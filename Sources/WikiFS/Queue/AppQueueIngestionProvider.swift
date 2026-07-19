@@ -31,7 +31,19 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     /// the readiness probe. Injectable so tests can stub it without touching the
     /// filesystem or spawning `zsh`. Defaults to reading from the App Group
     /// container, exactly like `AgentLauncher.resolveSelectedProvider`.
+    ///
+    /// #635: when no provider is enabled, `AgentProvidersConfig.selectedProvider`
+    /// falls back to the hardcoded `claudeAcpDefault` static (so the launcher's
+    /// own spawn path can still attempt a fresh process if bun is on PATH). But
+    /// that fallback masks the operator-disabled state from the readiness probe
+    /// — `readiness()` would return `nil` (ready) and the worker would proceed
+    /// into `launcher.run(...)`, dead-ending at "Agent process is not running"
+    /// against the torn-down subprocess from the cancelled prior turn. To detect
+    /// the disabled state we need the FULL provider config (not just
+    /// `selectedProvider()`'s post-fallback result), so the probe checks
+    /// `enabledProviders.isEmpty` directly via `resolveProviderConfig`.
     private let resolveSelectedProvider: () -> AgentProvider
+    private let resolveProviderConfig: () -> AgentProvidersConfig
 
     init(
         sessionBox: SessionLookupBox,
@@ -41,17 +53,41 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             let dir = (try? DatabaseLocation.appGroupContainerDirectory())
                 ?? FileManager.default.temporaryDirectory
             return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+        },
+        resolveProviderConfig: @escaping () -> AgentProvidersConfig = {
+            let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+                ?? FileManager.default.temporaryDirectory
+            return AgentProvidersConfig.loadOrSeed(from: dir)
         }
     ) {
         self.sessionBox = sessionBox
         self.fileProviderBox = fileProviderBox
         self.wikictlDirectory = wikictlDirectory
         self.resolveSelectedProvider = resolveSelectedProvider
+        self.resolveProviderConfig = resolveProviderConfig
     }
 
-    // MARK: - Readiness (#440)
+    // MARK: - Readiness (#440, extended #635)
 
     func readiness() async -> String? {
+        // #635: detect the operator-disabled state. `selectedProvider()` falls
+        // back to the hardcoded `claudeAcpDefault` when every configured
+        // provider is disabled — that fallback passes the existing PATH-based
+        // readiness check (bun's binary may well be on PATH), so retry would
+        // proceed into `launcher.run(...)` and dead-end at "Agent process is
+        // not running" against the torn-down subprocess from the cancelled
+        // prior turn. Short-circuit HERE with an actionable message so the
+        // worker fast-fails via `QueueIngestionError.notReady` and
+        // `handleWorkerFinished` marks the item `.failed` cleanly — surfacing
+        // the alert AND the "Configure Agents…" CTA in the Activity window
+        // (via `isConfigurationError`, which now matches this message).
+        let config = resolveProviderConfig()
+        if config.enabledProviders.isEmpty {
+            let msg = "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Agents to retry."
+            DebugLog.ingest("AppQueueIngestionProvider.readiness: NO ENABLED PROVIDER (providers=\(config.providers.count))")
+            return msg
+        }
+
         let provider = resolveSelectedProvider()
         let message = AgentLauncher.readinessMessage(for: provider)
         if message != nil {

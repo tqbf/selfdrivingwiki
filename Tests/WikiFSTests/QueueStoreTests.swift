@@ -386,6 +386,71 @@ struct QueueStoreTests {
         }
     }
 
+    // MARK: - Retry from .cancelled (#635)
+
+    /// #635: the Activity window offers a Retry button on `.cancelled`
+    /// rows — the UI's affordance must match the store's allowed
+    /// transitions, so `retryItem` now permits `.cancelled → .queued`
+    /// (previously only `.failed → .queued`, which silently dead-ended the
+    /// button — the throw was swallowed by `try?` at the call site, leaving
+    /// the row stuck with no feedback and no path to re-run).
+    @Test func testRetryFromCancelledTransitionsToQueued() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let item = try store.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+        let oldKey = item.orderingKey
+        let oldAttempt = item.attempt
+
+        // Cancel directly. `markCancelled` accepts `.queued` and `.running`,
+        // simulating the user cancelling a running job (the bug repro path
+        // where the operator kills the job mid-run via Cancel/Ctrl-C).
+        try store.markCancelled(id: item.id)
+        #expect(try store.getItem(item.id)?.state == .cancelled)
+
+        // Retry from `.cancelled` MUST succeed now (was previously rejected
+        // by validateTransition with allowedFrom: [.failed] only).
+        try store.retryItem(id: item.id)
+
+        let retried = try store.getItem(item.id)
+        #expect(retried?.state == .queued)
+        #expect(retried?.attempt == oldAttempt + 1)
+        // New ordering key > old (assigned to back of queue, like .failed retry).
+        #expect(retried!.orderingKey > oldKey)
+        // Error field was already nil for cancelled; stays nil on retry.
+        #expect(retried?.error == nil)
+    }
+
+    /// #635: retry from a terminal `.cancelled` state preserves the
+    /// attempt-increment invariant (matches the `.failed` retry path).
+    /// Combined with `testRetryFromCancelledTransitionsToQueued`, this
+    /// locks in the contract that `.cancelled` is fully retry-eligible —
+    /// no half-fix where the transition succeeds but `attempt` doesn't bump.
+    @Test func testRetryFromCancelledIncrementsAttempt() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let item = try store.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: "iw1", payload: makePayload()))
+
+        // First lifecycle: queued → running → cancelled.
+        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markCancelled(id: item.id)
+        try store.retryItem(id: item.id)
+        #expect(try store.getItem(item.id)?.attempt == 1)
+
+        // Second lifecycle: queued → running → failed → retry.
+        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markFailed(id: item.id, error: "boom")
+        try store.retryItem(id: item.id)
+        #expect(try store.getItem(item.id)?.attempt == 2)
+
+        // Third lifecycle: queued → running → cancelled (again) → retry.
+        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markCancelled(id: item.id)
+        try store.retryItem(id: item.id)
+        #expect(try store.getItem(item.id)?.attempt == 3)
+    }
+
     // MARK: - Requeue
 
     @Test func testRequeuePreservesOrderingKey() throws {

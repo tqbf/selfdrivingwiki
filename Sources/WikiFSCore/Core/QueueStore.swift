@@ -615,11 +615,17 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
-    /// Retry a `.failed` item: transition to `.queued`, increment `attempt`,
-    /// and assign a NEW `orderingKey` (back of the queue). Clears the error
-    /// message. Throws if the item is not in `.failed` state.
+    /// Retry a `.failed` or `.cancelled` item: transition to `.queued`,
+    /// increment `attempt`, and assign a NEW `orderingKey` (back of the
+    /// queue). Clears the error message. Throws if the item is not in
+    /// `.failed` or `.cancelled` state.
+    ///
+    /// `.cancelled → .queued` is permitted (#635): the Activity window offers
+    /// a Retry button on cancelled/killed jobs, and silently rejecting the
+    /// transition (the prior behavior) dead-ended the button — the UI's
+    /// affordance must match the store's allowed transitions.
     public func retryItem(id: QueueItem.ID) throws {
-        try validateTransition(id: id, allowedFrom: [.failed], to: .queued)
+        try validateTransition(id: id, allowedFrom: [.failed, .cancelled], to: .queued)
 
         try Self.wrap {
             let queue = try self.queue()

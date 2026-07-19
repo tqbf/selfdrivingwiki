@@ -281,7 +281,7 @@ struct ActivityWindowView: View {
             .help("Cancel")
         case .failed:
             Button {
-                Task { try? await queueEngine.retryItem(item.id) }
+                retry(item: item)
             } label: {
                 Image(systemName: "arrow.clockwise.circle.fill")
                     .foregroundStyle(.secondary)
@@ -322,7 +322,7 @@ struct ActivityWindowView: View {
             }
         case .failed:
             Button("Retry") {
-                Task { try? await queueEngine.retryItem(item.id) }
+                retry(item: item)
             }
             if let error = item.error {
                 Button("Copy Error") {
@@ -332,7 +332,7 @@ struct ActivityWindowView: View {
             }
         case .cancelled:
             Button("Retry") {
-                Task { try? await queueEngine.retryItem(item.id) }
+                retry(item: item)
             }
         case .completed:
             EmptyView()
@@ -508,7 +508,7 @@ struct ActivityWindowView: View {
                 }
             case .failed, .cancelled:
                 Button("Retry") {
-                    Task { try? await queueEngine.retryItem(item.id) }
+                    retry(item: item)
                 }
             case .completed:
                 EmptyView()
@@ -742,6 +742,29 @@ struct ActivityWindowView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    /// #635: retry the given queue item WITHOUT swallowing the throw. The
+    /// previous `try?` form silently no-op'd on invalid-state transitions
+    /// (e.g. the row reshuffled between the button render and the click), so
+    /// the user clicked Retry and nothing happened — no log, no feedback.
+    /// This form surfaces the failure to Console.app via `DebugLog.ingest`
+    /// (house rule: never bare `try?`).
+    ///
+    /// The actual run-time failure path (agent disabled / process dead /
+    /// spawn dead-ends with "Agent process is not running") is surfaced
+    /// separately: `QueueEngine.runWorker` → `handleWorkerFinished` calls
+    /// `store.markFailed(error:)`, which emits a `.failed` queue event the
+    /// snapshot loop renders with the actionable error + CTA via
+    /// ``isConfigurationError``.
+    private func retry(item: QueueItem) {
+        Task {
+            do {
+                try await queueEngine.retryItem(item.id)
+            } catch {
+                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     /// Look up the selected item in the current snapshot (active first).
@@ -803,16 +826,31 @@ struct ActivityWindowView: View {
     }
 
     /// Detects whether a failed item's error message is a "not configured"
-    /// error (binary not on PATH, no API key, no endpoint) rather than a
-    /// runtime error (agent crashed, network failure). Used to decide whether
-    /// to show the "Configure…" call-to-action button (#440).
+    /// error (binary not on PATH, no API key, no endpoint, agent disabled,
+    /// or the warm ACP subprocess died) rather than a generic runtime error
+    /// (e.g. convert failed, network blip mid-page). Used to decide whether
+    /// to show the "Configure…" call-to-action button (#440, extended #635).
     ///
     /// Matches the wording from `QueueIngestionError.notReady`,
-    /// `QueueExtractionError.notReady`, and the `ExtractionReadiness`
-    /// `.needsSetup`/`.notInstalled` cases. Conservative: only surfaces the
-    /// CTA when the error clearly points at configuration, so a generic
+    /// `QueueExtractionError.notReady`, the `ExtractionReadiness`
+    /// `.needsSetup`/`.notInstalled` cases, and the dead-process / agent-
+    /// disabled class surfaced by `AppQueueIngestionProvider.readiness` and
+    /// `ACPBackend.send`'s "Agent process is not running" failure (#635).
+    /// Conservative: only surfaces the CTA when the error clearly points at
+    /// configuration or a fixable agent-availability issue, so a generic
     /// "convert failed" doesn't show a misleading gear button.
     private func isConfigurationError(_ message: String) -> Bool {
+        Self.isConfigurationErrorMarker(message)
+    }
+
+    /// #635: pure marker matcher for ``isConfigurationError``. Extracted to a
+    /// static function so the regressions for the new "agent is not available" /
+    /// "agent process is not running" markers (and the existing readiness
+    /// markers) can be unit-tested directly without instantiating the SwiftUI
+    /// view — see `RetryStuckRegressionTests`. PURE + `nonisolated` so tests
+    /// can call without a main-actor hop (the matcher reads no AppKit /
+    /// observable state — just String matching).
+    nonisolated static func isConfigurationErrorMarker(_ message: String) -> Bool {
         let lower = message.lowercased()
         // Markers from the readiness messages:
         // - "was not found on your PATH"
@@ -821,6 +859,15 @@ struct ActivityWindowView: View {
         // - "no api key" / "add your … api key"
         // - "set a docling serve endpoint"
         // - "dependencies aren't installed" (local pdf2md)
+        // - "fix it in settings → agents"
+        //
+        // #635 markers — the retry-after-kill dead-end class. When the agent
+        // was disabled (or its warm subprocess was torn down on cancel), the
+        // readiness probe surfaces "agent is not available" / "re-enable the
+        // agent"; the older dead-process path surfaces "agent process is not
+        // running" from the swift-acp SDK through `ACPBackend.send`. Both
+        // are fixable from Settings → Agents, so both should surface the CTA
+        // rather than leaving the row showing a stuck, generic error.
         let markers = [
             "was not found on your path",
             "has no command configured",
@@ -830,7 +877,14 @@ struct ActivityWindowView: View {
             "add your google ai studio api key",
             "set a docling serve endpoint",
             "dependencies aren't installed",
-            "fix it in settings → agents"
+            "fix it in settings → agents",
+            // #635 — agent-disabled / dead-process class:
+            "agent is not available",
+            "re-enable the agent",
+            "agent is disabled",
+            "agent process is not running",
+            "acp agent subprocess died",
+            "no enabled agent provider"
         ]
         return markers.contains(where: { lower.contains($0) })
     }

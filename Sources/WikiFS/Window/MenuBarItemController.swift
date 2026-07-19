@@ -384,23 +384,110 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             )
             // NSHostingController (not a bare NSHostingView) so SwiftUI can
             // install the window's unified toolbar from the view's `.toolbar`.
-            let window = NSWindow(contentViewController: NSHostingController(rootView: contentView))
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            //
+            // #635: pass an explicit `contentRect` to the canonical NSWindow
+            // initializer instead of the convenience
+            // `init(contentViewController:)`. The convenience initializer
+            // derives its content rect from the controller's fitting size,
+            // which for a SwiftUI view is `.zero` until the first layout
+            // pass — so the window is born at (near-)zero size, then resized
+            // post-hoc via `setContentSize`. If a stale/zero `setFrameAutosaveName`
+            // value is then applied on top, the window stays malformed ("odd-shaped
+            // window behind the Activity window"). Using an explicit contentRect
+            // up front makes the 760×500 sizing authoritative at construction.
+            let contentRect = NSRect(
+                x: 0, y: 0,
+                width: Self.queueWindowDefaultSize.width,
+                height: Self.queueWindowDefaultSize.height)
+            let window = NSWindow(
+                contentRect: contentRect,
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false)
+            window.contentViewController = NSHostingController(rootView: contentView)
             window.toolbarStyle = .unified
             window.titleVisibility = .hidden
-            window.setContentSize(NSSize(width: 760, height: 500))
             window.isReleasedWhenClosed = false
-            // Center first; the autosave name then restores any saved frame
-            // over it (remember size/position across opens — set AFTER center
-            // so center() can't clobber the restored frame). Distinct names
-            // per queue so the two windows keep independent frames.
-            window.center()
-            window.setFrameAutosaveName(
-                queue == .extraction ? "ExtractionQueueWindow" : "AgentQueueWindow")
+
+            // #635: `setFrameAutosaveName` restores the saved frame from
+            // UserDefaults IN PLACE of the just-set contentRect. If a prior
+            // transitional/aborted window state persisted a zero or malformed
+            // frame (when the hosting view had no fitting size yet), that
+            // override would shrink the window back to the corrupted size —
+            // the "odd-shaped" symptom. Validate the saved frame BEFORE
+            // setting the autosave name; if invalid/missing, clear the stale
+            // UserDefaults entry so `setFrameAutosaveName` has nothing to
+            // restore (and we center below). Distinct names per queue so the
+            // two windows keep independent frames.
+            let autosaveName = Self.queueWindowAutosaveName(for: queue)
+            let savedFrameKey = "NSWindow Frame \(autosaveName)"
+            let savedFrame = UserDefaults.standard.string(forKey: savedFrameKey)
+            if Self.isAutosaveFrameValid(savedFrame) {
+                // Valid saved frame — registering the autosave name applies it
+                // (preserves last position/size across opens). No centering.
+                window.setFrameAutosaveName(autosaveName)
+            } else {
+                // Corrupted/missing saved frame — nuke it so the autosave name
+                // has nothing to restore over our 760×500 contentRect, then
+                // center. Future app opens will pick up this fresh frame.
+                UserDefaults.standard.removeObject(forKey: savedFrameKey)
+                window.setFrameAutosaveName(autosaveName)
+                window.center()
+            }
             queueWindows[queue] = window
         }
         queueWindows[queue]?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Queue window constants + helpers (#635)
+
+    /// Default content size for the per-queue Activity window.
+    /// `nonisolated` because the value is a Sendable `NSSize` literal — no
+    /// AppKit state — so the pure window-frame helpers (`isAutosaveFrameValid`)
+    /// and tests can read it without a main-actor hop.
+    nonisolated static let queueWindowDefaultSize = NSSize(width: 760, height: 500)
+
+    /// Autosave name for the per-queue Activity window. Distinct per queue so
+    /// the Ingestion + Extraction windows keep independent frames.
+    /// `nonisolated` — pure (no AppKit state) so tests can call without a
+    /// main-actor hop.
+    nonisolated static func queueWindowAutosaveName(for queue: QueueKind) -> String {
+        queue == .extraction ? "ExtractionQueueWindow" : "AgentQueueWindow"
+    }
+
+    /// #635: validate a previously-saved NSWindow autosave frame string.
+    /// AppKit persists a window's frame in UserDefaults under
+    /// `"NSWindow Frame <autosaveName>"` in `NSStringFromRect` format:
+    /// `"{{x, y}, {w, h}}"`. A frame saved during a prior transitional or
+    /// aborted window state (before the hosting controller produced a fitting
+    /// size) can be zero or non-positive — the "odd-shaped window that opens
+    /// behind the Activity window" symptom. PURE + tested directly
+    /// (`RetryStuckRegressionTests`) so the corruption detection stays
+    /// correct without instantiating AppKit windows. `nonisolated` so tests
+    /// can call without a main-actor hop.
+    nonisolated static func isAutosaveFrameValid(_ rawFrame: String?) -> Bool {
+        guard let rawFrame, !rawFrame.isEmpty else { return false }
+        // NSStringFromRect(NSRect(...)) → "{{x, y}, {w, h}}" — the canonical
+        // AppKit autosave format. Require it strictly so non-AppKit
+        // persisted values (or a partially-overwritten UserDefaults string)
+        // don't accidentally pass the size check below.
+        let trimmed = rawFrame.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("{{"), trimmed.hasSuffix("}}") else { return false }
+        // Strip braces/commas + collapse whitespace before numeric parse.
+        let stripped = trimmed
+            .replacingOccurrences(of: "{", with: " ")
+            .replacingOccurrences(of: "}", with: " ")
+            .replacingOccurrences(of: ",", with: " ")
+        let parts = stripped
+            .split(whereSeparator: { $0.isWhitespace })
+            .compactMap(Double.init)
+        guard parts.count >= 4 else { return false }
+        let width = parts[2]
+        let height = parts[3]
+        // Require a sensible minimum — the default is 760×500, so anything
+        // smaller than ~100pt on either axis is a corrupted/transitional save.
+        return width >= 100 && height >= 100
     }
 
     func closeActivityWindow() {
