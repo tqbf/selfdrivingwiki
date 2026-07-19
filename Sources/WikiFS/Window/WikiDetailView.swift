@@ -28,25 +28,52 @@ struct WikiDetailView: View {
 
     var body: some View {
         detailContent
-            // Accept an internal sidebar drag anywhere in the detail column —
-            // dropping a page/source/bookmark onto the welcome screen OR onto any
-            // open detail tab opens it as a tab and focuses it (openTab reuses an
-            // existing tab if one is already open). Innermost drop target, so
-            // URL/file drops still fall through to the window-level ingest
-            // destination in ContentView.
-            .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
-                let payloads = lists.flatMap(\.items)
-                guard !payloads.isEmpty else {
-                    DebugLog.tabs("[drop] detail action fired with NO payload")
-                    return false
+            // The `.dropDestination` lives in a `Color.clear` background so it
+            // shares the detail column's bounds without wrapping `detailContent`
+            // structurally. The conditional lives inside the `.background` — the
+            // only thing it toggles is the stateless `Color.clear`, so
+            // `detailContent` keeps a single structural identity across the
+            // edit-mode toggle (per swiftui-pro/perf: avoid `_ConditionalContent`
+            // around state-bearing content). Otherwise `PageDetailView` /
+            // `SourceDetailView` would be torn down + recreated on each toggle
+            // and lose their `@State isEditing`, throwing the user out of the
+            // editor they just opened.
+            //
+            // WHILE EDITING (`store.isActiveTabEditing == true`): no
+            // `.dropDestination` is installed at all. A sidebar drag over the
+            // editor surface is claimed by the `DropLinkTextView` (an `NSTextView`
+            // subclass that registers `wikiSidebarItem` at the AppKit level and
+            // inserts a `[[wikilink]]` at the drop point — issue #616). The
+            // previous implementation wrapped the whole column with
+            // `.dropDestination`, which intercepted the drag at drag-tracking
+            // time (before the `NSTextView` saw `draggingEntered`) and opened a
+            // new tab instead — the regression this gate fixes.
+            //
+            // WHILE NOT EDITING: `.dropDestination` is installed behind the
+            // content. Drops on the welcome screen, page/source chrome, and
+            // reader surfaces (where the underlying `WikiReaderView` is the
+            // frontmost registered `NSView` and claims sidebar drags itself via
+            // its own `performDragOperation`) open the dragged item as a tab —
+            // matching the original behavior.
+            .background {
+                if !store.isActiveTabEditing {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
+                            let payloads = lists.flatMap(\.items)
+                            guard !payloads.isEmpty else {
+                                DebugLog.tabs("[drop] detail action fired with NO payload")
+                                return false
+                            }
+                            for payload in payloads {
+                                DebugLog.tabs("[drop] detail action fired: kind=\(payload.kind) id=\(payload.id)")
+                                store.openTab(payload.selection)
+                            }
+                            return true
+                        } isTargeted: { targeted in
+                            isSidebarDropTargeted = targeted
+                        }
                 }
-                for payload in payloads {
-                    DebugLog.tabs("[drop] detail action fired: kind=\(payload.kind) id=\(payload.id)")
-                    store.openTab(payload.selection)
-                }
-                return true
-            } isTargeted: { targeted in
-                isSidebarDropTargeted = targeted
             }
     }
 
