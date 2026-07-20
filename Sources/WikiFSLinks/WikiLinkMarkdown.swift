@@ -266,12 +266,68 @@ public enum WikiLinkMarkdown {
             // link to ULID form and the canonical branch above emits the pin.
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
             let split = WikiLinkResolver.resolvedSplit(of: raw) { isResolved($0, kind) }
-            let resolved = split != nil
-            let linkTarget = split?.base ?? bareTarget
-            let linkFragment = split.map(\.fragment) ?? fragment
+
+            // Issue #619 (render path): when the bare target didn't resolve
+            // AND the regex found a `|` (alias present), the `|` may have
+            // been part of the real display name (common with YouTube titles
+            // the app ingests, or doc-set names like "Flex Tier - Documentation
+            // | Neuralwatt Cloud") rather than a true alias separator.
+            // Reconstruct `bareTarget | alias` (plus any `#`-fragment that
+            // landed in the alias portion) and run THAT through resolvedSplit.
+            // Mirrors the canonicalize-seam fix in WikiLinkRewriter (lines
+            // 71–126), so uncanonicalized bodies — chat transcripts in
+            // particular — render pipe-containing source links as resolvable
+            // `wiki://source` links instead of inert `wiki://missing`.
+            //
+            // Only runs as a FALLBACK when the bare target failed, so a
+            // genuine alias link (`[[Foo|bar]]` where Foo exists) already
+            // resolved via `split` above and is unaffected.
+            var resolvedViaReconstruction = false
+            let reconSplit: WikiLinkResolver.Split?
+            if split == nil, let alias = fixed.alias {
+                let normalizedAlias = collapseWhitespace(alias)
+                if normalizedAlias.isEmpty {
+                    reconSplit = nil
+                } else {
+                    let reconstructedRaw = fragment.map { "\(bareTarget) | \(normalizedAlias)#\($0)" }
+                        ?? "\(bareTarget) | \(normalizedAlias)"
+                    reconSplit = WikiLinkResolver.resolvedSplit(
+                        of: reconstructedRaw,
+                        isKnown: { isResolved($0, kind) }
+                    )
+                    resolvedViaReconstruction = reconSplit != nil
+                }
+            } else {
+                reconSplit = nil
+            }
+
+            let resolved = split != nil || reconSplit != nil
+            // Resolve (target, fragment) explicitly: `split?.fragment ?? ...`
+            // would conflate "split hit but fragment nil" (the whole-target
+            // case, e.g. "C# Guide" resolving whole) with "split missed", so
+            // branch on which source of truth won.
+            let linkTarget: String
+            let linkFragment: String?
+            if let split {
+                linkTarget = split.base
+                linkFragment = split.fragment
+            } else if let reconSplit {
+                linkTarget = reconSplit.base
+                linkFragment = reconSplit.fragment
+            } else {
+                linkTarget = bareTarget
+                linkFragment = fragment
+            }
 
             let display: String
-            if let alias = fixed.alias {
+            if resolvedViaReconstruction, let recon = reconSplit {
+                // The `|` was part of the name, not a real alias separator:
+                // display the FULL resolved name (e.g. "Flex Tier -
+                // Documentation | Neuralwatt Cloud"), NOT the alias fragment
+                // ("Neuralwatt Cloud#"quote""). Mirrors WikiLinkRewriter's
+                // `resolvedName` auto-alias at the canonicalize seam.
+                display = recon.base
+            } else if let alias = fixed.alias {
                 let collapsedAlias = collapseWhitespace(alias)
                 display = collapsedAlias.isEmpty ? linkTarget : collapsedAlias
             } else {
