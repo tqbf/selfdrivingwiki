@@ -355,6 +355,174 @@ struct AgentProvidersConfigPerStageModelTests {
         // read time since `neuralwatt` is no longer in the list).
         #expect(replaced.ingestStageModelIds["planner"] == "glm-5.2-flex")
     }
+
+    // MARK: - Per-stage PROVIDER pin (agent-settings-tabs plan)
+
+    /// Two providers so the pin has somewhere to go.
+    private var twoProviderFixture: AgentProvidersConfig {
+        AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: "neuralwatt", label: "Neuralwatt",
+                    command: ["neuralwatt", "acp"], env: [:],
+                    enabled: true, isDefault: true),
+                AgentProvider(
+                    id: "acme", label: "Acme",
+                    command: ["acme", "acp"], env: [:],
+                    enabled: true, isDefault: false),
+            ],
+            providerModels: [
+                "neuralwatt": [CachedModelInfo(modelId: "glm-5.2", name: "GLM-5.2", description: nil)],
+                "acme": [CachedModelInfo(modelId: "acme-1", name: "Acme One", description: nil)],
+            ],
+            selectedModelIds: [
+                "neuralwatt": "glm-5.2",
+                "acme": "acme-1",
+            ])
+    }
+
+    @Test func providerForStageNoPinReturnsGlobalDefault() {
+        let config = twoProviderFixture
+        #expect(config.provider(forStage: "planner").id == "neuralwatt")
+        #expect(config.provider(forStage: "chat").id == "neuralwatt")
+        #expect(config.provider(forStage: "lint").id == "neuralwatt")
+    }
+
+    @Test func providerForStageEnabledPinReturnsPinned() {
+        let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
+        #expect(config.provider(forStage: "chat").id == "acme")
+        // Other stages unaffected.
+        #expect(config.provider(forStage: "lint").id == "neuralwatt")
+    }
+
+    @Test func providerForStageDisabledPinFallsBackToDefault() {
+        var disabled = twoProviderFixture
+        disabled.providers[1].enabled = false  // disable acme
+        let config = disabled.settingStageProvider("acme", forStage: "chat")
+        // acme is disabled → the pin falls back to the global default.
+        #expect(config.provider(forStage: "chat").id == "neuralwatt")
+    }
+
+    @Test func modelIdForStageConvenienceUsesPerStageProvider() {
+        // modelId(forStage:) composes provider(forStage:) + model override.
+        // Pin chat to acme → the fallback is acme's selectedModelId.
+        let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == "acme-1")
+        // A chat stage model override wins.
+        let overridden = config.settingIngestStageModel("glm-5.2", forStage: "chat")
+        #expect(overridden.modelId(forStage: "chat") == "glm-5.2")
+    }
+
+    @Test func chatAndLintKeysResolveViaModelIdForStage() {
+        // The chat/lint keys ride the same ingestStageModelIds map (no schema
+        // change). modelId(forStage:) resolves them through provider(forStage:).
+        let config = twoProviderFixture
+            .settingIngestStageModel("glm-5.2", forStage: "chat")
+            .settingIngestStageModel("acme-1", forStage: "lint")
+        #expect(config.modelId(forStage: "chat") == "glm-5.2")
+        #expect(config.modelId(forStage: "lint") == "acme-1")
+    }
+
+    // MARK: - Stale-model clear on provider pin change (MEDIUM #6)
+
+    @Test func changingStageProviderClearsStaleModelOverride() {
+        // Set a model override under provider A, then change the stage's
+        // provider pin to B → the override MUST be cleared so a model id from
+        // A's catalog is never sent to B's subprocess.
+        let config = twoProviderFixture
+            .settingStageProvider("neuralwatt", forStage: "planner")
+            .settingIngestStageModel("glm-5.2", forStage: "planner")
+        #expect(config.ingestStageModelIds["planner"] == "glm-5.2")
+        let repinned = config.settingStageProvider("acme", forStage: "planner")
+        #expect(repinned.ingestStageModelIds["planner"] == nil)
+        // The provider pin itself changed.
+        #expect(repinned.stageProviderIds["planner"] == "acme")
+    }
+
+    @Test func clearingStageProviderPinDoesNotTouchOtherStages() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingStageProvider("acme", forStage: "lint")
+        let cleared = config.settingStageProvider(nil, forStage: "chat")
+        #expect(cleared.stageProviderIds["chat"] == nil)
+        #expect(cleared.stageProviderIds["lint"] == "acme")
+    }
+
+    @Test func settingSameStageProviderDoesNotClearModel() {
+        // Re-pinning the SAME provider is a no-op for the model override
+        // (didChange == false → no clear).
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingIngestStageModel("acme-1", forStage: "chat")
+        let samePin = config.settingStageProvider("acme", forStage: "chat")
+        #expect(samePin.ingestStageModelIds["chat"] == "acme-1")
+    }
+
+    // MARK: - settingStageProvider carry-through (other fields survive)
+
+    @Test func settingStageProviderPreservesOtherStagePinsAndModels() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingIngestStageModel("glm-5.2", forStage: "executor")
+        let repinned = config.settingStageProvider("acme", forStage: "lint")
+        #expect(repinned.stageProviderIds["chat"] == "acme")
+        #expect(repinned.ingestStageModelIds["executor"] == "glm-5.2")
+        #expect(repinned.selectedModelId(forProvider: "neuralwatt") == "glm-5.2")
+    }
+
+    @Test func settingStageProviderPreservesStageProviderIdsOfOtherStages() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingStageProvider("acme", forStage: "planner")
+        let repinned = config.settingStageProvider("neuralwatt", forStage: "lint")
+        #expect(repinned.stageProviderIds["chat"] == "acme")
+        #expect(repinned.stageProviderIds["planner"] == "acme")
+        #expect(repinned.stageProviderIds["lint"] == "neuralwatt")
+    }
+
+    // MARK: - stageProviderIds carry-through across existing mutators
+
+    @Test func settingDefaultPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingDefault(id: "acme")
+        #expect(config.stageProviderIds["chat"] == "acme")
+    }
+
+    @Test func settingIngestStageModelPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingIngestStageModel("acme-1", forStage: "chat")
+        #expect(config.stageProviderIds["chat"] == "acme")
+    }
+
+    @Test func settingCachedModelsPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingCachedModels([], forProvider: "neuralwatt")
+        #expect(config.stageProviderIds["chat"] == "acme")
+    }
+
+    @Test func settingSelectedModelPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingSelectedModel("acme-1", forProvider: "acme")
+        #expect(config.stageProviderIds["chat"] == "acme")
+    }
+
+    @Test func togglingFavoritePreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .togglingFavoriteModel("acme-1", forProvider: "acme")
+        #expect(config.stageProviderIds["chat"] == "acme")
+    }
+
+    @Test func replacingProvidersPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+        let replaced = config.replacingProviders(config.providers)
+        #expect(replaced.stageProviderIds["chat"] == "acme")
+    }
 }
 
 /// per-stage-model-selection plan §7: pure-logic tests for the
