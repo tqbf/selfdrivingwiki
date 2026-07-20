@@ -2711,6 +2711,26 @@ public final class WikiStoreModel {
         try? store.sourceOrigin(sourceID: id)
     }
 
+    /// The origin provenance of a page's HEAD — the agent + activity that last
+    /// created/edited it (page provenance, #page-provenance). `nil` when the
+    /// read fails (unknown id, no version rows). Drives the "Provenance" row
+    /// in `PageDetailView`. Off-main-safe when the read pool is configured
+    /// (the call routes through `WikiStore.pageOrigin`'s `dbWriter.read`); on
+    /// the main actor for the simple in-memory case. Threads via the public
+    /// `WikiStore` protocol so the model's `store: WikiStore` indirection
+    /// doesn't need a downcast.
+    public func pageOrigin(for id: PageID) -> PageOrigin? {
+        try? store.pageOrigin(pageID: id)
+    }
+
+    /// The full edit history for a page — every `page_versions` row joined to
+    /// its activity + agent, oldest-first. `nil`/empty when the read fails or
+    /// the page has no versions. Drives the expandable "Edit history" list in
+    /// `PageDetailView`.
+    public func pageEditHistory(for id: PageID) -> [PageOrigin] {
+        (try? store.pageEditHistory(pageID: id)) ?? []
+    }
+
     /// `true` iff `refreshSource(_:)` would actually succeed for this source —
     /// the single source of truth the detail view gates the Refresh button on.
     /// Mirrors `SourceRefreshService.materialize` + the `performRefresh` snapshot

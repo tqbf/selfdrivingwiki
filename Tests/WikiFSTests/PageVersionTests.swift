@@ -375,4 +375,207 @@ struct PageVersionTests {
         let history = try store.pageVersionHistory(pageID: page.id)
         #expect(history.count == 3, "two appends + root")
     }
+
+    // MARK: - Page provenance (#page-provenance): AC.1, AC.2, AC.3, AC.4
+
+    /// AC.1 — after a "chat" creates a page (the simulation of an ingestion
+    /// executor creating a page via `wikictl page upsert --author chat:<id>`),
+    /// `pageOrigin(pageID:)` returns a non-nil `PageOrigin` whose `agentName`
+    /// is `chat:<id>`, `agentKind` is `"chat"`, `activityKind` is `"import"`,
+    /// and `savedAt` is approximately now. The agent row was deduped via
+    /// `ensureAgent(name:kind:)` — NOT the shared `legacy-import` — so the
+    /// activity's `agent_id` points at the real chat identity.
+    @Test func pageOriginReflectsChatAuthorOnCreate() throws {
+        let store = try tempStore()
+        let chatID = "chat:01JTESTCHAT00000000"
+        let page = try store.createPage(title: "Chat-Created", createdBy: chatID)
+
+        guard let origin = try store.pageOrigin(pageID: page.id) else {
+            Issue.record("pageOrigin returned nil for a freshly created page")
+            return
+        }
+        #expect(origin.agentName == chatID, "agentName should be \(chatID) (got \(origin.agentName))")
+        #expect(origin.agentKind == "chat", "agentKind for chat:<id> is 'chat'")
+        #expect(origin.activityKind == "import", "root activity is 'import'")
+        #expect(origin.title == "Chat-Created")
+        // savedAt is "now" (within 5s — the test runs fast).
+        let drift = abs(origin.savedAt.timeIntervalSinceNow)
+        #expect(drift < 5.0, "savedAt should be ~now (drift \(drift)s)")
+    }
+
+    /// AC.1 (variant) — when the createPage author is `agent:<kind>`
+    /// (e.g. an ingestion executor), `agentKind` is `"agent"` and `agentName`
+    /// is `agent:<kind>`.
+    @Test func pageOriginReflectsAgentKindOnCreate() throws {
+        let store = try tempStore()
+        let agentLabel = "agent:ingest"
+        let page = try store.createPage(title: "Ingest Page", createdBy: agentLabel)
+
+        let origin = try store.pageOrigin(pageID: page.id)
+        #expect(origin?.agentName == agentLabel)
+        #expect(origin?.agentKind == "agent")
+        #expect(origin?.activityKind == "import")
+    }
+
+    /// AC.1 (degraded path) — a `createPage` with no author (nil) falls back
+    /// to the shared `legacy-import` agent. `pageOrigin` reports `agentName
+    /// == "legacy-import"` and `agentKind == "software"`. No crash, no data
+    /// loss. (Pre-v39 rows look the same — they degraded identically.)
+    @Test func pageOriginDegradesToLegacyImportWhenNoAuthor() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "No-Author Page", createdBy: nil)
+
+        let origin = try store.pageOrigin(pageID: page.id)
+        #expect(origin?.agentName == "legacy-import")
+        #expect(origin?.agentKind == "software")
+        #expect(origin?.activityKind == "import")
+    }
+
+    /// AC.2 — a freshly-created-then-edited page (with a DISTINCT author on
+    /// the edit so `tryAmendPageVersion` cannot coalesce). `pageEditHistory`
+    /// returns EXACTLY 2 entries (the empty-root `'import'` + the `'edit'`),
+    /// and `entry.last` pins the chat author + edited body — so it cannot
+    /// pass trivially off the create-double-row artifact.
+    @Test func pageEditHistoryCountsCreateAndEdit() throws {
+        let store = try tempStore()
+        // Create with one author (an ingestion agent)…
+        let createAuthor = "agent:ingest"
+        let page = try store.createPage(title: "Edit Chain", createdBy: createAuthor)
+        // …then edit with a DISTINCT author (a chat) so the amend-coalescer
+        // returns nil (different actor) and the version-append actually runs.
+        let editAuthor = "chat:01JTESTCHAT00000001"
+        try store.updatePage(
+            id: page.id, title: "Edit Chain", body: "edited body",
+            lastEditedBy: editAuthor)
+
+        let history = try store.pageEditHistory(pageID: page.id)
+        #expect(history.count == 2, "fresh create+edit yields 2 origin entries (got \(history.count))")
+
+        // entry[0] = root (the create's empty-root 'import' activity).
+        #expect(history[0].activityKind == "import")
+        #expect(history[0].agentName == createAuthor)
+        #expect(history[0].agentKind == "agent")
+
+        // entry[1] = the edit — pinned to the chat author + the edited body.
+        #expect(history[1].activityKind == "edit")
+        #expect(history[1].agentName == editAuthor)
+        #expect(history[1].agentKind == "chat")
+        // The title is the version's stored title (which equals what
+        // updatePage wrote).
+        #expect(history[1].title == "Edit Chain")
+
+        // pageOrigin(pageID:) reflects the HEAD = entry[1] (the chat edit).
+        let head = try store.pageOrigin(pageID: page.id)
+        #expect(head?.agentName == editAuthor)
+        #expect(head?.agentKind == "chat")
+        #expect(head?.activityKind == "edit")
+    }
+
+    /// AC.3 — the CAS-OFF path (`updatePage` with no `expectedHeadVersionID`,
+    /// the `wikictl` default) now appends a `page_versions` + `activities`
+    /// row, closing the pre-v39 "records nothing" hole. Verified by row count
+    /// before/after. Uses DISTINCT authors (per §5.3 LOW note) so the amend
+    /// short-circuit does not suppress the new version row.
+    @Test func updatePageCASOffAppendsVersionAndActivity() throws {
+        let store = try tempStore()
+        let createAuthor = "agent:create"
+        let page = try store.createPage(title: "CAS-Off", createdBy: createAuthor)
+
+        // Before: 1 page_versions row (the empty root), 1 activity (create's
+        // 'import').
+        let versionsBefore = try store.pageVersionHistory(pageID: page.id)
+        #expect(versionsBefore.count == 1)
+        let activitiesBefore = store.scalarText(
+            "SELECT COUNT(*) FROM activities;"
+        )
+        let beforeCount = Int(activitiesBefore) ?? -1
+        #expect(beforeCount == 1, "createPage seeds one 'import' activity")
+
+        // CAS-off update with a DISTINCT author (so amend can't coalesce).
+        try store.updatePage(
+            id: page.id, title: "CAS-Off", body: "first edit",
+            lastEditedBy: "chat:01JTESTCHAT00000002")
+
+        let versionsAfter = try store.pageVersionHistory(pageID: page.id)
+        #expect(versionsAfter.count == 2, "CAS-off update appends a version row (got \(versionsAfter.count))")
+
+        let activitiesAfterRaw = store.scalarText(
+            "SELECT COUNT(*) FROM activities;"
+        )
+        let afterCount = Int(activitiesAfterRaw) ?? -1
+        #expect(afterCount == beforeCount + 1, "CAS-off update adds one activity row")
+    }
+
+    /// AC.4 — page activities' `agent_id` resolves via `ensureAgent` to a REAL
+    /// named agent (not the shared `legacy-import`) when `lastEditedBy` is
+    /// non-null. Verified by querying the activity's agent row directly.
+    @Test func pageEditActivityPointsAtRealNamedAgent() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Real Agent", createdBy: "agent:ingest")
+        try store.updatePage(
+            id: page.id, title: "Real Agent", body: "edited",
+            lastEditedBy: "chat:01JTESTCHAT00000003")
+
+        // The HEAD activity (on the just-appended version) should point at a
+        // real `chat:<id>` agent, NOT the shared `legacy-import`. Verified by
+        // joining the HEAD version's activity to agents.name.
+        guard let head = try store.pageHeadVersionID(pageID: page.id) else {
+            Issue.record("expected a HEAD version after the update")
+            return
+        }
+        let agentName = store.scalarText("""
+        SELECT a.name FROM page_versions pv
+        JOIN activities act ON act.id = pv.activity_id
+        JOIN agents a ON a.id = act.agent_id
+        WHERE pv.id = '\(head)';
+        """)
+        #expect(agentName == "chat:01JTESTCHAT00000003",
+                "HEAD activity agent should be the chat (got \(agentName))")
+
+        let agentKind = store.scalarText("""
+        SELECT a.kind FROM page_versions pv
+        JOIN activities act ON act.id = pv.activity_id
+        JOIN agents a ON a.id = act.agent_id
+        WHERE pv.id = '\(head)';
+        """)
+        #expect(agentKind == "chat", "HEAD activity agent kind is 'chat'")
+    }
+
+    /// AC.4 (degraded) — when `lastEditedBy` is nil/empty, the activity's
+    /// `agent_id` falls back to the legacy-import shared agent. No crash, no
+    /// data loss.
+    @Test func pageEditNilAuthorDegradesToLegacyImport() throws {
+        let store = try tempStore()
+        // Create with a chat author so the root activity has a real agent.
+        let page = try store.createPage(title: "Degrade", createdBy: "chat:01JDEGRADE000000001")
+        // UpdatePage with lastEditedBy=nil — the append (CAS-off, no
+        // amend-can-fire because pages.last_edited_by="chat:…" ≠ nil) lands a
+        // new activity pointing at legacy-import.
+        try store.updatePage(
+            id: page.id, title: "Degrade", body: "v2", lastEditedBy: nil)
+
+        guard let head = try store.pageHeadVersionID(pageID: page.id) else {
+            Issue.record("expected a HEAD version")
+            return
+        }
+        let agentName = store.scalarText("""
+        SELECT a.name FROM page_versions pv
+        JOIN activities act ON act.id = pv.activity_id
+        JOIN agents a ON a.id = act.agent_id
+        WHERE pv.id = '\(head)';
+        """)
+        #expect(agentName == "legacy-import",
+                "nil author degrades to legacy-import (got \(agentName))")
+    }
+
+    /// AC.8 (migration ladder sanity) — a v38 DB reopened at v39 must report
+    /// `user_version = 39`. The migration step is a no-op `PRAGMA user_version
+    /// = 39` (no schema change; the write-path change is the real fix).
+    @Test func v39SchemaVersionAfterMigration() throws {
+        #expect(GRDBWikiStore.schemaVersion == 39,
+                "schemaVersion must report 39 after the page-provenance bump")
+        let store = try tempStore()
+        let v = store.pragmaValue("user_version")
+        #expect(v == "39", "fresh DB stamps user_version = 39 (got \(v))")
+    }
 }

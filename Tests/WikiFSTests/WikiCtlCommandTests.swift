@@ -281,6 +281,80 @@ struct WikiCtlCommandTests {
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
     }
 
+    // MARK: - page info (page provenance, #page-provenance)
+
+    /// `wikictl page info --title X` round-trip: creates a page with a chat
+    /// author via `add --author`, then `page info` prints the identity +
+    /// origin provenance for the HEAD. Mirrors `source info`'s smoke test.
+    @Test func pageInfoPrintsChatOrigin() throws {
+        let store = try tempStore()
+        let created = try PageCommand.run(
+            .add(id: nil, title: "Provenance Doc", body: .inline("hello"),
+                 author: "chat:01JTESTCHAT00000004"),
+            in: store)
+        let id = PageID(rawValue: created.output)
+        let result = try PageCommand.run(.info(.id(id)), in: store)
+        #expect(!result.didCommit, "page info is a read; must not commit")
+        // Identity header.
+        #expect(result.output.contains("id\t\(id.rawValue)"))
+        #expect(result.output.contains("title\tProvenance Doc"))
+        // HEAD origin = the imported create's activity, agent = chat:<id>.
+        #expect(result.output.contains("# origin (HEAD)"))
+        #expect(result.output.contains("activity\timport"))
+        #expect(result.output.contains("agent\tchat:01JTESTCHAT00000004"))
+        #expect(result.output.contains("agent_kind\tchat"))
+        // Edit history section present (just the root version).
+        #expect(result.output.contains("# edit history (oldest-first)"))
+        #expect(result.output.contains("0\timport\tchat:01JTESTCHAT00000004\tchat\t"))
+    }
+
+    /// `page info --title X` after a chat edit shows the edit activity on the
+    /// HEAD, with the chat agent. Mirrors `pageEditHistoryCountsCreateAndEdit`
+    /// (PageVersionTests) but via the CLI surface.
+    @Test func pageInfoAfterEditShowsEditOrigin() throws {
+        let store = try tempStore()
+        let created = try PageCommand.run(
+            .add(id: nil, title: "Edit Doc", body: .inline("v1"),
+                 author: "agent:ingest"),
+            in: store)
+        let id = PageID(rawValue: created.output)
+        // Chat edit (different author — amend won't fire).
+        _ = try PageCommand.run(
+            .add(id: id, title: "Edit Doc", body: .inline("v2"),
+                 author: "chat:01JTESTCHAT00000005"),
+            in: store)
+        let result = try PageCommand.run(.info(.title("Edit Doc")), in: store)
+        #expect(!result.didCommit)
+        #expect(result.output.contains("# origin (HEAD)"))
+        #expect(result.output.contains("activity\tedit"))
+        #expect(result.output.contains("agent\tchat:01JTESTCHAT00000005"))
+        #expect(result.output.contains("agent_kind\tchat"))
+        // The edit history has both entries (import + edit).
+        let historyLines = result.output
+            .split(separator: "\n")
+            .filter { $0.hasPrefix("0\t") || $0.hasPrefix("1\t") }
+        #expect(historyLines.count == 2, "create + edit yields 2 history rows")
+    }
+
+    @Test func parsesPageInfoByID() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "info", "--id", "01ABC"], env: noEnv)
+        #expect(invocation.command == .page(.info(.id(PageID(rawValue: "01ABC")))))
+    }
+
+    @Test func parsesPageInfoByTitle() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "info", "--title", "X"], env: noEnv)
+        #expect(invocation.command == .page(.info(.title("X"))))
+    }
+
+    @Test func pageInfoOnMissingPageThrows() throws {
+        let store = try tempStore()
+        #expect(throws: PageCommand.Failure.self) {
+            try PageCommand.run(.info(.title("Nope")), in: store)
+        }
+    }
+
     // MARK: - Search dispatch
     //
     // Post-#634: `PageCommand.run(.search)` needs a `bm25Leg` to produce

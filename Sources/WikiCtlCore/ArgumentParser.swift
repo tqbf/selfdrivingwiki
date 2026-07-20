@@ -99,6 +99,8 @@ public enum ArgumentParser {
       page history (--title X | --id Y)       show version history (W0)
       page revert (--title X | --id Y) --version V
                                               revert a page to version V (W0)
+      page info (--title X | --id Y)          print page identity + origin provenance
+                                              (HEAD's agent/activity + full edit history)
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                               append one dated row to log.md;
                                               --source stamps that file "Processed"
@@ -277,6 +279,9 @@ public enum ArgumentParser {
                 throw Failure.usage("page revert: --version is required")
             }
             return .page(.revert(try options.requireSelector(), versionID: versionID))
+
+        case "info":
+            return .page(.info(try options.requireSelector()))
 
         default:
             throw Failure.usage("page: unknown subcommand \(sub.debugDescription)")

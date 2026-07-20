@@ -58,7 +58,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 38
+    private static let currentSchemaVersion = 39
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -409,7 +409,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     ///   for a store that's already migrated) is a no-op; genuine upgrades run
     ///   only the steps they owe.
     ///
-    /// Both paths end at `user_version = currentSchemaVersion` (37), so the
+    /// Both paths end at `user_version = currentSchemaVersion` (39), so the
     /// File Provider's read-only handle to the same WAL file never sees a
     /// half-migrated schema.
     ///
@@ -1141,6 +1141,47 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // `DROP TRIGGER IF EXISTS` so a fresh-DB forced through the ladder (which
         // never created them at v13/v28) is a no-op. Mirrors the SQLiteWikiStore
         // ladder's v37→v38 step.
+        if version < 38 {
+            try Self.dropFTS5TablesAndTriggers(in: db)
+            try db.execute(sql: "PRAGMA user_version = 38;")
+            version = 38
+        }
+
+        // Step 38 → 39 (page provenance — #page-provenance): forward-only
+        // bump. The write-path change (route `updatePage` CAS-off through
+        // `appendPageVersionLocked`, swap `legacyImportAgentID → ensureAgent`)
+        // is what guarantees correctness for NEW saves; this step is the
+        // explicit `user_version` bump so existing v38 DBs re-open as v39 and
+        // a fresh DB lands at v39. NO backfill — pre-v39 page activities stay
+        // on the shared `legacy-import` agent (degraded, same as today); the
+        // `pageOrigin(pageID:)` read accessor degrades `agentName` to
+        // `"unknown"` and `agentKind` to `"software"` for those rows. A
+        // future, guarded, irreversible backfill can repoint historical
+        // `activity.agent_id` from `last_edited_by` behind a `wiki_metadata`
+        // flag (#page-provenance §5.2 — Phase C, deferred).
+        //
+        // ⚠ LOAD-BEARING ordering: this step MUST precede the catch-all
+        // fallback immediately below. The fallback's guard is keyed on
+        // `currentSchemaVersion` (39 now), so once this constant is bumped it
+        // short-circuits: it re-runs `dropFTS5TablesAndTriggers` (harmless —
+        // `DROP … IF EXISTS`) and stamps `user_version = 39`, executing NONE
+        // of any new step above it. Any new v39 migration work belongs INSIDE
+        // this block (before the fallback), not as a sibling after it.
+        if version < 39 {
+            try db.execute(sql: "PRAGMA user_version = 39;")
+            version = 39
+        }
+
+        // Catch-all fallback: any DB older than `currentSchemaVersion` whose
+        // per-step work has not been added above (the steady-state guard for a
+        // genuine currentSchemaVersion bump). Drops FTS5 + stamps
+        // `user_version` so the read-only File Provider handle never sees a
+        // half-migrated schema. Idempotent (`DROP … IF EXISTS`). Mirrors the
+        // historical SQLiteWikiStore ladder terminator. The version-specific
+        // step above is the one that runs on a real upgrade; this only fires
+        // if a future contributor bumps `currentSchemaVersion` without adding
+        // an explicit step (defensive — emits a loud reminder in the form of
+        // a redundant `PRAGMA user_version = N`).
         if version < Self.currentSchemaVersion {
             try Self.dropFTS5TablesAndTriggers(in: db)
             try db.execute(sql: "PRAGMA user_version = \(Self.currentSchemaVersion);")
@@ -2123,9 +2164,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return nil
     }
 
-    /// Build the complete current schema (v37 end-state) on a fresh `Database`.
+    /// Build the complete current schema (v39 end-state) on a fresh `Database`.
     /// Mirrors `SQLiteWikiStore.createFreshSchemaV20()` + the additive tables
-    /// from v23–v37. All DDL is `IF NOT EXISTS`-guarded so re-running on an
+    /// from v23–v39. All DDL is `IF NOT EXISTS`-guarded so re-running on an
     /// already-current DB is a no-op (idempotent for GRDB's migrator).
     private static func createFreshSchema(on db: Database) throws {
         let now = Date().timeIntervalSince1970
@@ -2515,7 +2556,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// Get-or-create the `legacy-import` agent row, returning its id.
-    /// Mirrors `SQLiteWikiStore.legacyImportAgentID`.
+    /// Mirrors `SQLiteWikiStore.legacyImportAgentID`. Used as the fallback
+    /// when a page mutation has no author identity (nil/empty `created_by` /
+    /// `last_edited_by` — pre-v39 rows, legacy callers). Page-PROV (#page-
+    /// provenance) routes authored saves through `ensureAgent(name:kind:)`
+    /// so the activity carries the REAL `chat:<id>` / `agent:<kind>` /
+    /// `user` / model-id identity; this stays as the degraded path.
     private func legacyImportAgentID(on db: Database) throws -> String {
         if let id = try String.fetchOne(
             db,
@@ -2528,6 +2574,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         INSERT INTO agents (id, kind, name) VALUES (?, 'software', 'legacy-import');
         """, arguments: [id])
         return id
+    }
+
+    /// Map a provenance author string (#131 / #397) to an `agents.kind`
+    /// value, mirroring the writer shapes documented in
+    /// `plans/wikictl-author-provenance.md`. The write seam threads the SAME
+    /// `chat:<id>` / `agent:<kind>` / `user` / model-id string that
+    /// `created_by`/`last_edited_by` carry into `ensureAgent(name:kind:)`,
+    /// so page activities point at REAL named agents (not the shared
+    /// `legacy-import`). `nil`/empty falls back to `"software"` (the
+    /// `legacyImportAgentID` path degrades the same as today — no data loss).
+    ///
+    /// `chat:<id>` and `agent:<kind>` are ULID-suffixed by construction
+    /// (`AgentLauncher.startInteractiveQuery` / `WIKI_AUTHOR` env), so they
+    /// cannot collide with a stray page titled `chat:…` on `ensureAgent`'s
+    /// `(name, kind)` dedup.
+    private func authorKind(_ author: String?) -> String {
+        guard let author, !author.isEmpty else { return "software" }
+        if author.hasPrefix("chat:")  { return "chat" }
+        if author.hasPrefix("agent:") { return "agent" }
+        if author == "user"           { return "human" }
+        return "model"
+    }
+
+    /// Resolve the agent for a page mutation's activity: if `author` carries a
+    /// `chat:`/`agent:`/`user`/model-id identity, dedup a REAL named agent on
+    /// `(name, kind)` via `ensureAgent`; otherwise degrade to the shared
+    /// `legacy-import` (pre-v39 behaviour). `db:`-taking so it composes inside
+    /// `mutate(event:_:)` bodies (the page-provenance write seam — see
+    /// `appendPageVersionLocked` + `createPage`).
+    private func ensurePageAuthorAgent(
+        _ author: String?, on db: Database
+    ) throws -> String {
+        guard let author, !author.isEmpty else {
+            return try legacyImportAgentID(on: db)
+        }
+        return try ensureAgent(
+            name: author, kind: authorKind(author), on: db)
     }
 
     // MARK: - changeToken (File Provider sync anchor)
@@ -2786,12 +2869,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
             """, arguments: [hash, Int64(0), bodyData])
 
-            let legacyAgentID = try self.legacyImportAgentID(on: db)
+            // Page provenance (#page-provenance): route the root activity's
+            // agent through `ensureAgent(name:kind:)` so a chat / agent / user
+            // author identity lands as a REAL named agent row (not the shared
+            // `legacy-import`). Degrades to the shared legacy agent when
+            // `createdBy` is nil/empty (pre-v39 behaviour, no data loss).
+            let agentID = try self.ensurePageAuthorAgent(createdBy, on: db)
             let activityID = ULID.generate()
             try db.execute(sql: """
             INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
             VALUES (?, 'import', ?, ?, ?);
-            """, arguments: [activityID, legacyAgentID, nowTS, nowTS])
+            """, arguments: [activityID, agentID, nowTS, nowTS])
 
             let versionID = ULID.generate()
             try db.execute(sql: """
@@ -2823,20 +2911,63 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in
             self.localEvent(.page, id: id.rawValue, change: .updated)
         }) { db in
+            // Existence check — match the pre-refactor contract that threw
+            // `.notFound` when the id is gone (the legacy `guard
+            // db.changesCount > 0` ran AFTER the UPDATE; this runs FIRST
+            // because the refactored body INSERTs into `page_versions` —
+            // whose FK on pages(id) would otherwise throw a raw SQLite
+            // `FOREIGN KEY constraint failed` instead of the user-friendly
+            // `.notFound`). The savepoint rolls back; `mutate` discards the
+            // buffered event (no emit on failure) — see
+            // `StoreEmissionReentrancyTests.throwingMutationEmitsNothing`.
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM pages WHERE id = ?;",
+                arguments: [id.rawValue]
+            ) ?? 0
+            guard exists == 1 else { throw WikiStoreError.notFound(id) }
+
             let title = WikiNameRules.sanitized(title)
             let slug = try self.uniqueSlug(from: title, id: id, on: db)
-            try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, version = version + 1, last_edited_by = ?
-            WHERE id = ?;
-            """, arguments: [title, slug, body,
-                            Date().timeIntervalSince1970, lastEditedBy,
-                            id.rawValue])
-            // Match SQLiteWikiStore: a 0-row UPDATE means the id is gone, so
-            // throw .notFound inside `mutate`'s body. The savepoint rolls back
-            // and `mutate` discards the buffered event (no emit on failure).
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
+            let bodyData = Data(body.utf8)
+            let hash = SHA256.hash(data: bodyData)
+                .map { String(format: "%02x", $0) }.joined()
+            let now = Date()
+            let nowTS = now.timeIntervalSince1970
+
+            // Page provenance (#page-provenance): the CAS-off path (no
+            // `expectedHeadVersionID`, the `wikictl` default — see
+            // `PageUpsert.writePage`) now appends a `page_versions` +
+            // `activities` row just like the CAS path, closing the "records
+            // nothing" hole (pre-v39, only the flat `last_edited_by` string
+            // survived). Routes through `appendPageVersionLocked` — NOT public
+            // `appendPageVersion` — because (a) `mutate`'s doc warns
+            // `dbWriter.write` is NOT reentrant (a public mutator that
+            // re-calls `mutate` deadlocks), and (b) `appendPageVersion` is
+            // itself a `mutate` wrapper that emits `.page .updated`, so a
+            // naive delegation would double-emit (the HIGH hazard in §5.3).
+            // This method's own `mutate` wrapper is the single emit site; the
+            // shared helper emits nothing.
+            //
+            // The amend-coalescing check (`tryAmendPageVersion`) at line ~6461
+            // IS run on this path too — a rapid same-author save within the
+            // 5s window amend-coalesces into the head instead of appending a
+            // new row (autosave semantics). The plan's AC.3 row-count test
+            // accounts for this by using a DISTINCT author from the create so
+            // the amend short-circuit does not suppress the new version row.
+            let head = try Self.pageHeadVersionIDLocked(pageID: id, on: db)
+            if let amendVersionID = try self.tryAmendPageVersion(
+                db: db, pageID: id, head: head, title: title, slug: slug,
+                body: body, bodyData: bodyData, hash: hash,
+                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+            {
+                _ = amendVersionID   // amend already touched the mirror.
+                return
+            }
+            _ = try self.appendPageVersionLocked(
+                db: db, pageID: id, head: head, title: title, slug: slug,
+                body: body, bodyData: bodyData, hash: hash,
+                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
         }
     }
 
@@ -4087,47 +4218,120 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return amendVersionID
             }
 
-            // 2. Blob (identical body = one row, ever).
-            try db.execute(sql: """
-            INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-            """, arguments: [hash, Int64(bodyData.count), bodyData])
-
-            // 3. Legacy-import agent + activity.
-            let agentID = try self.legacyImportAgentID(on: db)
-            let activityID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?, 'edit', ?, ?, ?);
-            """, arguments: [activityID, agentID, nowTS, nowTS])
-
-            // 4. New version (parent = current head).
-            let versionID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, pageID.rawValue, head, hash, title, activityID, nowTS])
-
-            // 5. Update the denormalized pages mirror.
-            try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, version = version + 1, last_edited_by = ?
-            WHERE id = ?;
-            """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
-
-            // 6. Write the page-content ref.
-            try db.execute(sql: """
-            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-            VALUES ('page-content', ?, ?, 1, ?)
-            ON CONFLICT(kind, owner_id) DO UPDATE SET
-                version_id = excluded.version_id,
-                generation = generation + 1,
-                updated_at = excluded.updated_at;
-            """, arguments: [pageID.rawValue, versionID, nowTS])
-
-            return versionID
+            // 2–6. Append the new version row (blob + activity + version +
+            //      mirror + ref). Extracted to `appendPageVersionLocked` so
+            //      `updatePage` (CAS-off) can share the same write seam
+            //      WITHOUT re-entering `mutate(event:)` (the HIGH hazard
+            //      called out in `plans/page-provenance.md` §5.3 — public
+            //      mutators that compose must pass the `Database` to internal
+            //      helpers, not re-call `mutate`). This helper does NOT emit;
+            //      this method's `mutate` wrapper is the single emit site.
+            return try self.appendPageVersionLocked(
+                db: db, pageID: pageID, head: head, title: title, slug: slug,
+                body: body, bodyData: bodyData, hash: hash,
+                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
         }
+    }
+
+    /// Shared version-append logic for `appendPageVersion` (CAS path) and
+    /// `updatePage` (CAS-off path). Performs the six-step write:
+    /// (1) skip the no-op case when the new body's hash matches the head blob
+    ///     (avoids bloat from `wikictl` re-writes that touched nothing), but
+    ///     ONLY when both titles also match — a pure title rename still
+    ///     appends (the mirror needs the new slug);
+    /// (2) `INSERT OR IGNORE` the new blob (CAS — identical bodies dedup);
+    /// (3) get-or-create the activity's `agents` row via `ensurePageAuthorAgent`
+    ///     so the author chain points at the REAL `chat:<id>` / `agent:<kind>`
+    ///     / `user` / model-id (the structured #page-provenance upgrade —
+    ///     previously the shared `legacy-import` agent for every page edit);
+    /// (4) insert an `activities` row of kind `'edit'`;
+    /// (5) insert a `page_versions` row (parent = `head`);
+    /// (6) update the `pages` denormalized mirror + UPSERT the `page-content`
+    ///     ref's `version_id` (bumping `generation`).
+    ///
+    /// NOT a `mutate(event:)` wrapper — does NOT emit. Each public caller
+    /// (`appendPageVersion`, `updatePage`) wraps its own `mutate` body around
+    /// this and emits `.page .updated` ONCE there (the Approach-A composition
+    /// pattern — `mutate`'s doc at the top of this file warns `dbWriter.write`
+    /// is NOT reentrant; a public mutator that re-calls `mutate` deadlocks).
+    /// `updatePage` MUST NOT call public `appendPageVersion` (would double-emit
+    /// AND re-enter); both call THIS instead.
+    private func appendPageVersionLocked(
+        db: Database, pageID: PageID, head: String?,
+        title: String, slug: String,
+        body: String, bodyData: Data, hash: String,
+        lastEditedBy: String?, now: Date, nowTS: Double
+    ) throws -> String {
+        // No-op guard: identical body AND title = no real change. Skip the
+        // version-append and the `pages` UPDATE (the ref's generation is
+        // unchanged too). The mirror already reflects the head. `wikictl`'s
+        // idempotent re-writes are the common case here — saves a row + a
+        // `pages` UPDATE per no-op save. Returns the existing head's id so the
+        // public caller's return value stays consistent with "the active
+        // version after this save".
+        if let head,
+           let headRow = try Row.fetchOne(db, sql: """
+                SELECT pv.blob_hash, pv.title
+                FROM page_versions pv WHERE pv.id = ?;
+                """, arguments: [head])
+        {
+            let headHash: String? = headRow["blob_hash"]
+            let headTitle: String? = headRow["title"]
+            if headHash == hash && headTitle == title {
+                // Still bump the mirror's `updated_at` so callers observing
+                // `updated_at` see refreshed activity without polluting the
+                // version chain (a `wikictl` re-write is a real "save attempt"
+                // — just a content-no-op). No `version` bump.
+                try db.execute(sql: """
+                UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
+                """, arguments: [nowTS, lastEditedBy, pageID.rawValue])
+                return head
+            }
+        }
+
+        // 2. Blob (identical body = one row, ever).
+        try db.execute(sql: """
+        INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
+        """, arguments: [hash, Int64(bodyData.count), bodyData])
+
+        // 3. Real named agent (page provenance #page-provenance) + an
+        //    'edit' activity. Degrades to legacy-import for nil/empty authors.
+        let agentID = try self.ensurePageAuthorAgent(lastEditedBy, on: db)
+        let activityID = ULID.generate()
+        try db.execute(sql: """
+        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+        VALUES (?, 'edit', ?, ?, ?);
+        """, arguments: [activityID, agentID, nowTS, nowTS])
+
+        // 4. New version (parent = current head, or NULL for a brand-new page
+        //    with no prior versions — `head == nil` should not happen after v34
+        //    migration but is defensive).
+        let versionID = ULID.generate()
+        try db.execute(sql: """
+        INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
+        """, arguments: [versionID, pageID.rawValue, head, hash, title, activityID, nowTS])
+
+        // 5. Update the denormalized pages mirror.
+        try db.execute(sql: """
+        UPDATE pages
+        SET title = ?, slug = ?, body_markdown = ?,
+            updated_at = ?, version = version + 1, last_edited_by = ?
+        WHERE id = ?;
+        """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+        guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
+
+        // 6. Write the page-content ref.
+        try db.execute(sql: """
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?, ?, 1, ?)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = generation + 1,
+            updated_at = excluded.updated_at;
+        """, arguments: [pageID.rawValue, versionID, nowTS])
+
+        return versionID
     }
 
 
@@ -4170,6 +4374,125 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    /// The origin provenance of a page's active (HEAD) version: joins
+    /// `refs → page_versions → activities → agents` (the read mirror of the
+    /// page-PROV graph substrate sources already use). Falls back to the
+    /// default-active rule (`MAX(id)` version) when no `page-content` ref
+    /// exists (should not happen after v34 migration, but defensive). Returns
+    /// `nil` when the page has no version rows (unknown id).
+    ///
+    /// NULL activity/agent columns degrade gracefully:
+    /// - no activity → `activityKind` falls back to `"import"`, `plan`/`externalRef` to `nil`;
+    /// - no agent → `agentName` falls back to `"unknown"`, `agentKind` to `"software"`
+    ///   (the kind of the shared `legacy-import` agent that pre-v39 rows point at).
+    ///
+    /// Read-only: routes through `dbWriter.read` so this is safe off-main via
+    /// `WikiReadPool` (a pooled store is `GRDBWikiStore(readOnlyURL:)`, no
+    /// migrations). READ-ONLY → emits no `ResourceChangeEvent`.
+    public func pageOrigin(pageID: PageID) throws -> PageOrigin? {
+        try dbWriter.read { db in
+            let cols = """
+            pv.id, pv.title, pv.blob_hash,
+            a.name, a.kind,
+            act.kind, act.plan, act.external_ref,
+            pv.saved_at
+            """
+            // 1. Prefer the active ref (matches pageHeadVersionIDLocked).
+            if let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT \(cols)
+                FROM refs r
+                JOIN page_versions pv ON pv.id = r.version_id
+                LEFT JOIN activities act ON act.id = pv.activity_id
+                LEFT JOIN agents a ON a.id = act.agent_id
+                WHERE r.kind = 'page-content' AND r.owner_id = ?;
+                """,
+                arguments: [pageID.rawValue]
+            ) {
+                return Self.pageOriginFrom(row: row)
+            }
+            // 2. Fall back to the default-active rule: MAX(id) version.
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT \(cols)
+                FROM page_versions pv
+                LEFT JOIN activities act ON act.id = pv.activity_id
+                LEFT JOIN agents a ON a.id = act.agent_id
+                WHERE pv.page_id = ? ORDER BY pv.id DESC LIMIT 1;
+                """,
+                arguments: [pageID.rawValue]
+            ) else { return nil }
+            return Self.pageOriginFrom(row: row)
+        }
+    }
+
+    /// The full edit history for a page — every `page_versions` row joined to
+    /// its `activities` → `agents` (extends `pageVersionHistory` with the
+    /// PROV join). Ordered OLDEST-FIRST (matches `pageVersionHistory` so
+    /// `entry.last` is the HEAD). An empty page (`createPage`'s empty root)
+    /// is included as one entry (kind 'import'); a fresh-then-edited page
+    /// therefore returns exactly 2 entries (the empty root + the first real
+    /// edit) — unless the same author edited within the 5s amend-coalescing
+    /// window, in which case the second save amends the root in place and no
+    /// new version row is appended (autosave semantics — see
+    /// `tryAmendPageVersion`). Read-only: emits nothing.
+    public func pageEditHistory(pageID: PageID) throws -> [PageOrigin] {
+        try dbWriter.read { db in
+            let cols = """
+            pv.id, pv.title, pv.blob_hash,
+            a.name, a.kind,
+            act.kind, act.plan, act.external_ref,
+            pv.saved_at
+            """
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT \(cols)
+                FROM page_versions pv
+                LEFT JOIN activities act ON act.id = pv.activity_id
+                LEFT JOIN agents a ON a.id = act.agent_id
+                WHERE pv.page_id = ?
+                ORDER BY pv.id ASC;
+                """,
+                arguments: [pageID.rawValue]
+            )
+            return rows.map { Self.pageOriginFrom(row: $0) }
+        }
+    }
+
+    /// Decode a `PageOrigin` from a joined row. NULL activity/agent columns
+    /// degrade gracefully (matches `originFrom(row:)` for sources).
+    private static func pageOriginFrom(row: Row) -> PageOrigin {
+        // Position 0..8 mirrors the SELECT column order in `pageOrigin`/
+        // `pageEditHistory`. `pv.id`/`pv.title`/`pv.blob_hash`/`pv.saved_at`
+        // are NOT NULL per the `page_versions` schema; the LEFT-joined
+        // `agents` + `activities` columns can be NULL (a pre-v39 page whose
+        // activity's agent was deleted, or a root version whose activity_id is
+        // somehow null). `String?` decodes both cases; `?? default` degrades.
+        let versionID: String = (row[0] as String?) ?? ""
+        let title: String = (row[1] as String?) ?? ""
+        let blobHash: String? = row[2]
+        let agentName: String? = row[3]
+        let agentKind: String? = row[4]
+        let activityKind: String? = row[5]
+        let plan: String? = row[6]
+        let externalRef: String? = row[7]
+        let savedAt: Double = (row[8] as Double?) ?? 0
+        return PageOrigin(
+            versionID: versionID,
+            title: title,
+            blobHash: blobHash,
+            agentName: agentName ?? "unknown",
+            agentKind: agentKind ?? "software",
+            activityKind: activityKind ?? "import",
+            plan: plan,
+            externalRef: externalRef,
+            savedAt: Date(timeIntervalSince1970: savedAt)
+        )
     }
 
 

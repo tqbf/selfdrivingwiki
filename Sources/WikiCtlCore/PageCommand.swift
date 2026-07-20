@@ -48,6 +48,11 @@ public enum PageCommand {
         /// Revert a page to a specific version (W0, PR #312). Repoints the
         /// page-content ref to `versionID` and updates the body mirror.
         case revert(Selector, versionID: String)
+        /// Print identity (id, title, slug, created/updated, version count) +
+        /// origin provenance (HEAD's agent + activity, edit history) for a
+        /// page. Mirrors `source info` (`SourceCommand.info`) — a read-side
+        /// diagnostic for agents + debugging. Read-only.
+        case info(Selector)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -97,6 +102,8 @@ public enum PageCommand {
             return try history(selector, in: store)
         case .revert(let selector, let versionID):
             return try revert(selector, versionID: versionID, in: store)
+        case .info(let selector):
+            return try info(selector, in: store)
         }
     }
 
@@ -344,6 +351,67 @@ public enum PageCommand {
         let id = try resolve(selector, in: store)
         try store.revertPage(pageID: id, to: versionID)
         return Result(output: "reverted \(id.rawValue) to \(versionID)", didCommit: true)
+    }
+
+    // MARK: - info (page provenance, #page-provenance)
+
+    /// Print identity (id, title, slug, head version id, version count,
+    /// created/updated) + origin provenance for the page's HEAD + every prior
+    /// version. Mirrors `SourceCommand.info`. Read-only. The HEAD's
+    /// `agentName` reflects the writer — for a chat edit, `"chat:<id>"`;
+    /// for an ingestion executor, `"agent:<kind>"`; for a manual app edit,
+    /// `"user"`; for pre-v39 rows, `"legacy-import"`.
+    private static func info(_ selector: Selector, in store: WikiStore) throws -> Result {
+        let id = try resolve(selector, in: store)
+        let page = try store.getPage(id: id)
+        let headVersionID = try store.pageHeadVersionID(pageID: id)
+        let history = try store.pageVersionHistory(pageID: id)
+
+        var lines: [String] = []
+        lines.append("id\t\(page.id.rawValue)")
+        lines.append("title\t\(page.title)")
+        lines.append("slug\t\(page.slug)")
+        if let createdBy = page.createdBy { lines.append("created_by\t\(createdBy)") }
+        if let lastEditedBy = page.lastEditedBy { lines.append("last_edited_by\t\(lastEditedBy)") }
+        lines.append("version\t\(page.version)")
+        let created = ISO8601DateFormatter().string(from: page.createdAt)
+        let updated = ISO8601DateFormatter().string(from: page.updatedAt)
+        lines.append("created_at\t\(created)")
+        lines.append("updated_at\t\(updated)")
+        lines.append("version_count\t\(history.count)")
+        if let headVersionID {
+            lines.append("head_version_id\t\(headVersionID)")
+        }
+
+        // HEAD origin (the active page-content ref → version → activity → agent).
+        if let origin = try store.pageOrigin(pageID: id) {
+            lines.append("")
+            lines.append("# origin (HEAD)")
+            lines.append("activity\t\(origin.activityKind)")
+            lines.append("agent\t\(origin.agentName)")
+            lines.append("agent_kind\t\(origin.agentKind)")
+            if let plan = origin.plan { lines.append("plan\t\(plan)") }
+            if let extRef = origin.externalRef { lines.append("external_ref\t\(extRef)") }
+            let savedAt = ISO8601DateFormatter().string(from: origin.savedAt)
+            lines.append("saved_at\t\(savedAt)")
+            if let hash = origin.blobHash { lines.append("blob_hash\t\(hash)") }
+        }
+
+        // Full edit history (every page_versions row joined to activity + agent).
+        let editHistory = try store.pageEditHistory(pageID: id)
+        if !editHistory.isEmpty {
+            lines.append("")
+            lines.append("# edit history (oldest-first)")
+            for (i, entry) in editHistory.enumerated() {
+                let savedAt = ISO8601DateFormatter().string(from: entry.savedAt)
+                // seq<TAB>activity<TAB>agent<TAB>agent_kind<TAB>date<TAB>title<TAB>version_id<TAB>blob_hash
+                let hash = entry.blobHash?.prefix(12) ?? "—"
+                let parent = history[i].parentID?.prefix(12) ?? "—"
+                lines.append("\(i)\t\(entry.activityKind)\t\(entry.agentName)\t\(entry.agentKind)\t\(savedAt)\t\(entry.title)\t\(entry.versionID.prefix(12))\t\(hash)\t\(parent)")
+            }
+        }
+
+        return Result(output: lines.joined(separator: "\n"), didCommit: false)
     }
 
     // MARK: - Selector resolution
