@@ -1182,6 +1182,13 @@ public final class WikiStoreModel {
             // store write. The title is passed to openTab explicitly, so tabTitle
             // (which reads `summaries`) is never called and needs no synchronous freshness.
             openTab(.page(page.id), title: title)
+            // New pages start in the editor so the user lands on the source view,
+            // not an empty rendered page. Per-tab (not global): navigation-opened
+            // pages keep their own mode. `PageDetailView.onAppear` seeds from this
+            // and its `.onChange(of: isEditing)` expands the header for free.
+            if let id = activeTabID {
+                setTabEditing(tabID: id, isEditing: true)
+            }
         } catch {
             DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
         }
