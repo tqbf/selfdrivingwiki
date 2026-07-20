@@ -43,10 +43,6 @@ struct AgentsSettingsView: View {
     /// chevron) avoids a friction click on every visit.
     @State private var isExpanded = true
 
-    @AppStorage(AgentLauncher.PermissionModeKey.chat)   private var chatModeRaw   = PermissionPolicy.bypass.rawValue
-    @AppStorage(AgentLauncher.PermissionModeKey.ingest) private var ingestModeRaw = PermissionPolicy.bypass.rawValue
-    @AppStorage(AgentLauncher.PermissionModeKey.lint)   private var lintModeRaw   = PermissionPolicy.bypass.rawValue
-
     let containerDirectory: URL
     private let credentialStore: any ACPCredentialStore
 
@@ -75,7 +71,6 @@ struct AgentsSettingsView: View {
         ) {
             Form {
                 providersSection
-                permissionSection
             }
             .formStyle(.grouped)
             .frame(minWidth: 560, minHeight: 520)
@@ -147,7 +142,7 @@ struct AgentsSettingsView: View {
                             editingProvider = provider
                         }
                 }
-                .frame(minHeight: 160, maxHeight: 220)
+                .frame(minHeight: 160)
                 .listStyle(.inset)
 
                 HStack {
@@ -405,41 +400,6 @@ struct AgentsSettingsView: View {
             selectedProviderID = config.providers.first?.id
         }
         providerPendingDeletion = nil
-    }
-
-    // MARK: - Permission mode (moved from the old Agent tab)
-
-    /// #607: per-operation permission pickers. Pre-split, a single shared
-    /// `agentPermissionMode` key fed chat + ingest + lint — a user who chose
-    /// `alwaysAsk` for chat got the same gating applied to an unattended
-    /// ingest/lint, guaranteeing a stall on the first prompt needing a
-    /// permission (#606). Now three independent pickers. Extraction is
-    /// intentionally omitted — see `plans/acp-permissions.md` §5.1 (extraction
-    /// keeps its `.bypass` default on `ACPExtractionClient`).
-    private var permissionSection: some View {
-        Section {
-            Picker("Chat Permission Mode", selection: $chatModeRaw) {
-                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                    Text(mode.label).tag(mode.rawValue)
-                }
-            }
-            Picker("Ingest Permission Mode", selection: $ingestModeRaw) {
-                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                    Text(mode.label).tag(mode.rawValue)
-                }
-            }
-            Picker("Lint Permission Mode", selection: $lintModeRaw) {
-                ForEach(PermissionPolicy.allCases, id: \.rawValue) { mode in
-                    Text(mode.label).tag(mode.rawValue)
-                }
-            }
-        } header: {
-            Text("Permissions")
-        } footer: {
-            Text("These control how the app responds to the agent's permission requests for each operation. Ingest and Lint run unattended — Bypass is recommended (the sandbox already confines writes; an unattended pipeline can't use Always Ask productively, and a stuck permission would auto-reject after 60s).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 
     // MARK: - Persistence
