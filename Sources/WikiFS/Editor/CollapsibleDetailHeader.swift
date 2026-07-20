@@ -62,6 +62,7 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
                     placeholder: placeholder,
                     lineLimit: titleLineLimit,
                     isDisabled: isTitleDisabled,
+                    onSingleTap: toggleExpanded,
                     onCommit: onTitleCommit
                 )
             } icon: {
@@ -71,11 +72,14 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            DebugLog.tabs("CollapsibleDetailHeader: header double-tapped — wasExpanded=\(isExpanded)")
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isExpanded.toggle()
-            }
+        .onTapGesture { toggleExpanded() }
+        .hoverRowBackground()
+    }
+
+    private func toggleExpanded() {
+        DebugLog.tabs("CollapsibleDetailHeader: header tapped — wasExpanded=\(isExpanded)")
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isExpanded.toggle()
         }
     }
 }

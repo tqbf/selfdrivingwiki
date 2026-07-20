@@ -21,6 +21,10 @@ struct EditableTitle: View {
     /// When true, double-click and the Rename menu item are inert (e.g. while the
     /// agent is updating the wiki).
     var isDisabled: Bool = false
+    /// Single-tap on the title text. The detail header uses this to toggle
+    /// expand/collapse, so a click anywhere on the row toggles — not just the
+    /// empty space beside the title. Defaults to nil so other callers are unaffected.
+    var onSingleTap: (() -> Void)? = nil
     /// Called with the new trimmed title on a real rename (non-empty, changed).
     let onCommit: (String) -> Void
 
@@ -53,6 +57,7 @@ struct EditableTitle: View {
                     .lineLimit(lineLimit)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { begin() }
+                    .onTapGesture(count: 1) { onSingleTap?() }
                     .contextMenu {
                         Button("Rename") { begin() }
                             .disabled(isDisabled)

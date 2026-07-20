@@ -48,6 +48,9 @@ struct ProviderSelector: View {
     /// The row currently under the pointer (for the hover highlight).
     @State private var hoveredRowID: String?
 
+    /// Whether the trigger chip is currently under the pointer.
+    @State private var isHovered = false
+
     @Environment(\.openSettings) private var openSettings
 
     init(launcher: AgentLauncher) {
@@ -65,8 +68,17 @@ struct ProviderSelector: View {
         config.enabledProviders
     }
 
+    /// The effective provider for chat: the chat stage's pinned provider when
+    /// set + enabled, else the global default. **Decision A**
+    /// (`plans/agent-settings-tabs.md` §6.5): the composer chip must reflect
+    /// the provider chat will ACTUALLY use, so when the chat stage is pinned
+    /// the chip shows the pinned provider — no silent mismatch. Selecting a
+    /// row in the popover still sets the GLOBAL default via
+    /// `setSelectedModelAndDefault(...)` (unchanged behavior); picking in the
+    /// composer affects everything that follows "Default", just not a pinned
+    /// chat stage.
     private var current: AgentProvider {
-        config.selectedProvider()
+        config.provider(forStage: "chat")
     }
 
     var body: some View {
@@ -311,22 +323,31 @@ struct ProviderSelector: View {
 
     // MARK: - Trigger
 
-    /// The compact trigger: glyph + "Provider · model" + chevron. `.caption`
-    /// type + secondary fill so it reads as an auxiliary affordance under the
-    /// composer, not a primary control. The model segment reflects the
-    /// per-provider selection, or "default" when none is set.
+    /// The compact trigger: glyph + "Provider · model" + chevron. `.callout`
+    /// type + primary fill so it reads as a real affordance under the
+    /// composer. The model segment reflects the per-provider selection, or
+    /// "default" when none is set. A subtle hover bubble (matching the
+    /// popover-row idiom) signals clickability.
     private var trigger: some View {
         HStack(spacing: 4) {
             Image(systemName: glyph(for: current))
                 .foregroundStyle(Color.blue)
             Text(triggerLabel)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Image(systemName: "chevron.up.chevron.down")
                 .imageScale(.small)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.primary)
         }
         .font(.callout)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+                .padding(.horizontal, -4)
+                .padding(.vertical, -2)
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
     }
 
     /// "Provider · model". For ACP providers the model is the user's selection

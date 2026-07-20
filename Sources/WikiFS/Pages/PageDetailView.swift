@@ -438,9 +438,15 @@ struct PageDetailView: View {
                     history: provenanceHistory)
                 .padding(.top, 4)
             } label: {
-                Label("Provenance", systemImage: "clock.arrow.circlepath")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Label("Provenance", systemImage: "clock.arrow.circlepath")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .hoverRowBackground()
             }
             .task(id: ProvenanceTaskKey(pageID: pageID, expanded: isProvenanceExpanded)) {
                 // Only load when expanded; a collapsed panel needs no read.

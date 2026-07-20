@@ -280,6 +280,14 @@ public final class WikiStoreModel {
     }
 
     private let store: WikiStore
+
+    /// The underlying concrete `WikiStore` (concretely `GRDBWikiStore` in
+    /// production). Exposed so the reader can hand it to off-main read helpers
+    /// (`TransclusionEmbedder.renderEmbedBody`) for the no-`readPool` fallback
+    /// (in-memory tests; rare in production — `WikiSession.init` always sets
+    /// `readPool` for file-backed wikis). Cast to `GRDBWikiStore` at the call
+    /// site; that is the only concrete conformer today.
+    public var internalStore: WikiStore { store }
     /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
     /// Injected by `WikiSession.init` for file-backed wikis; `nil` for
     /// in-memory stores (a separate connection to `:memory:` would see a

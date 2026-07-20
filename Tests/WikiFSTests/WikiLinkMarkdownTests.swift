@@ -362,6 +362,91 @@ struct WikiLinkMarkdownTests {
         #expect(url.fragment == nil)
     }
 
+    // MARK: - Pipe inside the NAME (issue #619 render-path mirror)
+    //
+    // The regex splits `[[target|alias]]` at the first `|`, but a display
+    // name can legitimately contain a literal `|` (YouTube titles the app
+    // ingests, doc-set names like "Flex Tier - Documentation | Neuralwatt
+    // Cloud"). On the render path used by chat (which never canonicalizes),
+    // the split target is truncated and would render as inert
+    // `wiki://missing`. The reconstruction below mirrors the canonicalize-seam
+    // fix (WikiLinkRewriter.swift:71-126): try `bareTarget | alias` whole
+    // through resolvedSplit, emit a navigable link when it resolves.
+
+    @Test func pipeInSourceNameResolvesViaAliasReconstruction() {
+        // A source whose display name contains a literal `|`. The regex
+        // splits at `|`, but the reconstructed whole name resolves.
+        let out = WikiLinkMarkdown.linkified(
+            "[[source:Flex Tier - Documentation | Neuralwatt Cloud]]"
+        ) { name, kind in
+            name == "Flex Tier - Documentation | Neuralwatt Cloud" && kind == .source
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Flex Tier - Documentation | Neuralwatt Cloud")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .source)
+    }
+
+    @Test func pipeInSourceNameWithQuoteFragmentResolves() {
+        // The chat footnote case: pipe-containing name + #"quote" anchor.
+        // The fragment lands in the alias portion after the `|` split; the
+        // reconstruction carries it through resolvedSplit.
+        let out = WikiLinkMarkdown.linkified(
+            "[[source:Flex Tier - Documentation | Neuralwatt Cloud#\"a quoted passage\"]]"
+        ) { name, kind in
+            name == "Flex Tier - Documentation | Neuralwatt Cloud" && kind == .source
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Flex Tier - Documentation | Neuralwatt Cloud")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .source)
+        #expect(WikiLinkMarkdown.fragment(from: url) == "\"a quoted passage\"")
+    }
+
+    @Test func pipeInPageNameResolvesViaAliasReconstruction() {
+        // Page-side equivalent: a page title containing `|`.
+        let out = WikiLinkMarkdown.linkified(
+            "[[But what is cross-entropy? | Compression is Intelligence Part 2]]"
+        ) { name, kind in
+            name == "But what is cross-entropy? | Compression is Intelligence Part 2" && kind == .page
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url)
+                == "But what is cross-entropy? | Compression is Intelligence Part 2")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .page)
+    }
+
+    @Test func pipeInChatNameResolvesViaAliasReconstruction() {
+        // Chat-side equivalent: a chat title containing `|`.
+        let out = WikiLinkMarkdown.linkified(
+            "[[chat:Standup - 2026-01-15 | Project Alpha]]"
+        ) { name, kind in
+            name == "Standup - 2026-01-15 | Project Alpha" && kind == .chat
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Standup - 2026-01-15 | Project Alpha")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .chat)
+    }
+
+    @Test func genuineAliasUnaffectedByPipeReconstruction() {
+        // `[[Alpha|B]]` where Alpha exists and "Alpha | B" does NOT: the
+        // reconstruction fails, falls through to the normal path, resolves Alpha.
+        let out = WikiLinkMarkdown.linkified("[[Alpha|B]]") { name, _ in
+            name == "Alpha"
+        }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Alpha")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .page)
+    }
+
+    @Test func pipeReconstructionFallsThroughToMissingWhenUnresolved() {
+        // Neither the truncated target nor the reconstructed whole resolves:
+        // falls through to today's behavior — `wiki://missing`, no navigation.
+        let out = WikiLinkMarkdown.linkified("[[source:Ghost | Pipeline]]") { _, _ in false }
+        let url = URL(string: extractURL(out))!
+        #expect(WikiLinkMarkdown.target(from: url) == "Ghost")
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == nil)
+        #expect(out.contains("wiki://missing"))
+    }
+
     // MARK: - Code-span protection for source links
 
     @Test func sourceLinkInsideCodeSpanIsLiteral() {
@@ -451,37 +536,50 @@ struct WikiLinkMarkdownTests {
         #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
     }
 
-    @Test func embedUnresolvedSourceFallsBackToCiteLink() {
-        // embedInfo returns nil → fallback to a cite link (ghost styling).
+    @Test func embedUnresolvedSourceRendersBrokenHeader() {
+        // Plan v2: a `![[source:…]]` whose source does NOT resolve (embedInfo
+        // returns nil) renders a muted broken-source `<details>` instead of a
+        // cite link — header is "Source not found: Ghost", no fetch metadata.
         let out = WikiLinkMarkdown.linkified(
             "![[source:Ghost]]",
             isResolved: { _, _ in false },
             embedInfo: { _ in nil }
         )
-        #expect(out.contains("wiki://missing"))
+        #expect(out.contains("sdw-transclusion"))
+        #expect(out.contains("data-sdw-state=\"missing\""))
+        #expect(out.contains("Source not found: Ghost"))
+        #expect(!out.contains("data-sdw-embed-target"))  // inert — no fetch
         #expect(!out.contains("<img"))
     }
 
-    @Test func embedUnknownMimeFallsBackToCiteLink() {
-        // Source resolves but MIME is not renderable (e.g. text/plain).
+    @Test func embedUnknownMimeRendersTransclusion() {
+        // Plan v2: a resolved source whose MIME is non-media (text/plain)
+        // renders a collapsed `<details>` transclusion (lazy fetch on expand),
+        // not a cite link.
         let id = PageID(rawValue: "01HTESTTXT00000000000000005")
         let out = WikiLinkMarkdown.linkified(
             "![[source:notes.txt]]",
             isResolved: { _, _ in true },
             embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain") }
         )
-        #expect(out.contains("wiki://source"))
+        #expect(out.contains("sdw-transclusion"))
+        #expect(out.contains("data-sdw-embed-kind=\"source\""))
+        #expect(out.contains("data-sdw-embed-id=\"\(id.rawValue)\""))
         #expect(!out.contains("<img"))
         #expect(!out.contains("<video"))
+        #expect(!out.contains("wiki://source"))
     }
 
-    @Test func embedWithNoResolverFallsBackToCiteLink() {
-        // No embedInfo passed → fallback to cite link.
+    @Test func embedWithNoResolverRendersBrokenHeader() {
+        // Plan v2: no embedInfo passed → the source is treated as unresolved
+        // and renders a muted broken-source `<details>`.
         let out = WikiLinkMarkdown.linkified(
             "![[source:img.png]]",
             isResolved: { _, _ in true }
         )
-        #expect(out.contains("wiki://source"))
+        #expect(out.contains("sdw-transclusion"))
+        #expect(out.contains("data-sdw-state=\"missing\""))
+        #expect(out.contains("Source not found"))
         #expect(!out.contains("<img"))
     }
 
@@ -551,9 +649,11 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedSyntheticMimeWithoutTargetFallsBackToCiteLink() {
-        // AC.4 / R2 regression: a byteless source with a synthetic mime
-        // (video/youtube) but NO resolved target must fall back to a cite link —
-        // NOT emit a broken <video src="wiki-blob://…"> against empty bytes.
+        // AC.4 / R2 regression + Plan v2 §15.2 gotcha: a byteless source with
+        // a synthetic mime (video/youtube) but NO resolved target must NOT
+        // become a transclusion either — it falls back to a cite link so the
+        // user can navigate to the source page. (A non-media transclusion
+        // would render an empty body.)
         let id = PageID(rawValue: "01HTESTSYN000000000000000D")
         let out = WikiLinkMarkdown.linkified(
             "![[source:video]]",
@@ -563,6 +663,7 @@ struct WikiLinkMarkdownTests {
         #expect(out.contains("wiki://source"))  // cite link fallback
         #expect(!out.contains("<video"))
         #expect(!out.contains("wiki-blob://"))
+        #expect(!out.contains("sdw-transclusion"))
     }
 
     @Test func embedBytefulStillUsesBlobDispatch() {
@@ -577,12 +678,16 @@ struct WikiLinkMarkdownTests {
         #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
     }
 
-    @Test func pageEmbedPrefixConsumedAndRendersAsLink() {
-        // `![[Page]]` is not a valid embed; the `!` is consumed so it doesn't
-        // form a CommonMark image, and the link renders normally.
+    @Test func pageEmbedPrefixRendersTransclusion() {
+        // Plan v2: `![[Page]]` is a valid embed — it renders a collapsed
+        // `<details>` transclusion. The `!` is consumed (not emitted as text).
         let out = WikiLinkMarkdown.linkified("![[Home]]", isResolved: { _, _ in true })
-        #expect(out.contains("[Home](wiki://page?title=Home)"))
+        #expect(out.contains("sdw-transclusion"))
+        #expect(out.contains("data-sdw-embed-kind=\"page\""))
+        #expect(out.contains("<summary>"))
+        #expect(out.contains("Home"))
         #expect(!out.contains("!"))
+        #expect(!out.contains("wiki://page"))  // not a cite link
     }
 
     @Test func embedInSentenceDoesNotConsumePrecedingText() {

@@ -104,4 +104,79 @@ struct AgentProvidersConfigSeedBackfillTests {
         // (empty as written). The guard will refuse spawn on opencode here.
         #expect(loaded.selectedModelId(forProvider: "claude-acp") == nil)
     }
+
+    // MARK: - stageProviderIds (agent-settings-tabs HIGH #1)
+
+    @Test func oldConfigWithoutStageProviderIdsDecodesToEmpty() throws {
+        // A pre-agent-settings-tabs `agent-providers.json` (no
+        // `stageProviderIds` key) decodes to `[:]` → every stage uses the
+        // global default provider (no migration, no behavior change).
+        let json = """
+        {
+          "providers": [
+            { "id": "claude-acp", "label": "Claude", "command": ["bun"], "env": {}, "enabled": true, "isDefault": true }
+          ],
+          "providerModels": {},
+          "selectedModelIds": { "claude-acp": "sonnet" },
+          "favoriteModelIds": {},
+          "maxConcurrent": {},
+          "ingestStageModelIds": {}
+        }
+        """
+        let data = Data(json.utf8)
+        let config = try JSONDecoder().decode(AgentProvidersConfig.self, from: data)
+        #expect(config.stageProviderIds == [:])
+        #expect(config.provider(forStage: "chat").id == "claude-acp")
+    }
+
+    @Test func loadOrSeedRoundTripsStageProviderIds() throws {
+        // HIGH #1: `loadOrSeed` reconstructs the config via an explicit field
+        // list (its own comments warn it silently drops unlisted fields).
+        // `stageProviderIds` MUST be carried through that reconstruction or
+        // per-stage provider pins vanish on restart. This test writes pins,
+        // reloads via `loadOrSeed`, and asserts the pins SURVIVE.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-providers-stage-pin-rt-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let original = AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: "claude-acp", label: "Claude",
+                    command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
+                    env: [:], enabled: true, isDefault: true),
+                AgentProvider(
+                    id: "acme", label: "Acme",
+                    command: ["acme", "acp"], env: [:],
+                    enabled: true, isDefault: false),
+            ],
+            selectedModelIds: ["claude-acp": "sonnet", "acme": "acme-1"],
+            stageProviderIds: [
+                "chat": "acme",
+                "lint": "claude-acp",
+                "planner": "acme",
+            ])
+        try original.save(to: tmp)
+
+        let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
+        // The pins survive the loadOrSeed reconstruction.
+        #expect(loaded.stageProviderIds["chat"] == "acme")
+        #expect(loaded.stageProviderIds["lint"] == "claude-acp")
+        #expect(loaded.stageProviderIds["planner"] == "acme")
+        // And they resolve correctly.
+        #expect(loaded.provider(forStage: "chat").id == "acme")
+        #expect(loaded.provider(forStage: "lint").id == "claude-acp")
+    }
+
+    @Test func stageProviderIdsEncodeAndDecodeThroughJSON() throws {
+        // The new field round-trips through Codable (encode → decode).
+        let original = AgentProvidersConfig(
+            providers: [.claudeAcpDefault],
+            selectedModelIds: ["claude-acp": "sonnet"],
+            stageProviderIds: ["chat": "claude-acp", "lint": "custom"])
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AgentProvidersConfig.self, from: encoded)
+        #expect(decoded.stageProviderIds == ["chat": "claude-acp", "lint": "custom"])
+    }
 }

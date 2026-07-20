@@ -77,6 +77,222 @@ screen/accessibility access.)
 **Result:** 3135 suites / 3135 tests pass (was 3133/264; +2 EditorTabTests
 already counted in the first run, +1 suite/2 tests for the hosted view tests).
 `make build` + `make check` clean.
+## 2026-07-20 — Global keyboard shortcuts for the five "Add" actions (branch `add-keybindings`)
+
+**Problem.** The five "Add" actions (Page, URL, File, Folder, Chat) were only
+reachable from their on-screen buttons — sidebar headers and the welcome /
+empty-state screen. There was no global keyboard path, so adding things required
+leaving the keyboard. Plan: [`plans/add-keybindings.md`](plans/add-keybindings.md).
+
+**Fix.** Extended the existing `ContentView.keyboardShortcutButtons` hidden-button
+group (`Sources/WikiFS/Window/ContentView.swift:348`) — the app's established
+idiom for global shortcuts tied to the active wiki's model (already powers
+Cmd-W, Cmd-Shift-T, Cmd-L, Cmd-1…9). Five new invisible buttons each invoke the
+*same handler* as the on-screen button — no duplicated logic:
+
+| Action | Shortcut | Handler (unchanged) |
+|---|---|---|
+| Add Page | ⌘⇧P | `store.newPageInNewTab()` |
+| Add URL | ⌘⇧U | `pendingAddURL = PendingAddURL(url: "")` (presents `AddFromURLSheet`) |
+| Add File | ⌘⇧F | `WikiFilePanels.chooseFile` → `Task { await store.addFiles([url]) }` |
+| Add Folder | ⌘⇧D | `showingImportMarkdown = true` (presents `ImportMarkdownSheet`) |
+| Add Chat | ⌘⇧C | `store.openTab(.newChat)` |
+
+Every button is `.opacity(0).allowsHitTesting(false)` so it's invisible and
+non-interactive — same as the existing entries. The shortcuts live on
+`ContentView` (in `.background { keyboardShortcutButtons }`), which is always
+mounted for the active wiki window, so they fire regardless of which descendant
+view (sidebar, editor, chat composer, address bar, welcome state) has focus.
+They are scoped to the wiki `ContentView`'s responder chain by construction, so
+they do **not** fire when Settings (or any non-wiki window) is key.
+
+**Why ⌘⇧?** The ⌘⇧ family is already established in-app for "new/special"
+actions (⇧⌘T reopen tab, ⇧⌘[/⇧⌘] cycle tabs). Each binding is mnemonic
+(first letter of the noun) and verified unclaimed against the app's full
+`.keyboardShortcut` surface and macOS conventions. ⌘N was deliberately
+suppressed (issue #396) and is **not** reclaimed. See `plans/add-keybindings.md`
+§4 for the full collision audit.
+
+**Why not `@FocusedValue` / menu commands?** The handlers are already reachable
+from `ContentView`'s scope (it owns `store` and the sheet `@State`), so
+`@FocusedValue` would add complexity for zero benefit. A `CommandGroup`
+(File ▸ New ▸ …) is a reasonable future discoverability nicety but would need
+the `sessionManager.frontmostSession?.store` indirection — deferred unless
+explicitly wanted; the shortcuts themselves work globally without it.
+
+**Evidence.** `make build` ✓ (signed `build/Self Driving Wiki.app`).
+`make test` ✓ — all 3167 tests in 266 suites passed. The shortcut wiring is
+pure UI glue that reuses existing handlers verbatim, so it inherits the model
+methods' existing test coverage (no new unit tests introduced; keyboard
+shortcuts are not unit-testable without UI tests). Live validation matrix
+(§7 of the plan) — firing each shortcut from sidebar / page editor / chat
+composer / address bar / welcome / settings — to be confirmed manually on
+launch.
+
+---
+
+## 2026-07-20 — Generalized `![[X]]` embed: pages + non-media sources (branch `page-embeds`)
+
+**Problem.** `![[source:…]]` embeds worked for inline media (image / video /
+audio / PDF iframe / Mermaid) but `![[PageName]]` did nothing — the `!` was
+silently consumed and a page embed rendered as a plain cite link. Non-media
+sources (text, markdown) likewise had no embed path; they fell back to a cite
+link. Plan v2 (`plans/page-embed-v2.md`) generalizes `![[X]]` to embed **pages
+and non-media sources** in a collapsed `<details>` disclosure, lazily fetched +
+rendered on expand through the same `ReaderMarkdown.prepared` +
+`MarkdownHTMLRenderer.render` + `evaluateJavaScript` seam the reader already
+uses.
+
+**Approach (render-only; the `WikiLinkParser.parse` L184 reject gate stays in
+place — page embeds stay out of the link graph; that's a deferred follow-up).**
+
+1. **Linkify layer (pure, in `WikiLinkMarkdown.linkified`).** A new
+   `transclusionEmbedHTML(display:kind:id:target:fragment:name:)` helper emits
+   the collapsed `<details>`, and a new `brokenEmbedHTML(display:kind:)` emits
+   the muted missing-target disclosure. The embed dispatch was restructured at
+   BOTH call sites (canonical ULID and name-based) to:
+   - `kind == .page` → page transclusion when resolved, else broken-page header
+     (bare names fall back to the source namespace when a source exists).
+   - `kind == .source` → media inline via `embedHTML` (unchanged), else
+     non-media transclusion; synthetic-provider-mime w/o target stays a cite
+     link (§15.2 gotcha — never become a transclusion).
+   - `kind == .chat` → not an embed (cite link; consistent with the parser).
+   - Canonical ULID embeds probe both `displayName(id, .page)` and
+     `displayName(id, .source)`; page wins on collision; explicit `page:` /
+     `source:` prefixes force the namespace.
+
+2. **Pure fetch+render helpers (`Sources/WikiFS/Reader/TransclusionEmbedder.swift`,
+   new).** `renderEmbedBody(store:id:kind:context:)` is the single reuse point
+   guaranteeing nested `![[…]]` collapse and `[[…]]` link: it fetches
+   (`getPage` / `processedMarkdownHead` / raw UTF-8 for native text) and runs
+   the shared pipeline. Pure given a `:memory:` in-memory store — unit-tested
+   against the #658 fixtures. Includes pure helpers for the JS-string seam:
+   `injectJSCall` (HTML as a **parameter**, escaped via `WikiReaderRep.jsString`),
+   `cycleMarkerHTML` / `cycleMarkerJSCall`, `placeholderBodyHTML`, `isCycle`.
+
+3. **Expand layer (`WikiReaderView.swift`).** New `WKScriptMessageHandler`
+   (`embedFetchName`) + `WKUserScript` (`embedBootstrapJS`) define
+   `window.sdwInjectEmbed(embedId, html)` (param-based injection — never
+   string-concatenated) and bind one-shot `toggle` listeners. The Coordinator's
+   `handleEmbedFetch(body:)` (sync, fire-and-forget) /
+   `processEmbedFetch(body:)` (async, awaitable for tests): cycle check (no
+   fetch) → resolve id → fresh `store.renderContext()` → off-main
+   `readPool.asyncRead { TransclusionEmbedder.renderEmbedBody }` → safe-inject.
+
+4. **CSS** for `.sdw-transclusion` disclosure (collapsed-by-default, `▸` arrow
+   rotating 90° on open) + a NEW broken-state rule reusing `#ff453a`
+   (`.sdw-transclusion[data-sdw-state="missing"] .sdw-embed-title`). The
+   existing `a[href^="wiki://missing"]` selector is untouched.
+
+5. **`WikiStoreModel.internalStore`** — public accessor for the underlying
+   `WikiStore` so the Coordinator's no-`readPool` fallback (in-memory tests)
+   can cast to `GRDBWikiStore` and call `TransclusionEmbedder.renderEmbedBody`
+   directly. Production always goes through `readPool` (`WikiSession.init`
+   sets it for file-backed wikis).
+
+**Cycle safety (Plan v2 §8).** Primary bound = lazy-collapse (a body is fetched
+only when its specific `<details>` is opened; cycles can't infinite-loop because
+each level only deepens on explicit user action). Defense-in-depth: ancestor
+chain via `data-sdw-embed-path` (empty at linkify; populated by
+`sdwInjectEmbed` for each nested `<details>` = parent path + parent id). On
+expand, `TransclusionEmbedder.isCycle(path:id:)` checks membership; a hit
+renders `↩ PageName (cycle)` and skips the fetch entirely.
+
+**Tests.** `Tests/WikiFSTests/TransclusionEmbedTests.swift` (30 tests):
+17 linkify dispatch tests (page / source / pdf / mermaid / bare→source fallback
+/ page-wins-on-collision / explicit-prefix / broken-header / code-span
+protection / escaped bang), 6 pure fetch+render tests against in-memory fixtures
+(`:memory:` #658), 4 cycle + safe-injection helper tests, 3 Coordinator handler
+tests using a `deliverJS` recorder (cycle marker, safe-injection payload with
+the classic `");evil();//` breakout proving jsString neutralizes it, missing
+target placeholder). Updated 4 existing tests in `WikiLinkMarkdownTests.swift`
++ `DiagramEmbedTests.swift` whose pre-v2 assertions (cite-link fallback for
+unresolved / non-media / synthetic-provider-mime-without-target / `![[Page]]`)
+reflected the now-replaced behavior. Manual live validation procedure
+documented in `plans/page-embed-v2.md` §12.4 — live WKWebView JS is not
+drivable in-process; `log show --predicate 'subsystem ==
+"com.selfdrivingwiki.debug"' --info | grep embed-fetch` confirms fetch-on-expand
+and the cycle marker.
+
+**Files touched.** `Sources/WikiFSLinks/WikiLinkMarkdown.swift`,
+`Sources/WikiFS/Reader/TransclusionEmbedder.swift` (new),
+`Sources/WikiFS/Reader/WikiReaderView.swift`,
+`Sources/WikiFSCore/Store/WikiStoreModel.swift`,
+`Tests/WikiFSTests/TransclusionEmbedTests.swift` (new),
+`Tests/WikiFSTests/WikiLinkMarkdownTests.swift`,
+`Tests/WikiFSTests/DiagramEmbedTests.swift`,
+`plans/page-embed-v2.md` (the plan).
+
+---
+
+
+## 2026-07-20 — Collapsible row toggle: single-click + full-row + hover (branch `collapsible-row-toggle`)
+
+**Problem.** The chat title-pane section would not toggle on click — only the
+title text responded (and only to a double-click, which entered rename). Page
+*appeared* to work but only because its titles are short; Source had the same
+latent bug. Root cause was gesture competition + unreachable empty space:
+`CollapsibleDetailHeader.titleRow` used `.onTapGesture(count: 2)` for the toggle
+and `EditableTitle`'s `Text` *also* used `.onTapGesture(count: 2)` for rename —
+so double-clicks on the text always renamed, never toggled. The row toggle was
+only reachable by double-clicking empty space right of the title; but chat
+titles are `titleLineLimit: 1` and long, filling the 760pt `readableContentWidth`
+row, leaving no reachable empty space. All three call sites apply the 760pt cap
+identically, so Source had the same latent bug.
+
+**Fix.** Switched the shared `CollapsibleDetailHeader.titleRow` toggle from
+`count: 2` to a single tap (`.onTapGesture { … }`) on the full-row
+`contentShape(Rectangle())`. A single click anywhere on the row now toggles
+regardless of title length or remaining empty space; `EditableTitle` rename
+stays on `count: 2`, so an actual double-click of the text still renames. The
+chevron `Button` is kept as a complementary disclosure affordance (consumes its
+own tap, no double-fire). Applied to all three title panes (Page / Chat /
+Source) at once via the shared component — no call-site change needed.
+
+**Hover bubble.** New `Sources/WikiFS/Editor/HoverRowBackground.swift` — a
+reusable `ViewModifier` (`Color.primary.opacity(0.07)` in a
+`RoundedRectangle(cornerRadius: 6, style: .continuous)`, driven by `.onHover`,
+animated with `.animation(.easeInOut(duration: 0.15), value: isHovered)`).
+Adapts to light/dark automatically via `Color.primary`. Applied to
+`CollapsibleDetailHeader.titleRow` so the bubble spans the whole hit area.
+
+**Provenance.** Kept native `DisclosureGroup` in `PageDetailView.provenanceSection`
+(semantics/accessibility + `.task(id:)` lazy-load gating preserved); extended
+its label to a full-width `HStack { Label + Spacer(minLength: 0) }` with
+`.frame(maxWidth: .infinity)` + `.contentShape(Rectangle())` + `.hoverRowBackground()`
+so the whole row is hit-testable and gets the hover affordance.
+
+Plan: `plans/collapsible-row-toggle-v2.md`.
+
+### Changed files
+
+- **NEW** `Sources/WikiFS/Editor/HoverRowBackground.swift` — reusable hover modifier.
+- `Sources/WikiFS/Editor/CollapsibleDetailHeader.swift` — `count: 2` → single
+  tap (`:74`); `.hoverRowBackground()` on `titleRow`; DebugLog msg updated;
+  chevron + contentShape + frame preserved.
+- `Sources/WikiFS/Pages/PageDetailView.swift` — provenance label wrapped to
+  full row + hover (`:426–436`).
+- No call-site change in `ChatView.swift` / `SourceDetailView.swift` /
+- `PageDetailView.swift` header call site — all inherit the fix from the shared
+  component.
+
+### Validation
+
+- `make build` ✓ (also regenerates GeneratedPrompts/Version).
+- `make test` ✓ — 3131 tests in 264 suites pass.
+- App launches cleanly (no new `.ips` crash report).
+- **Live gesture validation is NOT unit-testable** (per
+  `reproducing-live-ui-bugs` skill) and requires a human at the keyboard. The
+  toggle seam is logged via `DebugLog.tabs("CollapsibleDetailHeader: header
+  tapped — wasExpanded=…")`; a reviewer can `log show --predicate
+  'subsystem == "com.selfdrivingwiki.debug"' --last 1m` while clicking to
+  confirm exactly what fires. See plan §7 for the full manual checklist (single
+  on text toggles, double on text still renames, hover shows in light + dark,
+  chevron single-fires, provenance full-row toggles). **Fallback if a single
+  click on the chat title text does not toggle:** switch the row to
+  `.simultaneousGesture(TapGesture().onEnded { … })` (plan §10 Gotcha #1).
+
+---
 
 ## 2026-07-20 — Consolidate model selection into Agents tab; remove Permissions tab (branch `inline-models-remove-permissions-tab`)
 

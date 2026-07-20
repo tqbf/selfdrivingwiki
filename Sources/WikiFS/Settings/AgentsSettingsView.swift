@@ -45,6 +45,27 @@ struct AgentsSettingsView: View {
     /// yet" warning and the launcher refuses to spawn).
     @State private var isAddingNewProvider = false
 
+    /// The selected operation sub-tab (Chat / Ingestion / Lint) below the
+    /// Providers section. A segmented `Picker` (NOT a nested `TabView`) — a
+    /// nested `TabView` would inherit the Settings toolbar-tab style and
+    /// render a double bar. The segmented control is the cleaner inline
+    /// macOS idiom and satisfies the "tabs per operation" requirement
+    /// (`plans/agent-settings-tabs.md` §2.1 LOW #9).
+    @State private var selectedOperationTab: OperationTab = .chat
+
+    /// The three operation panes, each owning its stages.
+    enum OperationTab: String, CaseIterable, Identifiable {
+        case chat, ingestion, lint
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .chat:      return "Chat"
+            case .ingestion: return "Ingestion"
+            case .lint:      return "Lint"
+            }
+        }
+    }
+
     let containerDirectory: URL
     private let credentialStore: any ACPCredentialStore
 
@@ -170,16 +191,14 @@ struct AgentsSettingsView: View {
 
                 providerActionBar
 
-                // Per-stage MODEL picker for the resolved default provider
-                // (moved from the deleted PermissionsSettingsView — see
-                // plans/inline-models-and-remove-permissions-tab-v2.md §4d).
-                // Per-stage selects a model VARIANT within the provider's
-                // catalog, NOT a per-stage provider, so it does NOT belong
-                // on a per-provider row.
-                ingestStageSection
+                // Operation tabs (Chat / Ingestion / Lint): per-stage PROVIDER +
+                // MODEL pickers. Each stage can pin a provider (or "Default" =
+                // the global default) and a model from that provider's catalog.
+                // See `plans/agent-settings-tabs.md`.
+                operationTabsSection
             }
 
-            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. Ingest Stage Models below apply to whichever provider is currently default.")
+            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. The Chat / Ingestion / Lint tabs below pin the provider + model each operation runs with.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -326,53 +345,87 @@ struct AgentsSettingsView: View {
             })
     }
 
-    /// Per-ingest-stage model picker section (moved from the deleted
-    /// `PermissionsSettingsView`). Each ingest phase (planner / executor /
-    /// finalizer) can pick a different MODEL from the resolved default
-    /// provider's cached catalog — same provider across all three (per-stage
-    /// selects a model variant, NOT a provider). "Same as provider" (empty)
-    /// is the default → that stage uses the provider's `selectedModelId`
-    /// (the #604 collapsed behavior — no behavior change for existing users).
-    ///
-    /// Rendered as a nested `Form { Section { … } }.formStyle(.grouped)` so
-    /// the section keeps the same visual style it had in the Permissions tab
-    /// despite the parent being a plain VStack (not a Form). Kept as a
-    /// SIBLING of the providers List + action bar so it stays visible at the
-    /// bottom of the pane.
-    private var ingestStageSection: some View {
-        let provider = config.selectedProvider()
-        let models = config.cachedModels(forProvider: provider.id)
-        let fallbackLabel = config.selectedModelId(forProvider: provider.id) ?? "default"
-        return Form {
-            Section {
-                ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
-                    Picker("\(stage.label) Model", selection: Binding(
-                        get: { config.ingestStageModelIds[stage.rawValue] ?? "" },
-                        set: { newID in setStageModel(stage, newID.isEmpty ? nil : newID) }
-                    )) {
-                        Text("Same as provider (\(fallbackLabel))").tag("")
-                        ForEach(models, id: \.modelId) { model in
-                            Text(model.displayLabel).tag(model.modelId)
-                        }
-                    }
-                    .disabled(models.isEmpty)
-                    .help(models.isEmpty
-                          ? "Chat with this provider once to discover its models."
-                          : "Pick a different model for the \(stage.label) phase. Empty uses the provider's selected model.")
+    /// Operation tabs (Chat / Ingestion / Lint): a segmented `Picker` over the
+    /// three operation panes, each rendering one or more
+    /// `StageProviderModelPicker` rows. The segmented control (NOT a nested
+    /// `TabView`) avoids the double-toolbar-bar a nested `TabView` would
+    /// create inside the Settings pane (§2.1 LOW #9). Each pane wraps its
+    /// pickers in a `Form { Section }.formStyle(.grouped)` so the rows keep
+    /// the inset-grouped visual style of the former ingest-stage section.
+    private var operationTabsSection: some View {
+        VStack(spacing: 0) {
+            Picker("Operation", selection: $selectedOperationTab) {
+                ForEach(OperationTab.allCases) { tab in
+                    Text(tab.label).tag(tab)
                 }
-            } header: {
-                Text("Ingest Stage Models (\(provider.label))")
-            } footer: {
-                Text("Pick a different model for each ingest phase — e.g. a small model for Executors and a large model for the Planner. “Same as provider” uses the provider's selected model (the legacy behavior).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+
+            operationTabContent
         }
-        .formStyle(.grouped)
     }
 
-    private func setStageModel(_ stage: ACPIngestStage, _ modelId: String?) {
-        save(config.settingIngestStageModel(modelId, forStage: stage.rawValue))
+    @ViewBuilder
+    private var operationTabContent: some View {
+        switch selectedOperationTab {
+        case .chat:
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "chat",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Chat Model")
+                } header: {
+                    Text("Chat Model")
+                } footer: {
+                    Text("Provider and model for new chat sessions. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .ingestion:
+            Form {
+                Section {
+                    ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
+                        StageProviderModelPicker(
+                            stageKey: stage.rawValue,
+                            config: $config,
+                            containerDirectory: containerDirectory,
+                            label: "\(stage.label) Model")
+                    }
+                } header: {
+                    Text("Ingest Stage Models")
+                } footer: {
+                    Text("Pin a provider + model for each ingest phase (Planner / Executor / Finalizer). “Default” uses the global default provider. A warm subprocess is shared across phases when stages resolve to the same provider.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .lint:
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "lint",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Lint Model")
+                } header: {
+                    Text("Lint Model")
+                } footer: {
+                    Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        }
     }
 
     /// Returns a warning string when `provider` is enabled, has no selected
@@ -544,7 +597,13 @@ struct AgentsSettingsView: View {
 
     private func save(_ updated: AgentProvidersConfig) {
         config = updated
-        try? config.save(to: containerDirectory)
+        do {
+            try updated.save(to: containerDirectory)
+        } catch {
+            // House rule: never bare `try?`. The write may fail (read-only
+            // mount, permission) — log so it's visible in Console.app.
+            DebugLog.store("Failed to save agent-providers config: \(error.localizedDescription)")
+        }
     }
 
     /// #640: persist probe-discovered models durably. Uses
