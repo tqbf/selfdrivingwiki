@@ -166,6 +166,24 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
 
     // MARK: - Selection
 
+    /// PURE mutator: returns a NEW config with `providers` replaced (re-
+    /// normalized by `init`) and EVERY other field carried through unchanged.
+    /// Use this from call sites that only want to change the providers list —
+    /// the memberwise init's defaulted fields silently drop `maxConcurrent`
+    /// AND `ingestStageModelIds`, which is the pre-existing bug
+    /// `plans/inline-models-and-remove-permissions-tab-v2.md` §4f fixes.
+    /// Mirrors the carry-everything-through shape of `settingDefault(id:)` /
+    /// `settingIngestStageModel(_:forStage:)`.
+    public func replacingProviders(_ providers: [AgentProvider]) -> AgentProvidersConfig {
+        AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds)
+    }
+
     /// The default provider (the launcher's fallback when the user hasn't picked
     /// one). Falls back to Claude if no provider is marked default (defensive —
     /// `normalized` guarantees one, but a hand-edited file could violate it).

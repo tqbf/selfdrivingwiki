@@ -508,15 +508,6 @@ struct WikiFSApp: App {
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.agents)
                     .tabItem { Label("Agents", systemImage: "cpu") }
-                // Split out from the Agents tab so the provider list no
-                // longer pushes the permission pickers out of view when
-                // there are more than ~3 providers (the Form clipped at
-                // the window height without scrolling). The `@AppStorage`
-                // keys are view-independent so they work unchanged in a
-                // separate view.
-                PermissionsSettingsView(containerDirectory: containerDirectory)
-                    .tag(SettingsTab.permissions)
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
             }
             .appEnvironment(tracker: activityTracker)
             .frame(minWidth: 560, minHeight: 520)
@@ -529,7 +520,6 @@ struct WikiFSApp: App {
         case zotero
         case extraction
         case agents
-        case permissions
     }
 
     /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
@@ -584,10 +574,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `openWindowBridge` are in scope.
     var reopenMostRecentWiki: (() -> Void)?
 
-    /// `@AppStorage` key for the "ask before quitting" toggle (Settings →
-    /// Permissions → App Behavior). Default is "ask" (true) when unset —
-    /// matching the feature's purpose. Referenced by
-    /// `PermissionsSettingsView`.
+    /// `@AppStorage` key for the ask-before-quitting behavior. Default is
+    /// `true` (ask) when unset. The Settings toggle was removed with the
+    /// Permissions tab (the per-stage model picker now lives inline on the
+    /// Agents tab — see
+    /// `plans/inline-models-and-remove-permissions-tab-v2.md`); the key
+    /// stays because `AppDelegate` reads `confirmBeforeQuitting` for quit
+    /// gating.
     static let confirmQuitKey = "confirmBeforeQuitting"
 
     static var confirmBeforeQuitting: Bool {

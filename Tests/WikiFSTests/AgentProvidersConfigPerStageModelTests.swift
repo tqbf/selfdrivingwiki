@@ -288,6 +288,73 @@ struct AgentProvidersConfigPerStageModelTests {
         #expect(config.providers.count == 1)
         #expect(config.selectedProvider().id == "claude-acp")
     }
+
+    // MARK: - replacingProviders carry-through (v2 §4f regression)
+
+    @Test func replacingProvidersCarriesIngestStageModelIdsAndMaxConcurrent() {
+        // Regression: the four AgentsSettingsView mutators (enabledBinding /
+        // applyEdit / appendProvider / removeProvider) used to rebuild the
+        // config via the 4-field memberwise init, which defaults
+        // `ingestStageModelIds` to `[:]` and `maxConcurrent` to `[:]` —
+        // silently wiping the per-stage model picks + the concurrency map on
+        // every enable-toggle / add / remove / edit. `replacingProviders(_:)`
+        // is the carry-through mutator that fixes it. Post-#711 this matters
+        // MORE: a user picks planner=glm-5.2-fast in the (now-moved) per-stage
+        // section, toggles an unrelated provider's enabled switch in the
+        // Agents list, and the per-stage pick silently reverts without this
+        // fix.
+        let config = fixture
+            .settingIngestStageModel("glm-5.2-flex",  forStage: "planner")
+            .settingIngestStageModel("glm-5.2-short", forStage: "finalizer")
+        // Hand-set maxConcurrent (no public mutator exists for it; round-trip
+        // via the memberwise init to simulate a config that already has it).
+        var withConcurrent = config
+        withConcurrent.maxConcurrent = ["neuralwatt": 4]
+
+        // Replace the providers list (toggling a provider's `enabled` is the
+        // canonical trigger in `enabledBinding`).
+        var toggled = withConcurrent.providers
+        toggled[0].enabled = false
+        // Re-add an enabled provider so `normalized` has something to promote
+        // (otherwise the single-default invariant still picks neuralwatt).
+        toggled.append(AgentProvider(
+            id: "alt", label: "Alt", command: ["alt"], env: [:],
+            enabled: true, isDefault: false))
+        let replaced = withConcurrent.replacingProviders(toggled)
+
+        // ingestStageModelIds survives.
+        #expect(replaced.ingestStageModelIds["planner"] == "glm-5.2-flex")
+        #expect(replaced.ingestStageModelIds["executor"] == nil)
+        #expect(replaced.ingestStageModelIds["finalizer"] == "glm-5.2-short")
+        // maxConcurrent survives.
+        #expect(replaced.maxConcurrent == ["neuralwatt": 4])
+        // The providers list is actually replaced. Note: `normalized` keeps the
+        // disabled default provider as default (it only promotes a new default
+        // when NONE was default) — `selectedProvider()` is the seam that falls
+        // back to first-enabled at READ time, so the runtime behavior is still
+        // correct (alt runs even though neuralwatt is still nominally default).
+        #expect(replaced.providers.count == 2)
+        #expect(replaced.providers.first(where: { $0.isDefault })?.id == "neuralwatt")
+        #expect(replaced.selectedProvider().id == "alt")
+        // Model caches + selections + favorites also carry through (not the
+        // bug, but the helper must not regress them either).
+        #expect(replaced.cachedModels(forProvider: "neuralwatt").count == 3)
+        #expect(replaced.selectedModelId(forProvider: "neuralwatt") == "glm-5.2")
+    }
+
+    @Test func replacingProvidersReNormalizesEmptyListToDefault() {
+        // `init` calls `normalized(providers)`, which seeds `[claudeAcpDefault]`
+        // for an empty list. `replacingProviders([])` must NOT bypass that
+        // invariant (the helper is a thin wrapper around the memberwise init).
+        let config = fixture.settingIngestStageModel("glm-5.2-flex", forStage: "planner")
+        let replaced = config.replacingProviders([])
+        #expect(replaced.providers.count == 1)
+        #expect(replaced.providers.first?.id == "claude-acp")
+        // The per-stage pick survives even when the providers list is re-seeded
+        // (the resolver will fall back to the provider's selectedModelId at
+        // read time since `neuralwatt` is no longer in the list).
+        #expect(replaced.ingestStageModelIds["planner"] == "glm-5.2-flex")
+    }
 }
 
 /// per-stage-model-selection plan §7: pure-logic tests for the

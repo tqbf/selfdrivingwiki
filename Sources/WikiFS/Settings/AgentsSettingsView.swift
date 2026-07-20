@@ -44,11 +44,6 @@ struct AgentsSettingsView: View {
     /// persist in the list (otherwise the row sits with a "No model captured
     /// yet" warning and the launcher refuses to spawn).
     @State private var isAddingNewProvider = false
-    /// Per-view collapse state for the `CollapsibleDetailHeader`. Starts
-    /// expanded — a Settings panel is something the user opened to interact
-    /// with, so showing the form by default (rather than hiding it behind a
-    /// chevron) avoids a friction click on every visit.
-    @State private var isExpanded = true
 
     let containerDirectory: URL
     private let credentialStore: any ACPCredentialStore
@@ -65,25 +60,19 @@ struct AgentsSettingsView: View {
     }
 
     var body: some View {
-        // Collapsible title bar matching `PageDetailView` / `SourceDetailView`
-        // / `ChatView`. Collapsed shows just the "Agents" title row; expanded
-        // reveals the providers list below. The title is non-editable (a
-        // fixed label for the whole settings tab), so `isTitleDisabled` pins it.
-        CollapsibleDetailHeader(
-            systemImage: "cpu",
-            title: "Agents",
-            isTitleDisabled: true,
-            isExpanded: $isExpanded,
-            onTitleCommit: { _ in }
-        ) {
-            // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
-            // is a scroll container that sizes to content, which let the
-            // providers List grow unbounded and pushed the action bar off-
-            // screen. A plain VStack lets us give the List `.frame(maxHeight:
-            // .infinity)` so it fills available space and scrolls internally,
-            // while the action bar below stays pinned at the bottom.
-            providersSection
-                .frame(minWidth: 560, minHeight: 520, alignment: .top)
+        // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
+        // is a scroll container that sizes to content, which let the
+        // providers List grow unbounded and pushed the action bar off-
+        // screen. A plain VStack lets us give the List `.frame(maxHeight:
+        // .infinity)` so it fills available space and scrolls internally,
+        // while the action bar below stays pinned at the bottom.
+        //
+        // The `CollapsibleDetailHeader` wrapper was removed (the inline
+        // Model dropdown + the moved Ingest Stage Models section now live
+        // directly on this view, so a title bar with a chevron was
+        // redundant — see `plans/inline-models-and-remove-permissions-tab-v2.md`).
+        providersSection
+            .frame(minWidth: 560, minHeight: 520, alignment: .top)
             // #663: the Add Provider sheet. Non-destructive (nothing is written
             // until an Add button is pressed — AC.2). The handoff to the editor
             // uses `DispatchQueue.main.async` (see correction §5): letting this
@@ -149,7 +138,6 @@ struct AgentsSettingsView: View {
             } message: {
                 Text("This removes the provider from the app. You can add it again later.")
             }
-        }
     }
 
     // MARK: - Providers section
@@ -181,9 +169,17 @@ struct AgentsSettingsView: View {
                 .frame(maxHeight: .infinity)
 
                 providerActionBar
+
+                // Per-stage MODEL picker for the resolved default provider
+                // (moved from the deleted PermissionsSettingsView — see
+                // plans/inline-models-and-remove-permissions-tab-v2.md §4d).
+                // Per-stage selects a model VARIANT within the provider's
+                // catalog, NOT a per-stage provider, so it does NOT belong
+                // on a per-provider row.
+                ingestStageSection
             }
 
-            Text("Select a provider and click Edit… to edit its command, environment, API key, and models.")
+            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. Ingest Stage Models below apply to whichever provider is currently default.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -258,37 +254,125 @@ struct AgentsSettingsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                // Model status line (§3.2) — drives a green dot with the
-                // model name, or an orange warning matching `modelWarning`.
-                // The pure `modelStatus(for:in:)` classifier below is the
-                // unit-tested seam; the `modelWarning(for:in:)` sibling is
-                // kept for the existing `AgentsSettingsViewWarningTests`
-                // suite (correction §6 — both coexist).
-                switch Self.modelStatus(for: provider, in: config) {
-                case .selected(let name):
-                    Label(name, systemImage: "circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                case .noSelectionPickable:
-                    Label("No model selected — pick one before running",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                case .noneCaptured:
-                    Label("No model captured yet — chat with this provider once to discover models",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                case .disabled:
-                    EmptyView()
-                }
             }
             .opacity(provider.enabled ? 1.0 : 0.55)
 
             Spacer()
+
+            // Inline Model dropdown on the right. Disabled providers hide it
+            // (the launcher never selects a disabled provider, so its model
+            // selection is moot until the user enables it).
+            if provider.enabled {
+                providerControls(provider)
+            }
         }
         .padding(.vertical, 4)
         .tag(provider.id)
+    }
+
+    /// # inline-model-dropdown: the right-hand cluster on each enabled
+    /// provider row — a `Model ▾` `Picker` bound to the per-provider
+    /// `selectedModelId`, plus a compact caption underneath that keeps the
+    /// pure `modelStatus(for:in:)` classifier in use (the orange "pick one
+    /// before running" guidance when the picker is left on "Agent default"
+    /// while a cache exists).
+    @ViewBuilder
+    private func providerControls(_ provider: AgentProvider) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            modelPicker(provider)
+            // Compact caption — keeps `modelStatus` in use. `.noneCaptured`
+            // is surfaced by the picker itself (its "Chat to discover models"
+            // placeholder when there's no cache); `.selected` needs no
+            // caption (the picker's selection label conveys it).
+            switch Self.modelStatus(for: provider, in: config) {
+            case .noSelectionPickable:
+                Text("pick one before running")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            case .noneCaptured, .selected, .disabled:
+                EmptyView()
+            }
+        }
+    }
+
+    /// Model dropdown for `provider`. Reads/writes the per-provider
+    /// `selectedModelId`. When the cache is empty, the picker is disabled
+    /// and surfaces a "Chat to discover models" placeholder (mirrors the
+    /// shape `PermissionsSettingsView.ingestStageModelSection` had).
+    @ViewBuilder
+    private func modelPicker(_ provider: AgentProvider) -> some View {
+        let cachedModels = config.cachedModels(forProvider: provider.id)
+        Picker("Model", selection: modelBinding(for: provider)) {
+            if cachedModels.isEmpty {
+                Text("Chat to discover models").tag("")
+            } else {
+                Text("Agent default").tag("")
+                ForEach(cachedModels, id: \.modelId) { model in
+                    Text(model.displayLabel).tag(model.modelId)
+                }
+            }
+        }
+        .labelsHidden()
+        .disabled(cachedModels.isEmpty)
+        .frame(maxWidth: 180)
+    }
+
+    private func modelBinding(for provider: AgentProvider) -> Binding<String> {
+        Binding(
+            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
+            set: { newID in
+                save(config.settingSelectedModel(newID.isEmpty ? nil : newID,
+                                                 forProvider: provider.id))
+            })
+    }
+
+    /// Per-ingest-stage model picker section (moved from the deleted
+    /// `PermissionsSettingsView`). Each ingest phase (planner / executor /
+    /// finalizer) can pick a different MODEL from the resolved default
+    /// provider's cached catalog — same provider across all three (per-stage
+    /// selects a model variant, NOT a provider). "Same as provider" (empty)
+    /// is the default → that stage uses the provider's `selectedModelId`
+    /// (the #604 collapsed behavior — no behavior change for existing users).
+    ///
+    /// Rendered as a nested `Form { Section { … } }.formStyle(.grouped)` so
+    /// the section keeps the same visual style it had in the Permissions tab
+    /// despite the parent being a plain VStack (not a Form). Kept as a
+    /// SIBLING of the providers List + action bar so it stays visible at the
+    /// bottom of the pane.
+    private var ingestStageSection: some View {
+        let provider = config.selectedProvider()
+        let models = config.cachedModels(forProvider: provider.id)
+        let fallbackLabel = config.selectedModelId(forProvider: provider.id) ?? "default"
+        return Form {
+            Section {
+                ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
+                    Picker("\(stage.label) Model", selection: Binding(
+                        get: { config.ingestStageModelIds[stage.rawValue] ?? "" },
+                        set: { newID in setStageModel(stage, newID.isEmpty ? nil : newID) }
+                    )) {
+                        Text("Same as provider (\(fallbackLabel))").tag("")
+                        ForEach(models, id: \.modelId) { model in
+                            Text(model.displayLabel).tag(model.modelId)
+                        }
+                    }
+                    .disabled(models.isEmpty)
+                    .help(models.isEmpty
+                          ? "Chat with this provider once to discover its models."
+                          : "Pick a different model for the \(stage.label) phase. Empty uses the provider's selected model.")
+                }
+            } header: {
+                Text("Ingest Stage Models (\(provider.label))")
+            } footer: {
+                Text("Pick a different model for each ingest phase — e.g. a small model for Executors and a large model for the Planner. “Same as provider” uses the provider's selected model (the legacy behavior).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func setStageModel(_ stage: ACPIngestStage, _ modelId: String?) {
+        save(config.settingIngestStageModel(modelId, forStage: stage.rawValue))
     }
 
     /// Returns a warning string when `provider` is enabled, has no selected
@@ -363,11 +447,11 @@ struct AgentsSettingsView: View {
                 if let idx = updated.providers.firstIndex(where: { $0.id == provider.id }) {
                     updated.providers[idx].enabled = newValue
                 }
-                save(AgentProvidersConfig(
-                    providers: updated.providers,
-                    providerModels: updated.providerModels,
-                    selectedModelIds: updated.selectedModelIds,
-                    favoriteModelIds: updated.favoriteModelIds))
+                // §4f: route through `replacingProviders` so `maxConcurrent`
+                // AND `ingestStageModelIds` survive — the memberwise init's
+                // defaulted fields silently wiped them on every enable toggle
+                // (pre-existing bug made worse by #711 adding `ingestStageModelIds`).
+                save(config.replacingProviders(updated.providers))
             })
     }
 
@@ -394,11 +478,9 @@ struct AgentsSettingsView: View {
         } else {
             providers.append(updated)
         }
-        save(AgentProvidersConfig(
-            providers: providers,
-            providerModels: config.providerModels,
-            selectedModelIds: config.selectedModelIds,
-            favoriteModelIds: config.favoriteModelIds)
+        // §4f: route through `replacingProviders` so `maxConcurrent` +
+        // `ingestStageModelIds` survive the edit.
+        save(config.replacingProviders(providers)
             .settingSelectedModel(selectedModelId, forProvider: updated.id))
     }
 
@@ -422,11 +504,9 @@ struct AgentsSettingsView: View {
         }
         var updated = config
         updated.providers.append(provider)
-        save(AgentProvidersConfig(
-            providers: updated.providers,
-            providerModels: updated.providerModels,
-            selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds))
+        // §4f: route through `replacingProviders` so `maxConcurrent` +
+        // `ingestStageModelIds` survive the append.
+        save(config.replacingProviders(updated.providers))
         selectedProviderID = provider.id
     }
 
@@ -445,13 +525,10 @@ struct AgentsSettingsView: View {
         guard config.providers.contains(where: { $0.id == provider.id }) else { return }
         var updated = config
         updated.providers.removeAll { $0.id == provider.id }
-        // Re-running init() re-normalizes: promotes a new default if the
-        // deleted one was default.
-        save(AgentProvidersConfig(
-            providers: updated.providers,
-            providerModels: updated.providerModels,
-            selectedModelIds: updated.selectedModelIds,
-            favoriteModelIds: updated.favoriteModelIds))
+        // Re-running init() (via `replacingProviders`) re-normalizes: promotes
+        // a new default if the deleted one was default. §4f: the same helper
+        // also carries `maxConcurrent` + `ingestStageModelIds` through.
+        save(config.replacingProviders(updated.providers))
         if selectedProviderID == provider.id {
             selectedProviderID = config.providers.first?.id
         }
