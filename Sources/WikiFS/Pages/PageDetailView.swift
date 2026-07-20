@@ -447,6 +447,15 @@ struct PageDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .hoverRowBackground()
+                // Explicit single-tap toggle — mirrors
+                // `CollapsibleDetailHeader.toggleExpanded()` (#717/#722). The
+                // native `DisclosureGroup` label tap does not fire reliably in
+                // this nested/expanded-content context (same class of issue
+                // #722 fixed for the title bar), so we drive the toggle from
+                // an explicit `.onTapGesture` on the label instead. The
+                // `.task(id:)` lazy-load below is unchanged (origin/history
+                // read only fires on first expand).
+                .onTapGesture { toggleProvenance() }
             }
             .task(id: ProvenanceTaskKey(pageID: pageID, expanded: isProvenanceExpanded)) {
                 // Only load when expanded; a collapsed panel needs no read.
@@ -454,6 +463,18 @@ struct PageDetailView: View {
                 provenanceOrigin = store.pageOrigin(for: pageID)
                 provenanceHistory = store.pageEditHistory(for: pageID)
             }
+        }
+    }
+
+    /// Single-tap toggle for the provenance row — mirrors
+    /// `CollapsibleDetailHeader.toggleExpanded()` so the provenance bubble
+    /// animates with the same easing as the title-bar header. Routed through
+    /// `DebugLog.tabs` so `log show` can confirm exactly one toggle fires per
+    /// click (no double-toggle with the native `DisclosureGroup` gesture).
+    private func toggleProvenance() {
+        DebugLog.tabs("PageDetailView: provenance row tapped — wasExpanded=\(isProvenanceExpanded)")
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isProvenanceExpanded.toggle()
         }
     }
 
