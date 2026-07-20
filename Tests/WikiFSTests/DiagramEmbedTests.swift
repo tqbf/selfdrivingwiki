@@ -250,15 +250,20 @@ struct DiagramEmbedTests {
         #expect(out.range(of: "````\\s*$", options: .regularExpression) != nil)
     }
 
-    @Test func embedDiagramWithoutTargetFallsBackToCiteLink() throws {
-        // A `.mmd` source name the embedInfo resolver returns nil for → the
-        // renderer falls back to the cite-link path (no half-rendered fence).
+    @Test func embedDiagramWithoutTargetRendersBrokenHeader() throws {
+        // Plan v2: a `.mmd` source name the embedInfo resolver returns nil for
+        // → the renderer emits a muted broken-source `<details>` (no fetch).
+        // Pre-v2 this was a cite link; the v2 contract renders a broken embed
+        // so unresolved `![[source:…]]` is visually consistent with missing
+        // page embeds.
         let out = WikiLinkMarkdown.linkified(
             "![[source:missing-diagram.mmd]]",
             isResolved: { _, _ in true },
             embedInfo: { _ in nil }
         )
-        #expect(out.contains("wiki://source"))
+        #expect(out.contains("sdw-transclusion"))
+        #expect(out.contains("data-sdw-state=\"missing\""))
+        #expect(out.contains("Source not found: missing-diagram.mmd"))
         #expect(!out.contains("```mermaid"))
     }
 
