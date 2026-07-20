@@ -1,80 +1,611 @@
-# Chat Summary (Issue #411)
+# Chat-Message Summary — Implementation Plan
 
-## Goal
+> Plan for a **per-message summary** feature in Self Driving Wiki (macOS 15 /
+> Swift 6.0). Companion to `plans/chat-and-persistence.md` and
+> `plans/event-bus.md`.
+>
+> **STATUS: implementation in progress.** Branch `chat-summary`, PR — never
+> push/merge `main`.
+>
+> **Revision note (v2):** This version corrects the Default-vs-Model encoding
+> (§5/§6 — `provider(forStage:)` is non-optional and falls back to the global
+> default; the mode decision must gate on `stageProviderIds["summarizer"]`
+> directly), drops the fictional `StoreEmissionExhaustivenessTests` claim
+> (§3.5/§8), makes the model backend injectable so AC.4's model half is
+> automated (§4.3), adds an explicit AC↔test table (§9), pins explicit enum raw
+> values (§4.1), and mirrors the real `migrateV35ToV36` migration idiom (§3.3).
 
-Show a one-line AI summary of the model's response under each chat row in the
-sidebar (`RecentChatRow`). The summary is generated once on chat completion and
-stored in the SQLite database.
+---
 
-## Strategy (v0)
+## 0. TL;DR / mental model
 
-**Deterministic extract first**, with LLM summarization as a future enhancement.
+There are **two existing "summary" surfaces** — do not confuse them:
 
-- On chat completion (terminal `.result` event), extract the first sentence of
-  the first `.assistantText` or `.result` event, elided to ~60 chars using the
-  existing `ChatSummary.title(fromFirstMessage:maxLength:)` elision rule.
-- No LLM call needed for v0 — instant, no external dependency, no provider key
-  required. The LLM path can be layered on top later via `AgentBackend`.
-- This delivers the UI feature immediately and keeps the schema + store +
-  rendering infrastructure in place for when LLM summarization is added.
+| Surface | Granularity | Storage | Compute | Status |
+|---|---|---|---|---|
+| `ChatSummary.summary` / `summaryAt` | **One row per CHAT** (issue #411) | `chats.summary` + `chats.summary_at` columns | first-sentence truncation, run once in `AgentLauncher.finish()` | **Shipped.** Leave as-is. |
+| `ChatOutlineEntry.response` | **One per turn** (UI-only, recomputed on render) | none — recomputed every render via `ChatSummary.summaryExtract` | first-sentence truncation, on the fly | **Shipped.** This is the site we extend. |
 
-## Implementation
+**This feature** adds a **per-message** (`chat_messages`) summary that is:
 
-### 1. Schema migration (v35 → v36)
+1. **Configurable** — a summarizer setting: *Default* (today's first-sentence
+   truncation, **no model call**) or *a pinned model* (LLM via an agent
+   provider).
+2. **Cached in the DB** — new `chat_messages` columns, computed ONCE, never
+   recomputed. Read on render; compute once.
+3. Surfaced in the existing **chat outline** (`ChatOutlineView` /
+   `ChatOutlineEntry`) replacing the on-the-fly re-extraction, with the
+   transcript WebView injection as a stretch goal.
 
-Add `summary TEXT` and `summary_at REAL` columns to the `chats` table:
+The summarizer SETTING is designed as **another stage pin** in
+`AgentProvidersConfig` (the `"summarizer"` stage), surfaced via a new **"Summary"**
+tab in `AgentsSettingsView` that reuses PR #716's `StageProviderModelPicker`
+component.
 
-- New `migrateV35ToV36()` method: `ALTER TABLE chats ADD COLUMN summary TEXT;`
-  + `ALTER TABLE chats ADD COLUMN summary_at REAL;` (simple ALTER — no table
-  rebuild needed for nullable columns).
-- Update `createChatTablesV23()` to include the new columns for fresh DBs.
-- Bump `PRAGMA user_version=36`.
-- Follow the `mutate(event:_:)` + `ResourceChangeEvent` pattern from the store
-  emission invariant.
+**⚠ The single most important invariant in this plan (read §5 before coding):**
+the model-vs-truncation decision gates **strictly on
+`config.stageProviderIds["summarizer"]`** (a non-empty pin ⇒ model mode; empty
+or absent ⇒ truncation, no model call). **NEVER call
+`config.provider(forStage: "summarizer")` to make this decision** — it is
+non-optional and falls back to the global default provider, so it would always
+report a provider and wrongly force model mode.
 
-### 2. Model update (`ChatSummary`)
+**Deferred: Apple Intelligence (future macOS 26+).**
 
-Add `summary: String?` and `summaryAt: Date?` to `ChatSummary` in
-`Sources/WikiFSCore/ChatModels.swift`.
+---
 
-### 3. Store methods (`SQLiteWikiStore`)
+## 1. Dependency — Feature 1 (#716) is MERGED
 
-- Update `listChats()` SELECT + `chatSummary(from:)` decoder to include the new
-  columns.
-- New public mutator: `updateChatSummary(chatID:summary:)` — writes the summary
-  + timestamp, routes through `mutate(event:_:)`, emits `ResourceChangeEvent`.
-- `StoreEmissionExhaustivenessTests` will enforce the new mutator is partitioned
-  correctly.
+**This feature builds directly on the merged agent-settings work from PR #716.**
 
-### 4. `WikiStoreModel` wrapper
+**What this feature reuses (do NOT duplicate):**
+- `AgentProvidersConfig.stageProviderIds` (the `[String: String]` provider-pin
+  map) + `settingStageProvider(_:forStage:)` (the PURE mutator) — shipped in
+  #716.
+- `AgentProvidersConfig.modelId(forStage:)` / `modelId(forStage:fallbackProvider:)`
+  — per-stage model selection (shipped in #716). Used **only when in model mode**
+  (i.e. only after the stage pin is confirmed non-empty).
+- `StageProviderModelPicker` — reusable provider+model picker component (shipped
+  in #716). The Summary tab **IS** this picker for stage `"summarizer"` — no
+  separate mode Picker, no `summarizerMode` field.
+- `AgentsSettingsView` tab architecture (segmented `Picker` over
+  `OperationTab`) — shipped in #716.
+- The `mutate()` / emit discipline (unchanged — already shipped).
 
-Add `updateChatSummary(chatID:summary:)` that delegates to the store, matching
-the existing `renameChat(id:to:)` pattern.
+**Action for the implementer:**
+- Branch from `main` (already includes #716). Verify `stageProviderIds`,
+  `settingStageProvider`, `modelId(forStage:)`, `StageProviderModelPicker`, and
+  the `OperationTab` segmented control exist before starting.
+- Treat `"summarizer"` as **another stage key** (alongside `"planner"` /
+  `"executor"` / `"finalizer"` / `"lint"`) in the same config. Do NOT add a
+  parallel model-picker or a new config type, and do NOT add a
+  `summarizerMode` field.
 
-### 5. Summarization hook (`AgentLauncher`)
+---
 
-After the terminal `.result` event is processed in the interactive session loop
-(`AgentLauncher.swift` ~line 1819, after `flushTranscript()`), call a new
-`generateChatSummary(for:)` method that:
-- Collects the first `.assistantText` or `.result` event from `events`.
-- Extracts the first sentence, elides to 60 chars via the existing elision rule.
-- Call `store.updateChatSummary(chatID:summary:)`.
+## 2. Goal & scope
 
-### 6. UI rendering (`RecentChatRow`)
+**Goal:** give each assistant chat message a short, cached summary, generated by
+a user-configurable summarizer (default-truncation when no provider is pinned /
+pinned model when one is), computed once and stored in `chat_messages`.
 
-In `Sources/WikiFS/AgentToolsView.swift`, update `RecentChatRow`:
-- When not live and `chat.summary != nil`, show the summary as a `.caption`
-  `.foregroundStyle(.secondary)` line under the title, replacing the timestamp.
-- When live, keep the "responding…" indicator.
-- When no summary, keep the relative timestamp.
+**In scope:**
+- New `chat_messages` columns `summary`, `summary_kind`, `summary_at` + a v40
+  schema migration (mirrors the real `migrateV35ToV36` idiom).
+- A `ChatMessageSummaryKind` enum with **explicit** raw values
+  `"default"` / `"model"` (§4.1).
+- A `MessageSummarizer` service with **an injectable `AgentBackend` seam** so the
+  model path is unit-testable via `FakeAgentBackend`.
+- DB write method `updateMessageSummary(...)` routing through `mutate()` +
+  emitting a `ResourceChangeEvent` (#129), verified by a new explicit
+  `StoreEmissionTests` case.
+- Summarizer **setting** as the `"summarizer"` stage pin in
+  `AgentProvidersConfig`, surfaced via a new **Summary tab** in
+  `AgentsSettingsView` that **IS** `StageProviderModelPicker(stageKey:
+  "summarizer", …)` — no separate mode Picker.
+- Render the cached summary in the chat outline (replacing on-the-fly extraction
+  for persisted messages).
+- Trigger: on turn completion (background) for new messages + lazy backfill /
+  on-demand for history.
+- Swift Testing coverage: cache round-trip, migration, default-truncation pure
+  logic, **model backend driven end-to-end via `FakeAgentBackend`**, idempotency,
+  emit assertion.
 
-### 7. Tests
+**Out of scope (follow-ups):**
+- Injecting the summary into the transcript `ChatWebView` HTML (outline first).
+- Summarizing the existing chat-level `chats.summary` (#411) with a model — that
+  is a separate, already-shipped truncation; leave it unless the operator wants
+  to unify.
+- Apple Intelligence on-device summarizer (future macOS 26+).
 
-- Store column round-trip (write summary, read it back via `listChats`).
-- Store emission exhaustiveness (new mutator is partitioned).
-- Deterministic extract produces a non-empty string.
-- `RecentChatRow` shows summary when present (if testable).
+---
 
-### 8. Docs
+## 3. The DB caching layer (schema + migration + #129 emit)
 
-Update `plans/chat-and-persistence.md` with the new `summary` column.
+### 3.1 New columns on `chat_messages`
+
+Add three nullable columns:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `summary` | `TEXT` | The cached summary text. `NULL` = not yet computed. |
+| `summary_kind` | `TEXT` | Which summarizer produced it: `"default"` / `"model"`. `NULL` alongside `summary`. |
+| `summary_at` | `REAL` | Unix timestamp of computation (staleness display). `NULL` alongside `summary`. |
+
+All nullable so the migration is a pure `ALTER TABLE ADD COLUMN` with no backfill
+(mirrors the v35→36 `chats.summary` precedent — see §3.3).
+
+### 3.2 Schema locations to update (THREE sites must stay identical)
+
+The chat schema is defined in **three** places that must stay in lockstep (the
+existing invariant — see `GRDBWikiStore.swift:1385` `createChatTablesV23` and the
+fresh-schema block at `:2435`):
+
+1. `createChatTablesV23(in:)` — `Sources/WikiFSCore/Store/GRDBWikiStore.swift:1385`
+   (the shared chat-schema builder; the `CREATE TABLE chat_messages` block is at
+   `:1399-1408`).
+2. The fresh-schema consolidated `CREATE TABLE chat_messages` block —
+   `GRDBWikiStore.swift:2435`.
+3. The v40 migration step (new — see §3.3).
+
+Add the three columns to sites 1 & 2, and ALTER them in site 3.
+
+### 3.3 The v40 migration (mirror `migrateV35ToV36`, NOT a fabricated helper)
+
+The precedent is `migrateV35ToV36(in:)` at `GRDBWikiStore.swift:1970-1979` (the
+real issue-#411 chat-summary migration), which wraps the nullable `ALTER TABLE …
+ADD COLUMN` in `db.inTransaction(.immediate)` and guards it with
+`tableColumnInfo(_:in:)` (`:1226` — a column-name set, `.contains(...)`). Mirror
+that idiom exactly. `hasColumn(_:on:in:)` (`:1197`) is the single-column
+equivalent and is also acceptable.
+
+- Bump `currentSchemaVersion` from `39` → `40` (`GRDBWikiStore.swift:61`).
+- Add a new migration step **inside** the `migrate(from:in:)` ladder, guarded
+  `if version < 40 { … }`. **Place it BEFORE the catch-all fallback**
+  (`GRDBWikiStore.swift:1185`) — the fallback is keyed on
+  `currentSchemaVersion`, so once bumped it short-circuits and stamps
+  `user_version = 40`, executing none of any new sibling step after it. Mirror
+  the existing load-bearing-ordering comment at `:1163-1173`.
+- **Update the now-stale `(39 now)` comment near `:1163-1189`** to reflect 40.
+
+### 3.4 The `ChatMessage` model + read path
+
+- Add `summary: String?`, `summaryKind: String?`, `summaryAt: Date?` to
+  `ChatMessage` (`Sources/WikiFSCore/Core/ChatModels.swift:122`). Default them to
+  `nil` in the existing `init` (and add memberwise params defaulting to `nil`) so
+  non-summary callers are unaffected.
+- Update `chatMessages(chatID:)` SELECT (`GRDBWikiStore.swift:5789-5813`) to read
+  the three new columns and populate the model. The INSERT in `appendChatEvents`
+  does NOT set summary — it stays NULL until the summarizer runs. Decode the new
+  fields with decode-if-present (they are nullable).
+
+### 3.5 The summary WRITE method + #129 emit (CRITICAL)
+
+Add a public mutator — **it MUST route through `mutate()` and emit a
+`ResourceChangeEvent`** (#129). Model it exactly on `updateChatSummary`
+(`GRDBWikiStore.swift:5858-5868`):
+
+```swift
+public func updateMessageSummary(
+    chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+) throws {
+    try mutate(event: { _ in
+        // Emit on the CHAT the message belongs to — the projection + the model
+        // subscribe to .chat changes. (chat_messages cascade-delete with chats,
+        // so there is no standalone .message resource kind.)
+        self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+    }) { db in
+        try db.execute(sql: """
+        UPDATE chat_messages
+        SET summary = ?, summary_kind = ?, summary_at = ?
+        WHERE id = ?;
+        """, arguments: [summary, kind.rawValue,
+                        Date().timeIntervalSince1970, messageID.rawValue])
+    }
+}
+```
+
+Add it to:
+- The `WikiStore` protocol (`Sources/WikiFSCore/Store/WikiStore.swift`, near
+  `updateChatSummary` at `:650`).
+- `GRDBWikiStore` (impl above).
+- `WikiStoreModel` (`Sources/WikiFSCore/Store/WikiStoreModel.swift`) — a thin
+  `@MainActor` wrapper mirroring `updateChatSummary` at `:3573-3581` (do { try …
+  } catch { DebugLog.store(…) }; no manual reload — the bus fires it).
+
+**ResourceKind note:** `ResourceKind.chat` already exists (used by
+`updateChatSummary`/`renameChat`/`deleteChat`). Per-message summary reuses it —
+emit `.chat` updated with the **chat's** id. Do NOT add a `.message` kind (the
+projection has no per-message File Provider item; the chat row is the resource).
+
+> **Verification is an EXPLICIT per-method test, not an exhaustiveness guard.**
+> The repo does NOT have a `StoreEmissionExhaustivenessTests` that parses every
+> `public func`. The real file is `Tests/WikiFSTests/StoreEmissionTests.swift`
+> — a per-method suite (e.g. `appendChatMessagesEmitsChatUpdated` at :358-367).
+> Add a sibling `updateMessageSummaryEmitsChatUpdated` asserting
+> `kind == .chat`, `change == .updated`, `id == chatID.rawValue` (see §8).
+
+---
+
+## 4. The summarizer service
+
+New file: `Sources/WikiFSEngine/MessageSummarizer.swift` (engine layer — same
+module as `AgentLauncher` / `ACPExtractionClient`).
+
+### 4.1 The kind enum (EXPLICIT raw values — else they mismatch the column spec)
+
+In `Sources/WikiFSCore/Core/ChatModels.swift` (or a new
+`ChatMessageSummaryKind.swift` in Core):
+
+```swift
+public enum ChatMessageSummaryKind: String, Sendable, Codable, CaseIterable {
+    // Raw values are EXPLICIT and must match the `summary_kind` column spec.
+    // Without them Swift derives rawValue from the case NAME
+    // ("defaultTruncation"), mismatching the column and breaking round-trips.
+    case defaultTruncation = "default"   // first-sentence truncation, no model
+    case model               = "model"   // LLM via a pinned provider+model
+}
+```
+
+Add a Codable round-trip test (§8).
+
+### 4.2 The default backend (preserve today's behavior, zero model compute)
+
+Reuse **`ChatSummary.summaryExtract(from:maxLength:)`** verbatim
+(`Sources/WikiFSCore/Core/ChatModels.swift:80`). It IS the current "first few
+sentences" truncation. The default backend is a pure sync call — no I/O, no
+actor, **no model invocation**. (This guarantees zero behavior change for users
+who keep the Default setting.)
+
+### 4.3 The model backend — INJECTABLE `AgentBackend` seam (reuse ACP one-shot pattern)
+
+`MessageSummarizer`'s backend MUST be injectable so the model path is unit-test
+end-to-end with `FakeAgentBackend`
+(`Tests/WikiFSTests/FakeAgentBackend.swift:49`, an `actor` conforming to
+`AgentBackend` with a scripted `send(...) -> AsyncStream<AgentEvent>`
+(`:112`)). Two entry shapes, pick the cleaner for the engine's init style:
+
+- `init(backend: AgentBackend)` (or `init(backendFactory: (PermissionPolicy)
+  -> AgentBackend)`) — production resolves it via `AgentBackendFactory.makeBackend`
+  exactly like `ACPExtractionClient.convert`
+  (`Sources/WikiFSEngine/ACPExtractionClient.swift:114-213`); tests pass a
+  `FakeAgentBackend`.
+
+Mirror `ACPExtractionClient.convert` for the production model path:
+- Resolve the pinned provider + model **from the `"summarizer"` stage** — and
+  only enter this path once `stageProviderIds["summarizer"]` is non-empty (§5.1).
+  Use `config.modelId(forStage: "summarizer")` to read the pinned model id.
+- Build `AgentBackendFactory.providerHints(provider:resolvedCommand:apiKey:
+  selectedModelId:)` (`ACPExtractionClient.swift:140`) with the resolved
+  provider + its resolved command + Keychain key + the stage's model id.
+- Start a one-shot session via `AgentBackendFactory.makeBackend(policy:)`
+  (`:151`) with a summarization system prompt; send ONE turn
+  (`"Summarize this in one sentence:\n\n\(text)"`); collect `.assistantText` /
+  `.result` from the stream (`:178-198`); `backend.cancel(session)` (`:201`);
+  return the text.
+
+- **Permission policy: `.bypass`** (same as extraction — the summarizer has no
+  wiki to write to).
+- **Off-main:** the whole call is `async` and runs off the main actor; the DB
+  write is marshalled back to the `@MainActor` model.
+- **Error handling:** no bare `try?` (house rule). `do { try … } catch {
+  DebugLog.…(…) }`; a failed summarization leaves `summary = NULL` (retriable).
+
+> **Test seam (this is what makes AC.4 automated):** a Swift Testing case
+> constructs `MessageSummarizer(backend: FakeAgentBackend(behaviors:
+> [.init(events: [.assistantText("Short summary."), .messageStop])]))`,
+> feeds one assistant turn, and asserts the returned summary is the streamed
+> text AND that `updateMessageSummary` is called with `kind == .model`. So the
+> model half of AC.4 is automated, not manual. (The real `ACPBackend` SDK
+> `Client` is a concrete actor, not a protocol — that integration is still
+> manual — but the *summarizer logic* above it is fully tested.)
+
+> Note on weight: a full ACP subprocess for a one-sentence summary is **heavy**
+> (process spawn + `session/new` + one turn + teardown). For a chat with many
+> messages this is a lot of spawns. Mitigations: (a) only summarize on turn
+> completion (one summary per assistant turn, not per token), (b) reuse a warm
+> subprocess if the launcher pooling allows, (c) consider a lighter direct-HTTP
+> call later. Flag the weight as a known cost in the PR.
+
+---
+
+## 5. The summarizer SETTING (stage pin + Summary tab) — THE ENCODING
+
+> **This section is load-bearing. Read it before writing any trigger code.**
+
+### 5.1 Config: a `"summarizer"` stage — gate on `stageProviderIds`, NEVER on `provider(forStage:)`
+
+`AgentProvidersConfig.provider(forStage:)` (`AgentProvidersConfig.swift:239-246`)
+is **non-optional** and **falls back to `selectedProvider()`** (the global
+default LLM). It NEVER returns nil. Therefore any check shaped
+`if config.provider(forStage: "summarizer") != nil` (or `!= nil`) is **always
+true** and would force every message through the model path, breaking the
+Default (zero-model-compute) behavior.
+
+**The encoding — encode this explicitly and use it everywhere:**
+
+- **Model mode** ⇔ `config.stageProviderIds["summarizer"]` is **non-empty /
+  non-nil** (a provider is pinned).
+- **Default / truncation mode** ⇔ `config.stageProviderIds["summarizer"]` is
+  **empty or absent** (the pin is cleared).
+- **NEVER** branch the mode decision on `config.provider(forStage: "summarizer")`
+  or `config.modelId(forStage: "summarizer")` (the latter composes the former
+  and inherits the global fallback). Read `stageProviderIds["summarizer"]`
+  directly.
+
+No `summarizerMode` field exists or is added — the presence/absence of the
+`"summarizer"` stage pin encodes the choice. This keeps the config structure
+simple and consistent with the existing stage infrastructure.
+
+### 5.2 UI: a new Summary tab that IS `StageProviderModelPicker`
+
+In `AgentsSettingsView` (`Sources/WikiFS/Settings/AgentsSettingsView.swift`):
+
+1. **Add a 4th case** to `OperationTab` (`:57-58`, currently `case chat, ingestion,
+   lint`) → add `case summary` with label `"Summary"`.
+2. The Summary pane renders **exactly one** row — it IS the reusable picker:
+
+   ```swift
+   case .summary:
+       Form {
+           Section {
+               StageProviderModelPicker(
+                   stageKey: "summarizer",
+                   config: $config,
+                   containerDirectory: containerDirectory,
+                   label: "Summary Model",
+                   defaultOptionLabel: "Default (first few sentences)")
+           } header: {
+               Text("Message Summary")
+           } footer: {
+               Text("\"Default (first few sentences)\" is free truncation — no model call. "
+                 + "Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
+                   .font(.caption)
+                   .foregroundStyle(.secondary)
+           }
+       }
+       .formStyle(.grouped)
+   ```
+
+   There is **no separate mode Picker** and **no `summarizerMode` field**. The
+   `StageProviderModelPicker`'s own provider dropdown already includes a "Default"
+   first option with sentinel tag `""` (`StageProviderModelPicker.swift:52`) which
+   clears the pin — that IS the truncation choice. Selecting a provider pins the
+   stage → model mode.
+
+3. **Relabel the picker's "Default" option for the summarizer stage.** The
+   component's `"Default"` label (`:52`) means "inherit the global default
+   provider" for the other stages — but for the summarizer stage an empty pin
+   means "no model, truncation." To avoid the confusion, render the stage's
+   first dropdown option as **"Default (first few sentences)"** for the
+   summarizer case. Two clean ways:
+   - Add an optional `defaultOptionLabel: String = "Default"` param to
+     `StageProviderModelPicker` and pass `"Default (first few sentences)"` from
+     the Summary pane; or
+   - Special-case the rendered first `Text(...)` in the Summary pane's wrapping
+     view.
+   Document this **stage-specific semantic** in the picker's doc comment and the
+   Summary footer (above): for `"summarizer"`, `""` ⇒ truncation, NOT "global
+   provider."
+
+Persist changes via `config.save(to: containerDirectory)` (the picker already
+does this in `StageProviderModelPicker.save` — `:106-113`; no new persistence
+code).
+
+---
+
+## 6. Trigger + caching model (WHEN does it run?)
+
+**Implementation: on turn completion (background) for new messages + lazy
+backfill / on-demand for history.**
+
+### 6.1 New messages — on turn completion (mirror #411)
+
+The chat-level summary already runs in `AgentLauncher.finish()` →
+`generateChatSummary()` → `summarySink`
+(`Sources/WikiFSEngine/AgentLauncher.swift:2857-2863`), wired through
+`AgentOperationRunner.onSummary`
+(`Sources/WikiFSEngine/AgentOperationRunner.swift:101-104,372-374`). Add a
+**per-message** sink in the same finish seam: for each assistant-text message
+that completed this turn, **if its cached summary is nil**, dispatch per the
+configured mode (§5.1), then persist via `updateMessageSummary` (main-actor
+model → `mutate()` → emit).
+
+- **Mode decision (repeat):** read `config.stageProviderIds["summarizer"]`.
+  Empty/absent ⇒ truncation (Default); non-empty ⇒ model (pinned provider).
+- **Default mode:** `ChatSummary.summaryExtract` is so cheap it can run
+  inline/sync at finish — still cache it for a uniform read path.
+- **Model mode:** off-main via the injected `AgentBackend`; write back when done.
+
+### 6.2 History (messages predating the feature) — lazy + on-demand
+
+Pre-feature `chat_messages` rows have `summary = NULL`. Two paths:
+
+- **Lazy backfill:** when a persisted chat is opened, for visible assistant
+  messages with nil summary, enqueue summary computation with a **small
+  concurrency cap** (e.g. 1–2) so opening a long chat doesn't spawn N
+  subprocesses. The outline shows the default-truncation instantly (computed on
+  render for nil-default, free) and upgrades to the cached model summary when
+  ready.
+- **On-demand "Summarize" affordance:** a per-message button (and a per-chat
+  "Summarize all") for explicit user control. Recommended for the model mode
+  (it costs tokens/spawns).
+
+**Why not "on message receipt" for ALL:** an agent turn can emit many
+intermediate messages; summarizing each synchronously would stall the stream.
+Compute after the turn ends (the `.messageStop` / `.result` boundary — see
+`AgentEvent.endsGeneration`).
+
+### 6.3 Read path (Render)
+
+- **Outline** (`ChatView.chatOutlineEntries`, `:474-516`): today it calls
+  `ChatSummary.summaryExtract(from: text, maxLength: 200)` on the fly (`:493`,
+  `:501`). Change it to: for a **persisted** message with a non-nil cached
+  `summary`, use it; otherwise compute the default truncation on the fly (free,
+  deterministic) as the placeholder. The cached value wins once written.
+  - This needs the outline to map an outline entry to a `ChatMessage` id
+    (persisted path) to read the cached summary. The live (streaming) path has
+    no row yet → always use on-the-fly default truncation; cache after the turn.
+- **Transcript WebView** (`ChatWebView`): stretch goal — inject the summary
+    under the assistant message HTML. Outline first.
+
+### 6.4 Actor boundaries (house rules)
+
+- Model calls are **off-main** (`async`, off the `@MainActor` model). Consult
+  `docs/skills/swift-concurrency-pro/SKILL.md` (actors, structured/unstructured,
+  cancellation).
+- The **DB write is main-actor** via the model → `mutate()` (the store's
+  recursive lock + savepoint). Never run inference/network inside a transaction
+  (`docs/skills/sqlite-concurrency/SKILL.md`).
+- All diagnostics via `DebugLog` (never `print`).
+
+---
+
+## 7. Files to add / modify
+
+**Add:**
+- `Sources/WikiFSCore/Core/ChatMessageSummaryKind.swift` (the enum) — or fold
+  into `ChatModels.swift`.
+- `Sources/WikiFSEngine/MessageSummarizer.swift` (the service: mode dispatch on
+  `stageProviderIds["summarizer"]`, default backend, **injectable** model
+  backend wrapper).
+- `Tests/WikiFSTests/MessageSummaryTests.swift` (Swift Testing).
+
+**Modify:**
+- `Sources/WikiFSCore/Core/ChatModels.swift` — add `summary`/`summaryKind`/
+  `summaryAt` to `ChatMessage` (`:122`).
+- `Sources/WikiFSCore/Store/GRDBWikiStore.swift` — `currentSchemaVersion` 39→40
+  (`:61`); the three schema sites (`:1399`, `:2435`); the v40 migration step
+  (before the fallback at `:1185`, mirroring `migrateV35ToV36` at `:1970` and
+  updating the `(39 now)` comment near `:1163-1189`); `chatMessages(chatID:)`
+  SELECT (`:5789`); new `updateMessageSummary(...)`.
+- `Sources/WikiFSCore/Store/WikiStore.swift` — add `updateMessageSummary` to the
+  protocol (`:650`).
+- `Sources/WikiFSCore/Store/WikiStoreModel.swift` — `@MainActor` wrapper
+  (`:3573`).
+- `Sources/WikiFSEngine/AgentLauncher.swift` — per-message summary sink in
+  `finish()` (`:2857`).
+- `Sources/WikiFSEngine/AgentOperationRunner.swift` — wire the per-message sink
+  (`:101`).
+- `Sources/WikiFS/Chats/ChatView.swift` — `chatOutlineEntries` reads cached
+  summary (`:493`/`:501`).
+- `Sources/WikiFS/Settings/AgentsSettingsView.swift` — add `case summary` to
+  `OperationTab` (`:57`); add the Summary pane that IS
+  `StageProviderModelPicker(stageKey: "summarizer", …)`.
+- `Sources/WikiFS/Settings/StageProviderModelPicker.swift` — add the optional
+  `defaultOptionLabel` param so the summarizer stage can render
+  "Default (first few sentences)"; document the stage-specific semantic.
+
+---
+
+## 8. Testing plan (Swift Testing — `docs/skills/swift-testing-pro/SKILL.md`)
+
+**Pure / fast tier:**
+- `ChatMessageSummaryKind` **raw values** (`"default"` / `"model"`) + Codable
+  round-trip (encode → decode → equal; also a `"default"` string literal →
+  `.defaultTruncation` decode, guarding the explicit-raw-value fix).
+- Default backend = `ChatSummary.summaryExtract` (already covered by
+  `ChatSummaryTests.swift`; add a `MessageSummarizer` dispatch test that an
+  empty/absent `stageProviderIds["summarizer"]` calls it and sets
+  `kind == .defaultTruncation`, and crucially does NOT touch the backend).
+- **Mode-encoding guard:** a unit test asserting that `MessageSummarizer` reads
+  `stageProviderIds["summarizer"]` and never routes through
+  `provider(forStage: "summarizer")` for the mode decision (regression net for
+  the §5.1 bug).
+- v40 migration: fresh DB at v40; an old v39 fixture ALTERs to v40 with NULL
+  summaries; `chatMessages` reads nil (template: `ChatSummaryTests.swift:111-122`).
+
+**Integration (real in-memory store, `TestStoreFactory.inMemory()`):**
+- `updateMessageSummary` round-trip (write + `chatMessages` read-back).
+- Summary NULL for existing messages after migration.
+- **#129 emit:** a new **explicit** `updateMessageSummaryEmitsChatUpdated` case
+  in `Tests/WikiFSTests/StoreEmissionTests.swift`, modeled on
+  `appendChatMessagesEmitsChatUpdated` (`:358-367`) — assert
+  `kind == .chat`, `change == .updated`, `id == chatID.rawValue`. (There is NO
+  exhaustiveness test that auto-catches a missing emit; this explicit case is
+  the guard.)
+
+**Model path (automated via the injectable seam):**
+- A Swift Testing case using `FakeAgentBackend`
+  (`Tests/WikiFSTests/FakeAgentBackend.swift:49`) with a scripted
+  `[.assistantText("…"), .messageStop]` behavior: one assistant turn in →
+  summary out → `updateMessageSummary` called with `kind == .model`. This drives
+  the model path end-to-end without a real subprocess.
+
+**Idempotency / compute-once:**
+- Enqueue summarization twice for one message (nil summary) → assert
+  `updateMessageSummary` is called exactly once (cache short-circuit). Covers
+  AC.6.
+
+**Run:** `make test` (regenerates prompts/version, full suite ~1.5 min). Do NOT
+merge without green. Never push/merge `main`.
+
+---
+
+## 9. Acceptance criteria + AC ↔ test mapping
+
+| AC | Criterion | Automated test / verification |
+|---|---|---|
+| **1** | `chat_messages.summary` + `summary_kind` + `summary_at` exist; a fresh DB is at `user_version = 40`; an existing v39 DB migrates with NULL summaries. | v40 migration test (§8 pure tier) + integration NULL-after-migration. |
+| **2** | `updateMessageSummary` routes through `mutate()` and emits a `.chat`/`.updated` event. | **Explicit** `updateMessageSummaryEmitsChatUpdated` in `StoreEmissionTests.swift` (§8). |
+| **3** | Summarizer setting = **Default** (empty `stageProviderIds["summarizer"]`) → outline behavior is byte-identical to today (zero model compute). | Mode-encoding guard test + default-dispatch test (§8). |
+| **4** | Summarizer setting = **Model** (non-empty pin) → a pinned provider+model produces a cached one-sentence summary, stored once, shown in the outline, never recomputed. | **Automated model half:** `FakeAgentBackend` end-to-end case (§8). *Manual:* the real `ACPBackend` spawn (concrete SDK `Client` actor, not a protocol) — note this limitation in the PR. |
+| **5** | The Summary tab in `AgentsSettingsView` presents `StageProviderModelPicker(stageKey: "summarizer")` with a relabeled "Default (first few sentences)" option. | **Manual validation** (SwiftUI render; no hosted-view render harness in the suite today). Limitation noted; the `defaultOptionLabel` param itself can have a small unit test if extracted. |
+| **6** | A message is summarized at most once (cached); re-opening the chat shows the cached summary without recompute. | Idempotency unit test — enqueue twice, assert one `updateMessageSummary` call (§8). |
+| **7** | No `print`, no bare `try?`, off-main compute via the correct actor boundary, DB writes main-actor via `mutate()`. | Lint/grep discipline: `rg -n '\bprint\(' Sources` and `rg -n 'try\?' <new files>` come back empty; review the actor boundaries against `swift-concurrency-pro` / `sqlite-concurrency`. |
+
+---
+
+## 10. Gotchas
+
+- **The mode decision gates on `stageProviderIds["summarizer"]`, NOT
+  `provider(forStage: "summarizer")`.** `provider(forStage:)` is non-optional and
+  falls back to the global default provider (`AgentProvidersConfig.swift:239-246`),
+  so checking it for nil/non-nil would ALWAYS force model mode. There is no
+  `summarizerMode` field — the presence/absence of the stage pin encodes the
+  choice.
+- **The picker's "Default" option means different things per stage.** For
+  `"chat"`/`"planner"`/etc. the sentinel `""` means "inherit the global default
+  provider" (`StageProviderModelPicker.swift:52`). For `"summarizer"` an empty
+  pin means "no model — truncation." Relabel the summarizer stage's option to
+  "Default (first few sentences)" and document the stage-specific semantic.
+- **There is NO `StoreEmissionExhaustivenessTests`.** The #129 guard for the new
+  method is the **explicit** `updateMessageSummaryEmitsChatUpdated` case in
+  `StoreEmissionTests.swift` (§8). Wire `mutate()`/`localEvent(.chat, …updated)`
+  correctly the first time.
+- **Three schema sites** must stay identical (`createChatTablesV23`, the
+  fresh-schema block, the migration) — the existing invariant.
+- **Migration idiom is `migrateV35ToV36`** (`:1970`): `tableColumnInfo` /
+  `hasColumn` guard + `db.inTransaction(.immediate)` + `ALTER TABLE ADD COLUMN`.
+  Place the `if version < 40` step BEFORE the catch-all fallback (`:1185`) and
+  update the `(39 now)` comment near `:1163-1189`.
+- **`summaryExtract` is shared** between the chat-level (#411) summary and this
+  per-message default — don't fork it; call the same static.
+- **Live vs persisted outline**: the live (streaming) path has `AgentEvent`s but
+  no `ChatMessage` row yet, so it can't read a cached summary. Compute the
+  default truncation on the fly there; cache after the turn persists.
+- **Model-mode weight**: one ACP subprocess per summary is expensive. Cap
+  concurrency; prefer on-turn-completion over per-message-during-stream.
+- **`ChatMessageSummaryKind` raw values are EXPLICIT** (`"default"` / `"model"`)
+  — without them the rawValue is the case name and the `summary_kind` column
+  round-trip breaks.
+- **Apple Intelligence is deferred to a future macOS 26+ version.**
+
+---
+
+## 11. OPERATOR DECISIONS (locked)
+
+1. **Summarizer options:** Default (truncation) and Model (LLM) only. Apple
+   Intelligence is deferred.
+2. **UI placement:** A dedicated "Summary" tab in `AgentsSettingsView` (4th tab
+   alongside Chat / Ingestion / Lint), that **IS** #716's
+   `StageProviderModelPicker` for the `"summarizer"` stage (no separate mode
+   Picker, no `summarizerMode` field).
+3. **Mode encoding (the invariant):** non-empty `stageProviderIds["summarizer"]`
+   ⇒ Model; empty/absent ⇒ Default/truncation. Never decide via
+   `provider(forStage: "summarizer")`.
+4. **Architecture:** App-side / ACP-safe — model summarizer is a one-shot ACP
+   session (the `ACPExtractionClient.convert` pattern) with an **injectable
+   `AgentBackend` seam**, NOT a nested sub-agent.
+5. **Trigger model:** On turn completion (background) for new messages + lazy
+   backfill / on-demand for history.
