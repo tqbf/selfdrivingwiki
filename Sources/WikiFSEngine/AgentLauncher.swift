@@ -1040,6 +1040,15 @@ public final class AgentLauncher {
             case .query: return .chat
             }
         }()
+        // agent-settings-tabs §3: derive the per-stage key from the operation
+        // kind. `run()` is the SHARED one-shot entry for `.ingest` / `.query` /
+        // `.lint`/`.lintPage`. The stageKey drives BOTH the provider
+        // (`provider(forStage:)`) and the model (`modelId(forStage:)`) below —
+        // do NOT hardcode `"lint"` here: that mis-routes small-source ingest
+        // and one-shot query to the lint stage's pinned provider. Large-source
+        // ingest returns early at the `isLargeSource` branch below and gets its
+        // own per-phase resolution in `runACPIngestPlannerExecutors`.
+        let stageKey = Self.stageKey(for: request)
         let policy: PermissionPolicy = resolvePermissionMode(permissionKind)
         // #606: chat is interactive (unbounded — the UI chip is the release
         // valve); ingest/lint are unattended and MUST auto-reject so a stuck
@@ -1052,21 +1061,35 @@ public final class AgentLauncher {
         // planner/executor/finalizer phases run under.
         let turnCeiling = TurnLivenessPolicy.ceiling(for: permissionKind)
 
-        // #324: the launcher reads `agent-providers.json`, picks the default
-        // (or selected) provider, and resolves its PATH command + Keychain key
-        // into providerHints. The app is ACP-only.
-        //
-        // per-stage-model-selection (#704 removed): there is no per-operation
-        // provider pin anymore — every operation (chat / ingest / lint)
-        // resolves ONE provider via `selectedProvider()`. Per-stage MODEL
-        // selection (planner / executor / finalizer) varies the model id
-        // within that ONE provider's catalog; see
-        // `runACPIngestPlannerExecutors` and `AgentProvidersConfig.modelId(
-        // forStage:fallbackProvider:)`. `permissionKind` is still computed
-        // above to drive permission policy + turn ceiling choices, NOT to
-        // pick a provider.
+        // #324 + agent-settings-tabs: the launcher reads `agent-providers.json`
+        // and resolves the provider + model for THIS operation's stage via
+        // `provider(forStage:)` (pinned provider when set + enabled, else the
+        // global default). The app is ACP-only. Per-stage PROVIDER pinning +
+        // per-stage MODEL selection (chat / planner / executor / finalizer /
+        // lint) resolve through one seam; see
+        // `AgentProvidersConfig.provider(forStage:)` /
+        // `modelId(forStage:fallbackProvider:)`. `permissionKind` is still
+        // computed above to drive permission policy + turn ceiling, NOT to
+        // pick a provider (it happens to map to the same stageKey here, but
+        // the provider comes from the config stage map).
         let config = providersConfig()
-        let provider = config.selectedProvider()
+        let provider = config.provider(forStage: stageKey)
+        let resolvedStageModelId = config.modelId(forStage: stageKey, fallbackProvider: provider.id)
+        // SpawnModelGuard for the shared one-shot path (small-source ingest,
+        // one-shot query, lint). Previously only the large-source ingest
+        // orchestrator + interactive chat had this guard — a lint run with no
+        // model picked would silently fall through to the ACP subprocess's
+        // first-listed model. The guard validates the stage-resolved model
+        // against the stage-resolved provider. See `plans/agent-settings-tabs.md`
+        // §3 (SpawnModelGuard scope). `stageName` is nil here — the kind-specific
+        // stage name is only surfaced by the ingest orchestrator's per-phase
+        // loop; for lint/query a generic refusal suffices.
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedStageModelId) {
+            preflightError = msg
+            isRunning = false
+            releaseGenerationSlot()
+            return
+        }
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
 
         // Resolve the provider's spawn command (PATH-resolved because the
@@ -1129,7 +1152,7 @@ public final class AgentLauncher {
             operationKind: operation.kind.rawValue,
             providerId: provider.id,
             providerLabel: provider.label,
-            selectedModelId: config.selectedModelId(forProvider: provider.id),
+            selectedModelId: resolvedStageModelId,
             thinkingEffort: thinkingOption,
             sourceFiles: sourceFiles,
             sourceIDs: sourceIDs)
@@ -1182,7 +1205,7 @@ public final class AgentLauncher {
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
-                selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
+                selectedModelId: resolvedStageModelId)
         if let wsID = workspaceID {
             providerHints[HintKey.env("WIKI_WORKSPACE")] = wsID
         }
@@ -1360,20 +1383,26 @@ public final class AgentLauncher {
         // at :1022 — we REUSE `self.backend`, never call `resolveBackend`
         // again (which would orphan the ACPBackend actor `run()` built).
 
-        // Resolve the ONE provider + spawn all three phases will share.
+        // Resolve the provider + per-stage models for the three phases.
         //
-        // per-stage-model-selection (#704 removed): there is no per-operation
-        // provider pin anymore — ingest resolves ONE provider via
-        // `selectedProvider()`, and per-stage MODEL selection varies the model
-        // id within that provider's catalog (planner / executor / finalizer
-        // can pick `glm-5.2` / `glm-5.2-fast` / `glm-5.2-short`). The stage
-        // model ids are resolved + applied per-phase below; this top-level
-        // resolution stays ONE provider so the warm subprocess is reused
-        // across planner/executor/finalizer.
-        let provider = providersConfig().selectedProvider()
-        let plannerModel = providersConfig().modelId(forStage: ACPIngestStage.planner.rawValue, fallbackProvider: provider.id)
-        let executorModel = providersConfig().modelId(forStage: ACPIngestStage.executor.rawValue, fallbackProvider: provider.id)
-        let finalizerModel = providersConfig().modelId(forStage: ACPIngestStage.finalizer.rawValue, fallbackProvider: provider.id)
+        // agent-settings-tabs: the subprocess provider is the PLANNER stage's
+        // resolved provider (`provider(forStage: "planner")` — pinned when set,
+        // else the global default). This matches the provider `run()` already
+        // used to build `self.backend` (it derives `stageKey = "planner"` for
+        // `.ingest`). Per-stage MODEL ids resolve through EACH STAGE's own
+        // resolved provider via the `modelId(forStage:)` convenience wrapper,
+        // so a stage pinned to provider B falls back to B's `selectedModelId`.
+        // Architectural note: the warm subprocess is shared across phases
+        // (built from the planner provider) so fork-based context inheritance
+        // works. When all stages resolve to the SAME provider (the common
+        // case — all "Default" or all pinned alike) this is identical to the
+        // prior behavior. Pinning DIFFERENT providers per ingest stage is an
+        // explicit user choice; the per-stage model ids are routed to the
+        // shared subprocess as today.
+        let provider = providersConfig().provider(forStage: ACPIngestStage.planner.rawValue)
+        let plannerModel = providersConfig().modelId(forStage: ACPIngestStage.planner.rawValue)
+        let executorModel = providersConfig().modelId(forStage: ACPIngestStage.executor.rawValue)
+        let finalizerModel = providersConfig().modelId(forStage: ACPIngestStage.finalizer.rawValue)
         guard let spawn = resolveACPProviderSpawn(provider) else {
             DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
             preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
@@ -2322,6 +2351,23 @@ public final class AgentLauncher {
         return "agent:\(kind.rawValue)"
     }
 
+    /// Map a one-shot `OperationRequest` to the per-stage key the shared `run()`
+    /// path uses to resolve the provider + model (`agent-settings-tabs.md` §3).
+    /// PURE + static + `nonisolated` so the dispatch is unit-tested without a
+    /// subprocess or the main actor. The mapping is:
+    /// `.ingest → "planner"`, `.lint`/`.lintPage → "lint"`, `.query → "chat"`.
+    /// Do NOT hardcode a single key in `run()` — that would mis-route small-
+    /// source ingest and one-shot query to the lint stage's pinned provider.
+    /// Large-source ingest branches to its own orchestrator and resolves
+    /// per-phase.
+    nonisolated static func stageKey(for request: OperationRequest) -> String {
+        switch request {
+        case .ingest:          return ACPIngestStage.planner.rawValue
+        case .lint, .lintPage: return "lint"
+        case .query:           return "chat"
+        }
+    }
+
     /// Extract the `(sourceFiles, sourceIDs)` pair from a staged `WikiOperation`
     /// for the `models.json` record written at ingestion start. For `.ingest`
     /// this is `(sourcePaths, sourcePaths.map(WikiOperation.sourceID(fromPath:)))`;
@@ -2402,16 +2448,16 @@ public final class AgentLauncher {
         let turnCeiling = TurnLivenessPolicy.ceiling(for: .chat)
         DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive) ceiling=\(turnCeiling)s")
 
-        // #324: the launcher reads `agent-providers.json` and picks the
-        // default (or selected) provider. The app is ACP-only.
-        //
-        // per-stage-model-selection (#704 removed): there is no per-operation
-        // provider pin anymore — chat resolves ONE provider via
-        // `selectedProvider()`. Per-stage MODEL selection is an ingest-only
-        // concern (planner / executor / finalizer); chat is always a single
-        // session with one model.
-        let provider = providersConfig().selectedProvider()
-        let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
+        // #324 + agent-settings-tabs: the launcher reads `agent-providers.json`
+        // and resolves the provider + model for the CHAT stage via
+        // `provider(forStage: "chat")` (pinned provider when set + enabled,
+        // else the global default). The app is ACP-only. Per-stage PROVIDER
+        // pinning lets the user route chat to a different provider than
+        // ingest/lint; the composer chip reflects this resolution (Decision A,
+        // `ProviderSelector.current`). The model resolves through the same
+        // stage seam so a chat-specific model override applies.
+        let provider = providersConfig().provider(forStage: "chat")
+        let resolvedSelectedModel = providersConfig().modelId(forStage: "chat")
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
 
         // Refuse to spawn without an explicit `selectedModelId`. Mirrors the
@@ -2539,7 +2585,7 @@ public final class AgentLauncher {
                     provider: provider,
                     resolvedCommand: resolvedACPCommand,
                     apiKey: acpAPIKey,
-                    selectedModelId: providersConfig().selectedModelId(forProvider: provider.id))
+                    selectedModelId: resolvedSelectedModel)
                 // #397: chat-driven writes carry `chat:<chatID>` as their author
                 // provenance so created_by/last_edited_by points back to the
                 // originating conversation (resolvable via [[chat:…]]). An explicit

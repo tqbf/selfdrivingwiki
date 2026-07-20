@@ -65,8 +65,17 @@ struct ProviderSelector: View {
         config.enabledProviders
     }
 
+    /// The effective provider for chat: the chat stage's pinned provider when
+    /// set + enabled, else the global default. **Decision A**
+    /// (`plans/agent-settings-tabs.md` §6.5): the composer chip must reflect
+    /// the provider chat will ACTUALLY use, so when the chat stage is pinned
+    /// the chip shows the pinned provider — no silent mismatch. Selecting a
+    /// row in the popover still sets the GLOBAL default via
+    /// `setSelectedModelAndDefault(...)` (unchanged behavior); picking in the
+    /// composer affects everything that follows "Default", just not a pinned
+    /// chat stage.
     private var current: AgentProvider {
-        config.selectedProvider()
+        config.provider(forStage: "chat")
     }
 
     var body: some View {

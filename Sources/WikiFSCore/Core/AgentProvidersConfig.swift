@@ -59,16 +59,31 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `agent-providers.json` without this key decodes to `[:]`.
     public var maxConcurrent: [String: Int]
 
-    /// Per-ingest-stage model overrides. Keyed by stage name (`"planner"`,
-    /// `"executor"`, `"finalizer"` — see `ACPIngestStage`). Each value is a
-    /// model id FOR THE SAME PROVIDER the run resolves via
-    /// `selectedProvider()` (per-stage selects a MODEL variant, not a
-    /// provider). A missing or empty value falls back to
-    /// `selectedModelId(forProvider:)` — identical to today's behavior.
-    /// Forward-compatible: a pre-per-stage `agent-providers.json` without this
-    /// key decodes to `[:]` → every stage uses the provider's
-    /// `selectedModelId`. See `plans/per-stage-model-selection.md`.
+    /// Per-stage MODEL overrides. Keyed by stage name — the ingest stages
+    /// (`"planner"`, `"executor"`, `"finalizer"` — see `ACPIngestStage`) PLUS
+    /// the operation-level stages (`"chat"`, `"lint"`) introduced by the
+    /// agent-settings-tabs plan. Each value is a model id FOR THE STAGE'S
+    /// RESOLVED PROVIDER (see `provider(forStage:)`). A missing or empty value
+    /// falls back to that provider's `selectedModelId(forProvider:)`. The map
+    /// name retains the historical `ingest` prefix for backward-compat (the
+    /// persisted JSON key is unchanged); the chat/lint keys ride the same
+    /// string-keyed map. Do NOT "clean up" the non-ingest keys — they are
+    /// load-bearing (`plans/agent-settings-tabs.md`). Forward-compatible: a
+    /// pre-per-stage `agent-providers.json` without this key decodes to `[:]`
+    /// → every stage uses the provider's `selectedModelId`. See
+    /// `plans/per-stage-model-selection.md`.
     public var ingestStageModelIds: [String: String]
+
+    /// Per-stage PROVIDER overrides. Keyed by stage name (`"chat"`,
+    /// `"planner"`, `"executor"`, `"finalizer"`, `"lint"`). Value = provider
+    /// id. Missing/empty (`""`) = "use the global default provider"
+    /// (`selectedProvider()`). This lets the user pin a different PROVIDER per
+    /// operation/stage (Chat / Ingestion / Lint tabs in Settings), on top of
+    /// the per-stage MODEL overrides in `ingestStageModelIds`. Forward-
+    /// compatible: a pre-this-change `agent-providers.json` without this key
+    /// decodes to `[:]` → every stage uses the global default. See
+    /// `plans/agent-settings-tabs.md`.
+    public var stageProviderIds: [String: String]
 
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
@@ -76,7 +91,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         selectedModelIds: [String: String] = [:],
         favoriteModelIds: [String: [String]] = [:],
         maxConcurrent: [String: Int] = [:],
-        ingestStageModelIds: [String: String] = [:]
+        ingestStageModelIds: [String: String] = [:],
+        stageProviderIds: [String: String] = [:]
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
         self.providers = normalizedProviders
@@ -85,6 +101,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.favoriteModelIds = favoriteModelIds
         self.maxConcurrent = maxConcurrent
         self.ingestStageModelIds = ingestStageModelIds
+        self.stageProviderIds = stageProviderIds
     }
 
     // MARK: - Coding (forward-compatible: old files without model caches decode)
@@ -96,6 +113,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         case favoriteModelIds
         case maxConcurrent
         case ingestStageModelIds
+        case stageProviderIds
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,6 +134,10 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         // (the legacy #604 collapsed behavior — no migration, no behavior
         // change for existing users).
         self.ingestStageModelIds = try c.decodeIfPresent([String: String].self, forKey: .ingestStageModelIds) ?? [:]
+        // Forward-compatible: pre-agent-settings-tabs files have no
+        // `stageProviderIds` key. `[:]` → every stage uses the global default
+        // provider (the legacy behavior — no migration, no behavior change).
+        self.stageProviderIds = try c.decodeIfPresent([String: String].self, forKey: .stageProviderIds) ?? [:]
         // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
         // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
         // skips it. The original per-stage assignment feature was removed
@@ -181,7 +203,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: ingestStageModelIds)
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds)
     }
 
     /// The default provider (the launcher's fallback when the user hasn't picked
@@ -203,6 +226,35 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Look up a provider by id.
     public func provider(id: String) -> AgentProvider? {
         providers.first(where: { $0.id == id })
+    }
+
+    // MARK: - Per-stage provider + model resolution (agent-settings-tabs plan)
+
+    /// Resolve the concrete provider for a stage: the stage's pinned provider
+    /// when set + enabled, else the global `selectedProvider()`. The stage
+    /// key is one of `"chat"`, `"planner"`, `"executor"`, `"finalizer"`,
+    /// `"lint"`. PURE so it is unit-tested without a subprocess. A disabled
+    /// pin falls back to the default (the launcher never selects a disabled
+    /// provider). See `plans/agent-settings-tabs.md` §3.
+    public func provider(forStage stage: String) -> AgentProvider {
+        if let pinnedId = stageProviderIds[stage],
+           !pinnedId.isEmpty,
+           let p = provider(id: pinnedId), p.enabled {
+            return p
+        }
+        return selectedProvider()
+    }
+
+    /// Resolve the concrete model id for a stage using the stage-resolved
+    /// provider (`provider(forStage:)`). Returns the stage's pinned model id
+    /// when set + non-empty; otherwise falls back to that provider's
+    /// `selectedModelId`. PURE. This is the convenience wrapper that composes
+    /// `provider(forStage:)` + `modelId(forStage:fallbackProvider:)` — the
+    /// launcher's chat/lint/ingest sites call it so both the provider pin and
+    /// the model override resolve through one seam.
+    public func modelId(forStage stage: String) -> String? {
+        let p = provider(forStage: stage)
+        return modelId(forStage: stage, fallbackProvider: p.id)
     }
 
     // MARK: - Per-stage model selection (per-stage-model-selection plan)
@@ -245,7 +297,47 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: stages)
+            ingestStageModelIds: stages,
+            stageProviderIds: stageProviderIds)
+    }
+
+    /// A PURE mutator: returns a NEW config with the per-stage PROVIDER pin for
+    /// `stage` set (or cleared when `providerId` is nil/empty, restoring the
+    /// "use the global default provider" behavior). Called by the Settings UI's
+    /// per-stage provider picker; persisted by the view. Stale-model safety
+    /// (agent-settings-tabs §2.2.3): when the provider pin CHANGES to a
+    /// non-empty value, the stage's MODEL override (`ingestStageModelIds[stage]`)
+    /// is CLEARED — a model id from the previous provider's catalog must never
+    /// be sent to the new provider. The user then re-picks (or leaves "Same as
+    /// provider"). Mirrors the carry-everything-else-through shape of the other
+    /// setters.
+    public func settingStageProvider(_ providerId: String?, forStage stage: String) -> AgentProvidersConfig {
+        let normalized = (providerId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        var pins = stageProviderIds
+        let didChange: Bool
+        if let normalized {
+            didChange = (pins[stage] != normalized)
+            pins[stage] = normalized
+        } else {
+            didChange = (pins[stage] != nil)
+            pins.removeValue(forKey: stage)
+        }
+        // Clear the stale model override when the provider pin changes, so a
+        // model id from the old provider's catalog is never routed to the new
+        // provider's subprocess.
+        var stages = ingestStageModelIds
+        if didChange {
+            stages.removeValue(forKey: stage)
+        }
+        DebugLog.store("AgentProvidersConfig.settingStageProvider: stage=\(stage) providerId=\(normalized ?? "nil") clearedModel=\(didChange)")
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: stages,
+            stageProviderIds: pins)
     }
 
     /// Mark the provider with `id` as the default, demoting every other provider
@@ -272,7 +364,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: ingestStageModelIds)
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -319,7 +412,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: ingestStageModelIds)
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds)
     }
 
     /// A PURE mutator: returns a NEW config with the user's model selection for
@@ -340,7 +434,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selections,
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: ingestStageModelIds)
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds)
     }
 
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
@@ -378,7 +473,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favorites,
             maxConcurrent: maxConcurrent,
-            ingestStageModelIds: ingestStageModelIds)
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds)
     }
 
     // MARK: - Seed (pure)
@@ -444,7 +540,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 selectedModelIds: selectedModelIds,
                 favoriteModelIds: config.favoriteModelIds,
                 maxConcurrent: config.maxConcurrent,
-                ingestStageModelIds: config.ingestStageModelIds)
+                ingestStageModelIds: config.ingestStageModelIds,
+                stageProviderIds: config.stageProviderIds)
         }
         // Missing / corrupt / empty → seed + persist.
         DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)")
