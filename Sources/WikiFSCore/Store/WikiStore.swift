@@ -649,6 +649,15 @@ public protocol WikiStore: Sendable {
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
     func updateChatSummary(chatID: PageID, summary: String) throws
 
+    /// Write the cached one-line summary for a single assistant message
+    /// (chat-summary plan §3.5). The chat row is the change-emission resource
+    /// (there is no `.message` resource kind); emits `.chat .updated` with the
+    /// chat's id. Idempotent at the SQL level; the caller short-circuits on a
+    /// non-nil cached summary to enforce compute-once (AC.6).
+    func updateMessageSummary(
+        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+    ) throws
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
     func listAllChatsOrderedByID() throws -> [ChatSummary]

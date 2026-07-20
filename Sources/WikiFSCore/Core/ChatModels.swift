@@ -114,6 +114,22 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Which summarizer produced a `chat_messages.summary` row. The raw values
+/// are EXPLICIT and must match the `summary_kind` column spec exactly —
+/// without them Swift would derive the rawValue from the case name
+/// (`"defaultTruncation"`), mismatching the column and breaking round-trips
+/// (chat-summary plan §4.1). Closed set so `summary_kind` round-trips
+/// predictably across migrations.
+public enum ChatMessageSummaryKind: String, Sendable, Codable, CaseIterable {
+    /// First-sentence truncation via `ChatSummary.summaryExtract` — no model
+    /// call. The Default summarizer mode (chat-summary plan §4.2).
+    case defaultTruncation = "default"
+    /// LLM-generated summary via a pinned `"summarizer"`-stage provider + model
+    /// (chat-summary plan §4.3). One-shot ACP session per message; the result
+    /// is cached so it is computed exactly once.
+    case model = "model"
+}
+
 /// One persisted transcript row: a single renderable `AgentEvent`, stored
 /// verbatim as JSON (`event_json`) so history re-renders through the exact
 /// same pipeline as the live transcript, plus a `plainText` projection
@@ -126,13 +142,30 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
     public var seq: Int
     public var event: AgentEvent
     public var createdAt: Date
+    /// Cached one-line summary (chat-summary plan). `nil` until the summarizer
+    /// runs; written once via `updateMessageSummary` and never recomputed.
+    public var summary: String?
+    /// Which summarizer produced `summary`. `nil` alongside `summary`. Stored
+    /// as `ChatMessageSummaryKind.rawValue` in the `summary_kind` column.
+    public var summaryKind: ChatMessageSummaryKind?
+    /// When the summary was written, for staleness display. `nil` alongside
+    /// `summary`.
+    public var summaryAt: Date?
 
-    public init(id: PageID, chatID: PageID, seq: Int, event: AgentEvent, createdAt: Date) {
+    public init(
+        id: PageID, chatID: PageID, seq: Int, event: AgentEvent, createdAt: Date,
+        summary: String? = nil,
+        summaryKind: ChatMessageSummaryKind? = nil,
+        summaryAt: Date? = nil
+    ) {
         self.id = id
         self.chatID = chatID
         self.seq = seq
         self.event = event
         self.createdAt = createdAt
+        self.summary = summary
+        self.summaryKind = summaryKind
+        self.summaryAt = summaryAt
     }
 }
 

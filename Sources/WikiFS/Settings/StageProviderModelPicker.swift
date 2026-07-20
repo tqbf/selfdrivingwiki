@@ -4,15 +4,22 @@ import WikiFSCore
 /// A provider + model picker for a single agent stage/operation
 /// (`plans/agent-settings-tabs.md` §2.2/§6). Reused for the Chat Model,
 /// Planner/Executor/Finalizer Models, and Lint Model rows in the nested
-/// Chat/Ingestion/Lint tab view.
+/// Chat/Ingestion/Lint tab view, and for the per-message Summary Model row in
+/// the Summary tab (`plans/chat-summary.md` §5.2).
 ///
 /// - `stageKey`: stable string key into the per-stage overrides
-///   (`"chat"`, `"planner"`, `"executor"`, `"finalizer"`, `"lint"`). For ingest
-///   stages this is `ACPIngestStage.rawValue`.
+///   (`"chat"`, `"planner"`, `"executor"`, `"finalizer"`, `"lint"`,
+///   `"summarizer"`). For ingest stages this is `ACPIngestStage.rawValue`.
 /// - `config`: the live config (binding so edits flow back to the parent's
 ///   `@State`).
 /// - `containerDirectory`: for persistence (save on every change).
 /// - `label`: human-readable stage label shown as the row title.
+/// - `defaultOptionLabel`: the text shown for the sentinel `""` first option
+///   in the provider dropdown. Defaults to `"Default"` (inherit the global
+///   default provider). **Stage-specific semantic for `"summarizer"`**: an empty
+///   pin means "no model — truncation" (NOT "inherit the global provider"), so
+///   the Summary tab passes `"Default (first few sentences)"` to convey the
+///   actual behavior (`plans/chat-summary.md` §5.2).
 ///
 /// The provider dropdown includes a **"Default"** first option (sentinel `""` =
 /// inherit the global default provider). The model dropdown is **dependent** on
@@ -25,6 +32,7 @@ struct StageProviderModelPicker: View {
     @Binding var config: AgentProvidersConfig
     let containerDirectory: URL
     let label: String
+    var defaultOptionLabel: String = "Default"
 
     /// The effective provider for this stage (pinned when set + enabled, else
     /// the global default). Drives the model dropdown's contents.
@@ -49,7 +57,7 @@ struct StageProviderModelPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("\(label) Provider", selection: providerBinding) {
-                Text("Default").tag("")
+                Text(defaultOptionLabel).tag("")
                 ForEach(config.enabledProviders) { p in
                     Text(p.label).tag(p.id)
                 }

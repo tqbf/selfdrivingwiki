@@ -3580,6 +3580,21 @@ public final class WikiStoreModel {
         }
     }
 
+    /// `@MainActor` wrapper for the per-message summary write (chat-summary
+    /// plan §3.5). The summarizer's off-main compute marshals back here for the
+    /// DB write (no inference inside a transaction). No manual reload — the bus
+    /// fires `reloadFromStore()` async after the `.chat .updated` emit.
+    public func updateMessageSummary(
+        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+    ) {
+        do {
+            try store.updateMessageSummary(
+                chatID: chatID, messageID: messageID, summary: summary, kind: kind)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateMessageSummary failed: \(error)")
+        }
+    }
+
     public func deleteChat(id: PageID) {
         do {
             try store.deleteChat(id: id)

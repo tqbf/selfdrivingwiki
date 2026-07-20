@@ -471,10 +471,23 @@ struct ChatView: View {
     /// user turn is paired with the first assistant text that follows it
     /// (extracted to one sentence, elided), so the outline shows both sides of
     /// the conversation. Sourced from `displayMessages` (same events as the
-    /// transcript). Uses `ChatSummary.summaryExtract` for the response text.
+    /// transcript).
+    ///
+    /// **Per-message summary (chat-summary plan §6.3):** for persisted chats,
+    /// a cached `chat_messages.summary` wins over on-the-fly extraction — read
+    /// once, never recomputed. The live (streaming) path has no row yet, so it
+    /// always computes the default truncation on the fly (free); the summary is
+    /// cached after the turn persists.
     private var chatOutlineEntries: [ChatOutlineEntry] {
         let msgs = displayMessages
         let timestamps = displayTimestamps
+        // Align cached per-message summaries with `displayMessages` for the
+        // persisted path. `visiblePersistedMessages` applies the same
+        // `.transcriptVisible` filter as `displayMessages`, so indices match.
+        // The live path returns all-nil (no row yet).
+        let cachedSummaries: [String?] = isLiveChat
+            ? Array(repeating: nil, count: msgs.count)
+            : visiblePersistedMessages.map(\.summary)
         var entries: [ChatOutlineEntry] = []
         var pendingQuestion: String?
         var pendingQuestionTS: Date?
@@ -490,7 +503,8 @@ struct ChatView: View {
                 pendingQuestionTS = ts
             case .assistantText(let text):
                 if let q = pendingQuestion {
-                    let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
+                    let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil
@@ -498,7 +512,8 @@ struct ChatView: View {
                 }
             case .result(_, let text):
                 if let q = pendingQuestion {
-                    let summary = ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
+                    let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil
@@ -513,6 +528,18 @@ struct ChatView: View {
                                             questionTimestamp: pendingQuestionTS, responseTimestamp: nil))
         }
         return entries
+    }
+
+    /// The `.transcriptVisible` subset of `persistedMessages`, aligned with
+    /// `displayMessages` for the persisted path (chat-summary plan §6.3). Used
+    /// to read cached per-message summaries. Empty on the live path (no row
+    /// exists yet — the view sources from `launcher.events`).
+    private var visiblePersistedMessages: [ChatMessage] {
+        guard !isLiveChat else { return [] }
+        let indices = persistedMessages.map(\.event).transcriptVisibleIndices
+        return indices.compactMap { idx in
+            idx < persistedMessages.count ? persistedMessages[idx] : nil
+        }
     }
 
     @ViewBuilder

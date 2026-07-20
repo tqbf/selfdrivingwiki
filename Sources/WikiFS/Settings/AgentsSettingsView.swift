@@ -53,15 +53,17 @@ struct AgentsSettingsView: View {
     /// (`plans/agent-settings-tabs.md` §2.1 LOW #9).
     @State private var selectedOperationTab: OperationTab = .chat
 
-    /// The three operation panes, each owning its stages.
+    /// The operation panes, each owning its stages. The Summary tab
+    /// (`plans/chat-summary.md` §5.2) is the per-message summarizer stage pin.
     enum OperationTab: String, CaseIterable, Identifiable {
-        case chat, ingestion, lint
+        case chat, ingestion, lint, summary
         var id: String { rawValue }
         var label: String {
             switch self {
             case .chat:      return "Chat"
             case .ingestion: return "Ingestion"
             case .lint:      return "Lint"
+            case .summary:   return "Summary"
             }
         }
     }
@@ -420,6 +422,31 @@ struct AgentsSettingsView: View {
                     Text("Lint Model")
                 } footer: {
                     Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .summary:
+            // Per-message summarizer stage (plans/chat-summary.md §5.2). This
+            // IS the StageProviderModelPicker for the `"summarizer"` stage — no
+            // separate mode Picker. The sentinel `""` (first option) means
+            // "no model — truncation" for THIS stage (different from the other
+            // stages where `""` means "inherit the global default provider"), so
+            // the option is relabeled to "Default (first few sentences)" to
+            // convey the actual behavior.
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "summarizer",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Summary Model",
+                        defaultOptionLabel: "Default (first few sentences)")
+                } header: {
+                    Text("Message Summary")
+                } footer: {
+                    Text("“Default (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

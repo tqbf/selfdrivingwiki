@@ -568,14 +568,15 @@ struct PageVersionTests {
                 "nil author degrades to legacy-import (got \(agentName))")
     }
 
-    /// AC.8 (migration ladder sanity) — a v38 DB reopened at v39 must report
-    /// `user_version = 39`. The migration step is a no-op `PRAGMA user_version
-    /// = 39` (no schema change; the write-path change is the real fix).
+    /// AC.8 (migration ladder sanity) — a fresh DB must report the current
+    /// `user_version`. The v38→39 step was a no-op `PRAGMA user_version = 39`
+    /// (the write-path change was the real fix); v39→40 adds the per-message
+    /// summary columns (`plans/chat-summary.md` §3.3).
     @Test func v39SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 39,
-                "schemaVersion must report 39 after the page-provenance bump")
+        #expect(GRDBWikiStore.schemaVersion == 40,
+                "schemaVersion must report 40 after the chat-message-summary bump")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "39", "fresh DB stamps user_version = 39 (got \(v))")
+        #expect(v == "40", "fresh DB stamps user_version = 40 (got \(v))")
     }
 }
