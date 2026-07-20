@@ -1,3 +1,11 @@
+* **All Swift code must compile via `swift build` / `swift test` from the
+  command line (SwiftPM only) — never rely on Xcode-only tooling or APIs.**
+  In practice this means: no macros or APIs that require an Xcode project
+  file, an Xcode-managed scheme, or Xcode's build system to resolve (e.g.
+  avoid `@Entry` for `EnvironmentValues`/`FocusedValues` — use the manual
+  `EnvironmentKey`/`FocusedValueKey` pattern instead). If a feature only
+  builds inside Xcode, it doesn't belong in this codebase.
+
 * For all coding tasks use your judgement to decide an appropriate lower
   power model and run that in a subagent.
 
