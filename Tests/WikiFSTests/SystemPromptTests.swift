@@ -37,16 +37,21 @@ struct SystemPromptTests {
     /// schema can't silently regress to a stub.
     @Test func defaultBodyDocumentsTheWikictlCommandReference() {
         let body = SystemPrompt.defaultBody
-        // Every `wikictl` subcommand the agent must know — invoked via $WIKICTL so
-        // resolution does not depend on the agent's shell preserving PATH.
-        #expect(body.contains("$WIKICTL page list"))
-        #expect(body.contains("$WIKICTL page get"))
-        #expect(body.contains("$WIKICTL page add"))
-        #expect(body.contains("$WIKICTL page delete"))
-        #expect(body.contains("$WIKICTL index set"))
-        #expect(body.contains("$WIKICTL log append"))
-        // $WIKICTL holds wikictl's absolute path (PATH-independent resolution).
-        #expect(body.contains("$WIKICTL"))
+        // Every `wikictl` subcommand the agent must know. The harness puts
+        // wikictl on PATH, so the prompt uses a bare `wikictl` (NOT `$WIKICTL`,
+        // which word-splits on the spaces in the .app install path — see
+        // ACPBackend.buildAgentEnv).
+        #expect(body.contains("wikictl page list"))
+        #expect(body.contains("wikictl page get"))
+        #expect(body.contains("wikictl page add"))
+        #expect(body.contains("wikictl page delete"))
+        #expect(body.contains("wikictl index set"))
+        #expect(body.contains("wikictl log append"))
+        // Regression guard: the prompt must NOT route commands through the
+        // `$WIKICTL` env var — its value contains spaces and bash word-splits
+        // the unquoted expansion, so every `$WIKICTL …` call dies with
+        // "/Applications/Self: No such file or directory".
+        #expect(!body.contains("$WIKICTL"))
         // Write-via-wikictl-never-the-filesystem + read-only mount.
         #expect(body.contains("READ-ONLY"))
         // WIKI_DB selects the wiki, so do not pass --wiki.
@@ -91,7 +96,7 @@ struct SystemPromptTests {
         #expect(body.contains("PDF"))
         // Mermaid diagrams: authoring rules + save-time validation note.
         #expect(body.contains("```mermaid"))
-        #expect(body.contains("$WIKICTL page add"))
+        #expect(body.contains("wikictl page add"))
     }
 
     // MARK: - Update persists + bumps version

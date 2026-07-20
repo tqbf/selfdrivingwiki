@@ -57,10 +57,10 @@ import ACPModel
             status: .pending,
             title: nil,
             kind: .execute,
-            rawInput: AnyCodable(["command": "$WIKICTL page add --title Foo"])
+            rawInput: AnyCodable(["command": "wikictl page add --title Foo"])
         ))
         let events = translator.translate(update)
-        #expect(events == [.toolUse(name: "Bash", inputSummary: "$WIKICTL page add --title Foo")])
+        #expect(events == [.toolUse(name: "Bash", inputSummary: "wikictl page add --title Foo")])
     }
 
     /// A tool call's `kind` is the fallback name when `title` is nil. Uses

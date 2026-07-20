@@ -12,19 +12,19 @@ For each source, record the ingest in the log. The source files and their IDs ar
 
 ## Instructions
 
-1. Read the current page list: `$WIKICTL page list`
+1. Read the current page list: `wikictl page list`
 
-2. Write `index.md` — the curated catalog of ALL pages in the wiki (not just new ones). Write it to `./index.md`, then: `$WIKICTL index set --body-file ./index.md`
+2. Write `index.md` — the curated catalog of ALL pages in the wiki (not just new ones). Write it to `./index.md`, then: `wikictl index set --body-file ./index.md`
 
 3. For EACH source listed above, record the ingest in the log:
    ```
-   $WIKICTL log append --kind ingest --title "<source file name>" --source <id>
+   wikictl log append --kind ingest --title "<source file name>" --source <id>
    ```
    The `--source` id is REQUIRED — it marks that file as Ingested in the app.
 
 ### Write rules
 
-- The ONLY way to create or update content is `$WIKICTL`. The wiki mount is READ-ONLY.
+- The ONLY way to create or update content is `wikictl`. The wiki mount is READ-ONLY.
 - Always use `--body-file ./index.md`, never shell pipes or heredocs.
 
 IMPORTANT:
