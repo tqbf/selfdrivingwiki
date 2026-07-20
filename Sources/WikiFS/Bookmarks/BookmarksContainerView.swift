@@ -8,9 +8,11 @@ import WikiFSCore
 struct BookmarksContainerView: View {
     let store: WikiStoreModel
     let fileProvider: FileProviderFacade
-    var onShowPicker: (PickerContext) -> Void
-    var onEdit: (String) -> Void
-    var onNewFolder: () -> Void
+    // All closures are main-actor-isolated: they touch the @MainActor
+    // WikiStoreModel or present sheets/state on the main actor.
+    var onShowPicker: (@MainActor @Sendable (PickerContext) -> Void)
+    var onEdit: (@MainActor @Sendable (String) -> Void)
+    var onNewFolder: (@MainActor @Sendable () -> Void)
 
     @State private var searchText: String = ""
 
@@ -88,7 +90,7 @@ struct BookmarksContainerView: View {
     /// Idle state uses `.secondary`; hover highlights via `.tint` — matches the
     /// subtle treatment of sidebar action buttons in native macOS apps.
     private func headerButton(systemImage: String, help: String,
-                              action: @escaping () -> Void) -> some View {
+                              action: @escaping @MainActor @Sendable () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.body)
@@ -200,7 +202,7 @@ struct BookmarksContainerView: View {
     }
 }
 
-struct PickerContext: Identifiable {
+struct PickerContext: Identifiable, Sendable {
     let id: UUID
     let parentID: String?
     let kind: ItemPickerKind

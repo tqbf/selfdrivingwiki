@@ -5,7 +5,7 @@ import WikiFSCore
 /// `ItemPickerKind` (which drives the folder-level "Add Page…/Add Source…"
 /// browse-and-pick flow and has no chat case) — this one backs the "already
 /// have the item(s), pick a destination folder" flow, which does support chats.
-enum BookmarkRefKind: String {
+enum BookmarkRefKind: String, Sendable {
     case pages
     case sources
     case chats
@@ -15,7 +15,7 @@ enum BookmarkRefKind: String {
 /// of `PickerContext`. Here the items are already chosen (a multi-row selection
 /// from the Pages/Sources list, or the active chat) and the user picks the
 /// destination folder.
-struct BookmarkTargetPickerContext: Identifiable {
+struct BookmarkTargetPickerContext: Identifiable, Sendable {
     let id = UUID()
     let kind: BookmarkRefKind
     let ids: [PageID]
@@ -34,7 +34,8 @@ struct BookmarkTargetPickerSheet: View {
     let kind: BookmarkRefKind
     let ids: [PageID]
     /// Receives the chosen destination folder id (`nil` = bookmarks root).
-    let onConfirm: (String?) -> Void
+    /// Main-actor: the caller touches the @MainActor WikiStoreModel.
+    let onConfirm: (@MainActor @Sendable (String?) -> Void)
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""

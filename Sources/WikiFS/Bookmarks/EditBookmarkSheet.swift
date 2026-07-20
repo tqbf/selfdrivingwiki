@@ -6,7 +6,9 @@ import WikiFSCore
 struct EditBookmarkSheet: View {
     let store: WikiStoreModel
     let nodeID: String
-    let onSave: (String) -> Void
+    /// Receives the chosen folder name. Main-actor: the caller touches the
+    /// @MainActor WikiStoreModel to create bookmark refs.
+    let onSave: (@MainActor @Sendable (String) -> Void)
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
