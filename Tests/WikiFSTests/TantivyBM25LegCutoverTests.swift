@@ -11,8 +11,9 @@ import Testing
 /// fused with the semantic cosine leg via `RankFusion.rrf`. With no chunk
 /// embeddings seeded (the case below), the semantic leg is empty, so the fused
 /// output == the BM25 leg's membership/order. A nil/empty leg yields no lexical
-/// results; with vec unavailable under `swift test`, the output is empty too —
-/// the FTS5 fallback that previously made nil-bm25Leg return matches is gone.
+/// results; with the embedder unavailable under `swift test` (NLEmbedding is
+/// app-gated), the output is empty too — the FTS5 fallback that previously made
+/// nil-bm25Leg return matches is gone.
 ///
 /// Store-level tests (no Tantivy index, no model, no event bus) → fast CI tier.
 /// They exercise the default backend (`StoreBackend.current.makeStore`) directly.

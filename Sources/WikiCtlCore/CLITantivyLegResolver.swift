@@ -28,7 +28,8 @@ import WikiFSCore
 /// Returns `nil` when Tantivy is unavailable, the index returned nothing, or
 /// every hit was missing from the catalog. Post-#634, `nil` means "no BM25
 /// leg" — the store's FTS5 fallback was dropped (#634); the cosine leg still
-/// answers when NLEmbedding/MLX and vec are available. As long as the wiki
+/// answers when NLEmbedding/MLX is available (Swift-side `VectorCosine`,
+/// issue #628 — no C scalar). As long as the wiki
 /// has been opened in the app at least once (the app kicks off the initial
 /// build via `TantivyShadowSync.start()`), the Tantivy leg is populated.
 public enum CLITantivyLegResolver {
@@ -36,7 +37,7 @@ public enum CLITantivyLegResolver {
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
     /// when the index is unavailable/empty — post-#634 that means no BM25
     /// leg (FTS5 was dropped in #634; the cosine leg still answers when
-    /// NLEmbedding/vec are available).
+    /// NLEmbedding/MLX is loaded).
     public static func resolvePageLeg(
         wikiID: String,
         containerDirectory: URL,
@@ -175,7 +176,7 @@ public enum CLITantivyLegResolver {
     /// semantic cosine leg via `RankFusion.rrf`. Returns `nil` (not `[]`)
     /// when nothing resolves so the store runs WITHOUT a BM25 leg (post-#634:
     /// FTS5 is dropped, so a `nil`/empty leg means no lexical results — cosine
-    /// still answers when NLEmbedding/vec are available). This matches the
+    /// still answers when NLEmbedding/MLX is loaded). This matches the
     /// model's contract and is the post-#634 reality all callers route
     /// through: a missing Tantivy leg = "no BM25 leg" (no fallback path), not
     /// an error.

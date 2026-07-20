@@ -6,8 +6,9 @@ import Foundation
 ///
 /// The store depends on the `Embedder` abstraction, so swapping the embedder is a
 /// behind-the-scenes change: the chunk index stores opaque Float32 BLOBs and the
-/// `vec_distance_cosine` queries are dimension-agnostic (as long as every vector
-/// uses one dimension — enforced by the `embedding_meta` cutover, schema v15).
+/// Swift-side dot product (issue #628 — `VectorCosine`) is dimension-agnostic
+/// (as long as every vector uses one dimension — enforced by the
+/// `embedding_meta` cutover, schema v15).
 ///
 /// Two entry points:
 /// - ``embeddingBlob(for:)`` — one vector for a **short query** string.

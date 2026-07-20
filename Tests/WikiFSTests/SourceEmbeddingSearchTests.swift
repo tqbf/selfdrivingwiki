@@ -5,15 +5,16 @@ import Testing
 @testable import WikiFSCore
 
 /// Semantic source search tests. The cosine-ranking semantic path cannot run
-/// under `swift test` (NLEmbedding is app-bundle-gated — sqlite-vec itself is
-/// now statically linked and registered; see
-/// `vecScalarIsRegisteredAfterStaticLink`), so these tests exercise: the v13
-/// schema migration, the `storeSourceEmbedding` write path, the **Tantivy
-/// bm25Leg pass-through** (post-#634 — FTS5 is dropped, `searchSimilarSources`
-/// consumes a caller-supplied leg), the `reembedSource` no-op behavior
-/// without vec, the `wikictl source search` CLI (TSV output + arg validation),
-/// and the `ON DELETE CASCADE` on `source_embeddings`. Mirrors `SourcesTests` /
-/// `WikiCtlCommandTests`.
+/// under `swift test` (NLEmbedding is app-bundle-gated — Swift-side cosine
+/// ranking via `VectorCosine` IS active, but there's no embedder to produce a
+/// query vector under `swift test`; see `VectorCosineTests` for the pure-math
+/// correctness anchor), so these tests exercise: the v13 schema migration, the
+/// `storeSourceEmbedding` write path, the **Tantivy bm25Leg pass-through**
+/// (post-#634 — FTS5 is dropped, `searchSimilarSources` consumes a
+/// caller-supplied leg), the `reembedSource` no-op behavior without the
+/// embedder loaded, the `wikictl source search` CLI (TSV output + arg
+/// validation), and the `ON DELETE CASCADE` on `source_embeddings`. Mirrors
+/// `SourcesTests` / `WikiCtlCommandTests`.
 struct SourceEmbeddingSearchTests {
 
     private func tempDatabaseURL() -> URL {
@@ -67,15 +68,24 @@ struct SourceEmbeddingSearchTests {
         #expect(!tableExists(db, "chats_fts"))
     }
 
-    // MARK: - vec registration (Phase 2: statically-linked sqlite-vec)
+    // MARK: - Swift-side cosine path (Phase 3: #628 — vendored C scalar retired)
 
-    @Test func vecScalarIsRegisteredAfterStaticLink() throws {
-        // sqlite-vec is compiled in (-DSQLITE_CORE) and registered on every
-        // connection now. The cosine semantic path still can't RANK under swift
-        // test (NLEmbedding is app-gated), but this proves the scalar functions
-        // exist — the core Phase 2 guarantee.
+    @Test func searchSimilarSourcesUsesSwiftCosineRankerWhenEmbedderLoaded() throws {
+        // Post-#628: the semantic cosine leg is pure Swift (`VectorCosine` over
+        // L2-normalized BLOBs). With no embedder loaded under `swift test`
+        // (NLEmbedding is app-gated), `searchSimilarSources` falls back to the
+        // Tantivy bm25Leg only — the cosine leg is silently empty. This test
+        // pins that contract: a fabricated Tantivy leg passes through unchanged
+        // when the embedder is unavailable, and the store does NOT throw or
+        // touch a C extension scalar. (`VectorCosineTests` proves the math
+        // directly; `SemanticSearchSwiftCosineTests` proves the store-level
+        // ranker with hand-crafted unit vectors.)
         let store = try tempStore()
-        #expect(store.vecRegisteredForTesting, "sqlite-vec should be registered on the connection")
+        let s = try store.addSource(filename: "alpha.pdf", data: Data("%PDF".utf8))
+        let leg = [s]
+        let hits = try store.searchSimilarSources(query: "alpha", limit: 10, bm25Leg: leg)
+        #expect(hits.count == 1)
+        #expect(hits.first?.filename == "alpha.pdf")
     }
 
     // MARK: - storeSourceChunks
@@ -83,7 +93,8 @@ struct SourceEmbeddingSearchTests {
     @Test func storeSourceChunksRoundTripsWithoutThrowing() throws {
         let store = try tempStore()
         let summary = try store.addSource(filename: "note.md", data: Data("# Hi".utf8))
-        // Inserting 512×Float32-shaped chunk BLOBs directly does not require vec.
+        // Inserting 512×Float32-shaped chunk BLOBs directly does not require
+        // the embedder (pure data write).
         let chunk = Data(count: 512 * 4)
         #expect(throws: Never.self) {
             try store.storeSourceChunks(id: summary.id, chunks: [chunk, chunk])
@@ -141,8 +152,9 @@ struct SourceEmbeddingSearchTests {
 
     @Test func searchSimilarSourcesEmptyLegReturnsEmpty() throws {
         // Post-#634: an empty leg (`[]`) and nil leg are equivalent — both mean
-        // no BM25 results. With no cosine results either (vec unavailable under
-        // swift test), the output is empty.
+        // no BM25 results. With no cosine results either (the embedder is
+        // unavailable under `swift test` — NLEmbedding is app-gated), the
+        // output is empty.
         let store = try tempStore()
         _ = try store.addSource(filename: "alpha.txt", data: Data("a".utf8))
         #expect(try store.searchSimilarSources(query: "zzznomatch", limit: 10, bm25Leg: nil).isEmpty)

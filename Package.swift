@@ -43,8 +43,8 @@ let package = Package(
         // GRDB.swift — GRDB toolkit for SQLite. Phase 1 pilot: QueueStore uses
         // DatabaseQueue + DatabaseMigrator replacing hand-rolled sqlite3_* calls
         // (plans/grdb-adoption.md §6). The default GRDB product uses the system
-        // SQLite (same as our CSqliteVec / SQLiteWikiStore) — they coexist on
-        // different database files with no conflict.
+        // SQLite (same as SQLiteWikiStore) — they coexist on different database
+        // files with no conflict.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         // tantivy.swift — Rust Tantivy full-text search via UniFFI bindings + an
         // @TantivyDocument macro. Phase 0 build spike (plans/tantivy-search-sidecar.md):
@@ -55,23 +55,6 @@ let package = Package(
         .package(url: "https://github.com/botisan-ai/tantivy.swift.git", from: "0.3.4"),
     ],
     targets: [
-        // Statically-linked sqlite-vec (semantic vector search). The amalgamation
-        // is compiled with -DSQLITE_CORE so it registers on a connection without
-        // sqlite3_load_extension (which the macOS system SQLite omits). See
-        // Sources/CSqliteVec/README.md. The app still uses the system SQLite;
-        // only the vec extension is vendored.
-        .target(
-            name: "CSqliteVec",
-            path: "Sources/CSqliteVec",
-            publicHeadersPath: "include",
-            cSettings: [
-                .define("SQLITE_CORE"),
-                .define("SQLITE_VEC_STATIC"),
-                // sqlite-vec.c #includes "sqlite3ext.h"/"sqlite3.h" (from the
-                // macOS SDK) and "sqlite-vec.h" (in this target's root).
-                .headerSearchPath("."),
-            ]
-        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -134,7 +117,6 @@ let package = Package(
         .target(
             name: "WikiFSCore",
             dependencies: [
-                "CSqliteVec",
                 "WikiFSTypes",
                 "WikiFSLinks",
                 "WikiFSMarkdown",

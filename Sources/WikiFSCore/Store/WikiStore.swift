@@ -554,10 +554,11 @@ public protocol WikiStore: Sendable {
     /// embedding compute runs off it).
     func missingPageEmbeddingWork() -> [(id: PageID, text: String)]
 
-    /// Search pages semantically (cosine similarity via `vec_distance_cosine`,
-    /// ranked by each page's best-matching chunk). The cosine leg runs only when
-    /// the vec extension AND `EmbeddingService.embeddingBlob(for:)` (NLEmbedding,
-    /// app-gated) both resolve — otherwise the BM25 leg alone is returned.
+    /// Search pages semantically (cosine similarity via Swift-side
+    /// `VectorCosine`, ranked by each page's best-matching chunk). The cosine
+    /// leg runs only when `EmbeddingService.isAvailable` (NLEmbedding/MiniLM,
+    /// app-gated) AND `EmbeddingService.embeddingBlob(for:)` both resolve —
+    /// otherwise the BM25 leg alone is returned.
     ///
     /// - Parameter bm25Leg: The pre-computed, best-first BM25 leg from Tantivy
     ///   (Phase 2 / #649). This is the SOLE lexical path after #634 dropped
@@ -577,8 +578,9 @@ public protocol WikiStore: Sendable {
     /// `missingPageEmbeddingWork`.
     func missingSourceEmbeddingWork() -> [(id: PageID, text: String)]
 
-    /// Search sources semantically (cosine similarity via `vec_distance_cosine`,
-    /// ranked by each source's best-matching chunk). Mirrors `searchSimilar`.
+    /// Search sources semantically (cosine similarity via Swift-side
+    /// `VectorCosine`, ranked by each source's best-matching chunk). Mirrors
+    /// `searchSimilar`.
     ///
     /// - Parameter bm25Leg: The pre-computed best-first BM25 leg from Tantivy
     ///   (post-#634, the sole lexical path). See `searchSimilar(query:limit:bm25Leg:)`.
@@ -670,8 +672,8 @@ public protocol WikiStore: Sendable {
 
     /// Search chats semantically + lexically (hybrid RRF, same as
     /// `searchSimilar`/`searchSimilarSources`). The semantic cosine leg runs
-    /// when vec is available; the lexical leg is the supplied Tantivy BM25 leg
-    /// (post-#634, the sole lexical path).
+    /// when the embedder is loaded; the lexical leg is the supplied Tantivy
+    /// BM25 leg (post-#634, the sole lexical path).
     ///
     /// - Parameter bm25Leg: The pre-computed best-first BM25 leg from Tantivy
     ///   (post-#634). See `searchSimilar(query:limit:bm25Leg:)`.

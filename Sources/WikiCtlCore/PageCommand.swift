@@ -40,7 +40,7 @@ public enum PageCommand {
         case add(id: PageID?, title: String, body: BodySource, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
-        /// sqlite-vec), falling back to LIKE title match.
+        /// Swift-side `VectorCosine`), falling back to LIKE title match.
         case search(query: String, limit: Int)
         /// Show the page's version history (W0, PR #312). One line per version:
         /// `seq  versionID  saved_at  title  blob_hash  parent_id`.

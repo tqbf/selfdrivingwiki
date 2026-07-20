@@ -99,7 +99,8 @@ public protocol TantivyContentSource: Sendable {
 /// `"<kind>:<ULID>"` so it is globally unique *across kinds in the same
 /// index*, which is what Tantivy's `deleteDoc(id:)` matches against.
 ///
-/// **Phase 1 only.** FTS5 + sqlite-vec + RRF remains the primary search path.
+/// **Phase 1 only.** Tantivy BM25 + Swift cosine (`VectorCosine`) + RRF is the
+/// primary search path.
 @TantivyDocument
 struct TantivySearchDocument: Sendable {
     /// `"<kind>:<ULID>"` — globally unique within the single index.

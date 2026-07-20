@@ -559,8 +559,8 @@ public final class WikiStoreModel {
     /// the search never hops back to the main actor to make progress. Returns
     /// cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable or
     /// returns no hits — post-#634 that's the documented contract (FTS5 was
-    /// dropped; nil leg = no BM25 leg, cosine still answers when vec and
-    /// NLEmbedding/MLX are available).
+    /// dropped; nil leg = no BM25 leg, cosine still answers when
+    /// NLEmbedding/MLX are loaded).
     public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
         let leg = resolveTantivyLegSync(query: query, kind: .page, limit: limit, catalog: summaries)
