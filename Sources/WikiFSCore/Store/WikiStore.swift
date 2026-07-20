@@ -398,6 +398,31 @@ public protocol WikiStore: Sendable {
     /// The full version chain for a page, ordered by ULID (chain order).
     func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary]
 
+    /// The origin provenance of a page's active (HEAD) version: joins
+    /// `refs → page_versions → activities → agents` (the PROV-DM read
+    /// mirror of `sourceOrigin(sourceID:)`). Returns `nil` when the page has
+    /// no version rows (unknown id). `agentName` is `chat:<id>` /
+    /// `agent:<kind>` / `user` / a model id (the structured upgrade of the
+    /// #131 flat `last_edited_by` string); `agentKind` is its PROV kind
+    /// (chat / agent / human / model / software). Pre-v39 rows and unknown
+    /// authors degrade to the shared `"legacy-import"` agent (no crash). On
+    /// the protocol (not only the concrete read helper) so callers — notably
+    /// `PageDetailView` and `wikictl page info` — can route through it via
+    /// `any WikiStore`. No default implementation (mirrors `sourceOrigin`):
+    /// `GRDBWikiStore` is the sole conformer; a future mock/test double must
+    /// stub `nil`.
+    func pageOrigin(pageID: PageID) throws -> PageOrigin?
+
+    /// The full edit history for a page — every `page_versions` row joined to
+    /// its `activities` → `agents` (extending `pageVersionHistory` with the
+    /// agent/activity join). Ordered OLDEST-FIRST (matches `pageVersionHistory`
+    /// so `entry.last` is the HEAD). An empty page (`createPage`'s empty root)
+    /// is included as one entry (kind 'import'); a fresh-then-edited page
+    /// therefore returns exactly 2 entries (the empty root + the first real
+    /// edit). NULL activity/agent columns degrade gracefully. New protocol
+    /// requirement (no default — mirrors `pageOrigin`/`sourceOrigin`).
+    func pageEditHistory(pageID: PageID) throws -> [PageOrigin]
+
     /// Revert a page to a specific version: repoint the `page-content` ref to
     /// `versionID` and update the denormalized `pages.body_markdown` from the
     /// version's blob. Emits a `.page .updated` change event.

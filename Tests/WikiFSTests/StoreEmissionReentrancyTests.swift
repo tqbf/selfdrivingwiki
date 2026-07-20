@@ -60,6 +60,34 @@ struct StoreEmissionReentrancyTests {
         #expect(rec.snapshot.last?.change == .deleted)
     }
 
+    /// AC.7 — `updatePage` now composes the version-append logic via
+    /// `appendPageVersionLocked` (an internal `db:`-taking helper, NOT a
+    /// `mutate` wrapper).
+    /// The HIGH hazard called out in `plans/page-provenance.md` §5.3 is
+    /// double-emit + re-entrant `mutate` deadlock when a public mutator
+    /// delegates to another public mutator. The structural fix is one emit
+    /// per public wrapper; this test asserts both invariants: exactly one
+    /// event, no deadlock.
+    /// Mirrors `withTransactionMutationEmitsOnceNoDeadlock`'s shape. Uses a
+    /// DISTINCT author (per §5.3 LOW note) so `tryAmendPageVersion` cannot
+    /// short-circuit and `appendPageVersionLocked` actually runs.
+    @Test func updatePageAfterVersioningRefactorEmitsOnceNoDeadlock() async throws {
+        let (store, _, rec) = try makeHarness()
+        let page = try store.createPage(title: "Provenance Composer")
+        // createPage emitted one event; isolate updatePage.
+        try await awaitCount(rec, 1)
+        let beforeUpdate = rec.count
+        try store.updatePage(
+            id: page.id, title: "Provenance Composer (v2)", body: "edited",
+            lastEditedBy: "agent-edit")
+        try await awaitCount(rec, beforeUpdate + 1)
+        // Exactly one new event — no double-emit (the regression AC.6 also
+        // asserts, but this test enforces the structural reentrance property).
+        #expect(rec.count == beforeUpdate + 1)
+        #expect(rec.snapshot.last?.kind == .page)
+        #expect(rec.snapshot.last?.change == .updated)
+    }
+
     /// (b) A subscriber that re-enters the store to READ observes the COMMITTED
     /// value (the event fires post-commit, after the lock is released). This
     /// catches a misplaced/inner flush that would let a reader see uncommitted
