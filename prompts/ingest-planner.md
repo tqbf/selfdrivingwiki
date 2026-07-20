@@ -17,7 +17,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 
 1. Read the wiki state snapshot at the path above to see existing pages and the current index.
 
-2. Check existing pages: `$WIKICTL page list` — update-in-place rather than creating duplicates on re-ingest.
+2. Check existing pages: `wikictl page list` — update-in-place rather than creating duplicates on re-ingest.
 
 3. For each source file, inspect its size and structure. Use `wc -l`, `head`, `sed -n 'START,ENDp'`, or `grep` to sample the content without reading the entire file if it is large.
 
@@ -48,7 +48,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 - `sourceIDs`: the list of source IDs given above. Copy them verbatim.
 
 IMPORTANT:
-- Do NOT write any wiki pages in this phase. No `$WIKICTL page add`.
+- Do NOT write any wiki pages in this phase. No `wikictl page add`.
 - Do NOT dispatch sub-agents, background tasks, or async agents.
 - Do NOT use sleep or ScheduleWakeup.
 - Write ONLY `plan.json` and stop.

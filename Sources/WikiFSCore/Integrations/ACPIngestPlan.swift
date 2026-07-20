@@ -18,7 +18,7 @@ import Foundation
 /// backed by a specific section of a staged source file.
 public struct ACPIngestPageAssignment: Codable, Equatable, Sendable {
     /// The wiki page title to create or update (upserting an existing title
-    /// updates it — the planner checks `$WIKICTL page list` for dedup).
+    /// updates it — the planner checks `wikictl page list` for dedup).
     public let title: String
     /// The staged source filename in the scratch directory (e.g. `"source-1.md"`).
     public let sourceFile: String
@@ -160,7 +160,7 @@ public enum ACPIngestPrompts {
     }
 
     /// The executor task prompt. Instructs Sonnet to read its assigned source
-    /// section and write each page via `$WIKICTL page add`. Cross-references
+    /// section and write each page via `wikictl page add`. Cross-references
     /// all page titles for linking.
     public static func executorPrompt(
         stateFilePath: String,
