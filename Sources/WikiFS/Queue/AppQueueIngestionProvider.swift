@@ -101,6 +101,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -191,6 +192,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                     launcher: launcher,
                     store: store,
                     wikiID: wikiID,
+                    queueItemID: queueItemID,
                     changeSignaler: changeSignaler,
                     ingestingSourceIDs: Set(sourceIDs),
                     workspaceID: wsID,
@@ -215,6 +217,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                     launcher: launcher,
                     store: store,
                     wikiID: wikiID,
+                    queueItemID: queueItemID,
                     changeSignaler: changeSignaler,
                     ingestingSourceIDs: Set(sourceIDs),
                     onProgress: onProgress,
@@ -229,6 +232,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 launcher: launcher,
                 store: store,
                 wikiID: wikiID,
+                queueItemID: queueItemID,
                 changeSignaler: changeSignaler,
                 ingestingSourceIDs: Set(sourceIDs),
                 onProgress: onProgress,
@@ -257,6 +261,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
     func runLint(
         wikiID: String,
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -284,6 +289,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             launcher: launcher,
             store: store,
             wikiID: wikiID,
+            queueItemID: queueItemID,
             changeSignaler: changeSignaler,
             onProgress: onProgress,
             onTranscript: onTranscript,
@@ -297,6 +303,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -346,6 +353,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             launcher: launcher,
             store: store,
             wikiID: wikiID,
+            queueItemID: queueItemID,
             changeSignaler: changeSignaler,
             onProgress: onProgress,
             onTranscript: onTranscript,
@@ -360,11 +368,15 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
     /// Run the agent via `launcher.run(...)`. Mirrors
     /// `AgentOperationRunner.run(...)` but adds progress + transcript forwarding.
+    /// `queueItemID` is passed through to the launcher so the run's scratch dir
+    /// takes the namespaced shape `<id>/runs/<RFC3339>/` (grouped retries,
+    /// derivable "latest run" by item ID across app restarts).
     private func runAgent(
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
         wikiID: String,
+        queueItemID: String,
         changeSignaler: any ChangeSignaler,
         ingestingSourceIDs: Set<PageID>,
         workspaceID: String? = nil,
@@ -391,6 +403,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
+            queueItemID: queueItemID,
             onEvent: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,
@@ -412,6 +425,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         launcher: AgentLauncher,
         store: WikiStoreModel,
         wikiID: String,
+        queueItemID: String,
         changeSignaler: any ChangeSignaler,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
@@ -429,6 +443,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: [],
             workspaceID: nil,
+            queueItemID: queueItemID,
             onEvent: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,
