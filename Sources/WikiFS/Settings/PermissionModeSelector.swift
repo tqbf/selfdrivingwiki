@@ -17,6 +17,7 @@ struct PermissionModeSelector: View {
     @State private var isPresented = false
     @State private var searchText = ""
     @State private var hovered: PermissionPolicy?
+    @State private var isHovered = false
 
     /// The selected policy (falls back to bypass — the persisted default — if
     /// the raw value is somehow unknown).
@@ -40,20 +41,29 @@ struct PermissionModeSelector: View {
     // MARK: - Trigger chip
 
     /// The compact chip: glyph + label + chevron. Styled to match
-    /// `ProviderSelector`'s trigger (`.caption` + secondary fill) so the two
-    /// read as sibling chips in the composer toolbar.
+    /// `ProviderSelector`'s trigger (`.callout` + primary fill) so the two
+    /// read as sibling chips in the composer toolbar. A subtle hover bubble
+    /// (matching the popover-row idiom) signals clickability.
     private var trigger: some View {
         HStack(spacing: 4) {
             Image(systemName: current.glyph)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Text(current.label)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Image(systemName: "chevron.up.chevron.down")
                 .imageScale(.small)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.primary)
         }
         .font(.callout)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+                .padding(.horizontal, -4)
+                .padding(.vertical, -2)
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
     }
 
     // MARK: - Popover (search + flat list)
