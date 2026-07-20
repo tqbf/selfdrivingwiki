@@ -1,5 +1,25 @@
 import Foundation
 
+/// The ingest pipeline phase names — used as the keys into
+/// `AgentProvidersConfig.ingestStageModelIds` for per-stage model selection
+/// (`plans/per-stage-model-selection.md` §4.2). Compile-time-checked so the
+/// planner/executor/finalizer stage names can never drift between the
+/// orchestrator (writes the key) and the config (reads it).
+public enum ACPIngestStage: String, Sendable, CaseIterable {
+    case planner, executor, finalizer
+
+    /// Human-readable capitalized label for the per-stage model picker in
+    /// Settings + the per-stage `SpawnModelGuard` refusal message
+    /// ("No model selected for the Planner stage …").
+    public var label: String {
+        switch self {
+        case .planner:   return "Planner"
+        case .executor:  return "Executor"
+        case .finalizer: return "Finalizer"
+        }
+    }
+}
+
 /// The app-side decision of HOW to run an Ingest: a single pass for a tiny
 /// source, or a multi-phase planner → executors → finalizer run for anything
 /// larger (`plans/llm-wiki.md` Phase D / `plans/acp-multi-provider.md`).
@@ -7,9 +27,11 @@ import Foundation
 /// PURE and unit-tested. The decision is driven purely by source size against a
 /// named threshold — it is a source-size predicate, NOT a model or provider
 /// choice. WHICH provider/model runs the ingest is resolved separately by
-/// `AgentLauncher.runACPIngestPlannerExecutors` using the app default provider
-/// + its `selectedModelId` (#604 — per-stage assignment was removed; every
-/// phase shares one backend).
+/// `AgentLauncher.runACPIngestPlannerExecutors` using `selectedProvider()` +
+/// `ACPIngestStage` per-stage model overrides
+/// (`plans/per-stage-model-selection.md` — the per-stage model selection
+/// that restores the differentiation PR #604 removed, on top of ONE shared
+/// provider).
 ///
 /// The case names are historical (`singleOpus`/`opusCurator` date from the
 /// removed Claude-CLI backend's opus/sonnet tiering); only the tiny-vs-large

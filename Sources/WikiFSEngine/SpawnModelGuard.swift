@@ -12,16 +12,30 @@ import WikiFSCore
 /// at Agents settings. See `tmp/ingestion-stall-diagnosis.md` (2026-07-18).
 ///
 /// PURE — no actor, no I/O. Unit-tested directly. Called from two launch sites:
-/// - `AgentLauncher.runACPIngestPlannerExecutors` (ingest — one choke-point
-///   covering planner/executor/finalizer; #604 collapsed the removed
-///   per-stage routing into a single resolution)
+/// - `AgentLauncher.runACPIngestPlannerExecutors` (ingest — validates each of
+///   the three per-stage models: planner / executor / finalizer, per
+///   `plans/per-stage-model-selection.md` §6)
 /// - `AgentLauncher.startInteractiveQuery` (interactive chat)
 enum SpawnModelGuard {
     /// Returns `nil` when spawning is allowed (a non-empty `modelId` is set for
     /// `provider`); otherwise a human-readable preflight error message that
     /// names the provider and points the user at Settings → Agents.
-    static func validate(provider: AgentProvider, modelId: String?) -> String? {
+    ///
+    /// When `stageName` is provided (the per-stage ingest path), the message
+    /// names the stage too — e.g. "No model selected for the Planner stage of
+    /// provider ‘Claude’." — so a missing *executor*-stage model (with
+    /// planner/finalizer set) is diagnosed specifically rather than as a
+    /// generic "no model" refusal.
+    static func validate(
+        provider: AgentProvider,
+        modelId: String?,
+        stageName: String? = nil
+    ) -> String? {
         if let modelId, !modelId.isEmpty { return nil }
+        if let stageName, !stageName.isEmpty {
+            return "No model selected for the \(stageName) stage of provider ‘\(provider.label)’. "
+                 + "Open Settings → Agents and pick a model before running."
+        }
         return "No model selected for provider ‘\(provider.label)’. "
              + "Open Settings → Agents and pick a model before running."
     }

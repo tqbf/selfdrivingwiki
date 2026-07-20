@@ -4,32 +4,33 @@ import Foundation
 import WikiFSCore
 @testable import WikiFS
 
-/// AC.2 — the interactive chat spawn path (`startInteractiveQuery`) refuses to
-/// spawn a session when the resolved provider has no `selectedModelId`,
-/// setting `preflightError` to the same wording as the ingest path's guard
-/// and returning without spawning.
-///
-/// Construction pattern mirrors `QueryNewChatTests.makeLauncher()` (line 14-
-/// 18): the launcher is a `@MainActor` plain class with injectable seams
-/// (`resolveSelectedProvider`, `resolveProvidersContainerDirectory`). The
-/// `startInteractiveQuery` early-return site lives in the PREFLIGHT section
-/// (comment at the function's start: "no gate held — early returns here don't
-/// need gate release"), so the observable contract is: `preflightError != nil`
-/// + `isRunning` stays false (only the one-shot `run()` path sets `isRunning =
-/// true` early — the chat path sets it later, past our guard).
-@MainActor
-struct AgentLauncherSpawnRefusalTests {
+    /// AC.2 — the interactive chat spawn path (`startInteractiveQuery`) refuses to
+    /// spawn a session when the resolved provider has no `selectedModelId`,
+    /// setting `preflightError` to the same wording as the ingest path's guard
+    /// and returning without spawning.
+    ///
+    /// Construction pattern mirrors `QueryNewChatTests.makeLauncher()` (line 14-
+    /// 18): the launcher is a `@MainActor` plain class with injectable seams
+    /// (`resolveSelectedProvider`, `resolveProvidersContainerDirectory`). The
+    /// `startInteractiveQuery` early-return site lives in the PREFLIGHT section
+    /// (comment at the function's start: "no gate held — early returns here don't
+    /// need gate release"), so the observable contract is: `preflightError != nil`
+    /// + `isRunning` stays false (only the one-shot `run()` path sets `isRunning =
+    /// true` early — the chat path sets it later, past our guard).
+    @MainActor
+    struct AgentLauncherSpawnRefusalTests {
 
     /// Build a launcher whose chat path resolves to a provider with NO
     /// `selectedModelId`, so the `SpawnModelGuard` refuses to spawn.
     ///
-    /// per-op-provider: the chat path now resolves its provider via
-    /// `providersConfig().providerForChat()` (NOT via the injected
-    /// `resolveSelectedProvider` seam). So the no-model scenario is set up by
-    /// pre-writing an `agent-providers.json` whose DEFAULT provider is
-    /// opencode (no `chatProviderId` pin → fallback to default), with no
-    /// selectedModelIds entry for opencode. The guard fires on that nil-model
-    /// state.
+    /// per-stage-model-selection (#704 removed): the chat path now resolves
+    /// its provider via `providersConfig().selectedProvider()` (NOT via the
+    /// injected `resolveSelectedProvider` seam, NOT via a per-op
+    /// `providerForChat()` — that field is gone). So the no-model scenario is
+    /// set up by pre-writing an `agent-providers.json` whose DEFAULT provider
+    /// is opencode (no per-op pin → fall-back was the per-op behavior; now
+    /// the default IS the resolver), with no selectedModelIds entry for
+    /// opencode. The guard fires on that nil-model state.
     private func makeRefusingLauncher() throws -> AgentLauncher {
         let launcher = AgentLauncher()
         let tmp = FileManager.default.temporaryDirectory
@@ -108,12 +109,11 @@ struct AgentLauncherSpawnRefusalTests {
         // model-selected config produces a nil guard result the launcher
         // would use.
         //
-        // per-op-provider: the chat path now resolves via
-        // `providersConfig().providerForChat()` (the per-op resolver, with
-        // fall-back to default). We pre-write opencode-as-default with a
-        // selected model — `providerForChat()` returns opencode (no chat pin
-        // → fallback to default) and the model resolver returns the seeded
-        // model id — and feed both into the guard exactly as
+        // per-stage-model-selection (#704 removed): the chat path resolves via
+        // `providersConfig().selectedProvider()`. We pre-write
+        // opencode-as-default with a selected model — `selectedProvider()`
+        // returns opencode — and the model resolver returns the seeded model
+        // id — and feed both into the guard exactly as
         // `startInteractiveQuery` does.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("spawn-allowed-\(UUID().uuidString)", isDirectory: true)
@@ -140,10 +140,10 @@ struct AgentLauncherSpawnRefusalTests {
         let launcher = AgentLauncher()
         launcher.resolveProvidersContainerDirectory = { tmp }
 
-        // Read what the chat path resolves via the per-op seam. A nil
-        // `chatProviderId` falls back to the default provider (opencode), and
-        // its selected model is "glm-4.7" — both fed into the guard.
-        let provider = launcher.providersConfig().providerForChat()
+        // Read what the chat path resolves via the selectedProvider seam.
+        // The default provider is opencode, and its selected model is
+        // "glm-4.7" — both fed into the guard.
+        let provider = launcher.providersConfig().selectedProvider()
         let modelId = launcher.providersConfig().selectedModelId(forProvider: provider.id)
         // Pin the chat path's guard input contract — what
         // `startInteractiveQuery` actually feeds into `SpawnModelGuard.validate`.

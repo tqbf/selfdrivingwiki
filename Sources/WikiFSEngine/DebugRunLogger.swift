@@ -74,6 +74,13 @@ final class DebugRunLogger: @unchecked Sendable {
     /// `session-new.json`; for subsequent sessions (multi-phase ingest —
     /// planner/executors/finalizer) it is `session-new-2.json`,
     /// `session-new-3.json`, etc. so no session's data is lost.
+    ///
+    /// per-stage-model-selection §9 AC.9: this artifact captures the PRE-
+    /// setModel advertised default (it runs at `ACPBackend.swift:532`, BEFORE
+    /// the setModel block at `:549-568`), so AC.9 asserts against the NEW
+    /// `logSessionSetModel` artifact instead. Forked executors have no
+    /// `session-new*.json` at all (`forkSession :1170-1215` does no debug
+    /// logging), so they appear ONLY in the `session-setModel` artifact.
     func logSessionNew(
         _ response: NewSessionResponse,
         sessionId: SessionId,
@@ -86,6 +93,44 @@ final class DebugRunLogger: @unchecked Sendable {
             "sessionId": sessionId.value,
             "workingDirectory": workingDirectory,
             "response": encodeToAny(response),
+        ]
+        writeJSON(payload, to: url, encoder: prettyEncoder)
+    }
+
+    /// Write the per-stage post-`setModel` artifact to
+    /// `session-setModel-*.json` (one per apply call, indexed by call order —
+    /// mirrors `logSessionNew`'s per-session file counter). Records, per
+    /// phase, the stage label, the resolved decision (`apply(...)` OR
+    /// `useAgentDefault`), the `baselineCurrentModelId` (NOT the stale stored
+    /// `modelsInfo.currentModelId` — HIGH #2), the APPLIED model id (when
+    /// setModel was sent + succeeded), and any setModel error.
+    ///
+    /// per-stage-model-selection §4.5 / §9 (HIGH #1 + AC.9): this is the
+    /// PRIMARY assertion target for "the three ingest phases ran on three
+    /// DIFFERENT applied models" — `session-new*.json` cannot be used (it's
+    /// written pre-setModel + forked executors produce none at all). A real
+    /// multi-phase ingest with `planner=glm-5.2`, `executor=glm-5.2-fast`,
+    /// `finalizer=glm-5.2-short` MUST produce three artifacts with three
+    /// distinct `appliedModelId` values.
+    func logSessionSetModel(
+        sessionId: SessionId,
+        stage: String,
+        decision: String,
+        baselineCurrentModelId: String?,
+        appliedModelId: String?,
+        setModelError: String?
+    ) {
+        let index = nextSessionIndex()
+        let name = index == 1 ? "session-setModel" : "session-setModel-\(index)"
+        let url = folderURL.appendingPathComponent("\(name).json", isDirectory: false)
+        let payload: [String: Any?] = [
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "sessionId": sessionId.value,
+            "stage": stage,
+            "decision": decision,
+            "baselineCurrentModelId": baselineCurrentModelId,
+            "appliedModelId": appliedModelId,
+            "setModelError": setModelError,
         ]
         writeJSON(payload, to: url, encoder: prettyEncoder)
     }

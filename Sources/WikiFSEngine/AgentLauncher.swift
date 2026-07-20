@@ -398,59 +398,6 @@ public final class AgentLauncher {
 
     // MARK: - Per-operation provider assignment (per-op-provider)
 
-    /// Set + persist the chat operation's pinned provider id, then return the
-    /// new config so the Settings UI can update its bound state in one step.
-    /// A nil/empty `id` clears the pin (chat falls back to the default provider
-    /// — the legacy behavior). The next `startInteractiveQuery` reads this,
-    /// so the change applies on the next chat with no launcher change.
-    /// Mirrors `setDefaultProvider(id:)`'s load→mutate→save shape + error path.
-    @discardableResult
-    public func setChatProvider(id: String?) -> AgentProvidersConfig {
-        let dir = resolveProvidersContainerDirectory()
-        let updated = providersConfig().settingChatProvider(id: id)
-        DebugLog.store("setChatProvider: id=\(id ?? "nil") → save")
-        do {
-            try updated.save(to: dir)
-        } catch {
-            // The user's per-op provider assignment silently reverts on next
-            // launch if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.setChatProvider save failed (id=\(id ?? "nil")): \(error)")
-        }
-        return updated
-    }
-
-    /// Set + persist the ingest operation's pinned provider id. Same shape as
-    /// `setChatProvider(id:)`. The next `runACPIngestPlannerExecutors` (large
-    /// sources) OR single-session `run()` for `.ingest` reads this.
-    @discardableResult
-    public func setIngestProvider(id: String?) -> AgentProvidersConfig {
-        let dir = resolveProvidersContainerDirectory()
-        let updated = providersConfig().settingIngestProvider(id: id)
-        DebugLog.store("setIngestProvider: id=\(id ?? "nil") → save")
-        do {
-            try updated.save(to: dir)
-        } catch {
-            DebugLog.store("AgentLauncher.setIngestProvider save failed (id=\(id ?? "nil")): \(error)")
-        }
-        return updated
-    }
-
-    /// Set + persist the lint operation's pinned provider id. Same shape as
-    /// `setChatProvider(id:)`. The next single-session `run()` for `.lint` /
-    /// `.lintPage` reads this.
-    @discardableResult
-    public func setLintProvider(id: String?) -> AgentProvidersConfig {
-        let dir = resolveProvidersContainerDirectory()
-        let updated = providersConfig().settingLintProvider(id: id)
-        DebugLog.store("setLintProvider: id=\(id ?? "nil") → save")
-        do {
-            try updated.save(to: dir)
-        } catch {
-            DebugLog.store("AgentLauncher.setLintProvider save failed (id=\(id ?? "nil")): \(error)")
-        }
-        return updated
-    }
-
     /// Atomically set the default provider AND a per-provider model selection
     /// in ONE load→mutate→save cycle (no race between two separate writes).
     /// This is the composer's "pick a model" path: choosing a model implies
@@ -1109,22 +1056,17 @@ public final class AgentLauncher {
         // (or selected) provider, and resolves its PATH command + Keychain key
         // into providerHints. The app is ACP-only.
         //
-        // per-op-provider: each operation (chat / ingest / lint) resolves its
-        // OWN provider — falling back to the default provider when the pin is
-        // nil OR points at a provider that's been deleted. `permissionKind` was
-        // computed just above from the same `request` enum, so it reflects the
-        // same operation. (`.chat` is reachable here only if a `.query` request
-        // hits `run()` — the live interactive path is `startInteractiveQuery`,
-        // which has its own per-op provider resolution; this branch is a
-        // defensive mirror so a future code path that routes `.query` through
-        // `run()` would still pick the right provider.)
+        // per-stage-model-selection (#704 removed): there is no per-operation
+        // provider pin anymore — every operation (chat / ingest / lint)
+        // resolves ONE provider via `selectedProvider()`. Per-stage MODEL
+        // selection (planner / executor / finalizer) varies the model id
+        // within that ONE provider's catalog; see
+        // `runACPIngestPlannerExecutors` and `AgentProvidersConfig.modelId(
+        // forStage:fallbackProvider:)`. `permissionKind` is still computed
+        // above to drive permission policy + turn ceiling choices, NOT to
+        // pick a provider.
         let config = providersConfig()
-        let provider: AgentProvider
-        switch permissionKind {
-        case .chat:   provider = config.providerForChat()
-        case .ingest: provider = config.providerForIngest()
-        case .lint:   provider = config.providerForLint()
-        }
+        let provider = config.selectedProvider()
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
 
         // Resolve the provider's spawn command (PATH-resolved because the
@@ -1400,37 +1342,77 @@ public final class AgentLauncher {
         // at :1022 — we REUSE `self.backend`, never call `resolveBackend`
         // again (which would orphan the ACPBackend actor `run()` built).
 
-        // Resolve the ONE provider + spawn + hints all three phases will use.
+        // Resolve the ONE provider + spawn all three phases will share.
         //
-        // per-op-provider: ingest uses its own pinned provider when set,
-        // falling back to the default provider when the pin is nil OR points at
-        // a provider that's been deleted from the config. Mirrors
-        // `startInteractiveQuery`'s chat resolution + `run()`'s per-kind
-        // resolution.
-        let provider = providersConfig().providerForIngest()
-        let modelId = providersConfig().selectedModelId(forProvider: provider.id)
+        // per-stage-model-selection (#704 removed): there is no per-operation
+        // provider pin anymore — ingest resolves ONE provider via
+        // `selectedProvider()`, and per-stage MODEL selection varies the model
+        // id within that provider's catalog (planner / executor / finalizer
+        // can pick `glm-5.2` / `glm-5.2-fast` / `glm-5.2-short`). The stage
+        // model ids are resolved + applied per-phase below; this top-level
+        // resolution stays ONE provider so the warm subprocess is reused
+        // across planner/executor/finalizer.
+        let provider = providersConfig().selectedProvider()
+        let plannerModel = providersConfig().modelId(forStage: ACPIngestStage.planner.rawValue, fallbackProvider: provider.id)
+        let executorModel = providersConfig().modelId(forStage: ACPIngestStage.executor.rawValue, fallbackProvider: provider.id)
+        let finalizerModel = providersConfig().modelId(forStage: ACPIngestStage.finalizer.rawValue, fallbackProvider: provider.id)
         guard let spawn = resolveACPProviderSpawn(provider) else {
             DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
             preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
             finish(status: -1)
             return
         }
-        // Refuse to spawn without an explicit `selectedModelId`. Without this,
-        // the ACP subprocess silently falls through to its own first-listed
-        // upstream model (e.g. `opencode/big-pickle`, a free model nobody chose)
-        // — the diagnosed 2026-07-18 ingestion-stall root cause #6. Mirrors
-        // the single-session `run()` path's guard AND `startInteractiveQuery`'s
-        // guard. See `tmp/ingestion-stall-diagnosis.md` and `SpawnModelGuard.swift`.
-        if let msg = SpawnModelGuard.validate(provider: provider, modelId: modelId) {
-            preflightError = msg
-            finish(status: -1)
-            return
+        // Refuse to spawn without an explicit model on EVERY stage (#704 + this
+        // plan's §6). Without this, the ACP subprocess silently falls through
+        // to its own first-listed upstream model (e.g. `opencode/big-pickle`,
+        // a free model nobody chose) — the diagnosed 2026-07-18 ingestion-stall
+        // root cause #6. Per-stage validation: a missing *executor* model (with
+        // planner/finalizer set) now produces a phase-named refusal, not a
+        // silent spawn. See `tmp/ingestion-stall-diagnosis.md` and
+        // `SpawnModelGuard.swift`.
+        let stageValidations: [(ACPIngestStage, String?)] = [
+            (.planner, plannerModel),
+            (.executor, executorModel),
+            (.finalizer, finalizerModel)
+        ]
+        for (stage, stageModelId) in stageValidations {
+            if let msg = SpawnModelGuard.validate(provider: provider, modelId: stageModelId, stageName: stage.label) {
+                preflightError = msg
+                finish(status: -1)
+                return
+            }
         }
-        let providerHints = AgentBackendFactory.providerHints(
+        // Base spawn config WITHOUT a model — model is per-phase (§4.3 of
+        // plans/per-stage-model-selection.md). Each phase injects its OWN
+        // resolved stage model id (planner/executor/finalizer) into a fresh
+        // hint dict, so `createSession`/`applyModelIfNeeded` apply the right
+        // model per phase. Keeping the provider/spawn identical across phases
+        // means `self.backend` (the warm `ACPBackend` actor `run()` already
+        // built at :954) is reused unchanged — no new subprocess.
+        let baseHints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: spawn.command,
             apiKey: spawn.apiKey,
-            selectedModelId: modelId)
+            selectedModelId: nil)
+        // Per-phase hint dict: base + the stage's resolved model id. The
+        // orchestrator resolved all three stage ids up top (§4.3) —
+        // `plannerModel` is the load-bearing baseline for the fork path's
+        // `applyModelIfNeeded` (§4.5, HIGH #2 — NOT the stale stored
+        // `modelsInfo.currentModelId`).
+        func hints(for stage: ACPIngestStage) -> [String: String] {
+            var h = baseHints
+            let m: String? = {
+                switch stage {
+                case .planner:   return plannerModel
+                case .executor:  return executorModel
+                case .finalizer: return finalizerModel
+                }
+            }()
+            if let m, !m.isEmpty {
+                h[HintKey.acpSelectedModelId.rawValue] = m
+            }
+            return h
+        }
         // `self.backend` was assigned by `run()` at :954 before delegating
         // here — there is always an instance. Read it into a local so the
         // phases below capture a stable Sendable reference (AgentBackend is
@@ -1448,10 +1430,11 @@ public final class AgentLauncher {
         }
 
         // --- Phase 1: Planner ---
-        DebugLog.agent("runACPIngest: Phase 1 — Planner")
+        DebugLog.agent("runACPIngest: Phase 1 — Planner (model=\(plannerModel ?? "nil"))")
         currentIngestPhase = "planner"
+        let plannerHints = hints(for: .planner)
         let plannerProfile = BackendProfile(
-            providerHints: providerHints,
+            providerHints: plannerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1465,7 +1448,9 @@ public final class AgentLauncher {
             profile: plannerProfile,
             systemPrompt: systemPrompt,
             prompt: plannerPrompt,
-            phaseName: "planner"
+            phaseName: "planner",
+            stage: .planner,
+            baselineModelId: nil  // planner uses createSession — baseline from newSession (fresh)
         ) else {
             // Planner failed — fall back to single-session ACP ingest on the
             // same resolution (the #604 collapsed default provider).
@@ -1478,7 +1463,7 @@ public final class AgentLauncher {
                 makeCLIProfile: makeCLIProfile,
                 backend: backend,
                 provider: provider,
-                providerHints: providerHints)
+                providerHints: plannerHints)
             return
         }
 
@@ -1511,14 +1496,20 @@ public final class AgentLauncher {
                 makeCLIProfile: makeCLIProfile,
                 backend: backend,
                 provider: provider,
-                providerHints: providerHints)
+                providerHints: plannerHints)
             return
         }
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
 
         // --- Phase 2: Executors (one per source file) ---
+        // All executors share the SAME `.executor` stage model id — no per-file
+        // differentiation. The per-session `applyModelIfNeeded` call after each
+        // fork (§4.5, HIGH #2) handles the `setModel` uniformly. Baseline is
+        // `plannerModel` (the planner's RESOLVED model — NOT the stale inherited
+        // `modelsInfo.currentModelId`).
+        let executorHints = hints(for: .executor)
         let executorProfile = BackendProfile(
-            providerHints: providerHints,
+            providerHints: executorHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1530,7 +1521,7 @@ public final class AgentLauncher {
             // subprocess. Events are buffered per-session and flushed to the
             // main actor as batches on each turn-end (avoiding interleaved
             // streaming deltas that would garble the transcript).
-            DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s))")
+            DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s), model=\(executorModel ?? "nil"))")
             currentIngestPhase = "executor[parallel]"
             await runParallelExecutors(
                 backend: backend,
@@ -1540,7 +1531,9 @@ public final class AgentLauncher {
                 stateFilePath: stateFilePath,
                 sourceIDs: sourceIDs,
                 systemPrompt: systemPrompt,
-                maxConcurrent: maxConcurrent)
+                maxConcurrent: maxConcurrent,
+                executorModel: executorModel,
+                plannerModel: plannerModel)
         } else {
             // Serial executors (Phase 3 behavior — current).
             for sourceFile in plan.distinctSourceFiles {
@@ -1548,7 +1541,7 @@ public final class AgentLauncher {
                 let assignments = plan.assignments(forSource: sourceFile)
                 guard !assignments.isEmpty else { continue }
                 let executorProfile = BackendProfile(
-                    providerHints: providerHints,
+                    providerHints: executorHints,
                     scratchDirectory: scratch,
                     isReadOnly: false,
                     cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1571,6 +1564,8 @@ public final class AgentLauncher {
                     systemPrompt: systemPrompt,
                     prompt: executorPrompt,
                     phaseName: "executor[\(sourceFile)]",
+                    stage: .executor,
+                    baselineModelId: plannerModel,  // §4.5 HIGH #2 — planner's RESOLVED model, NOT stale stored
                     forkFrom: forkFrom
                 ) {
                     await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
@@ -1606,8 +1601,9 @@ public final class AgentLauncher {
         }
 
         // --- Phase 3: Finalizer ---
+        let finalizerHints = hints(for: .finalizer)
         let finalizerProfile = BackendProfile(
-            providerHints: providerHints,
+            providerHints: finalizerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
@@ -1615,14 +1611,16 @@ public final class AgentLauncher {
             stateFilePath: stateFilePath,
             sourceFileNames: sourceFileNames,
             sourceIDs: sourceIDs)
-        DebugLog.agent("runACPIngest: Phase 3 — Finalizer")
+        DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
         currentIngestPhase = "finalizer"
         if let session = await runPhase(
             backend: backend,
             profile: finalizerProfile,
             systemPrompt: systemPrompt,
             prompt: finalizerPrompt,
-            phaseName: "finalizer"
+            phaseName: "finalizer",
+            stage: .finalizer,
+            baselineModelId: nil  // finalizer uses createSession — baseline from newSession (fresh)
         ) {
             await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
             if let acp = backend as? ACPBackend {
@@ -1672,7 +1670,9 @@ public final class AgentLauncher {
         stateFilePath: String,
         sourceIDs: [String],
         systemPrompt: String,
-        maxConcurrent: Int
+        maxConcurrent: Int,
+        executorModel: String?,
+        plannerModel: String?
     ) async {
         let backend = backend                         // Sendable (AgentBackend: Sendable)
         let acp = backend as? ACPBackend             // Sendable (actor)
@@ -1731,6 +1731,13 @@ public final class AgentLauncher {
                 let workDir = profile.scratchDirectory?.path
                 let parentHandle = forkFrom
                 let sysPrompt = systemPrompt
+                // per-stage-model-selection §4.6: every parallel executor is
+                // the SAME stage (`.executor`) and shares one executor model
+                // id. The planner's RESOLVED model is the baseline for the
+                // fork-path `applyModelIfNeeded` (§4.5, HIGH #2 — NOT the stale
+                // inherited modelsInfo.currentModelId).
+                let stageExecutorModel = executorModel
+                let stageBaseline = plannerModel
 
                 group.addTask { [weak self] in
                     guard let self else { return ExecutorResult(session: nil) }
@@ -1742,6 +1749,15 @@ public final class AgentLauncher {
                         if let forked = try? await acp.forkSession(from: parentHandle, cwd: workDir) {
                             DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded")
                             session = forked
+                            // §4.5: apply the executor's stage model with the
+                            // planner's RESOLVED model as the baseline.
+                            let advertisedIds = await acp.availableModels(for: session).map(\.modelId)
+                            await acp.applyModelIfNeeded(
+                                session: session,
+                                selectedModelId: stageExecutorModel,
+                                stage: .executor,
+                                baselineCurrentModelId: stageBaseline,
+                                advertisedModelIds: advertisedIds)
                         } else {
                             DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
                             do {
@@ -1857,6 +1873,8 @@ public final class AgentLauncher {
         systemPrompt: String,
         prompt: String,
         phaseName: String,
+        stage: ACPIngestStage,
+        baselineModelId: String?,
         forkFrom: SessionHandle? = nil
     ) async -> SessionHandle? {
         self.backend = backend
@@ -1870,6 +1888,18 @@ public final class AgentLauncher {
             // the planner's source-layout understanding without the reasoning
             // noise. If fork is unsupported (returns nil), fall back to a fresh
             // `backend.start()` — current pre-Phase-3 behavior.
+            //
+            // per-stage-model-selection §4.5 (HIGH #2): on the FORK path,
+            // `ACPBackend.forkSession` inherits the planner's `modelsInfo`
+            // WITHOUT calling `setModel` — so the inherited
+            // `modelsInfo.currentModelId` is the agent's *advertised default*,
+            // NOT the planner's *actually-applied* stage model. The resolver's
+            // "already current → no-op" guard would misfire on the stale value,
+            // so we explicitly pass `baselineModelId = plannerModel` (the
+            // planner's RESOLVED stage model) into `applyModelIfNeeded`. On the
+            // fresh-start path (`createSession`), the baseline is read FRESH
+            // from `newSession` inside `ACPBackend.applyModelIfNeeded` (no need
+            // for a parameter — `baselineModelId` is ignored for fresh starts).
             let session: SessionHandle
             if let parentHandle = forkFrom, let acp = backend as? ACPBackend {
                 DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
@@ -1877,6 +1907,17 @@ public final class AgentLauncher {
                 if let forked = try? await acp.forkSession(from: parentHandle, cwd: workingDir) {
                     DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded, using forked session")
                     session = forked
+                    // §4.5: apply the executor's stage model with the planner's
+                    // RESOLVED model as the baseline (NOT the stale inherited
+                    // modelsInfo.currentModelId). The advertised model ids come
+                    // from the forked session's inherited modelsInfo.
+                    let advertisedIds = await acp.availableModels(for: session).map(\.modelId)
+                    await acp.applyModelIfNeeded(
+                        session: session,
+                        selectedModelId: profile.providerHints[HintKey.acpSelectedModelId.rawValue],
+                        stage: stage,
+                        baselineCurrentModelId: baselineModelId,
+                        advertisedModelIds: advertisedIds)
                 } else {
                     DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
                     session = try await backend.start(
@@ -1950,7 +1991,9 @@ public final class AgentLauncher {
             profile: profile,
             systemPrompt: systemPrompt,
             prompt: promptText,
-            phaseName: "fallback-single"
+            phaseName: "fallback-single",
+            stage: .planner,             // semantically: the fallback IS a single-session ingest's "planner+executor+finalizer" — use .planner for the artifact
+            baselineModelId: nil
         ) {
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
@@ -2330,10 +2373,12 @@ public final class AgentLauncher {
         // #324: the launcher reads `agent-providers.json` and picks the
         // default (or selected) provider. The app is ACP-only.
         //
-        // per-op-provider: chat uses its own pinned provider when set, falling
-        // back to the default provider when the pin is nil OR points at a
-        // provider that's been deleted from the config.
-        let provider = providersConfig().providerForChat()
+        // per-stage-model-selection (#704 removed): there is no per-operation
+        // provider pin anymore — chat resolves ONE provider via
+        // `selectedProvider()`. Per-stage MODEL selection is an ingest-only
+        // concern (planner / executor / finalizer); chat is always a single
+        // session with one model.
+        let provider = providersConfig().selectedProvider()
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
 

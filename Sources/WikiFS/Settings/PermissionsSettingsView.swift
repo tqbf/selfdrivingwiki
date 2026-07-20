@@ -29,14 +29,16 @@ import WikiFSCore
 /// the only Settings tab whose controls affect the app's runtime behavior
 /// rather than per-wiki content.
 ///
-/// **Per-operation provider assignment (per-op-provider):** the "Provider
-/// Assignment" section pins a separate provider to each operation (chat /
-/// ingest / lint), with a per-provider model picker. A nil pin = "use the
-/// default provider" (the legacy behavior — all three routes fall back to
-/// the provider marked `isDefault`). The model picker reads/writes the
-/// PER-PROVIDER model selection — so two operations pinned to the same
-/// provider share its selected model (acceptable per the spec; a future
-/// per-op-per-provider model override would require a shape change).
+/// **Per-stage model selection (per-stage-model-selection plan, replaces the
+/// removed #704 per-op provider pin section):** the "Ingest Stage Models"
+/// section picks a different MODEL for each ingest phase (planner /
+/// executor / finalizer) within ONE provider. The whole ingest run resolves
+/// ONE provider via `selectedProvider()`; per-stage only varies the model id
+/// within that provider's catalog (e.g. `glm-5.2` planner → `glm-5.2-fast`
+/// executors → `glm-5.2-short` finalizer — same provider). "Same as provider"
+/// (empty) is the default → every stage uses the provider's
+/// `selectedModelId` (the #604 collapsed behavior — no behavior change for
+/// existing users).
 struct PermissionsSettingsView: View {
     @AppStorage(AgentLauncher.PermissionModeKey.chat)   private var chatModeRaw   = PermissionPolicy.bypass.rawValue
     @AppStorage(AgentLauncher.PermissionModeKey.ingest) private var ingestModeRaw = PermissionPolicy.bypass.rawValue
@@ -48,30 +50,19 @@ struct PermissionsSettingsView: View {
     /// Mirrors `AgentsSettingsView`'s `@State config` shape.
     @State private var config: AgentProvidersConfig
 
-    /// The per-operation provider id bindings. `nil` = "use default provider"
-    /// (the legacy behavior). Bound to the config's `chatProviderId` /
-    /// `ingestProviderId` / `lintProviderId` fields via the `setXxxProvider`
-    /// launcher wrappers; persisted to `agent-providers.json` on every change.
-    @State private var chatProviderId: String?
-    @State private var ingestProviderId: String?
-    @State private var lintProviderId: String?
-
     private let containerDirectory: URL
 
     init(containerDirectory: URL) {
         self.containerDirectory = containerDirectory
         let loaded = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
         _config = State(initialValue: loaded)
-        _chatProviderId = State(initialValue: loaded.chatProviderId)
-        _ingestProviderId = State(initialValue: loaded.ingestProviderId)
-        _lintProviderId = State(initialValue: loaded.lintProviderId)
     }
 
     var body: some View {
         Form {
             permissionSection
             appBehaviorSection
-            providerAssignmentSection
+            ingestStageModelSection
         }
         .formStyle(.grouped)
         .onAppear { refresh() }
@@ -120,134 +111,66 @@ struct PermissionsSettingsView: View {
         }
     }
 
-    // MARK: - Provider assignment section (per-op-provider)
+    // MARK: - Per-stage model selection (per-stage-model-selection plan §5)
 
-    /// Per-operation provider + model pickers. Each operation can pin its OWN
-    /// provider (independent of the default). The model picker writes the
-    /// PER-PROVIDER model selection — so when two operations share a provider,
-    /// they share its model. The "— Default —" row clears the pin (routes to
-    /// `defaultProvider`); the "— Agent default —" row clears the model pin
-    /// (lets the agent's first-listed model be used — the same as today).
-    private var providerAssignmentSection: some View {
-        Section {
-            operationRow(
-                label: "Chat",
-                providerID: $chatProviderId,
-                onProviderChange: { setChatProvider($0) })
-            operationRow(
-                label: "Ingest",
-                providerID: $ingestProviderId,
-                onProviderChange: { setIngestProvider($0) })
-            operationRow(
-                label: "Lint",
-                providerID: $lintProviderId,
-                onProviderChange: { setLintProvider($0) })
+    /// Per-ingest-stage model picker. Each ingest phase (planner / executor /
+    /// finalizer) can pick a different MODEL from the resolved provider's
+    /// cached catalog (same provider across all three — per-stage selects a
+    /// model variant, NOT a provider). "Same as provider" (empty) is the
+    /// default → that stage uses the provider's `selectedModelId` (the #604
+    /// collapsed behavior — no behavior change for existing users).
+    ///
+    /// Reuses the existing `Picker` pattern from `AgentsSettingsView.swift`'s
+    /// per-provider model picker (`Provider default` / `Agent default` rows,
+    /// reads `cachedModels(forProvider:)`).
+    private var ingestStageModelSection: some View {
+        let provider = config.selectedProvider()           // ONE provider across all stages
+        let models = config.cachedModels(forProvider: provider.id)
+        let fallbackLabel = config.selectedModelId(forProvider: provider.id) ?? "default"
+        return Section {
+            ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
+                Picker("\(stage.label) Model", selection: Binding(
+                    get: { config.ingestStageModelIds[stage.rawValue] ?? "" },
+                    set: { newID in setStageModel(stage, newID.isEmpty ? nil : newID) }
+                )) {
+                    Text("Same as provider (\(fallbackLabel))").tag("")
+                    ForEach(models, id: \.modelId) { model in
+                        Text(model.displayLabel).tag(model.modelId)
+                    }
+                }
+                .disabled(models.isEmpty)
+                .help(models.isEmpty
+                      ? "Chat with this provider once to discover its models."
+                      : "Pick a different model for the \(stage.label) phase. Empty uses the provider's selected model.")
+            }
         } header: {
-            Text("Provider Assignment")
+            Text("Ingest Stage Models")
         } footer: {
-            Text("Pin a different provider to each operation. “Default” uses the provider marked default in the Agents tab (the legacy behavior). When a provider is deleted, any operation still pinned to it silently falls back to the default — no dangling references. The model picker writes the per-provider selection, so two operations pinned to the same provider share its model.")
+            Text("Pick a different model for each ingest phase (\(provider.label)) — e.g. a small model for Executors and a large model for the Planner. “Same as provider” uses the provider's selected model (the legacy behavior).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    /// One operation row: a Provider picker + a Model picker. The Model picker
-    /// reads the cached models for the operation's chosen provider (or the
-    /// default provider when the pin is nil), mirroring the chat composer's
-    /// per-provider selection seam.
-    private func operationRow(
-        label: String,
-        providerID: Binding<String?>,
-        onProviderChange: @escaping @MainActor (String?) -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            // The resolved provider for this operation — used to list models
-            // and to persist the model selection. When the pin is nil OR stale
-            // (points at a deleted provider), `providerForXxx()` returns
-            // `defaultProvider` — so the model picker always shows a real list.
-            let resolved: AgentProvider = {
-                switch label {
-                case "Chat":   return config.providerForChat()
-                case "Ingest": return config.providerForIngest()
-                case "Lint":   return config.providerForLint()
-                default:        return config.defaultProvider
-                }
-            }()
-
-            Picker("\(label) Provider", selection: Binding(
-                get: { providerID.wrappedValue ?? "" },
-                set: { newID in onProviderChange(newID.isEmpty ? nil : newID) }
-            )) {
-                Text("Default (\(config.defaultProvider.label))").tag("")
-                ForEach(config.enabledProviders, id: \.id) { provider in
-                    Text(provider.label).tag(provider.id)
-                }
-            }
-
-            let models = config.cachedModels(forProvider: resolved.id)
-            let currentModel = config.selectedModelId(forProvider: resolved.id)
-            Picker("\(label) Model", selection: Binding(
-                get: { currentModel ?? "" },
-                set: { newID in setModel(newID.isEmpty ? nil : newID, for: resolved.id) }
-            )) {
-                if models.isEmpty {
-                    Text("Chat with this provider once to discover models").tag("")
-                } else {
-                    Text("Agent default").tag("")
-                    ForEach(models, id: \.modelId) { model in
-                        Text(model.displayLabel).tag(model.modelId)
-                    }
-                }
-            }
-            .disabled(models.isEmpty)
-        }
-        .padding(.vertical, 2)
-    }
-
     // MARK: - Actions
 
-    private func setChatProvider(_ id: String?) {
-        config = config.settingChatProvider(id: id)
-        chatProviderId = id
-        persist()
-    }
-
-    private func setIngestProvider(_ id: String?) {
-        config = config.settingIngestProvider(id: id)
-        ingestProviderId = id
-        persist()
-    }
-
-    private func setLintProvider(_ id: String?) {
-        config = config.settingLintProvider(id: id)
-        lintProviderId = id
-        persist()
-    }
-
-    /// Set the per-provider model selection. The selection is keyed by
-    /// PROVIDER (not per-operation) — every operation pinned to this provider
-    /// will see the same model. Mirrors `AgentsSettingsView.applyEdit`'s
-    /// `settingSelectedModel(_:forProvider:)` call.
-    private func setModel(_ modelId: String?, for providerId: String) {
-        config = config.settingSelectedModel(modelId, forProvider: providerId)
+    /// Set + persist the per-stage model id for `stage` (or clear it when
+    /// `modelId` is nil/empty). Mirrors `AgentsSettingsView.applyEdit`'s
+    /// `settingSelectedModel(_:forProvider:)` call — load→mutate→save shape +
+    /// the same `do/catch + DebugLog` house-rule error path.
+    private func setStageModel(_ stage: ACPIngestStage, _ modelId: String?) {
+        config = config.settingIngestStageModel(modelId, forStage: stage.rawValue)
         persist()
     }
 
     private func refresh() {
         let loaded = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
         config = loaded
-        chatProviderId = loaded.chatProviderId
-        ingestProviderId = loaded.ingestProviderId
-        lintProviderId = loaded.lintProviderId
     }
 
     /// Persist the in-memory config to `agent-providers.json`. Uses
     /// `do/catch + DebugLog` per the house rule against bare `try?` (a silent
-    /// failure would silently revert the user's per-op provider assignment on
+    /// failure would silently revert the user's per-stage model assignment on
     /// next launch — exactly the kind of bug the rule exists to prevent).
     private func persist() {
         do {

@@ -204,11 +204,12 @@ import WikiFSCore
     /// `SpawnModelGuard.validate` inside `startInteractiveQuery` therefore
     /// sets `preflightError` and returns early — no real subprocess spawned.
     ///
-    /// per-op-provider: `startInteractiveQuery` now resolves its provider via
-    /// `providersConfig().providerForChat()` (NOT `resolveSelectedProvider`).
-    /// So we pre-write a config whose DEFAULT provider is opencode with NO
-    /// selected model — `providerForChat()` returns opencode (no chat pin →
-    /// fallback to default) and the guard fires on the nil-model state.
+    /// per-stage-model-selection (#704 removed): `startInteractiveQuery`
+    /// resolves its provider via `providersConfig().selectedProvider()`
+    /// (the per-op `providerForChat()` is gone). We pre-write a config whose
+    /// DEFAULT provider is opencode with NO selected model —
+    /// `selectedProvider()` returns opencode and the guard fires on the
+    /// nil-model state.
     private func makeRefusingLauncher() throws -> AgentLauncher {
         let launcher = AgentLauncher()
         let tmp = FileManager.default.temporaryDirectory
