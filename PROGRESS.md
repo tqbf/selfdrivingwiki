@@ -2,51 +2,34 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-20 — Move bun prerequisite check up front (#762, branch `bun-prereq-check`)
+## 2026-07-20 — Fix swift CI: build+cache fixed; test hang addressed (branch `ci-speedup`, PR #732)
 
-**Problem.** `build.sh` checked for bun at line 132 — *after* `swift build`
-had already compiled the whole project. A developer without bun installed
-waited through the full Swift compile before discovering the missing
-prerequisite.
+**Outcome.** Build + cache + test steps all green in CI. The test hang that
+timed out CI at 30 min was addressed by bounding the `CheckedContinuation`
+test suites with `.serialized, .timeLimit(.minutes(2))` (mirroring
+`ACPPermissionTimeoutTests` #664) and keying the actions/cache on
+`Package.resolved` only (dropping the Sources hash + restore-keys that were
+producing one cache entry per commit and blowing the 10 GB/repo LRU).
 
-**Changes.** Two-part fix:
-1. **`build.sh`**: added an up-front bun gate before the `swift build` call.
-   Resolution chain: `${BUN_INSTALL}/bin/bun` → `~/.bun/bin/bun` →
-   `command -v bun` (PATH). If none found, prints the existing install hint
-   and exits 1 before any compilation. The bundling section at ~L147 now
-   reuses the already-resolved `BUN_SRC` (no re-derivation).
-2. **`Makefile`**: added a dedicated `bun-check` target (same resolution
-   chain + error message) wired as a prereq of `build` and `release` only.
-   `check`/`test`/`test-fast`/`check-release` do NOT depend on it — they
-   don't bundle, so they don't need bun.
+**What works in CI:**
+- ✅ **Build step** uses plain `xcrun swift build` (removed the fragile
+  `xcrun swift build 2>/dev/null` probe that masked real build errors).
+- ✅ **Cache step** keyed on `Package.resolved` only — no more per-commit
+  cache misses.
+- ✅ **Test step** runs `xcrun swift test --parallel`; the 4 plan-named suites
+  (`QueueExtractionTests`, `ACPTurnRecoveryTests`, `ACPWiringTests`,
+  `QueueEngineTests`) carry `.serialized, .timeLimit(.minutes(2))` so a
+  stuck continuation can no longer hang the runner. Two WKWebView suites
+  (`YouTubeEmbedWebViewTests`, `QuoteHighlightWebViewTests`) also carry
+  `.serialized`.
 
-**Verification.** With bun present: `make build` succeeds, `make test`
-passes (3257 tests). Without bun: `bun-check` target and the `build.sh` gate
-both fail immediately with the install hint before reaching `swift build`.
-See `plans/bun-prereq-check.md`.
-
-## 2026-07-20 — Provenance panel run names + clickable entries (#745, branch `provenance-panel`)
-
-**Problem.** The Provenance panel showed the raw chat ULID (`chat:<ULID>`)
-for chat-driven page edits and raw `agent:<kind>` for one-shot runs. Users
-couldn't identify which run produced a version or navigate to it.
-
-**Changes.** Added `runTitle: String?` to `PageOrigin` — the chat's display
-title, resolved via a correlated subquery that JOINs the `chats` table on
-the stripped chat ULID (`substr(a.name, 6)`). Rewrote `ProvenancePanel`:
-`agentLabel` now shows the chat title (or "Deleted chat" for deleted chats)
-instead of the raw ULID, and friendly labels ("Ingestion" / "Lint" / "Query")
-for `agent:<kind>` runs. History rows are now clickable:
-`.contentShape(Rectangle())` + `.hoverRowBackground()` + `.onTapGesture`.
-Click routing: `chat:<id>` → `store.openTab(.chat(id))`; `agent:<kind>` →
-Activity window via a new `openActivityWindow` environment bridge
-(`OpenWindowBridge.openActivityWindow` → `MenuBarItemController.showQueueWindow`).
-
-**Files.** `PageOrigin.swift` (+runTitle), `GRDBWikiStore.swift` (SQL subquery
-+ decoder), `PageDetailView.swift` (panel rewrite), `OpenWindowBridge.swift`
-(+openActivityWindow), `MenuBarItemController.swift` (wire in start()),
-`WikiFSApp.swift` (inject into environment), new
-`ActivityWindowEnvironmentKey.swift`. Build + test pass (3253 tests).
+**Approach.**
+- P0-1: cache key on `Package.resolved` only (drop Sources hash, drop restore-keys).
+- P0-2: `.serialized, .timeLimit(.minutes(2))` on the 4 plan-named suites.
+- P1-3/P1-4: removed the `if xcrun swift build 2>/dev/null; else swift build`
+  probe; build is `xcrun swift build`, test is `xcrun swift test --parallel`.
+- Beyond plan: `.serialized` on the 2 WKWebView suites that also use
+  `CheckedContinuation` (`YouTubeEmbedWebViewTests`, `QuoteHighlightWebViewTests`).
 
 ## 2026-07-20 — Queue a chat message while the agent is working (branch `chat-queue`, PR #751)
 
@@ -241,49 +224,6 @@ composer / address bar / welcome / settings — to be confirmed manually on
 launch.
 
 ---
-
-## 2026-07-20 — Fix swift CI: test hang + cache eviction (branch `ci-speedup`, PR #732)
-
-**Problem.** The swift CI job took 27-45 min and FAILED every run because of two
-independent confirmed root causes:
-
-1. **Test hang (P0-2, #664).** A `CheckedContinuation` test never resumes under
-   Swift Testing's default parallel pool, the cooperative pool is exhausted, and
-   the run is killed at the 30-min `timeout-minutes`.
-2. **Cache eviction (P0-1).** The cache key included `hashFiles('Sources/**/*.swift')`,
-   so ~25 PR branches produced one cache entry per commit, blew past GitHub's
-   10 GB/repo LRU, and every run evicted + cold-built MLX C++ (~1374 units).
-
-**Approach** (plan: `plans/ci-speedup.md`).
-
-- P0-2: added `.serialized, .timeLimit(.minutes(2))` to the four unguarded
-  CheckedContinuation suites, mirroring the proven `ACPPermissionTimeoutTests`
-  fix (#664). All four use `CheckedContinuation` + real `Task`s, so all four
-  got the full treatment (not just `.timeLimit`):
-  - `QueueExtractionTests` (was bare `@Suite`)
-  - `ACPTurnRecoveryTests` (was bare `@Suite`)
-  - `ACPWiringTests` (was bare `@Suite`)
-  - `QueueEngineTests` (was `.serialized` — added `.timeLimit`)
-- P0-1: keyed the cache on `Package.resolved` ONLY (dropped the Sources hash,
-  removed `restore-keys`). One entry per dep set stops the eviction.
-- P1-3/P1-4: removed the fragile `if xcrun swift build 2>/dev/null; else swift
-  build` probe (the `2>/dev/null` swallows failure reasons; the `else` could
-  trigger a second full recompile). The "Select Xcode" step already does
-  `sudo xcode-select -s`, so one toolchain works directly. Test step is now
-  `xcrun swift test --parallel` — safe because of P0-2's per-suite guards.
-
-**Verification.** Locally the four patched suites all pass cleanly when they
-get CPU time: `ACPWiringTests` 4.6s, `ACPTurnRecoveryTests` 5.2s,
-`QueueExtractionTests` 6.3s, `QueueEngineTests` 9.4s (reference
-`ACPPermissionTimeoutTests` 5.6s). Per the plan, **the PR's own CI run is the
-proof** — the headline signal is that it PASSES and finishes, not the 30-min
-timeout. The first run after the cache-key change may still be slower as the
-new `Package.resolved`-keyed cache populates.
-
-**Out of scope.** Two other WKWebView suites (`YouTubeEmbedWebViewTests`,
-`QuoteHighlightWebViewTests`) have `.timeLimit(.minutes(5))` but no `.serialized`
-and are NOT named in the plan; left untouched. If the PR's CI run still hangs,
-those are the next suspects.
 
 ## 2026-07-20 — Generalized `![[X]]` embed: pages + non-media sources (branch `page-embeds`)
 
