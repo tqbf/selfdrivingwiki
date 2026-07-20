@@ -563,6 +563,10 @@ struct ActivityWindowView: View {
                 blobStore: store(for: item.wikiID)
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Match `detailHeader`'s 16pt inset. ChatWebView's CSS sets
+                // body left-padding to 0 by design (PR #457) — the left margin
+                // is the host's responsibility, so provide it here.
+                .padding(.horizontal, 16)
         } else if !progressText.isEmpty {
             ScrollView {
                 Text(progressText)
