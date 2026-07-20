@@ -24,12 +24,12 @@ import ACPModel
             pages: [
                 ACPIngestPageAssignment(
                     title: "Photosynthesis",
-                    sourceFile: "source-1.md",
+                    sourceFile: "Photosynthesis-Notes--01J5ABC.md",
                     sourceRanges: "lines 1-80",
                     outline: "Overview of photosynthesis."),
                 ACPIngestPageAssignment(
                     title: "Calvin Cycle",
-                    sourceFile: "source-1.md",
+                    sourceFile: "Photosynthesis-Notes--01J5ABC.md",
                     sourceRanges: "lines 81-120",
                     outline: "Carbon fixation pathway."),
             ],
@@ -49,34 +49,34 @@ import ACPModel
     @Test func testAssignmentsForSource() {
         let plan = ACPIngestPlan(
             pages: [
-                ACPIngestPageAssignment(title: "A", sourceFile: "source-1.md", sourceRanges: "1-10", outline: "a"),
-                ACPIngestPageAssignment(title: "B", sourceFile: "source-2.md", sourceRanges: "1-10", outline: "b"),
-                ACPIngestPageAssignment(title: "C", sourceFile: "source-1.md", sourceRanges: "11-20", outline: "c"),
+                ACPIngestPageAssignment(title: "A", sourceFile: "Source-One--01AAA.md", sourceRanges: "1-10", outline: "a"),
+                ACPIngestPageAssignment(title: "B", sourceFile: "Source-Two--01BBB.md", sourceRanges: "1-10", outline: "b"),
+                ACPIngestPageAssignment(title: "C", sourceFile: "Source-One--01AAA.md", sourceRanges: "11-20", outline: "c"),
             ],
-            sourceIDs: ["id1", "id2"])
+            sourceIDs: ["01AAA", "01BBB"])
 
-        let source1 = plan.assignments(forSource: "source-1.md")
+        let source1 = plan.assignments(forSource: "Source-One--01AAA.md")
         #expect(source1.count == 2)
         #expect(source1.map(\.title) == ["A", "C"])
 
-        let source2 = plan.assignments(forSource: "source-2.md")
+        let source2 = plan.assignments(forSource: "Source-Two--01BBB.md")
         #expect(source2.count == 1)
         #expect(source2.first?.title == "B")
 
-        #expect(plan.assignments(forSource: "source-3.md").isEmpty)
+        #expect(plan.assignments(forSource: "Source-Three--01CCC.md").isEmpty)
     }
 
     @Test func testDistinctSourceFiles() {
         let plan = ACPIngestPlan(
             pages: [
-                ACPIngestPageAssignment(title: "A", sourceFile: "source-1.md", sourceRanges: "", outline: ""),
-                ACPIngestPageAssignment(title: "B", sourceFile: "source-2.md", sourceRanges: "", outline: ""),
-                ACPIngestPageAssignment(title: "C", sourceFile: "source-1.md", sourceRanges: "", outline: ""),
+                ACPIngestPageAssignment(title: "A", sourceFile: "Source-One--01AAA.md", sourceRanges: "", outline: ""),
+                ACPIngestPageAssignment(title: "B", sourceFile: "Source-Two--01BBB.md", sourceRanges: "", outline: ""),
+                ACPIngestPageAssignment(title: "C", sourceFile: "Source-One--01AAA.md", sourceRanges: "", outline: ""),
             ],
             sourceIDs: [])
 
         // First-occurrence order, no duplicates.
-        #expect(plan.distinctSourceFiles == ["source-1.md", "source-2.md"])
+        #expect(plan.distinctSourceFiles == ["Source-One--01AAA.md", "Source-Two--01BBB.md"])
     }
 
     @Test func testAllPageTitles() {
@@ -174,12 +174,15 @@ import ACPModel
     @Test func testPlannerPromptFillsPlaceholders() {
         let prompt = ACPIngestPrompts.plannerPrompt(
             stateFilePath: "/tmp/WIKI_STATE.md",
-            stagedSourcePaths: ["/tmp/scratch/source-1.md", "/tmp/scratch/source-2.md"],
+            stagedSourcePaths: [
+                "/tmp/scratch/Neuralwatt-Cloud--01ABC.html",
+                "/tmp/scratch/MCR-Protocol--01DEF.txt",
+            ],
             sourceIDs: ["01ABC", "01DEF"])
 
         #expect(prompt.contains("/tmp/WIKI_STATE.md"))
-        #expect(prompt.contains("source-1.md"))
-        #expect(prompt.contains("source-2.md"))
+        #expect(prompt.contains("Neuralwatt-Cloud--01ABC.html"))
+        #expect(prompt.contains("MCR-Protocol--01DEF.txt"))
         #expect(prompt.contains("01ABC"))
         #expect(prompt.contains("01DEF"))
         #expect(prompt.contains("plan.json"))
@@ -187,8 +190,8 @@ import ACPModel
 
     @Test func testExecutorPromptFillsPlaceholders() {
         let assignments = [
-            ACPIngestPageAssignment(title: "Alpha", sourceFile: "source-1.md", sourceRanges: "lines 1-50", outline: "Overview of alpha."),
-            ACPIngestPageAssignment(title: "Beta", sourceFile: "source-1.md", sourceRanges: "lines 51-100", outline: "Details of beta."),
+            ACPIngestPageAssignment(title: "Alpha", sourceFile: "Neuralwatt-Cloud--01ABC.html", sourceRanges: "lines 1-50", outline: "Overview of alpha."),
+            ACPIngestPageAssignment(title: "Beta", sourceFile: "Neuralwatt-Cloud--01ABC.html", sourceRanges: "lines 51-100", outline: "Details of beta."),
         ]
         let prompt = ACPIngestPrompts.executorPrompt(
             stateFilePath: "/tmp/state.md",
@@ -201,17 +204,33 @@ import ACPModel
         #expect(prompt.contains("lines 1-50"))
         #expect(prompt.contains("lines 51-100"))
         #expect(prompt.contains("Gamma"))  // cross-link reference
-        #expect(prompt.contains("source-1.md"))
+        #expect(prompt.contains("Neuralwatt-Cloud--01ABC.html"))
+    }
+
+    @Test func testExecutorPromptFallbackWhenNoAssignments() {
+        // When assignments is empty (an executor always has ≥1 page in
+        // practice — the launcher skips an empty-assignment source), the
+        // fallback `?? "source.md"` is reached. It is an obviously-placeholder
+        // leaf (no `--<ulid>` suffix, no provenance).
+        let prompt = ACPIngestPrompts.executorPrompt(
+            stateFilePath: "/tmp/state.md",
+            assignments: [],
+            allPageTitles: [],
+            sourceIDs: ["id1"])
+
+        #expect(prompt.contains("source.md"))
+        // The stale `source-1.md` literal is gone.
+        #expect(!prompt.contains("source-1.md"))
     }
 
     @Test func testFinalizerPromptFillsPlaceholders() {
         let prompt = ACPIngestPrompts.finalizerPrompt(
             stateFilePath: "/tmp/state.md",
-            sourceFileNames: ["source-1.md", "source-2.md"],
+            sourceFileNames: ["Neuralwatt-Cloud--01ABC.html", "MCR-Protocol--01DEF.txt"],
             sourceIDs: ["id1", "id2"])
 
-        #expect(prompt.contains("source-1.md"))
-        #expect(prompt.contains("source-2.md"))
+        #expect(prompt.contains("Neuralwatt-Cloud--01ABC.html"))
+        #expect(prompt.contains("MCR-Protocol--01DEF.txt"))
         #expect(prompt.contains("id1"))
         #expect(prompt.contains("id2"))
         #expect(prompt.contains("index set"))
@@ -261,7 +280,7 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         let planData = try JSONEncoder().encode(ACPIngestPlan(
-            pages: [ACPIngestPageAssignment(title: "Test", sourceFile: "source-1.md", sourceRanges: "1-10", outline: "x")],
+            pages: [ACPIngestPageAssignment(title: "Test", sourceFile: "Test-Source--01ABC.md", sourceRanges: "1-10", outline: "x")],
             sourceIDs: ["id1"]))
 
         let fake = FakeAgentBackend(behaviors: [
@@ -446,15 +465,20 @@ struct ACPIngestCollapsedRoutingTests {
         return OperationRequest.StagedSource(
             bytes: Data(pad.utf8),
             ext: "md",
-            displayPath: "sources/by-id/large.md"
+            displayPath: "sources/by-id/large.md",
+            name: "Large Source",
+            sourceID: "01FAKE01KQ8HDDR3ZXK72XHG6R"
         )
     }
 
     @Test func runACPIngestResolvesOneBackendAcrossAllPhases() async throws {
         // Plan the planner will write: one source file, one page assignment.
+        // The `sourceFile` field must match the leaf `stageSources` produces
+        // for `largeSource()` — i.e. `Large-Source--01FAKE01KQ8HDDR3ZXK72XHG6R.md`.
+        let expectedLeaf = "Large-Source--01FAKE01KQ8HDDR3ZXK72XHG6R.md"
         let planData = try JSONEncoder().encode(ACPIngestPlan(
             pages: [ACPIngestPageAssignment(
-                title: "Padded Page", sourceFile: "large.md",
+                title: "Padded Page", sourceFile: expectedLeaf,
                 sourceRanges: "1-600", outline: "padding for size threshold")],
             sourceIDs: ["01FAKE"]))
         let fake = FakeAgentBackend(behaviors: [

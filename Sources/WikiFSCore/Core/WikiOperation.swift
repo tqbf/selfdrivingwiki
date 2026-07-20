@@ -27,9 +27,11 @@ public enum WikiOperation: Equatable, Sendable {
   ///
   /// - `sourcePaths`: the sources' mount-relative paths under `$WIKI_ROOT` (kept for
   ///   reference / the rare mount fallback).
-  /// - `stagedSourcePaths`: the ABSOLUTE scratch paths the app staged the raw source
-  ///   bytes to as `source-1.<ext>`, `source-2.<ext>`, … (read from SQLite, not the
-  ///   laggy mount) — what the agent actually reads.
+  ///   - `stagedSourcePaths`: the ABSOLUTE scratch paths the app staged the raw source
+  ///   bytes to as `<shellSafeStem>--<full-ULID>.<ext>` leaves (read from SQLite,
+  ///   not the laggy mount) — what the agent actually reads. The leaf is shell-safe
+  ///   by construction so the executor's BARE `{{PRIMARY_SOURCE_FILE}}` injection
+  ///   is safe without quoting.
   /// - `stateFilePath`: the ABSOLUTE scratch path of the staged `WIKI_STATE.md`
   ///   snapshot (titles + index.md + log tail) — so the agent skips orientation.
   /// - `plan`: the model-tiering decision (single Opus pass vs Opus curator + Sonnet

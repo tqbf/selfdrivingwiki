@@ -56,7 +56,9 @@ struct RunAwaitsTurnTests {
             sources: [OperationRequest.StagedSource(
                 bytes: Data("# Test\n".utf8),
                 ext: "md",
-                displayPath: "sources/by-id/test.md"
+                displayPath: "sources/by-id/test.md",
+                name: "Test Source",
+                sourceID: "01TEST01KQ8HDDR3ZXK72XHG6R"
             )],
             stateMarkdown: "# State"
         )
