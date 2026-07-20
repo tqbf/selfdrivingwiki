@@ -366,6 +366,28 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    /// Per-message summary emit (chat-summary plan §3.5 + AC.2). The new
+    /// `updateMessageSummary` mutator MUST route through `mutate()` and emit a
+    /// `.chat .updated` event on the chat the message belongs to (the
+    /// projection + model subscribe to `.chat` changes; there is no
+    /// `.message` resource kind). Modeled on
+    /// `appendChatMessagesEmitsChatUpdated` above.
+    @Test func updateMessageSummaryEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try await drain(rec)
+        let messages = try store.appendChatMessages(
+            chatID: chat.id, events: [AgentEvent.assistantText("text.")])
+        try await drain(rec)
+        try store.updateMessageSummary(
+            chatID: chat.id, messageID: messages[0].id,
+            summary: "one-liner.", kind: .defaultTruncation)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     @Test func renameChatEmitsChatUpdated() async throws {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")

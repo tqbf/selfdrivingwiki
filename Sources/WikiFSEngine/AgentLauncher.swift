@@ -629,6 +629,13 @@ public final class AgentLauncher {
     /// (after the first assistant turn completes), not on every turn.
     /// Reset in `resetRunArtifacts()`.
     @ObservationIgnored private var summaryGenerated = false
+    /// Per-message summary sink (chat-summary plan §6.1). Fired once in
+    /// `finish()` with the active chat id so the wired callback can summarize
+    /// the assistant messages from this turn + persist via
+    /// `updateMessageSummary`. nil when the session has no chatID (one-shot
+    /// runs) or the caller didn't wire the sink. Cleared in `finish()` and
+    /// `resetRunArtifacts()` for hygiene.
+    @ObservationIgnored private var messageSummarySink: (@MainActor (PageID) -> Void)?
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
@@ -2409,7 +2416,8 @@ public final class AgentLauncher {
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
-        onSummary: (@MainActor (PageID, String) -> Void)? = nil
+        onSummary: (@MainActor (PageID, String) -> Void)? = nil,
+        onMessageSummary: (@MainActor (PageID) -> Void)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -2540,6 +2548,7 @@ public final class AgentLauncher {
         // (which clears any stale sink from a prior run).
         transcriptSink = onTranscript
         summarySink = onSummary
+        messageSummarySink = onMessageSummary
         // D2: record the chat row this live session is writing to. This is the
         // source-of-truth switch for ChatView — when it matches a tab's
         // chatID, that tab renders `launcher.events` (streaming) instead of the
@@ -2908,6 +2917,16 @@ public final class AgentLauncher {
         summarySink?(PageID(rawValue: chatID), extracted)
     }
 
+    /// Fire the per-message summary sink (chat-summary plan §6.1). Called once
+    /// in `finish()` after `flushTranscript()` + `generateChatSummary()` and
+    /// before `activeChatID = nil`. No-op when no sink/chatID is set. The sink
+    /// owns the mode dispatch + the off-main Task for model mode; this method
+    /// just hands it the chat id.
+    private func fireMessageSummarySink() {
+        guard let chatID = activeChatID else { return }
+        messageSummarySink?(PageID(rawValue: chatID))
+    }
+
     /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
     /// advance the cursor. Filtering to persistable events is the model's job
     /// (`WikiStoreModel.appendChatEvents` filters via `AgentEvent.isPersistable`) —
@@ -3061,8 +3080,16 @@ public final class AgentLauncher {
         // run AFTER flushTranscript() (so the transcript is committed) and
         // BEFORE activeChatID = nil (so the chat ID is still available).
         generateChatSummary()
+        // Fire the per-message summary sink (chat-summary plan §6.1). Runs
+        // AFTER flushTranscript() so the turn's messages are committed (the
+        // sink queries `chatMessages(chatID:)` for unsummarized rows), and
+        // BEFORE activeChatID = nil so the chat ID is still available. The sink
+        // dispatches per the configured mode: default-truncation runs inline;
+        // model mode spawns an off-main Task (the sink closure owns that hop).
+        fireMessageSummarySink()
         transcriptSink = nil
         summarySink = nil
+        messageSummarySink = nil
         onAgentEvent = nil
         // #544 live progress: detach the live-usage callback after the run ends,
         // mirroring onAgentEvent. The Activity window stops receiving updates
@@ -3178,6 +3205,7 @@ public final class AgentLauncher {
         // session's events (issue #119).
         transcriptSink = nil
         summarySink = nil
+        messageSummarySink = nil
         onAgentEvent = nil
         // #544 live progress: clear the live-usage callback + provider label so
         // a stale callback from a prior run never receives a new run's updates.

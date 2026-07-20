@@ -100,6 +100,11 @@ public enum AgentOperationRunner {
             },
             onSummary: chat.map { chat -> (@MainActor (PageID, String) -> Void) in
                 return { [weak store] id, summary in store?.updateChatSummary(chatID: id, summary: summary) }
+            },
+            onMessageSummary: chat.map { chat -> (@MainActor (PageID) -> Void) in
+                return { [weak store] id in
+                    Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
+                }
             }
         )
 
@@ -371,6 +376,9 @@ public enum AgentOperationRunner {
             },
             onSummary: { [weak store] id, summary in
                 store?.updateChatSummary(chatID: id, summary: summary)
+            },
+            onMessageSummary: { [weak store] id in
+                Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
             })
     }
 
@@ -471,5 +479,104 @@ public enum AgentOperationRunner {
     private static func ingestSourcePath(for source: SourceSummary) -> String {
         let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
         return "sources/by-id/\(leaf)"
+    }
+
+    // MARK: - Per-message summary (chat-summary plan §6.1)
+
+    /// Summarize all unsummarized assistant messages in `chatID` per the
+    /// configured summarizer mode (chat-summary plan §6.1). Called from the
+    /// `onMessageSummary` sink wired into `startInteractiveQuery`, which fires
+    /// once in `AgentLauncher.finish()` after `flushTranscript()` commits the
+    /// turn's messages.
+    ///
+    /// **Mode dispatch** gates STRICTLY on `stageProviderIds["summarizer"]`
+    /// (chat-summary plan §5.1 invariant — never `provider(forStage:)`):
+    /// - **Default** (empty/absent pin): inline `ChatSummary.summaryExtract`
+    ///   via `MessageSummarizer.defaultSummary` — pure, cheap, no model call.
+    /// - **Model** (non-empty pin): off-main `Task` driving a one-shot ACP
+    ///   session per message via the injected `AgentBackend`. The DB write is
+    ///   marshalled back to `@MainActor`.
+    ///
+    /// **Idempotency (AC.6):** only messages with `summary == nil` are
+    /// summarized — the store query is the compute-once guard. Re-firing the
+    /// sink (e.g. on a second turn) is a no-op for already-summarized rows.
+    @MainActor
+    private static func summarizePendingMessages(
+        chatID: PageID, store: WikiStoreModel?, launcher: AgentLauncher
+    ) {
+        guard let store else { return }
+        let config = AgentProvidersConfig.loadOrSeed(from: launcher.resolveProvidersContainerDirectory())
+        let mode = MessageSummarizer.mode(for: config)
+
+        // Query the persisted messages + filter to unsummarized assistant-text
+        // rows. This is the compute-once guard (AC.6): already-summarized rows
+        // are skipped.
+        let messages = store.chatMessages(chatID: chatID)
+        let pending = messages.filter { msg in
+            msg.summary == nil
+                && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
+        }
+        guard !pending.isEmpty else { return }
+
+        switch mode {
+        case .defaultTruncation:
+            // Pure + cheap — run inline on the main actor.
+            for msg in pending {
+                guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+                let summary = MessageSummarizer.defaultSummary(for: text)
+                guard !summary.isEmpty else { continue }
+                store.updateMessageSummary(
+                    chatID: chatID, messageID: msg.id,
+                    summary: summary, kind: .defaultTruncation)
+            }
+        case .model:
+            // Off-main via a detached Task. The config + pending messages are
+            // captured by value (Sendable) so the Task can cross the actor
+            // boundary cleanly.
+            let containerDir = launcher.resolveProvidersContainerDirectory()
+            let credentialStore = launcher.acpCredentialStore
+            Task { @MainActor in
+                await Self.runModelSummarization(
+                    chatID: chatID, pending: pending, config: config,
+                    containerDir: containerDir, credentialStore: credentialStore,
+                    store: store)
+            }
+        }
+    }
+
+    /// Drive the model-mode summarization for a batch of pending messages
+    /// (chat-summary plan §4.3 + §6.4). Runs off-main for the ACP session(s);
+    /// marshals each write back to the `@MainActor` store. Called from a
+    /// `Task` so it doesn't block `finish()`.
+    @MainActor
+    private static func runModelSummarization(
+        chatID: PageID, pending: [ChatMessage], config: AgentProvidersConfig,
+        containerDir: URL, credentialStore: any ACPCredentialStore,
+        store: WikiStoreModel
+    ) async {
+        guard let profile = MessageSummarizer.resolveProfile(
+            config: config, credentialStore: credentialStore) else {
+            DebugLog.agent("AgentOperationRunner.runModelSummarization: profile resolution failed — skipping \(pending.count) messages")
+            return
+        }
+        // Construct the backend via the factory (production = ACPBackend with
+        // `.bypass` — the summarizer has no wiki to write to). The backend is
+        // constructed once per batch so a warm subprocess can be reused across
+        // messages in a future iteration; today each `modelSummary` call is a
+        // one-shot session.
+        let backend = AgentBackendFactory.makeBackend(policy: .bypass)
+        for msg in pending {
+            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+            // Off-main: the backend session runs on its own actor / process.
+            // The await suspends the MainActor without blocking it.
+            guard let summary = await MessageSummarizer.modelSummary(
+                text: text, backend: backend, profile: profile) else { continue }
+            // Marshal the DB write back to @MainActor (we're already here —
+            // this method is @MainActor). `updateMessageSummary` routes through
+            // `mutate()` + emits `.chat .updated` (#129).
+            store.updateMessageSummary(
+                chatID: chatID, messageID: msg.id,
+                summary: summary, kind: .model)
+        }
     }
 }

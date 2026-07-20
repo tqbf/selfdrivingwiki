@@ -57,7 +57,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 39
+    private static let currentSchemaVersion = 40
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1142,14 +1142,45 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         //
         // ⚠ LOAD-BEARING ordering: this step MUST precede the catch-all
         // fallback immediately below. The fallback's guard is keyed on
-        // `currentSchemaVersion` (39 now), so once this constant is bumped it
+        // `currentSchemaVersion` (40 now), so once this constant is bumped it
         // short-circuits: it re-runs `dropFTS5TablesAndTriggers` (harmless —
-        // `DROP … IF EXISTS`) and stamps `user_version = 39`, executing NONE
-        // of any new step above it. Any new v39 migration work belongs INSIDE
+        // `DROP … IF EXISTS`) and stamps `user_version = 40`, executing NONE
+        // of any new step above it. Any new v40 migration work belongs INSIDE
         // this block (before the fallback), not as a sibling after it.
         if version < 39 {
             try db.execute(sql: "PRAGMA user_version = 39;")
             version = 39
+        }
+
+        // Step 39 → 40 (chat-message summary, plans/chat-summary.md): adds
+        // nullable summary columns to `chat_messages` so each assistant message
+        // can carry a cached one-line summary. Mirrors `migrateV35ToV36`
+        // (issue #411): guarded `tableColumnInfo` column-presence check +
+        // `db.inTransaction(.immediate)` + `ALTER TABLE ADD COLUMN`. The columns
+        // are nullable so the migration is a pure schema change with no backfill
+        // — pre-feature rows surface as `summary = NULL` and are lazily
+        // summarized on first view (chat-summary plan §6.2).
+        //
+        // LOAD-BEARING: MUST precede the catch-all fallback immediately below
+        // (same reason as the v38→39 step above — the fallback re-runs
+        // `dropFTS5TablesAndTriggers` and stamps
+        // `user_version = currentSchemaVersion`, executing none of any new step
+        // after it).
+        if version < 40 {
+            let columns = try Self.tableColumnInfo("chat_messages", in: db)
+            guard !columns.contains("summary") else {
+                try db.execute(sql: "PRAGMA user_version = 40;")
+                version = 40
+                return
+            }
+            try db.inTransaction(.immediate) {
+                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary TEXT;")
+                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_kind TEXT;")
+                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_at REAL;")
+                return .commit
+            }
+            try db.execute(sql: "PRAGMA user_version = 40;")
+            version = 40
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
@@ -1377,13 +1408,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chat_messages (
-            id         TEXT PRIMARY KEY,
-            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            seq        INTEGER NOT NULL,
-            role       TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            text       TEXT NOT NULL DEFAULT '',
-            created_at REAL NOT NULL
+            id          TEXT PRIMARY KEY,
+            chat_id     TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq         INTEGER NOT NULL,
+            role        TEXT NOT NULL,
+            event_json  TEXT NOT NULL,
+            text        TEXT NOT NULL DEFAULT '',
+            created_at  REAL NOT NULL,
+            summary     TEXT,
+            summary_kind TEXT,
+            summary_at  REAL
         );
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
@@ -2413,13 +2447,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chat_messages (
-            id         TEXT PRIMARY KEY,
-            chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            seq        INTEGER NOT NULL,
-            role       TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            text       TEXT NOT NULL DEFAULT '',
-            created_at REAL NOT NULL
+            id          TEXT PRIMARY KEY,
+            chat_id     TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            seq         INTEGER NOT NULL,
+            role        TEXT NOT NULL,
+            event_json  TEXT NOT NULL,
+            text        TEXT NOT NULL DEFAULT '',
+            created_at  REAL NOT NULL,
+            summary     TEXT,
+            summary_kind TEXT,
+            summary_at  REAL
         );
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
@@ -5800,7 +5837,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func chatMessages(chatID: PageID) throws -> [ChatMessage] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
-            SELECT id, seq, event_json, created_at FROM chat_messages
+            SELECT id, seq, event_json, created_at, summary, summary_kind, summary_at
+            FROM chat_messages
             WHERE chat_id = ? ORDER BY seq ASC;
             """, arguments: [chatID.rawValue])
             let decoder = JSONDecoder()
@@ -5811,12 +5849,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     let data = json.data(using: .utf8),
                     let event = try? decoder.decode(AgentEvent.self, from: data)
                 else { continue }
+                // Decode-if-present for the nullable summary columns
+                // (chat-summary plan §3.4). Pre-v40 rows and unsummarized
+                // messages surface as nil.
+                let summary: String? = row["summary"]
+                let summaryKindRaw: String? = row["summary_kind"]
+                let summaryAtDouble: Double? = row["summary_at"]
                 out.append(ChatMessage(
                     id: PageID(rawValue: row["id"]),
                     chatID: chatID,
                     seq: row["seq"],
                     event: event,
-                    createdAt: Date(timeIntervalSince1970: row["created_at"])
+                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                    summary: summary,
+                    summaryKind: summaryKindRaw.flatMap(ChatMessageSummaryKind.init(rawValue:)),
+                    summaryAt: summaryAtDouble.map { Date(timeIntervalSince1970: $0) }
                 ))
             }
             return out
@@ -5875,6 +5922,29 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE id = ?;
             """, arguments: [summary, Date().timeIntervalSince1970,
                             Date().timeIntervalSince1970, chatID.rawValue])
+        }
+    }
+
+    /// Write the cached one-line summary for a single assistant message
+    /// (chat-summary plan §3.5). Routes through `mutate(event:_:)` and emits a
+    /// `.chat .updated` event on the chat the message belongs to — the
+    /// projection + model subscribe to `.chat` changes, and there is no
+    /// standalone `.message` resource kind (`chat_messages` cascade-delete with
+    /// `chats`). The write is idempotent (re-running on an already-summarized
+    /// row overwrites the cached values), but the caller is expected to
+    /// short-circuit when `summary` is non-nil (compute-once, AC.6).
+    public func updateMessageSummary(
+        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+    ) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chat_messages
+            SET summary = ?, summary_kind = ?, summary_at = ?
+            WHERE id = ?;
+            """, arguments: [summary, kind.rawValue,
+                            Date().timeIntervalSince1970, messageID.rawValue])
         }
     }
 
