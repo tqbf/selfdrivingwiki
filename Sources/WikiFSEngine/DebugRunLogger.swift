@@ -198,6 +198,74 @@ final class DebugRunLogger: @unchecked Sendable {
     /// UI affordance).
     var folderPath: URL { folderURL }
 
+    // MARK: - models.json (written at ingestion start, before the planner runs)
+
+    /// Write `record` to `<scratch>/models.json`. This is NOT a `debug/` artifact
+    /// — it lives at the run's scratch root as a sibling of `run.jsonl` and
+    /// `run.stderr.log`, written ONCE at ingestion start so a run's resolved
+    /// provider/model/thinking-effort can be inspected post-hoc without opening
+    /// the verbose ACP trace. Best-effort: any write failure is logged via
+    /// `DebugLog` and never thrown (house rule: no bare `try?`). `static` because
+    /// the `DebugRunLogger` *instance* is only constructed inside
+    /// `ACPBackend.startProcess` — AFTER `openLogFiles` runs; the launcher needs
+    /// to call this at the point where `run.jsonl` is created, before any
+    /// `DebugRunLogger` instance exists. See `plans/log-ingestion-models.md`.
+    static func writeModelsConfig(
+        _ record: ModelsConfigRecord,
+        to scratchURL: URL
+    ) {
+        let url = scratchURL.appendingPathComponent("models.json", isDirectory: false)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(record)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            DebugLog.agent("DebugRunLogger.writeModelsConfig: failed \(url.path): \(error.localizedDescription)")
+        }
+    }
+
+    /// Build a `ModelsConfigRecord` from the data available at spawn time.
+    /// Pure — no I/O — so it's unit-tested directly. `thinkingEffort` is the
+    /// launcher's current `thinkingOption` at the moment of spawn: the user's
+    /// chosen level (may be `nil` when the agent hasn't advertised
+    /// `thought_level`, or before any session captured it). Captured here as a
+    /// best-effort snapshot of "what thinking level did this run use".
+    static func makeRecord(
+        chatULID: String?,
+        startedAt: Date,
+        operationKind: String,
+        providerId: String,
+        providerLabel: String?,
+        selectedModelId: String?,
+        thinkingEffort: ThinkingEffortOption?,
+        sourceFiles: [String],
+        sourceIDs: [String]
+    ) -> ModelsConfigRecord {
+        ModelsConfigRecord(
+            schemaVersion: 1,
+            chatULID: chatULID,
+            startedAt: ISO8601DateFormatter().string(from: startedAt),
+            operationKind: operationKind,
+            provider: ModelsConfigRecord.ProviderInfo(
+                id: providerId,
+                label: providerLabel),
+            selectedModelId: selectedModelId?.nilIfEmpty,
+            thinkingEffort: thinkingEffort.map {
+                ModelsConfigRecord.ThinkingEffortInfo(
+                    configId: $0.configId,
+                    currentValue: $0.currentValue.nilIfEmpty,
+                    choices: $0.choices.map {
+                        ModelsConfigRecord.ThinkingEffortInfo.Choice(
+                            value: $0.value,
+                            label: $0.label)
+                    })
+            },
+            sourceFiles: sourceFiles,
+            sourceIDs: sourceIDs,
+            phases: [])
+    }
+
     // MARK: - Private helpers
 
     private func nextSessionIndex() -> Int {
@@ -264,6 +332,81 @@ final class DebugRunLogger: @unchecked Sendable {
         } catch {
             DebugLog.agent("DebugRunLogger: append failed \(url.lastPathComponent): \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - models.json record (written at ingestion start)
+
+/// Lightweight record of the resolved provider / model / thinking-effort for a
+/// run, written ONCE at ingestion start to `<scratch>/models.json`. A sibling
+/// of `run.jsonl` / `run.stderr.log` — NOT part of the verbose `debug/` trace.
+///
+/// **Forward-compatibility:** today the launcher resolves ONE provider+model+
+/// thinking triple and applies it across every phase of the run (the multi-phase
+/// planner/executor/finalizer path reuses the same triple). The `phases` array
+/// is `[]` today. When per-phase model selection lands, callers append
+/// `PhaseEntry`s (`{name, provider?, selectedModelId?, thinkingEffort?}`) to
+/// `phases` WITHOUT rewriting the schema. Readers MUST treat an absent/empty
+/// `phases` as "the top-level triple applies to every phase" — and a non-empty
+/// entry as an override for that phase only.
+struct ModelsConfigRecord: Codable, Sendable, Equatable {
+    /// Bumped on schema-breaking changes. Today: `1`.
+    var schemaVersion: Int
+    /// The run's chatULID (the `<queueItemID>` the launcher uses to build the
+    /// scratch path). `nil` only for legacy/test paths that omit it.
+    var chatULID: String?
+    /// ISO8601 timestamp the record was written (== ingestion start).
+    var startedAt: String
+    /// `"ingest"`, `"query"`, `"lint"` (the `WikiOperation.Kind.rawValue`).
+    var operationKind: String
+    /// The resolved provider.
+    var provider: ProviderInfo
+    /// The model selected for this run (per provider). `nil` when no model is
+    /// explicitly selected (the agent default applies).
+    var selectedModelId: String?
+    /// The thinking-effort config + current level. `nil` when the agent doesn't
+    /// advertise `thought_level` (capability detection) or it hasn't been
+    /// captured yet at spawn time.
+    var thinkingEffort: ThinkingEffortInfo?
+    /// Mount-relative source paths being ingested (`sourcePaths` from
+    /// `WikiOperation.ingest`). `[]` for non-ingest kinds.
+    var sourceFiles: [String]
+    /// Source IDs derived from `sourceFiles` (`WikiOperation.sourceID(fromPath:)`).
+    /// `[]` for non-ingest kinds.
+    var sourceIDs: [String]
+    /// Reserved for forward-compat: per-phase overrides (`planner`, `executor`,
+    /// `finalizer`). `[]` today — see the struct's doc comment.
+    var phases: [PhaseEntry]
+
+    struct ProviderInfo: Codable, Sendable, Equatable {
+        var id: String
+        var label: String?
+    }
+
+    struct ThinkingEffortInfo: Codable, Sendable, Equatable {
+        var configId: String
+        var currentValue: String?
+        var choices: [Choice]?
+
+        struct Choice: Codable, Sendable, Equatable {
+            var value: String
+            var label: String
+        }
+    }
+
+    struct PhaseEntry: Codable, Sendable, Equatable {
+        var name: String
+        var provider: ProviderInfo?
+        var selectedModelId: String?
+        var thinkingEffort: ThinkingEffortInfo?
+    }
+}
+
+private extension String {
+    /// Empty/whitespace-only string → nil (so `selectedModelId` /
+    /// `thinkingEffort.currentValue` normalize to "unset" in the JSON, not `""`).
+    var nilIfEmpty: String? {
+        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
     }
 }
 
