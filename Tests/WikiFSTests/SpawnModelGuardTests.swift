@@ -3,12 +3,13 @@ import Foundation
 @testable import WikiFSEngine
 import WikiFSCore
 
-/// Pure-logic tests for `SpawnModelGuard.validate(provider:modelId:)`.
+/// Pure-logic tests for `SpawnModelGuard.validate(provider:modelId:stageName:)`.
 ///
 /// The guard is the shared contract behind two spawn-refusal sites in
 /// `AgentLauncher`:
-/// - `runACPIngestPlannerExecutors` (ingest — one choke-point covering
-///   planner/executor/finalizer; #604 collapsed the removed per-stage routing)
+/// - `runACPIngestPlannerExecutors` (ingest — validates each of the three
+///   per-stage models: planner / executor / finalizer, per
+///   `plans/per-stage-model-selection.md` §6)
 /// - `startInteractiveQuery` (interactive chat)
 ///
 /// These tests do NOT exercise the wiring; they pin the message contract
@@ -81,5 +82,40 @@ struct SpawnModelGuardTests {
         #expect(
             SpawnModelGuard.validate(provider: a, modelId: nil)
             == SpawnModelGuard.validate(provider: b, modelId: nil))
+    }
+
+    // MARK: - Per-stage validation (per-stage-model-selection plan §6)
+
+    @Test func returnsStageNamedRefusalWhenStageProvided() {
+        // per-stage-model-selection plan §6: a missing *executor*-stage model
+        // (with planner/finalizer set) must produce a phase-named refusal, not
+        // a silent spawn — the orchestrator runs the guard three times (once
+        // per stage) and the message must name the failing stage so the user
+        // knows which picker to fix.
+        let msg = SpawnModelGuard.validate(
+            provider: claude, modelId: nil, stageName: "Executor")
+        #expect(msg != nil)
+        #expect(msg?.contains("Executor") == true)
+        #expect(msg?.contains("stage") == true)
+        // Actionable + provider identification preserved.
+        #expect(msg?.contains("No model selected") == true)
+        #expect(msg?.contains(claude.label) == true)
+        #expect(msg?.contains("Settings → Agents") == true)
+    }
+
+    @Test func stageNameIsIgnoredWhenModelIsPresent() {
+        // Stage validation passes (nil) when a model IS selected — the
+        // per-stage name is only in the error message.
+        #expect(SpawnModelGuard.validate(
+            provider: claude, modelId: "sonnet", stageName: "Planner") == nil)
+    }
+
+    @Test func stageNameNilFallsBackToNonStageMessage() {
+        // When stageName is nil OR empty, the message uses the legacy
+        // non-stage form. Mirrors `startInteractiveQuery`'s chat-path call
+        // (no stageName arg — chat is not a per-stage ingest kind).
+        #expect(SpawnModelGuard.validate(provider: claude, modelId: nil)?.contains("stage") == false)
+        #expect(SpawnModelGuard.validate(
+            provider: claude, modelId: nil, stageName: "")?.contains("stage") == false)
     }
 }

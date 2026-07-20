@@ -99,7 +99,18 @@ public actor ACPBackend: AgentBackend {
         /// `NewSessionResponse.models`). nil when the agent didn't advertise a
         /// list (older agents). Captured at start so the launcher can cache them
         /// per-provider for the model picker (#329).
-        let modelsInfo: ModelsInfo?
+        ///
+        /// `var` (not `let`) so per-stage-model-selection's `applyModelIfNeeded`
+        /// (§4.5) can refresh `currentModelId` in place after a successful
+        /// `setModel` — HIGH #1: previously the `setModel` return was discarded
+        /// and `modelsInfo.currentModelId` reported the pre-`setModel`
+        /// advertised default forever, so `sessionUsage(for:)` / `summary.json`
+        /// / the debug artifact all lied about which model actually ran.
+        /// `ModelsInfo` is a `public struct` value type in `ACPModel`, so
+        /// reassigning a fresh copy with the applied id is value-type-safe
+        /// (no cross-session bleed); see `AgentProviderModelCache.swift` for the
+        /// pure `ACPModelSelectionResolver` decision that drives the refresh.
+        var modelsInfo: ModelsInfo?
         /// The config options the agent advertised (`session/new` →
         /// `NewSessionResponse.configOptions`), e.g. the `thought_level`
         /// select (high/medium/low). nil when the agent advertises none. Captured
@@ -546,27 +557,18 @@ public actor ACPBackend: AgentBackend {
         // without a subprocess; here we just execute it. A bad/stale selection
         // falls back to the agent default (no setModel) — never reproduces the
         // 404 the picker exists to prevent.
-        if let selectedModelId = profile.providerHints[HintKey.acpSelectedModelId.rawValue],
-           !selectedModelId.isEmpty {
-            let advertisedIds = modelsInfo?.availableModels.map(\.modelId) ?? []
-            let decision = ACPModelSelectionResolver.resolve(
-                selectedModelId: selectedModelId,
-                currentModelId: modelsInfo?.currentModelId,
-                advertisedModelIds: advertisedIds)
-            if case .apply(let id) = decision {
-                DebugLog.agent("ACPBackend.createSession: setModel \(id)")
-                do {
-                    _ = try await client.setModel(sessionId: sessionId, modelId: id)
-                } catch {
-                    // setModel failed — log and proceed to the prompt anyway; the
-                    // agent's default may still work, and a clearer error will
-                    // surface from the prompt if not. Non-fatal by design.
-                    DebugLog.agent("ACPBackend.createSession: setModel \(id) failed: \(error.localizedDescription)")
-                }
-            } else {
-                DebugLog.agent("ACPBackend.createSession: keeping agent default model (selected=\(selectedModelId) → \(decision))")
-            }
-        }
+        //
+        // per-stage-model-selection §4.4 (store-then-apply-with-refresh): the
+        // store happens FIRST (the `ACPSession` is in the actor's `sessions`
+        // map before `applyModelIfNeeded` is called) so the handle the caller
+        // already has points at a real record; then `applyModelIfNeeded`
+        // resolves against the FRESH `modelsInfo.currentModelId` from
+        // `newSession` (an accurate baseline — the createSession path does NOT
+        // have the stale-baseline bug), applies `setModel`, AND refreshes the
+        // stored `modelsInfo.currentModelId` so downstream reads (the usage
+        // tracker, `summary.json`, the per-stage debug artifact) report the
+        // APPLIED model. The previous inline block duplicated this logic and
+        // never refreshed the stored id (HIGH #1 root).
 
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
@@ -584,6 +586,21 @@ public actor ACPBackend: AgentBackend {
         // Phase 4: create a usage tracker for this session.
         usageStates[sessionID] = SessionUsageState()
 
+        // Apply the (optional) selected stage model + refresh the stored
+        // currentModelId on success + write the per-stage `session-setModel`
+        // debug artifact. Non-fatal on setModel failure (logs + proceeds,
+        // matching the previous inline catch at this site — the agent may
+        // still work on its default model; a clearer error surfaces from the
+        // prompt if not). On the createSession path, the baseline is the FRESH
+        // `modelsInfo.currentModelId` straight from `newSession` above —
+        // HIGH #2's stale-baselines bug does NOT exist here.
+        await applyModelIfNeeded(
+            session: SessionHandle(id: sessionID),
+            selectedModelId: profile.providerHints[HintKey.acpSelectedModelId.rawValue],
+            stage: nil,  // createSession is also used by chat/lint — no stage label
+            baselineCurrentModelId: modelsInfo?.currentModelId,
+            advertisedModelIds: modelsInfo?.availableModels.map(\.modelId) ?? [])
+
         // Rebind onExit so the latest caller's callback fires on process exit.
         // With a warm subprocess, multiple sessions share one permission delegate;
         // the last binding wins (each phase's onExit is phase-tracking telemetry
@@ -597,6 +614,119 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.createSession: session \(sessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
+    }
+
+    /// Apply `selectedModelId` to an already-created session (the
+    /// `createSession` path AND the executor fork path), using
+    /// `baselineCurrentModelId` as the resolver's "current" baseline. On a
+    /// successful `setModel` it REFRESHES the session's stored
+    /// `modelsInfo.currentModelId` to the applied id + writes the NEW
+    /// `debug/session-setModel-*.json` artifact recording stage + decision +
+    /// baseline + APPLIED id.
+    ///
+    /// per-stage-model-selection §4.5 (HIGH #2 + MEDIUM): the
+    /// `baselineCurrentModelId` is LOAD-BEARING — never feed the stale stored
+    /// `modelsInfo.currentModelId` into it on the fork path. The
+    /// `ACPModelSelectionResolver` "already current → no-op" guard
+    /// (`AgentProviderModelCache.swift:90-92`) is only correct when the
+    /// baseline is accurate. On the createSession path the baseline is the
+    /// FRESH `modelsInfo` from `newSession`; on the fork path it's the
+    /// planner's RESOLVED stage model (NOT the inherited stale id). The
+    /// refresh + debug artifact on success close HIGH #1 (the
+    /// `modelsInfo.currentModelId` + the debug trace + the usage tracker all
+    /// lied about the APPLIED model).
+    ///
+    /// Non-fatal on `setModel` failure (logs + proceeds, matching the previous
+    /// inline catch at this site — the agent may still work on its default
+    /// model; a clearer error surfaces from the prompt if not. Mirrors
+    /// `ACPBackend.createSession`'s pre-refactor catch block).
+    func applyModelIfNeeded(
+        session sessionHandle: SessionHandle,
+        selectedModelId: String?,
+        stage: ACPIngestStage?,
+        baselineCurrentModelId: String?,
+        advertisedModelIds: [String]
+    ) async {
+        // Resolve: validate + decide whether to call setModel at all.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: selectedModelId,
+            currentModelId: baselineCurrentModelId,
+            advertisedModelIds: advertisedModelIds)
+        let stageLabel = stage?.label ?? "session"
+        switch decision {
+        case .apply(let appliedId):
+            DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setModel \(appliedId) (baseline=\(baselineCurrentModelId ?? "nil"))")
+            // Apply the model. The return (a `SetModelResponse`) carries no
+            // load-bearing data — what matters is no error was thrown.
+            guard var session = sessions[sessionHandle.id] else {
+                DebugLog.agent("ACPBackend.applyModelIfNeeded: no session for handle \(sessionHandle.id) — setModel skipped")
+                debugLogger?.logSessionSetModel(
+                    sessionId: SessionId("(unknown)"),
+                    stage: stageLabel,
+                    decision: "apply(\(appliedId))",
+                    baselineCurrentModelId: baselineCurrentModelId,
+                    appliedModelId: nil,
+                    setModelError: "no session for handle \(sessionHandle.id)")
+                return
+            }
+            do {
+                _ = try await session.client.setModel(sessionId: session.sessionId, modelId: appliedId)
+                // HIGH #1 fix: refresh the stored `modelsInfo.currentModelId`
+                // to the APPLIED id so downstream reads (`sessionUsage(for:)`,
+                // `summary.json`, the per-stage debug artifact) report the
+                // actually-applied model. `ModelsInfo` is a `public struct`
+                // value type in `ACPModel`, so reassigning a fresh copy is
+                // value-type-safe (no cross-session bleed): each
+                // `sessions[id]` record owns its own copy.
+                if let oldInfo = session.modelsInfo {
+                    session.modelsInfo = ModelsInfo(
+                        currentModelId: appliedId,
+                        availableModels: oldInfo.availableModels)
+                    sessions[sessionHandle.id] = session
+                }
+                // Write the per-stage post-setModel debug artifact (§9 AC.9
+                // assertion target). Mirrors `logSessionNew`'s per-session
+                // counter shape so forked executors never overwrite each
+                // other's traces.
+                debugLogger?.logSessionSetModel(
+                    sessionId: session.sessionId,
+                    stage: stageLabel,
+                    decision: "apply(\(appliedId))",
+                    baselineCurrentModelId: baselineCurrentModelId,
+                    appliedModelId: appliedId,
+                    setModelError: nil)
+                DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setModel OK applied=\(appliedId) baseline=\(baselineCurrentModelId ?? "nil")")
+            } catch {
+                // Non-fatal: the agent's default may still work, and a
+                // clearer error will surface from the prompt if not. Still
+                // write the debug artifact so the failure is visible.
+                DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setModel \(appliedId) failed: \(error.localizedDescription)")
+                debugLogger?.logSessionSetModel(
+                    sessionId: session.sessionId,
+                    stage: stageLabel,
+                    decision: "apply(\(appliedId))",
+                    baselineCurrentModelId: baselineCurrentModelId,
+                    appliedModelId: nil,
+                    setModelError: error.localizedDescription)
+            }
+        case .useAgentDefault:
+            // No setModel round-trip — keep the inherited/default model.
+            // Still write the debug artifact so a forked executor appears in
+            // the per-stage trace (it would have NO `session-new*.json` at
+            // all per `forkSession` — §9 / HIGH #1). `appliedModelId` is nil
+            // here; the artifact consumer distinguishes "applied=..." (the
+            // setModel was sent) from the no-op path by `decision`.
+            if let session = sessions[sessionHandle.id] {
+                debugLogger?.logSessionSetModel(
+                    sessionId: session.sessionId,
+                    stage: stageLabel,
+                    decision: "useAgentDefault",
+                    baselineCurrentModelId: baselineCurrentModelId,
+                    appliedModelId: nil,
+                    setModelError: nil)
+            }
+            DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) keeping agent default (selected=\(selectedModelId ?? "nil") decision=\(decision) baseline=\(baselineCurrentModelId ?? "nil"))")
+        }
     }
 
     public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
