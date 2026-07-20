@@ -20,8 +20,8 @@ enum WikiLinkMenuNSItems {
         actions: [WikiLinkAction]? = nil,
         store: WikiStoreModel,
         fileProvider: FileProviderFacade?,
-        addURL: ((String) -> Void)? = nil,
-        addBookmark: ((BookmarkTargetPickerContext) -> Void)? = nil
+        addURL: (@MainActor @Sendable (String) -> Void)? = nil,
+        addBookmark: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)? = nil
     ) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         for action in actions ?? WikiLinkMenuBuilder.actions(for: url) {
@@ -151,11 +151,19 @@ private final class ClosureMenuItemTarget: NSObject {
 }
 
 private struct AddURLHandlerKey: EnvironmentKey {
-    static let defaultValue: ((String) -> Void)? = nil
+    // Main-actor-isolated: the handler touches UI/store state (presents the
+    // "Add from URL" sheet via a @State property on the main-actor ContentView).
+    // @Sendable so the closure can be stored in EnvironmentValues and read deep
+    // in the reader tree without losing isolation.
+    static let defaultValue: (@MainActor @Sendable (String) -> Void)? = nil
 }
 
 private struct AddBookmarkHandlerKey: EnvironmentKey {
-    static let defaultValue: ((BookmarkTargetPickerContext) -> Void)? = nil
+    // Main-actor-isolated: the handler touches UI state (presents the bookmark
+    // picker sheet via a @State property on the main-actor ContentView).
+    // @Sendable so the closure can be stored in EnvironmentValues and read deep
+    // in the reader tree without losing isolation.
+    static let defaultValue: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)? = nil
 }
 
 extension EnvironmentValues {
@@ -168,7 +176,7 @@ extension EnvironmentValues {
     /// buttons) so external links can be ingested from any reader without
     /// threading a closure through every detail view. Mirrors how the reader
     /// already injects behavior via `\.openURL`.
-    var addURLHandler: ((String) -> Void)? {
+    var addURLHandler: (@MainActor @Sendable (String) -> Void)? {
         get { self[AddURLHandlerKey.self] }
         set { self[AddURLHandlerKey.self] = newValue }
     }
@@ -177,7 +185,7 @@ extension EnvironmentValues {
     /// `ContentView` and read deep in the reader tree via `WikiLinkMenuNSItems`,
     /// so a right-clicked internal wiki link can be filed into a bookmark folder
     /// without threading a closure through every detail view. Issue #188.
-    var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)? {
+    var addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)? {
         get { self[AddBookmarkHandlerKey.self] }
         set { self[AddBookmarkHandlerKey.self] = newValue }
     }

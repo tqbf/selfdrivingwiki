@@ -22,15 +22,18 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     /// inside collapsed folders are immediately visible).
     var forceExpandAll: Bool = false
     let fileProvider: FileProviderFacade
-    var onOpen: ([WikiSelection]) -> Void
-    var onOpenBackground: ([WikiSelection]) -> Void
-    var onGoToOriginal: (WikiSelection) -> Void
-    var onEdit: (String) -> Void
-    var onDelete: ([String]) -> Void
-    var onAddPage: (String?) -> Void
-    var onAddSource: (String?) -> Void
-    var onNewFolder: () -> Void
-    var onNewSubfolder: (String) -> Void
+    // All callbacks are main-actor-isolated: they touch the @MainActor
+    // WikiStoreModel or present UI. @Sendable so they can be captured by the
+    // NSViewControllerRepresentable bridge without losing isolation.
+    var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
+    var onEdit: (@MainActor @Sendable (String) -> Void)
+    var onDelete: (@MainActor @Sendable ([String]) -> Void)
+    var onAddPage: (@MainActor @Sendable (String?) -> Void)
+    var onAddSource: (@MainActor @Sendable (String?) -> Void)
+    var onNewFolder: (@MainActor @Sendable () -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (String) -> Void)
 
     func makeNSViewController(context: Context) -> BookmarksOutlineViewController {
         let vc = BookmarksOutlineViewController()
@@ -70,15 +73,15 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
 // MARK: - Callbacks
 
 struct BookmarksCallbacks {
-    var onOpen: ([WikiSelection]) -> Void
-    var onOpenBackground: ([WikiSelection]) -> Void
-    var onGoToOriginal: (WikiSelection) -> Void
-    var onEdit: (String) -> Void
-    var onDelete: ([String]) -> Void
-    var onAddPage: (String?) -> Void
-    var onAddSource: (String?) -> Void
-    var onNewFolder: () -> Void
-    var onNewSubfolder: (String) -> Void
+    var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
+    var onEdit: (@MainActor @Sendable (String) -> Void)
+    var onDelete: (@MainActor @Sendable ([String]) -> Void)
+    var onAddPage: (@MainActor @Sendable (String?) -> Void)
+    var onAddSource: (@MainActor @Sendable (String?) -> Void)
+    var onNewFolder: (@MainActor @Sendable () -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (String) -> Void)
 }
 
 /// Carries the right-clicked node + the effective selection (all selected if

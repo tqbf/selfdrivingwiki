@@ -367,8 +367,8 @@ final class WikiReaderWebView: WKWebView {
     var store: WikiStoreModel?
     var fileProvider: FileProviderFacade?
     var currentSelection: WikiSelection?
-    var addURLHandler: ((String) -> Void)?
-    var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)?
+    var addURLHandler: (@MainActor @Sendable (String) -> Void)?
+    var addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     /// The href under the cursor, kept current by the injected `mouseover`
     /// listener. Read synchronously in `willOpenMenu`. `fileprivate(set)` so the
     /// in-file message-handler proxy can write it without exposing a public setter.
@@ -888,8 +888,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
     /// `updateNSView` (the Coordinator consumes + applies it once the page loads).
     let anchorVersion: Int
     @Binding var isLoading: Bool
-    let addURLHandler: ((String) -> Void)?
-    let addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)?
+    let addURLHandler: (@MainActor @Sendable (String) -> Void)?
+    let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
