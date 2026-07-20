@@ -136,11 +136,6 @@ struct AgentsSettingsView: View {
             } else {
                 List(config.providers, selection: $selectedProviderID) { provider in
                     providerRow(provider)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            selectedProviderID = provider.id
-                            editingProvider = provider
-                        }
                 }
                 .frame(minHeight: 160)
                 .listStyle(.inset)
@@ -182,7 +177,7 @@ struct AgentsSettingsView: View {
         } header: {
             Text("Providers")
         } footer: {
-            Text("Double-click a provider to edit its command, environment, API key, and models.")
+            Text("Select a provider and click Edit… to edit its command, environment, API key, and models.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
