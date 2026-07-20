@@ -20,6 +20,7 @@ struct AddContextPicker: View {
     @State private var isPresented = false
     @State private var searchText = ""
     @State private var hoveredID: String?
+    @State private var isHovered = false
 
     /// Cap the unfiltered list so a large wiki doesn't render thousands of rows
     /// before the user has typed anything to narrow it.
@@ -31,10 +32,18 @@ struct AddContextPicker: View {
         } label: {
             Image(systemName: "plus")
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+                .padding(.horizontal, -2)
+                .padding(.vertical, -2)
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
         .buttonStyle(.borderless)
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             popoverContent

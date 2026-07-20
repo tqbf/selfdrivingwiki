@@ -48,6 +48,9 @@ struct ProviderSelector: View {
     /// The row currently under the pointer (for the hover highlight).
     @State private var hoveredRowID: String?
 
+    /// Whether the trigger chip is currently under the pointer.
+    @State private var isHovered = false
+
     @Environment(\.openSettings) private var openSettings
 
     init(launcher: AgentLauncher) {
@@ -320,22 +323,31 @@ struct ProviderSelector: View {
 
     // MARK: - Trigger
 
-    /// The compact trigger: glyph + "Provider · model" + chevron. `.caption`
-    /// type + secondary fill so it reads as an auxiliary affordance under the
-    /// composer, not a primary control. The model segment reflects the
-    /// per-provider selection, or "default" when none is set.
+    /// The compact trigger: glyph + "Provider · model" + chevron. `.callout`
+    /// type + primary fill so it reads as a real affordance under the
+    /// composer. The model segment reflects the per-provider selection, or
+    /// "default" when none is set. A subtle hover bubble (matching the
+    /// popover-row idiom) signals clickability.
     private var trigger: some View {
         HStack(spacing: 4) {
             Image(systemName: glyph(for: current))
                 .foregroundStyle(Color.blue)
             Text(triggerLabel)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Image(systemName: "chevron.up.chevron.down")
                 .imageScale(.small)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.primary)
         }
         .font(.callout)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+                .padding(.horizontal, -4)
+                .padding(.vertical, -2)
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
     }
 
     /// "Provider · model". For ACP providers the model is the user's selection
