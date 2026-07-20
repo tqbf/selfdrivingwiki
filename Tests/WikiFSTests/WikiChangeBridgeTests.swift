@@ -173,7 +173,7 @@ struct WikiChangeBridgeTests {
 
         // No crash is the main assertion — the bridge handled a non-matching
         // wiki id gracefully (FP was signaled, no bus was poked).
-        #expect(true)
+        #expect(Bool(true))
     }
 }
 
