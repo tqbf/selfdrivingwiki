@@ -28,7 +28,7 @@ import WikiFSCore
 /// disambiguation, the `recoveryRef.cancel()` placement) is validated manually
 /// (§7c in the plan: MV-1 normal >3s turn + MV-2 #615 repro + MV-3 stopAgent).
 /// Flagged as Risks R1/R2 in the plan.
-@Suite struct ACPTurnRecoveryTests {
+@Suite(.serialized, .timeLimit(.minutes(2))) struct ACPTurnRecoveryTests {
 
     // MARK: - Test (a): grace timeout fires → recovery path
 

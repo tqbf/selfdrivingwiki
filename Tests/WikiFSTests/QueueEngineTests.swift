@@ -9,7 +9,7 @@ import WikiFSCore
 /// These tests verify scheduling, capacity limits, pause/halt semantics,
 /// chained-item completion, event stream contents, and rehydration — all
 /// with injectable fake workers (no real extraction/ingestion runs).
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct QueueEngineTests {
 
     // MARK: - Test helpers
