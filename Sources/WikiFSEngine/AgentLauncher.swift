@@ -162,15 +162,6 @@ public final class AgentLauncher {
     /// when no run has started or the folder couldn't be created. Survives
     /// `finish()` so the UI can reveal it after the run completes.
     public private(set) var debugFolderURL: URL?
-    /// Per-chat in-memory map of `(logFileURL, debugFolderURL)` captured at
-    /// spawn commit in `startInteractiveQuery`. Lets the chat detail toolbar
-    /// reveal a chat's debug folder after the live session ends or the chat is
-    /// reopened from history (same app session only — cleared on restart,
-    /// mirroring ingestion's `QueueActivityTracker` lifetime). Keyed by chatID
-    /// string (the `PageID.rawValue` passed to `startInteractiveQuery`).
-    /// No file-provider emission — paths are read-only metadata, not store
-    /// mutations (the #129 `mutate()` rule does not apply to `AgentLauncher`).
-    public private(set) var chatLogPaths: [String: (log: URL?, debug: URL?)] = [:]
     /// The wall-clock start time of the current/last run, captured at spawn
     /// commit so `summary.json`'s duration is accurate even if `runStartedAt`
     /// (set inside `setGenerating(true)`) is reset.nil when no run has started.
@@ -286,19 +277,56 @@ public final class AgentLauncher {
     /// time; tests/the daemon default to nil (no deny rule emitted).
     @ObservationIgnored public var pdf2mdScriptPathResolver: () -> String? = { nil }
 
-    /// Returns the persisted debug-folder URL for a chat that ran during this
-    /// app session, or nil if the chat never ran (or ran before this launch).
-    /// Reads from `chatLogPaths`, the in-memory map populated at spawn commit
-    /// in `startInteractiveQuery`. Mirrors `QueueActivityTracker.debugURL(for:)`.
+    /// Returns the chat's most-recent run's debug-folder URL by resolving from
+    /// disk: `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/<latest>/debug/`.
+    /// Pure — no in-memory state — so the path resolves correctly across app
+    /// restarts. Previously a chatID→folder map was kept in memory and cleared
+    /// on relaunch, leaving chats with no way to find their on-disk debug logs
+    /// after a restart. Run timestamps are RFC 3339 (UTC, milliseconds), so
+    /// lexicographic sort = chronological order — "latest" is `max(runNames)`.
+    /// Returns nil when the chat has never run here, or its `runs/` directory
+    /// is empty / missing. Mirrors `QueueActivityTracker.debugURL(for:)`.
     public func debugFolderURL(forChat id: String) -> URL? {
-        chatLogPaths[id]?.debug
+        guard let latest = Self.latestRunDirectory(for: id) else { return nil }
+        return latest.appendingPathComponent("debug", isDirectory: true)
     }
 
-    /// Returns the persisted run-log URL for a chat that ran during this app
-    /// session, or nil if the chat never ran. Companion to
-    /// `debugFolderURL(forChat:)`.
+    /// Returns the chat's most-recent run's `run.jsonl` log file by resolving
+    /// from disk: `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/<latest>/run.jsonl`.
+    /// Pure — companion to `debugFolderURL(forChat:)`.
     public func logFileURL(forChat id: String) -> URL? {
-        chatLogPaths[id]?.log
+        guard let latest = Self.latestRunDirectory(for: id) else { return nil }
+        return latest.appendingPathComponent("run.jsonl", isDirectory: false)
+    }
+
+    /// Resolve `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/`. Returns nil
+    /// only if the Caches directory itself can't be resolved (very rare). The
+    /// `runs/` subdirectory may or may not exist on disk yet — callers handle
+    /// the not-yet-spawned case via `contentsOfDirectory` returning nil.
+    private static func chatRunsDirectory(for chatID: String) -> URL? {
+        guard let base = FileManager.default
+            .urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return base
+            .appendingPathComponent("Self Driving Wiki-agent", isDirectory: true)
+            .appendingPathComponent(chatID, isDirectory: true)
+            .appendingPathComponent("runs", isDirectory: true)
+    }
+
+    /// Resolve the most-recent timestamped run subfolder under
+    /// `<chatULID>/runs/`, or nil if no runs exist. RFC 3339 timestamps sort
+    /// lexicographically, so "latest" is `max(runNames)`. `try?` is correct
+    /// here — a non-existent `runs/` directory simply means the chat has never
+    /// run, which is the nil case the callers already handle.
+    private static func latestRunDirectory(for chatID: String) -> URL? {
+        guard let runsDir = chatRunsDirectory(for: chatID),
+              let runNames = try? FileManager.default.contentsOfDirectory(atPath: runsDir.path),
+              !runNames.isEmpty else {
+            return nil
+        }
+        let latest = runNames.sorted().last!
+        return runsDir.appendingPathComponent(latest, isDirectory: true)
     }
 
     /// Read the persisted provider config (loads + seeds on first run). The
@@ -2262,7 +2290,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory() else {
+        guard let scratch = makeScratchDirectory(chatID: chatID) else {
             preflightError = "Could not create a scratch working directory for the agent."
             return
         }
@@ -2313,15 +2341,11 @@ public final class AgentLauncher {
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
         activeChatID = chatID
-        // #671: capture (logFileURL, debugFolderURL) under chatID so the chat
-        // detail toolbar can reveal a chat's debug folder after the live session
-        // ends or the chat is reopened from history (same app session only —
-        // mirroring ingestion's `QueueActivityTracker` in-memory lifetime).
-        // Placed right after `activeChatID = chatID` and after `openLogFiles`
-        // (line above) so the binding + paths land atomically with the live flip.
-        if let chatID {
-            chatLogPaths[chatID] = (logFileURL, debugFolderURL)
-        }
+        // #681: the chat's debug-folder path is now DERIVED from chatID at read
+        // time (`debugFolderURL(forChat:)` resolves `<chatULID>/runs/<latest>/`),
+        // so no in-memory map needs to be captured here. The pure function works
+        // for in-progress, just-finished, and reopened-from-history chats alike —
+        // including after an app restart.
         // Pre-display the user's message so it appears instantly — don't make
         // the user wait ~4s for backend.start (spawn + initialize + newSession)
         // before seeing their own text. `sendInteractiveMessage` will skip its
@@ -3052,19 +3076,55 @@ public final class AgentLauncher {
     /// holds the per-run `run.jsonl` / `run.stderr.log` backend logs, so — unlike
     /// the previous version — we do NOT delete it on termination; it persists for
     /// post-hoc debugging via "Reveal log". Returns nil only if it can't be created.
-    private func makeScratchDirectory() -> URL? {
+    ///
+    /// Layout (per #681 chat-debug-folders):
+    /// - **Chat run** (`chatID` non-nil): `<base>/Self Driving Wiki-agent/<chatULID>/runs/<RFC3339>/`.
+    ///   The `<chatULID>/` parent is derivable from chatID alone, so
+    ///   `debugFolderURL(forChat:)` becomes a pure function — no DB persistence
+    ///   needed to find a chat's debug folder after a restart. `<RFC3339>/` is the
+    ///   timestamp of this specific spawn; lex sort of run timestamps = chronological,
+    ///   so "latest run" is `max(runNames)` and prior-run logs are preserved (a
+    ///   `continueChat` re-run creates a NEW timestamped sibling, no clobber).
+    /// - **Ingest/lint run** (`chatID` nil): `<base>/Self Driving Wiki-agent/<RFC3339>/`.
+    ///   These runs are one-shot — no stable identity to namespace under, and
+    ///   nothing to reopen from history — so they stay flat under the agent root.
+    ///   Same RFC 3339 timestamp format as chat runs: sortable + human-readable in
+    ///   Finder (vs the prior opaque UUIDv4 folder names, where `ls` order was
+    ///   meaningless and finding the latest run meant `stat`-ing every folder).
+    private func makeScratchDirectory(chatID: String? = nil) -> URL? {
         let base = FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let scratch = base
-            .appendingPathComponent("Self Driving Wiki-agent", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let agentRoot = base.appendingPathComponent("Self Driving Wiki-agent", isDirectory: true)
+        let timestamp = Self.rfc3339Timestamp(for: Date())
+        let scratch: URL
+        if let chatID {
+            scratch = agentRoot
+                .appendingPathComponent(chatID, isDirectory: true)
+                .appendingPathComponent("runs", isDirectory: true)
+                .appendingPathComponent(timestamp, isDirectory: true)
+        } else {
+            scratch = agentRoot.appendingPathComponent(timestamp, isDirectory: true)
+        }
         do {
             try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
             return scratch
         } catch {
             return nil
         }
+    }
+
+    /// RFC 3339 / ISO 8601 timestamp with millisecond precision, UTC. Used as
+    /// the run-folder name so lexicographic sort = chronological order —
+    /// "latest run" is `max(runNames)` with no `stat` needed. Milliseconds
+    /// (`.withFractionalSeconds`) disambiguate same-second spawns; the launch
+    /// queue serializes same-kind spawns anyway, so collisions are not a real
+    /// concern. `ISO8601DateFormatter` is Foundation's canonical RFC 3339
+    /// formatter (thread-safe, no locale drift).
+    private static func rfc3339Timestamp(for date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     // MARK: - Seatbelt sandbox

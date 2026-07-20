@@ -634,18 +634,25 @@ struct ChatView: View {
     /// The "Reveal Debug Folder" button. ALWAYS rendered when there is a
     /// `chatID` — previously the button was gated on
     /// `launcher.debugFolderURL(forChat:) ?? launcher.debugFolderURL`,
-    /// which is an in-memory map populated only at spawn commit. A persisted
-    /// chat reopened from history (that ran in a previous app session) had
-    /// no entry, so the button never appeared — the operator couldn't tell
-    /// the feature existed (Bug 2).
+    /// which read from an in-memory map populated only at spawn commit. A
+    /// persisted chat reopened from history (that ran in a previous app
+    /// session) had no entry, so the button never appeared — the operator
+    /// couldn't tell the feature existed (Bug 2, #671).
     ///
-    /// When the launcher has a debug URL for this chat (from the in-memory
-    /// `chatLogPaths` map, or the live session's `debugFolderURL` while a
-    /// run is in progress), the button is enabled and reveals the folder.
-    /// When there is no URL (a persisted chat that ran in a previous
-    /// session, or a chat whose run failed preflight), the button is
-    /// DISABLED with a help tooltip explaining the limitation — so the
-    /// feature is always discoverable.
+    /// #681 made `debugFolderURL(forChat:)` a pure function of chatID: it
+    /// resolves `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/<latest>/debug/`
+    /// from disk at read time. So a chat that ran in ANY prior session now
+    /// resolves correctly after restart — the only disabled case is a chat
+    /// that has never spawn-committed (no `<chatULID>/runs/` directory on
+    /// disk: a draft chat, or one whose preflight failed before scratch-dir
+    /// creation).
+    ///
+    /// When the launcher resolves a debug URL for this chat (from the
+    /// disk-derived pure function, with a fallback to the live session's
+    /// `debugFolderURL` while a spawn is in progress), the button is enabled
+    /// and reveals the folder. When there is no URL, the button is DISABLED
+    /// with a help tooltip explaining the limitation — so the feature is
+    /// always discoverable.
     @ViewBuilder
     private var revealDebugFolderButton: some View {
         if let chatID {
@@ -663,13 +670,14 @@ struct ChatView: View {
             if let debugURL {
                 NSWorkspace.shared.activateFileViewerSelecting([debugURL])
             } else {
-                // No debug URL for this chat — `chatLogPaths` is
-                // in-memory and only populated at spawn commit, so a
-                // chat that ran in a previous app session has no entry.
-                // Log so the click is visible in Console.app (the
-                // disabled state should already prevent this branch,
-                // but belt-and-suspenders).
-                DebugLog.agent("ChatView: no debug folder available for chat — id=\(chatID.rawValue) (not run in this app session)")
+                // No debug URL for this chat — no `<chatULID>/runs/`
+                // directory exists on disk. The chat was either created but
+                // never spawn-committed (draft / preflight failure), or the
+                // spawn's createDirectory hasn't completed yet (extremely
+                // brief; the disabled state should already prevent this).
+                // Log so the click is visible in Console.app (belt-and-
+                // suspenders).
+                DebugLog.agent("ChatView: no debug folder available for chat — id=\(chatID.rawValue) (no runs on disk)")
             }
         }
         .disabled(debugURL == nil)
@@ -686,7 +694,7 @@ struct ChatView: View {
         if debugURL != nil {
             return "Open the complete debug trace folder (ACP messages, permissions, usage)"
         }
-        return "Debug logs only available for chats run in this session"
+        return "No debug folder on disk for this chat"
     }
 
     // MARK: - Preflight-error banner (issue #613)
