@@ -28,6 +28,12 @@ public protocol QueueIngestionProvider: Sendable {
     /// - Parameters:
     ///   - wikiID: The wiki to ingest into.
     ///   - sourceIDs: The source IDs to ingest.
+    ///   - queueItemID: The queue item's stable ULID — used as the parent
+    ///     folder name for the run's scratch dir so retries of the same item
+    ///     share a namespace on disk
+    ///     (`<Caches>/Self Driving Wiki-agent/<id>/runs/<RFC3339>/`).
+    ///     Lets the Activity window's "Reveal Debug Folder" resolve by item
+    ///     ID even after an app restart (the latest run under `<id>/runs/`).
     ///   - onProgress: Called with progress lines (agent stdout/stderr) to
     ///     emit as `.progress` events.
     ///   - onTranscript: Called with each typed agent event for this item,
@@ -54,6 +60,7 @@ public protocol QueueIngestionProvider: Sendable {
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -66,6 +73,8 @@ public protocol QueueIngestionProvider: Sendable {
     ///
     /// - Parameters:
     ///   - wikiID: The wiki to lint.
+    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
+    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
     ///   - onProgress: Called with progress lines to emit as `.progress` events.
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
@@ -73,6 +82,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLint(
         wikiID: String,
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -87,6 +97,8 @@ public protocol QueueIngestionProvider: Sendable {
     /// - Parameters:
     ///   - wikiID: The wiki to lint.
     ///   - pageIDs: The page IDs to lint.
+    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
+    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
     ///   - onProgress: Called with progress lines to emit as `.progress` events.
     ///   - onTranscript: Called with each typed agent event for this item.
     ///   - onUsage: Called after the run with cumulative usage, if captured.
@@ -95,6 +107,7 @@ public protocol QueueIngestionProvider: Sendable {
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -247,6 +260,7 @@ struct QueueIngestionWorker: QueueWorker {
             try await provider.runLintPages(
                 wikiID: item.wikiID,
                 pageIDs: pageIDs,
+                queueItemID: item.id,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,
@@ -258,6 +272,7 @@ struct QueueIngestionWorker: QueueWorker {
             // lintPageIDs is non-nil but empty → whole-wiki lint.
             try await provider.runLint(
                 wikiID: item.wikiID,
+                queueItemID: item.id,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,
@@ -274,6 +289,7 @@ struct QueueIngestionWorker: QueueWorker {
             try await provider.runIngestion(
                 wikiID: item.wikiID,
                 sourceIDs: sourceIDs,
+                queueItemID: item.id,
                 onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
                 onTranscript: onTranscript,
                 onUsage: onUsage,

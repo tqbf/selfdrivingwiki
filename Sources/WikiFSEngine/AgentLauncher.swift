@@ -967,6 +967,7 @@ public final class AgentLauncher {
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
+        queueItemID: String? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
@@ -1068,7 +1069,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory() else {
+        guard let scratch = makeScratchDirectory(id: queueItemID) else {
             preflightError = "Could not create a scratch working directory for the agent."
             isRunning = false
             releaseGenerationSlot()
@@ -2290,7 +2291,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory(chatID: chatID) else {
+        guard let scratch = makeScratchDirectory(id: chatID) else {
             preflightError = "Could not create a scratch working directory for the agent."
             return
         }
@@ -3078,29 +3079,35 @@ public final class AgentLauncher {
     /// post-hoc debugging via "Reveal log". Returns nil only if it can't be created.
     ///
     /// Layout (per #681 chat-debug-folders):
-    /// - **Chat run** (`chatID` non-nil): `<base>/Self Driving Wiki-agent/<chatULID>/runs/<RFC3339>/`.
-    ///   The `<chatULID>/` parent is derivable from chatID alone, so
-    ///   `debugFolderURL(forChat:)` becomes a pure function — no DB persistence
-    ///   needed to find a chat's debug folder after a restart. `<RFC3339>/` is the
-    ///   timestamp of this specific spawn; lex sort of run timestamps = chronological,
-    ///   so "latest run" is `max(runNames)` and prior-run logs are preserved (a
-    ///   `continueChat` re-run creates a NEW timestamped sibling, no clobber).
-    /// - **Ingest/lint run** (`chatID` nil): `<base>/Self Driving Wiki-agent/<RFC3339>/`.
-    ///   These runs are one-shot — no stable identity to namespace under, and
-    ///   nothing to reopen from history — so they stay flat under the agent root.
-    ///   Same RFC 3339 timestamp format as chat runs: sortable + human-readable in
-    ///   Finder (vs the prior opaque UUIDv4 folder names, where `ls` order was
-    ///   meaningless and finding the latest run meant `stat`-ing every folder).
-    private func makeScratchDirectory(chatID: String? = nil) -> URL? {
+    /// `<base>/Self Driving Wiki-agent/<id>/runs/<RFC3339>/`
+    ///
+    /// - `<id>` is the stable run-namespace identifier: a chat ULID for chat runs
+    ///   (`startInteractiveQuery`) or a queue item ULID for ingest/lint runs
+    ///   (`run`). Both chats and queue items are retriable — a pub-sub-style
+    ///   retry creates a NEW timestamped sibling under the same `<id>/runs/`,
+    ///   so prior-run logs are preserved without clobber. Derivable from `<id>`
+    ///   alone across app restarts, so `debugFolderURL(forChat:)` (chat side)
+    ///   and `QueueActivityTracker.debugURL(for:)` (ingest/lint side, via
+    ///   rehydrated `queue_item_activity.debug_url`) resolve correctly without
+    ///   any in-memory map.
+    /// - `<RFC3339>` is the spawn timestamp (RFC 3339, UTC, milliseconds). Lex
+    ///   sort = chronological, so "latest run" is `max(runNames)` with no `stat`
+    ///   needed; also human-readable in Finder (vs opaque UUIDv4).
+    ///
+    /// The rare `id == nil` case (a non-queue, non-chat caller — currently only
+    /// legacy test paths via `AgentOperationRunner.run()`) falls back to the
+    /// flat `<agentRoot>/<RFC3339>/` layout: no stable identity to namespace
+    /// under, and nothing reopens it from history.
+    private func makeScratchDirectory(id: String? = nil) -> URL? {
         let base = FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let agentRoot = base.appendingPathComponent("Self Driving Wiki-agent", isDirectory: true)
         let timestamp = Self.rfc3339Timestamp(for: Date())
         let scratch: URL
-        if let chatID {
+        if let id {
             scratch = agentRoot
-                .appendingPathComponent(chatID, isDirectory: true)
+                .appendingPathComponent(id, isDirectory: true)
                 .appendingPathComponent("runs", isDirectory: true)
                 .appendingPathComponent(timestamp, isDirectory: true)
         } else {
