@@ -242,6 +242,49 @@ launch.
 
 ---
 
+## 2026-07-20 — Fix swift CI: test hang + cache eviction (branch `ci-speedup`, PR #732)
+
+**Problem.** The swift CI job took 27-45 min and FAILED every run because of two
+independent confirmed root causes:
+
+1. **Test hang (P0-2, #664).** A `CheckedContinuation` test never resumes under
+   Swift Testing's default parallel pool, the cooperative pool is exhausted, and
+   the run is killed at the 30-min `timeout-minutes`.
+2. **Cache eviction (P0-1).** The cache key included `hashFiles('Sources/**/*.swift')`,
+   so ~25 PR branches produced one cache entry per commit, blew past GitHub's
+   10 GB/repo LRU, and every run evicted + cold-built MLX C++ (~1374 units).
+
+**Approach** (plan: `plans/ci-speedup.md`).
+
+- P0-2: added `.serialized, .timeLimit(.minutes(2))` to the four unguarded
+  CheckedContinuation suites, mirroring the proven `ACPPermissionTimeoutTests`
+  fix (#664). All four use `CheckedContinuation` + real `Task`s, so all four
+  got the full treatment (not just `.timeLimit`):
+  - `QueueExtractionTests` (was bare `@Suite`)
+  - `ACPTurnRecoveryTests` (was bare `@Suite`)
+  - `ACPWiringTests` (was bare `@Suite`)
+  - `QueueEngineTests` (was `.serialized` — added `.timeLimit`)
+- P0-1: keyed the cache on `Package.resolved` ONLY (dropped the Sources hash,
+  removed `restore-keys`). One entry per dep set stops the eviction.
+- P1-3/P1-4: removed the fragile `if xcrun swift build 2>/dev/null; else swift
+  build` probe (the `2>/dev/null` swallows failure reasons; the `else` could
+  trigger a second full recompile). The "Select Xcode" step already does
+  `sudo xcode-select -s`, so one toolchain works directly. Test step is now
+  `xcrun swift test --parallel` — safe because of P0-2's per-suite guards.
+
+**Verification.** Locally the four patched suites all pass cleanly when they
+get CPU time: `ACPWiringTests` 4.6s, `ACPTurnRecoveryTests` 5.2s,
+`QueueExtractionTests` 6.3s, `QueueEngineTests` 9.4s (reference
+`ACPPermissionTimeoutTests` 5.6s). Per the plan, **the PR's own CI run is the
+proof** — the headline signal is that it PASSES and finishes, not the 30-min
+timeout. The first run after the cache-key change may still be slower as the
+new `Package.resolved`-keyed cache populates.
+
+**Out of scope.** Two other WKWebView suites (`YouTubeEmbedWebViewTests`,
+`QuoteHighlightWebViewTests`) have `.timeLimit(.minutes(5))` but no `.serialized`
+and are NOT named in the plan; left untouched. If the PR's CI run still hangs,
+those are the next suspects.
+
 ## 2026-07-20 — Generalized `![[X]]` embed: pages + non-media sources (branch `page-embeds`)
 
 **Problem.** `![[source:…]]` embeds worked for inline media (image / video /
