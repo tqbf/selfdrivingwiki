@@ -396,6 +396,61 @@ public final class AgentLauncher {
         return updated
     }
 
+    // MARK: - Per-operation provider assignment (per-op-provider)
+
+    /// Set + persist the chat operation's pinned provider id, then return the
+    /// new config so the Settings UI can update its bound state in one step.
+    /// A nil/empty `id` clears the pin (chat falls back to the default provider
+    /// — the legacy behavior). The next `startInteractiveQuery` reads this,
+    /// so the change applies on the next chat with no launcher change.
+    /// Mirrors `setDefaultProvider(id:)`'s load→mutate→save shape + error path.
+    @discardableResult
+    public func setChatProvider(id: String?) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingChatProvider(id: id)
+        DebugLog.store("setChatProvider: id=\(id ?? "nil") → save")
+        do {
+            try updated.save(to: dir)
+        } catch {
+            // The user's per-op provider assignment silently reverts on next
+            // launch if this write throws; log so it's visible in Console.app.
+            DebugLog.store("AgentLauncher.setChatProvider save failed (id=\(id ?? "nil")): \(error)")
+        }
+        return updated
+    }
+
+    /// Set + persist the ingest operation's pinned provider id. Same shape as
+    /// `setChatProvider(id:)`. The next `runACPIngestPlannerExecutors` (large
+    /// sources) OR single-session `run()` for `.ingest` reads this.
+    @discardableResult
+    public func setIngestProvider(id: String?) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingIngestProvider(id: id)
+        DebugLog.store("setIngestProvider: id=\(id ?? "nil") → save")
+        do {
+            try updated.save(to: dir)
+        } catch {
+            DebugLog.store("AgentLauncher.setIngestProvider save failed (id=\(id ?? "nil")): \(error)")
+        }
+        return updated
+    }
+
+    /// Set + persist the lint operation's pinned provider id. Same shape as
+    /// `setChatProvider(id:)`. The next single-session `run()` for `.lint` /
+    /// `.lintPage` reads this.
+    @discardableResult
+    public func setLintProvider(id: String?) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().settingLintProvider(id: id)
+        DebugLog.store("setLintProvider: id=\(id ?? "nil") → save")
+        do {
+            try updated.save(to: dir)
+        } catch {
+            DebugLog.store("AgentLauncher.setLintProvider save failed (id=\(id ?? "nil")): \(error)")
+        }
+        return updated
+    }
+
     /// Atomically set the default provider AND a per-provider model selection
     /// in ONE load→mutate→save cycle (no race between two separate writes).
     /// This is the composer's "pick a model" path: choosing a model implies
@@ -1053,7 +1108,23 @@ public final class AgentLauncher {
         // #324: the launcher reads `agent-providers.json`, picks the default
         // (or selected) provider, and resolves its PATH command + Keychain key
         // into providerHints. The app is ACP-only.
-        let provider = resolveSelectedProvider()
+        //
+        // per-op-provider: each operation (chat / ingest / lint) resolves its
+        // OWN provider — falling back to the default provider when the pin is
+        // nil OR points at a provider that's been deleted. `permissionKind` was
+        // computed just above from the same `request` enum, so it reflects the
+        // same operation. (`.chat` is reachable here only if a `.query` request
+        // hits `run()` — the live interactive path is `startInteractiveQuery`,
+        // which has its own per-op provider resolution; this branch is a
+        // defensive mirror so a future code path that routes `.query` through
+        // `run()` would still pick the right provider.)
+        let config = providersConfig()
+        let provider: AgentProvider
+        switch permissionKind {
+        case .chat:   provider = config.providerForChat()
+        case .ingest: provider = config.providerForIngest()
+        case .lint:   provider = config.providerForLint()
+        }
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
 
         // Resolve the provider's spawn command (PATH-resolved because the
@@ -1330,7 +1401,13 @@ public final class AgentLauncher {
         // again (which would orphan the ACPBackend actor `run()` built).
 
         // Resolve the ONE provider + spawn + hints all three phases will use.
-        let provider = resolveSelectedProvider()
+        //
+        // per-op-provider: ingest uses its own pinned provider when set,
+        // falling back to the default provider when the pin is nil OR points at
+        // a provider that's been deleted from the config. Mirrors
+        // `startInteractiveQuery`'s chat resolution + `run()`'s per-kind
+        // resolution.
+        let provider = providersConfig().providerForIngest()
         let modelId = providersConfig().selectedModelId(forProvider: provider.id)
         guard let spawn = resolveACPProviderSpawn(provider) else {
             DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
@@ -2252,7 +2329,11 @@ public final class AgentLauncher {
 
         // #324: the launcher reads `agent-providers.json` and picks the
         // default (or selected) provider. The app is ACP-only.
-        let provider = resolveSelectedProvider()
+        //
+        // per-op-provider: chat uses its own pinned provider when set, falling
+        // back to the default provider when the pin is nil OR points at a
+        // provider that's been deleted from the config.
+        let provider = providersConfig().providerForChat()
         let resolvedSelectedModel = providersConfig().selectedModelId(forProvider: provider.id)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
 

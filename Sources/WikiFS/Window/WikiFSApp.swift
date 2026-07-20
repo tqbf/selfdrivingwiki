@@ -514,7 +514,7 @@ struct WikiFSApp: App {
                 // the window height without scrolling). The `@AppStorage`
                 // keys are view-independent so they work unchanged in a
                 // separate view.
-                PermissionsSettingsView()
+                PermissionsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.permissions)
                     .tabItem { Label("Permissions", systemImage: "lock.shield") }
             }
