@@ -314,19 +314,11 @@ struct ActivityWindowView: View {
                 copyTranscript(for: item)
             }
         }
-        let logURL = activityTracker.logURL(for: item.id)
         let debugURL = activityTracker.debugURL(for: item.id)
-        if logURL != nil || debugURL != nil {
+        if let debugURL {
             Divider()
-            if let logURL {
-                Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
-                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
-                }
-            }
-            if let debugURL {
-                Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-                    NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-                }
+            Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
             }
         }
         switch item.state {
@@ -713,36 +705,24 @@ struct ActivityWindowView: View {
         openWindowBridge?.openWiki?(wikiID)
     }
 
-    // MARK: - Reveal log / debug folder
+    // MARK: - Reveal debug folder
 
-    /// A compact menu offering "Reveal Log" and "Reveal Debug Folder" for the
-    /// selected item. Only shown when at least one path is available — items
-    /// that never spawned an agent (preflight failure, cancelled before run)
-    /// won't have either. Mirrors the ChatView's activity menu.
+    /// A compact button revealing the run's debug folder in Finder. Only
+    /// shown when a debug folder is available — items that never spawned an
+    /// agent (preflight failure, cancelled before run) won't have one. The
+    /// debug folder contains the complete trace (ACP messages, permissions,
+    /// usage, stderr.log), which supersedes the per-run `run.jsonl` log that
+    /// used to be exposed separately. Mirrors the ChatView's debug button.
     @ViewBuilder
     private func revealMenu(for item: QueueItem) -> some View {
-        let logURL = activityTracker.logURL(for: item.id)
-        let debugURL = activityTracker.debugURL(for: item.id)
-        if logURL != nil || debugURL != nil {
-            Menu {
-                if let logURL {
-                    Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
-                        NSWorkspace.shared.activateFileViewerSelecting([logURL])
-                    }
-                    .help("Reveal the lightweight run.jsonl log in Finder")
-                }
-                if let debugURL {
-                    Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-                        NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-                    }
-                    .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
-                }
+        if let debugURL = activityTracker.debugURL(for: item.id) {
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
             } label: {
-                Label("Reveal", systemImage: "ellipsis.circle")
+                Label("Reveal Debug Folder", systemImage: "folder.badge.gearshape")
             }
             .labelStyle(.iconOnly)
-            .menuStyle(.borderlessButton)
-            .help("Reveal log files in Finder")
+            .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
         }
     }
 
