@@ -199,26 +199,35 @@ import WikiFSCore
     }
 
     /// Mirrors `AgentLauncherSpawnRefusalTests.makeRefusingLauncher()`: a
-    /// launcher whose `providersConfig()` returns a fresh config with the
-    /// default provider (opencode) having NO `selectedModelId`. The
+    /// launcher whose `providersConfig()` returns a config with the default
+    /// provider (opencode) having NO `selectedModelId`. The
     /// `SpawnModelGuard.validate` inside `startInteractiveQuery` therefore
     /// sets `preflightError` and returns early — no real subprocess spawned.
+    ///
+    /// per-op-provider: `startInteractiveQuery` now resolves its provider via
+    /// `providersConfig().providerForChat()` (NOT `resolveSelectedProvider`).
+    /// So we pre-write a config whose DEFAULT provider is opencode with NO
+    /// selected model — `providerForChat()` returns opencode (no chat pin →
+    /// fallback to default) and the guard fires on the nil-model state.
     private func makeRefusingLauncher() throws -> AgentLauncher {
         let launcher = AgentLauncher()
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("preflight-banner-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        launcher.resolveProvidersContainerDirectory = { tmp }
+        // Pre-write a config whose DEFAULT provider is opencode with no model.
         // #663: `.opencodeDefault` was deleted; built inline.
-        launcher.resolveSelectedProvider = {
-            AgentProvider(
-                id: "opencode",
-                label: "OpenCode",
-                command: ["opencode", "acp"],
-                env: [:],
-                enabled: true,
-                isDefault: false)
-        }
+        var opencodeDefault = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
+        opencodeDefault.isDefault = true
+        let configNoModel = AgentProvidersConfig(
+            providers: [opencodeDefault])
+        try configNoModel.save(to: tmp)
+        launcher.resolveProvidersContainerDirectory = { tmp }
         return launcher
     }
 }

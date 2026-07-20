@@ -20,36 +20,43 @@ import WikiFSCore
 @MainActor
 struct AgentLauncherSpawnRefusalTests {
 
-    /// Build a launcher whose `providersConfig()` returns the freshly-seeded
-    /// config from a throwaway tmp dir (so claude-acp has "sonnet", but the
-    /// test's chosen provider — opencode — has NO selected model). The guard
-    /// therefore refuses spawn on opencode.
+    /// Build a launcher whose chat path resolves to a provider with NO
+    /// `selectedModelId`, so the `SpawnModelGuard` refuses to spawn.
+    ///
+    /// per-op-provider: the chat path now resolves its provider via
+    /// `providersConfig().providerForChat()` (NOT via the injected
+    /// `resolveSelectedProvider` seam). So the no-model scenario is set up by
+    /// pre-writing an `agent-providers.json` whose DEFAULT provider is
+    /// opencode (no `chatProviderId` pin → fallback to default), with no
+    /// selectedModelIds entry for opencode. The guard fires on that nil-model
+    /// state.
     private func makeRefusingLauncher() throws -> AgentLauncher {
         let launcher = AgentLauncher()
-        // Point `providersConfig()` at a fresh tmp dir so the seeded default
-        // ("claude-acp": "sonnet") is loaded — but nothing is set for opencode.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("spawn-refusal-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         // NOTE: tmp is intentionally NOT cleaned up here — `loadOrSeed` writes
         // a seed file into it on first read, and we don't want a follow-up
         // `providersConfig()` call to re-seed mid-test. The OS reaps temp.
+
+        // Pre-write a config whose DEFAULT provider is opencode (constructed
+        // inline — #663: the `.opencodeDefault` static was deleted alongside
+        // the Hermes/OpenCode seeds; the catalog-driven `AddProviderSheet`
+        // replaced them, so test fixtures build literals). No selectedModelIds
+        // entry for opencode → the guard fires on the nil-model state.
+        var opencodeDefault = AgentProvider(
+            id: "opencode",
+            label: "OpenCode",
+            command: ["opencode", "acp"],
+            env: [:],
+            enabled: true,
+            isDefault: false)
+        opencodeDefault.isDefault = true
+        let configNoModel = AgentProvidersConfig(
+            providers: [opencodeDefault])
+        try configNoModel.save(to: tmp)
+
         launcher.resolveProvidersContainerDirectory = { tmp }
-        // Override the provider so we exercise opencode's nil-modelId state,
-        // independent of whatever the user happens to have configured as
-        // default in the real App Group container. Constructed inline (#663:
-        // the `.opencodeDefault` static was deleted alongside the Hermes/
-        // OpenCode seeds — the catalog-driven `AddProviderSheet` replaced
-        // them, so test fixtures build literals).
-        launcher.resolveSelectedProvider = {
-            AgentProvider(
-                id: "opencode",
-                label: "OpenCode",
-                command: ["opencode", "acp"],
-                env: [:],
-                enabled: true,
-                isDefault: false)
-        }
         return launcher
     }
 
@@ -100,6 +107,14 @@ struct AgentLauncherSpawnRefusalTests {
         // guard itself. This test pins the LAUNCHER wiring: that a
         // model-selected config produces a nil guard result the launcher
         // would use.
+        //
+        // per-op-provider: the chat path now resolves via
+        // `providersConfig().providerForChat()` (the per-op resolver, with
+        // fall-back to default). We pre-write opencode-as-default with a
+        // selected model — `providerForChat()` returns opencode (no chat pin
+        // → fallback to default) and the model resolver returns the seeded
+        // model id — and feed both into the guard exactly as
+        // `startInteractiveQuery` does.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("spawn-allowed-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -124,10 +139,11 @@ struct AgentLauncherSpawnRefusalTests {
 
         let launcher = AgentLauncher()
         launcher.resolveProvidersContainerDirectory = { tmp }
-        launcher.resolveSelectedProvider = { opencodeDefault }
 
-        // Read what the chat path would resolve: provider + its modelId.
-        let provider = launcher.resolveSelectedProvider()
+        // Read what the chat path resolves via the per-op seam. A nil
+        // `chatProviderId` falls back to the default provider (opencode), and
+        // its selected model is "glm-4.7" — both fed into the guard.
+        let provider = launcher.providersConfig().providerForChat()
         let modelId = launcher.providersConfig().selectedModelId(forProvider: provider.id)
         // Pin the chat path's guard input contract — what
         // `startInteractiveQuery` actually feeds into `SpawnModelGuard.validate`.

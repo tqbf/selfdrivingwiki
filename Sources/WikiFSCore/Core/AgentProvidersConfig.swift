@@ -59,12 +59,29 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `agent-providers.json` without this key decodes to `[:]`.
     public var maxConcurrent: [String: Int]
 
+    /// Per-operation default provider id overrides (issue: per-op-provider).
+    /// When `nil`, the operation falls back to `defaultProvider` (the provider
+    /// marked `isDefault == true`). When set to an id that no longer matches
+    /// any provider (the provider was deleted), the resolver ALSO falls back
+    /// to `defaultProvider` — there are no dangling references.
+    ///
+    /// `nil` is the legacy state: a pre-existing `agent-providers.json` without
+    /// these keys decodes to all-`nil`, so every operation routes to
+    /// `defaultProvider` exactly as before — no migration, no behavior change
+    /// for existing users.
+    public var chatProviderId: String?
+    public var ingestProviderId: String?
+    public var lintProviderId: String?
+
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
         selectedModelIds: [String: String] = [:],
         favoriteModelIds: [String: [String]] = [:],
-        maxConcurrent: [String: Int] = [:]
+        maxConcurrent: [String: Int] = [:],
+        chatProviderId: String? = nil,
+        ingestProviderId: String? = nil,
+        lintProviderId: String? = nil
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
         self.providers = normalizedProviders
@@ -72,6 +89,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.selectedModelIds = selectedModelIds
         self.favoriteModelIds = favoriteModelIds
         self.maxConcurrent = maxConcurrent
+        self.chatProviderId = chatProviderId
+        self.ingestProviderId = ingestProviderId
+        self.lintProviderId = lintProviderId
     }
 
     // MARK: - Coding (forward-compatible: old files without model caches decode)
@@ -82,6 +102,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         case selectedModelIds
         case favoriteModelIds
         case maxConcurrent
+        case chatProviderId
+        case ingestProviderId
+        case lintProviderId
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,6 +120,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.favoriteModelIds = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelIds) ?? [:]
         // Forward-compatible: pre-Phase-2 files have no `maxConcurrent` key.
         self.maxConcurrent = try c.decodeIfPresent([String: Int].self, forKey: .maxConcurrent) ?? [:]
+        // Forward-compatible: pre-per-op-provider files have no per-operation
+        // provider id keys. nil → "use defaultProvider" = legacy behavior.
+        self.chatProviderId = try c.decodeIfPresent(String.self, forKey: .chatProviderId)
+        self.ingestProviderId = try c.decodeIfPresent(String.self, forKey: .ingestProviderId)
+        self.lintProviderId = try c.decodeIfPresent(String.self, forKey: .lintProviderId)
         // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
         // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
         // skips it. The per-stage assignment feature was removed (#604): every
@@ -165,6 +193,87 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         providers.first(where: { $0.id == id })
     }
 
+    // MARK: - Per-operation provider resolution (per-op-provider)
+
+    /// The provider to launch for **chat** (`startInteractiveQuery`). When
+    /// `chatProviderId` is nil OR no longer matches a configured provider (the
+    /// provider was deleted), falls back to `defaultProvider` — there are no
+    /// dangling references. PURE so it is unit-tested directly; called fresh at
+    /// spawn time so a Settings change applies on the next chat.
+    public func providerForChat() -> AgentProvider {
+        chatProviderId.flatMap { provider(id: $0) } ?? defaultProvider
+    }
+
+    /// The provider to launch for **ingest** (single-session `run()` for the
+    /// `.ingest` request + the multi-phase `runACPIngestPlannerExecutors`
+    /// path). Same fall-back semantics as `providerForChat()`.
+    public func providerForIngest() -> AgentProvider {
+        ingestProviderId.flatMap { provider(id: $0) } ?? defaultProvider
+    }
+
+    /// The provider to launch for **lint** (`run()` for `.lint` / `.lintPage`
+    /// requests). Same fall-back semantics as `providerForChat()`.
+    public func providerForLint() -> AgentProvider {
+        lintProviderId.flatMap { provider(id: $0) } ?? defaultProvider
+    }
+
+    /// A PURE mutator: returns a NEW config with the chat operation pinned to
+    /// `id` (or un-pinned when `id` is nil/empty, restoring the legacy "use
+    /// defaultProvider" behavior). Persists via the launcher wrapper
+    /// `setChatProvider(id:)`; the Settings UI binds to it directly. NEVER
+    /// validates that `id` exists — the resolver falls back to
+    /// `defaultProvider` when a pinned id is later deleted, so accepting an
+    /// unknown id here is safe and means a re-add of the same id later just
+    /// starts working again. Mirrors `settingDefault(id:)`'s carry-everything-
+    /// else-through shape.
+    public func settingChatProvider(id: String?) -> AgentProvidersConfig {
+        let normalized = (id?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        DebugLog.store("AgentProvidersConfig.settingChatProvider: id=\(normalized ?? "nil")")
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            chatProviderId: normalized,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: lintProviderId)
+    }
+
+    /// A PURE mutator: returns a NEW config with the ingest operation pinned
+    /// to `id` (or un-pinned when nil/empty). See `settingChatProvider(id:)`
+    /// for the semantics.
+    public func settingIngestProvider(id: String?) -> AgentProvidersConfig {
+        let normalized = (id?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        DebugLog.store("AgentProvidersConfig.settingIngestProvider: id=\(normalized ?? "nil")")
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: normalized,
+            lintProviderId: lintProviderId)
+    }
+
+    /// A PURE mutator: returns a NEW config with the lint operation pinned
+    /// to `id` (or un-pinned when nil/empty). See `settingChatProvider(id:)`
+    /// for the semantics.
+    public func settingLintProvider(id: String?) -> AgentProvidersConfig {
+        let normalized = (id?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        DebugLog.store("AgentProvidersConfig.settingLintProvider: id=\(normalized ?? "nil")")
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: normalized)
+    }
+
     /// Mark the provider with `id` as the default, demoting every other provider
     /// (the single-default invariant — exactly one default after this returns).
     /// PURE + returns a NEW config: callers (the Settings UI, the composer's
@@ -180,14 +289,21 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         for i in updated.indices {
             updated[i].isDefault = (updated[i].id == id)
         }
-        // Carry over the per-provider model caches + selections (don't wipe them
-        // when only the default provider changes).
+        // Carry over the per-provider model caches + selections + the
+        // per-operation provider id overrides (don't wipe them when only the
+        // default provider changes). The per-op overrides are NOT re-pointed:
+        // if chat was pinned to id="claude-acp" and the user changes the
+        // default to "gemini", the chat override still routes chat to
+        // claude-acp — that is the whole point of an explicit per-op override.
         return AgentProvidersConfig(
             providers: updated,
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            maxConcurrent: maxConcurrent)
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: lintProviderId)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -233,7 +349,10 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: cache,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favoriteModelIds,
-            maxConcurrent: maxConcurrent)
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: lintProviderId)
     }
 
     /// A PURE mutator: returns a NEW config with the user's model selection for
@@ -253,7 +372,10 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: providerModels,
             selectedModelIds: selections,
             favoriteModelIds: favoriteModelIds,
-            maxConcurrent: maxConcurrent)
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: lintProviderId)
     }
 
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
@@ -290,7 +412,10 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             providerModels: providerModels,
             selectedModelIds: selectedModelIds,
             favoriteModelIds: favorites,
-            maxConcurrent: maxConcurrent)
+            maxConcurrent: maxConcurrent,
+            chatProviderId: chatProviderId,
+            ingestProviderId: ingestProviderId,
+            lintProviderId: lintProviderId)
     }
 
     // MARK: - Seed (pure)
@@ -355,7 +480,10 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 providerModels: config.providerModels,
                 selectedModelIds: selectedModelIds,
                 favoriteModelIds: config.favoriteModelIds,
-                maxConcurrent: config.maxConcurrent)
+                maxConcurrent: config.maxConcurrent,
+                chatProviderId: config.chatProviderId,
+                ingestProviderId: config.ingestProviderId,
+                lintProviderId: config.lintProviderId)
         }
         // Missing / corrupt / empty → seed + persist.
         DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)")
