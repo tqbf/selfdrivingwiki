@@ -702,9 +702,42 @@ struct EditorTabTests {
         }
         #expect(model.tabs[0].title == "Fresh Page")
         #expect(model.activeTabID == model.tabs[0].id)
+        // New pages start in the editor (per-tab default set in newPageInNewTab).
+        #expect(model.tabs[0].isEditing == true)
+        #expect(model.isActiveTabEditing == true)
 
         let summaries = (try? store.listPages(sortBy: .lastUpdated)) ?? []
         #expect(summaries.contains(where: { $0.title == "Fresh Page" }))
+    }
+
+    @Test func newPageInNewTab_setsActiveTabEditingTrue() throws {
+        let (model, _) = try tempModel()
+        model.reloadFromStore()
+
+        model.newPageInNewTab(title: "Auto-Edit Page")
+        // The newly-created tab is marked editing so the user lands on the
+        // source view, and the model-level edit flag reflects it.
+        #expect(model.activeTab?.isEditing == true)
+        #expect(model.isActiveTabEditing == true)
+    }
+
+    @Test func newPageInNewTab_doesNotAffectOtherTabs() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "Existing")
+        model.reloadFromStore()
+
+        // A navigation-opened page keeps the default (non-editing) tab state.
+        model.openTab(.page(a.id))
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].isEditing == false)
+
+        // Adding a new page marks ONLY the new tab editing.
+        model.newPageInNewTab(title: "Brand New")
+        #expect(model.tabs.count == 2)
+        #expect(model.activeTabID == model.tabs[1].id)
+        #expect(model.tabs[1].isEditing == true)
+        // The pre-existing navigation tab is untouched.
+        #expect(model.tabs[0].isEditing == false)
     }
 
     // MARK: - History navigation preserves tab metadata

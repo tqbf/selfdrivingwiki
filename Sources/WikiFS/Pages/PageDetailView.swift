@@ -186,7 +186,21 @@ struct PageDetailView: View {
         } message: {
             Text("A lint job is already running on this page. It will appear in the Activity window when it finishes.")
         }
-        .onAppear { lastKnownActiveTabID = store.activeTabID }
+        .onAppear {
+            lastKnownActiveTabID = store.activeTabID
+            // Seed edit mode from the active tab on first mount. `.onChange(of:
+            // store.activeTabID)` below only fires on *subsequent* tab switches,
+            // so without this a freshly-created "start in editor" tab would
+            // render the preview branch on first paint. Safe for navigation:
+            // navigation-opened tabs default to `isEditing == false`.
+            let editing = store.activeTab?.isEditing ?? false
+            isEditing = editing
+            // Ensure the header is expanded in the *first* paint when seeding
+            // edit mode — `.onChange(of: isEditing)` may not fire synchronously
+            // for a write made during `.onAppear`, and the editor branch needs
+            // the Save/Cancel row visible immediately (defense in depth).
+            if editing { isHeaderExpanded = true }
+        }
         .onChange(of: store.selection) {
             // In-tab navigation (wiki-link click, sidebar navigation within the
             // same tab): exit edit mode. Tab switches are detected below via
