@@ -241,6 +241,33 @@ struct WikiReaderView: View {
              wiki://missing?… by the linkifier — color it red so dangling
              references are obvious at a glance. */
           a[href^="wiki://missing"] { color: #ff453a; }
+          /* Plan v2 transclusion: a `<details class="sdw-transclusion">` is the
+             collapsed page / non-media-source embed. The disclosure is
+             collapsed-by-default per the HTML spec (no `open` attribute). The
+             broken state reuses the same red as ghost links (the
+             `a[href^="wiki://missing"]` selector above is an `<a>` attribute
+             selector and does NOT style a `<details>`, so this is its own
+             rule — Plan v2 §7.1). */
+          details.sdw-transclusion {
+            margin: 0.6em 0; padding: 0.4em 0.8em; border-radius: 8px;
+            background: var(--code-bg); border: 1px solid var(--border);
+          }
+          details.sdw-transclusion > summary {
+            cursor: pointer; list-style: none; font-weight: 500;
+            color: var(--text);
+          }
+          details.sdw-transclusion > summary::-webkit-details-marker { display: none; }
+          details.sdw-transclusion > summary::before {
+            content: "▸"; display: inline-block; width: 1em; color: var(--muted);
+            transition: transform 0.15s ease;
+          }
+          details.sdw-transclusion[open] > summary::before { transform: rotate(90deg); }
+          details.sdw-transclusion .sdw-embed-body { margin-top: 0.5em; }
+          details.sdw-transclusion .sdw-embed-placeholder {
+            color: var(--muted); font-style: italic;
+          }
+          details.sdw-transclusion[data-sdw-state="missing"] .sdw-embed-title { color: #ff453a; }
+          details.sdw-transclusion .sdw-embed-cycle .sdw-embed-placeholder { color: var(--muted); }
           /* External links: append a small ↗ glyph so it's visually clear the
              link will open in an external browser, unlike internal wiki://
              links which navigate in-app. */
@@ -347,6 +374,13 @@ final class WikiReaderWebView: WKWebView {
     /// in-file message-handler proxy can write it without exposing a public setter.
     fileprivate(set) var hoveredLinkHref: String?
 
+    /// The Coordinator that owns this view's load lifecycle + the Plan v2
+    /// embed-fetch handler. Set by `WikiReaderRep.makeNSView` so the
+    /// `EmbedFetchMessageHandler` proxy can forward `WKScriptMessage` bodies
+    /// without holding a strong reference (the view holds the Coordinator
+    /// indirectly via the representable's context).
+    weak var coordinator: WikiReaderRep.Coordinator?
+
     /// Serves `wiki-blob://source/<id>` blob bytes from SQLite to the WKWebView.
     /// Created in `init()` (must be registered before the view loads). Its
     /// `store` is set by the representable alongside the view's own `store`.
@@ -361,8 +395,20 @@ final class WikiReaderWebView: WKWebView {
         // doesn't exist until then).
         let proxy = LinkHoverMessageHandler(target: nil)
         cc.add(proxy, name: Self.linkHoverName)
+        // Plan v2 transclusion: a second message handler fires when a
+        // `<details class="sdw-transclusion">` is first opened. The Coordinator
+        // resolves + fetches + renders the body off-main and injects via the
+        // safe `sdwInjectEmbed` setter (HTML is a parameter, never concatenated
+        // — Plan v2 §4.4). The proxy is retained by the controller; weakly
+        // references this view, same pattern as the hover handler.
+        let embedProxy = EmbedFetchMessageHandler(target: nil)
+        cc.add(embedProxy, name: Self.embedFetchName)
         cc.addUserScript(WKUserScript(
             source: Self.hoverListenerJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true))
+        cc.addUserScript(WKUserScript(
+            source: Self.embedBootstrapJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         config.userContentController = cc
@@ -372,6 +418,7 @@ final class WikiReaderWebView: WKWebView {
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
         super.init(frame: .zero, configuration: config)
         proxy.target = self
+        embedProxy.target = self
     }
 
     @available(*, unavailable)
@@ -729,6 +776,77 @@ final class WikiReaderWebView: WKWebView {
       new MutationObserver(bindLinks).observe(document.body||document.documentElement,{childList:true,subtree:true});
     })();
     """
+
+    // MARK: - Plan v2 transclusion (injected script + message handler)
+
+    nonisolated static let embedFetchName = "embedFetch"
+
+    /// Bootstrap that defines `sdwInjectEmbed` (the safe HTML-injection setter
+    /// — Plan v2 §4.4) and binds a one-shot `toggle` listener to every
+    /// `<details class="sdw-transclusion">`. On first open it reads the
+    /// element's `data-sdw-*` attributes and posts them to the Swift
+    /// `embedFetch` handler; the Coordinator fetches + renders the body off-main
+    /// and calls `sdwInjectEmbed` back with the HTML as a **parameter** (never
+    /// concatenated into JS source — `jsString` escapes it into a JS double-
+    /// quoted literal). After injection it stamps `data-sdw-state="loaded"` and
+    /// propagates the ancestor path to any nested `<details>` the body contains
+    /// (parent path + parent id) so the cycle check fires on re-expand
+    /// (`TransclusionEmbedder.isCycle`, Plan v2 §8).
+    nonisolated static let embedBootstrapJS = """
+    (function(){
+      // Safe HTML setter: param-based injection (no string-concat of html).
+      // Defined on `window` so the Coordinator's evaluateJavaScript can call it
+      // by name with the (nodeId, html) tuple escaped through jsString.
+      window.sdwInjectEmbed = function(embedId, html){
+        var sel = '[\(WikiLinkMarkdown.TransclusionAttr.node)="' + embedId + '"]';
+        var host = document.querySelector(sel);
+        if(!host){ return; }
+        var body = host.querySelector('.sdw-embed-body');
+        if(!body){ return; }
+        body.innerHTML = html;
+        body.setAttribute('\(WikiLinkMarkdown.TransclusionAttr.state)', 'loaded');
+        host.setAttribute('\(WikiLinkMarkdown.TransclusionAttr.state)', 'loaded');
+        // Propagate the ancestor path: parent path + this embed's id, so a
+        // nested `<details>` opened next carries the chain (cycle check).
+        var parentId = host.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.id)') || '';
+        var parentPath = host.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)') || '';
+        var childPath = parentId ? (parentPath ? parentPath + ' ' + parentId : parentId) : parentPath;
+        var nested = host.querySelectorAll('details.\(WikiLinkMarkdown.TransclusionAttr.className)');
+        for(var i=0;i<nested.length;i++){
+          nested[i].setAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)', childPath);
+        }
+      };
+      function postEmbed(details){
+        var nodeId = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.node)') || '';
+        var state  = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.state)') || '';
+        if(!nodeId){ return; }
+        // Only first-open fires a fetch (state == 'empty'); later toggles are
+        // pure show/hide. Cycle/missing/loaded states are inert here.
+        if(state !== 'empty'){ return; }
+        var kind   = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.kind)') || '';
+        var id     = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.id)') || '';
+        var target = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.target)') || '';
+        var path   = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)') || '';
+        var name   = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.name)') || '';
+        try{
+          window.webkit.messageHandlers.\(embedFetchName).postMessage({
+            nodeId: nodeId, kind: kind, id: id, target: target, path: path, name: name
+          });
+        }catch(e){}
+      }
+      function bindEmbeds(){
+        var nodes = document.querySelectorAll('details.\(WikiLinkMarkdown.TransclusionAttr.className):not([data-sdw-embed-bound])');
+        for(var i=0;i<nodes.length;i++){(function(d){
+          d.setAttribute('data-sdw-embed-bound','1');
+          d.addEventListener('toggle', function(){
+            if(d.open){ postEmbed(d); }
+          });
+        })(nodes[i]);}
+      }
+      bindEmbeds();
+      new MutationObserver(bindEmbeds).observe(document.body||document.documentElement,{childList:true,subtree:true});
+    })();
+    """
 }
 
 /// Forwards the `mouseover`-posted href to the owning web view. Retained by the
@@ -740,6 +858,22 @@ private final class LinkHoverMessageHandler: NSObject, WKScriptMessageHandler {
     init(target: WikiReaderWebView?) { self.target = target }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         target?.hoveredLinkHref = message.body as? String
+    }
+}
+
+/// Forwards the `embedFetch`-posted payload (`{nodeId, kind, id, target, path,
+/// name}`) from a first-opened `<details class="sdw-transclusion">` to the
+/// owning web view's Coordinator, which resolves + fetches + renders the body
+/// off-main and injects via `sdwInjectEmbed` (Plan v2 §4.3). Retained by the
+/// `WKUserContentController`; weakly references the view so there's no cycle.
+@MainActor
+private final class EmbedFetchMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WikiReaderWebView?
+    init(target: WikiReaderWebView?) { self.target = target }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let view = target,
+              let body = message.body as? [String: String] else { return }
+        view.coordinator?.handleEmbedFetch(body: body)
     }
 }
 
@@ -770,6 +904,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.navigationDelegate = context.coordinator
+        webView.coordinator = context.coordinator
         context.coordinator.webView = webView
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
@@ -1122,6 +1257,140 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 else { store?.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .inert:
                 break
+            }
+        }
+
+        // MARK: - Plan v2 transclusion — embed fetch + render
+
+        /// Closure that delivers the JS source to the web view. Defaults to
+        /// `webView?.evaluateJavaScript(js)`; tests replace it with a recorder
+        /// to assert the exact JS string (in particular, that the HTML is a
+        /// **parameter** to `sdwInjectEmbed`, never concatenated into source —
+        /// Plan v2 §4.4 safe-injection mandate).
+        var deliverJS: (@MainActor (String) -> Void)?
+
+        /// Emit `js` to the web view (or to the test recorder if set).
+        @MainActor
+        private func emit(_ js: String) {
+            if let deliverJS { deliverJS(js) }
+            else { webView?.evaluateJavaScript(js) }
+        }
+
+        /// Handle the `embedFetch` message posted from a first-opened
+        /// `<details class="sdw-transclusion">`. Resolves the id (name-based
+        /// page embeds resolved here on the main actor via `pageID(forTitle:)`),
+        /// gets a **fresh** `WikiRenderContext`, hops off-main into
+        /// `readPool.asyncRead` to fetch + render the body through the shared
+        /// pipeline, then injects via the safe `sdwInjectEmbed` setter
+        /// (`TransclusionEmbedder.injectJSCall`). Cycle + missing paths short-
+        /// circuit the fetch entirely (Plan v2 §4.3, §8).
+        ///
+        /// `body` is the `{nodeId, kind, id, target, path, name}` dict the JS
+        /// bootstrap posted. Each value is a `String` (empty when absent).
+        ///
+        /// This is the synchronous entry point the `WKScriptMessageHandler`
+        /// proxy calls; it kicks off the fetch via a `Task` (fire-and-forget).
+        /// Tests use ``processEmbedFetch(body:)`` (async) to await completion
+        /// rather than sleep.
+        func handleEmbedFetch(body: [String: String]) {
+            Task { [weak self] in
+                await self?.processEmbedFetch(body: body)
+            }
+        }
+
+        /// Async, awaitable form of ``handleEmbedFetch(body:)``. Does the
+        /// cycle check, resolution, fetch, and injection in one async flow so
+        /// a test can `await` it instead of polling on a Task. Production
+        /// callers go through `handleEmbedFetch` (fire-and-forget); tests go
+        /// through this directly.
+        func processEmbedFetch(body: [String: String]) async {
+            let nodeId = body["nodeId"] ?? ""
+            let kindStr = body["kind"] ?? ""
+            let idStr = body["id"] ?? ""
+            let targetStr = body["target"] ?? ""
+            let pathStr = body["path"] ?? ""
+            let nameStr = body["name"] ?? ""
+
+            guard !nodeId.isEmpty else { return }
+            let kind: ParsedLink.LinkType = kindStr == WikiLinkMarkdown.pageEmbedKind
+                ? .page
+                : (kindStr == ParsedLink.LinkType.source.rawValue ? .source : .page)
+
+            // 1. Cycle check (Plan v2 §8): the target id is already in this
+            //    embed's ancestor chain → render the muted marker, no fetch.
+            //    Off-main read path stays untouched (hard invariant).
+            if !idStr.isEmpty, TransclusionEmbedder.isCycle(path: pathStr, id: idStr) {
+                let js = TransclusionEmbedder.cycleMarkerJSCall(nodeId: nodeId, name: nameStr)
+                emit(js)
+                DebugLog.reader("embed-fetch cycle kind=\(kindStr) id=\(idStr) name=\(nameStr)")
+                return
+            }
+
+            // 2. Resolve id. Canonical ULID embeds carry their id directly;
+            //    name-based page embeds resolve here on the main actor.
+            let resolvedID: PageID?
+            if !idStr.isEmpty {
+                resolvedID = PageID(rawValue: idStr)
+            } else if kind == .page, !targetStr.isEmpty,
+                      let decoded = targetStr.removingPercentEncoding,
+                      let id = store?.pageID(forTitle: decoded) {
+                resolvedID = id
+            } else {
+                resolvedID = nil
+            }
+
+            // 3. Missing target → render the "not found" body inline (no fetch).
+            guard let id = resolvedID, let store else {
+                let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"
+                         + "<span class=\"sdw-embed-placeholder\">"
+                         + (kind == .page ? "Page not found" : "Source not found")
+                         + "</span></div>"
+                emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
+                DebugLog.reader("embed-fetch unresolved kind=\(kindStr) target=\(targetStr) name=\(nameStr)")
+                return
+            }
+
+            // 4. Fresh render context (memoized, event-bus-invalidated).
+            let context = store.renderContext()
+
+            // 5. Off-main fetch + render. `readPool` is `nil` for in-memory
+            //    stores (a separate `:memory:` connection sees a different,
+            //    empty DB); fall back to the main-actor store in that case.
+            //    No transaction, no extraction — the read path invariant.
+            let loadStart = DispatchTime.now()
+            do {
+                let raw: String
+                if let pool = store.readPool {
+                    raw = try await pool.asyncRead { roStore in
+                        try TransclusionEmbedder.renderEmbedBody(
+                            store: roStore, id: id, kind: kind, context: context)
+                    }
+                } else if let grdb = store.internalStore as? GRDBWikiStore {
+                    // Main-actor fallback (in-memory tests; rare in prod).
+                    raw = try TransclusionEmbedder.renderEmbedBody(
+                        store: grdb, id: id, kind: kind, context: context)
+                } else {
+                    raw = TransclusionEmbedder.emptySentinel
+                }
+                DebugLog.reader("embed-fetch ok kind=\(kindStr) id=\(id.rawValue) "
+                              + "name=\(nameStr) ms=\(Self.elapsedMs(since: loadStart))")
+                let html: String
+                if TransclusionEmbedder.isEmpty(raw) {
+                    // Source has no extractable body (binary, no head
+                    // markdown) — render the muted placeholder + open
+                    // link. NO extraction is triggered.
+                    html = TransclusionEmbedder.placeholderBodyHTML(
+                        kind: kind, id: id, name: nameStr)
+                } else {
+                    html = raw
+                }
+                emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
+            } catch {
+                DebugLog.reader("embed-fetch failed kind=\(kindStr) id=\(id.rawValue) "
+                              + "error=\(error)")
+                let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"
+                         + "<span class=\"sdw-embed-placeholder\">Failed to load.</span></div>"
+                emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
             }
         }
 
