@@ -15,26 +15,46 @@ import Foundation
 // MARK: - Source format
 
 /// The format-layer subset of `FetchOutcome.Kind`: what a source produces after
-/// dispatch (HTML→Markdown, PDF verbatim, text verbatim, binary verbatim).
-/// Byteless origins (podcasts, embeds) bypass format dispatch entirely.
+/// dispatch (HTML verbatim with extracted-markdown sidecar, PDF verbatim, text
+/// verbatim, binary verbatim). Byteless origins (podcasts, embeds) bypass format
+/// dispatch entirely.
+///
+/// Issue #599: HTML sources are now treated like PDF sources — the original
+/// HTML bytes are the source blob (`.html` format), and the extracted markdown
+/// rides as a `FormatPlan.extractedMarkdown` sidecar that the store path writes
+/// as a `SourceMarkdownOrigin.extraction` processed-markdown version. This
+/// replaces the old `.htmlConverted` behavior that stored ONLY the markdown and
+/// discarded the original HTML.
 public enum SourceFormat: Sendable, Equatable {
-    case htmlConverted   // HTML → Markdown
-    case pdf             // verbatim PDF
+    case html           // verbatim HTML (extracted markdown carried as sidecar)
+    case pdf            // verbatim PDF
     case text            // verbatim text
     case binary          // verbatim other bytes
 }
 
 /// A format dispatch result: the filename, bytes, and detected format — pure,
 /// no URL/store/network dependency.
+///
+/// For HTML sources (`.html` format), `extractedMarkdown` carries the
+/// HTML→Markdown conversion (mirrors PDF → pdf2md extraction: original bytes
+/// live as the source blob, extracted markdown as a processed-markdown version).
+/// `nil` for non-HTML formats.
 public struct FormatPlan: Sendable, Equatable {
     public let filename: String
     public let data: Data
     public let format: SourceFormat
+    public let extractedMarkdown: String?
 
-    public init(filename: String, data: Data, format: SourceFormat) {
+    public init(
+        filename: String,
+        data: Data,
+        format: SourceFormat,
+        extractedMarkdown: String? = nil
+    ) {
         self.filename = filename
         self.data = data
         self.format = format
+        self.extractedMarkdown = extractedMarkdown
     }
 }
 
@@ -79,11 +99,19 @@ public enum FormatMaterializer {
         }
 
         if mime == MimeType.html || mime == MimeType.xhtml {
+            // Issue #599: preserve the original HTML bytes as the source blob
+            // (mirroring PDF → pdf2md extraction). The extracted markdown rides
+            // as a sidecar on the FormatPlan and is written as a
+            // `.extraction`-origin processed-markdown version by the store path.
             let html = decodeText(data)
             let result = HTMLToMarkdown.convert(html)
             let resolvedStem = result.title.flatMap { nonEmpty($0) } ?? stem
-            let filename = ensureExtension(sanitizeStem(resolvedStem), ext: "md")
-            return FormatPlan(filename: filename, data: Data(result.markdown.utf8), format: .htmlConverted)
+            let filename = ensureExtension(sanitizeStem(resolvedStem), ext: "html")
+            return FormatPlan(
+                filename: filename,
+                data: data,
+                format: .html,
+                extractedMarkdown: result.markdown)
         }
 
         if MimeType.isPDF(mime) {

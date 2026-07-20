@@ -184,7 +184,7 @@ struct BytelessEmbedIntegrationTests {
         // A non-media URL must NOT route to byteless media — it hits the fetcher.
         let outcome = try await model.addURL(
             "https://example.com/article", fetcher: HTMLFetcher())
-        #expect(outcome.kind == .htmlConverted)
+        #expect(outcome.kind == .html)  // #599: HTML bytes preserved with markdown sidecar
     }
 
     // MARK: - #646: synthetic markdown for byteless sources

@@ -1897,18 +1897,53 @@ public final class WikiStoreModel {
     /// this does the main-actor `store.addSource` write, threading the
     /// `MaterializedSource`'s provenance + retained Zotero columns through. Each
     /// caller wraps its OWN duplicate/error handling around this throw.
+    ///
+    /// Issue #599: when `m.extractedMarkdown` is non-nil (HTML sources), the
+    /// markdown is stored as a `SourceMarkdownOrigin.extraction` processed-markdown
+    /// version — mirroring PDF → pdf2md extraction. The original bytes live as the
+    /// source blob; the markdown is the derived artifact. Best-effort: a write
+    /// failure is logged, never thrown (the source itself already landed).
     @discardableResult
     private func storeMaterialized(
         _ m: MaterializedSource,
         resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
-        try store.addSource(
+        let summary = try store.addSource(
             filename: m.filename, data: m.data,
             zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
             mimeType: m.mimeType, provenance: m.provenance, role: .primary,
             originalPath: nil, activityID: nil,
             resolvedDisplayName: resolvedDisplayName)
+        appendExtractedMarkdown(to: summary, from: m)
+        return summary
     }
+
+    /// Writes a materializer's `extractedMarkdown` sidecar (if present and
+    /// non-empty) as a `.extraction`-origin processed-markdown version. Mirrors
+    /// `seedPdfMarkdown`'s use of `appendProcessedMarkdown` so an HTML source's
+    /// derived markdown lands on the same chain as a PDF's extracted markdown
+    /// (issue #599 — HTML sources are treated like PDF sources). Best-effort:
+    /// the source itself already committed; an extraction-write failure is
+    /// logged via `DebugLog.store`, never thrown.
+    private func appendExtractedMarkdown(to summary: SourceSummary, from m: MaterializedSource) {
+        guard let markdown = m.extractedMarkdown,
+              !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        do {
+            try store.appendProcessedMarkdown(
+                sourceID: summary.id, content: markdown,
+                origin: .extraction, note: nil,
+                technique: Self.htmlToMarkdownTechnique)
+        } catch {
+            DebugLog.store("WikiStoreModel.appendExtractedMarkdown failed (source=\(summary.id.rawValue)): \(error)")
+        }
+    }
+
+    /// Technique tag stamped on an HTML source's extracted-markdown version
+    /// (`appendProcessedMarkdown(technique:)`). Mirrors the PDF extraction
+    /// technique tags (e.g. `"pdf2md"`) so the "Converted" provenance row
+    /// surfaces the producer in the alternatives UI.
+    private static let htmlToMarkdownTechnique = "html-to-markdown"
 
     /// Ingest dropped files. For each URL: reject directories (a recursive
     /// directory ingest is out of scope), read the bytes OFF the main thread
@@ -2351,21 +2386,23 @@ public final class WikiStoreModel {
             filename: snapshot.page.filename, data: snapshot.page.data,
             mimeType: snapshot.page.mimeType, zoteroItemTitle: snapshot.page.zoteroItemTitle)
         var summary: SourceSummary
-        if snapshot.plan.format == .htmlConverted && !snapshot.images.isEmpty {
+        if snapshot.plan.format == .html && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
             summary = try storeMaterialized(snapshot.page, resolvedDisplayName: resolvedDisplayName)
         }
-        // HTML-converted sources have ".md" appended to the storage filename;
-        // set a clean display name (the page title without the extension) so
-        // the UI shows "How to Do Thing" instead of "How to Do Thing.md".
-        if snapshot.plan.format == .htmlConverted {
+        // HTML sources have ".html" appended to the storage filename (issue #599:
+        // the original HTML bytes are now the source blob, not the converted
+        // markdown). Set a clean display name (the page title without the
+        // extension) so the UI shows "How to Do Thing" instead of
+        // "How to Do Thing.html".
+        if snapshot.plan.format == .html {
             let cleanTitle = (snapshot.page.filename as NSString).deletingPathExtension
             do {
                 try store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
             } catch {
                 // #475/#492: don't silently swallow — the display name would silently
-                // revert to "Foo.md" with no Console.app trace of why.
+                // revert to "Foo.html" with no Console.app trace of why.
                 DebugLog.store("WikiStoreModel.importURLSource setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
             }
         }
@@ -2409,6 +2446,11 @@ public final class WikiStoreModel {
                 originalPath: image.originalPath, sourceURL: image.sourceURL,
                 activityID: activityID, role: .media)
         }
+        // 4. Issue #599: write the snapshot markdown (image srcs rewritten to
+        //    stored siblings) as a `.extraction`-origin processed-markdown
+        //    version, so the reader tab shows rendered content with inlined
+        //    images alongside the original-HTML HTML tab.
+        appendExtractedMarkdown(to: pageSummary, from: snapshot.page)
         return pageSummary
     }
 

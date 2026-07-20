@@ -4,8 +4,9 @@ import Testing
 
 /// Tests for the URL-ingest dispatch / filename / store pipeline, driven entirely
 /// by a FAKE fetcher and an in-memory store collector — no real network. Covers
-/// html→.md, pdf→.pdf (raw bytes preserved), text/plain→as-is, non-2xx error,
-/// redirect→final-URL filename, missing-scheme→https, and the pure plan/helpers.
+/// html→.html (verbatim + markdown sidecar, #599), pdf→.pdf (raw bytes
+/// preserved), text/plain→as-is, non-2xx error, redirect→final-URL filename,
+/// missing-scheme→https, and the pure plan/helpers.
 struct URLFetchServiceTests {
 
     // MARK: - Test doubles
@@ -54,24 +55,26 @@ struct URLFetchServiceTests {
             data: Data(body.utf8), contentType: mime, finalURL: URL(string: url)!)
     }
 
-    // MARK: - HTML → markdown
+    // MARK: - HTML → verbatim bytes + extracted-markdown sidecar (issue #599)
 
-    @Test func htmlIsConvertedToMarkdownFile() async throws {
+    @Test func htmlStoredVerbatimWithExtractedMarkdownSidecar() async throws {
         let collector = StoreCollector()
+        let html = "<html><head><title>Cool Page</title></head><body><h1>Hi</h1><p>Hello <strong>world</strong>.</p></body></html>"
         let fetcher = FakeFetcher(response: response(
-            "<html><head><title>Cool Page</title></head><body><h1>Hi</h1><p>Hello <strong>world</strong>.</p></body></html>",
-            mime: "text/html; charset=utf-8",
+            html, mime: "text/html; charset=utf-8",
             url: "https://example.com/article"
         ))
         let service = makeService(fetcher, collector)
 
-        let outcome = try await service.fetch( "https://example.com/article")
+        let outcome = try await service.fetch("https://example.com/article")
 
-        #expect(outcome.kind == .htmlConverted)
-        #expect(collector.filename == "Cool Page.md")
-        let stored = String(data: collector.data!, encoding: .utf8)!
-        #expect(stored == "# Hi\n\nHello **world**.")
-        #expect(outcome.filename == "Cool Page.md")
+        // Issue #599: HTML sources preserve the ORIGINAL HTML bytes (the
+        // outcome kind reflects HTML, not ".htmlConverted" markdown).
+        #expect(outcome.kind == .html)
+        #expect(collector.filename == "Cool Page.html")
+        // Byte-identical — the source blob IS the original HTML.
+        #expect(collector.data == Data(html.utf8))
+        #expect(outcome.filename == "Cool Page.html")
     }
 
     @Test func htmlWithoutTitleFallsBackToURLStem() async throws {
@@ -83,19 +86,19 @@ struct URLFetchServiceTests {
         ))
         let service = makeService(fetcher, collector)
 
-        try await service.fetch( "example.com/guides/photosynthesis")
-        #expect(collector.filename == "photosynthesis.md")
+        try await service.fetch("example.com/guides/photosynthesis")
+        #expect(collector.filename == "photosynthesis.html")
     }
 
-    @Test func xhtmlAlsoConverted() async throws {
+    @Test func xhtmlAlsoStoredVerbatim() async throws {
         let collector = StoreCollector()
         let fetcher = FakeFetcher(response: response(
             "<html><title>X</title><body><p>x</p></body></html>",
             mime: "application/xhtml+xml",
             url: "https://example.com/x"
         ))
-        try await makeService(fetcher, collector).fetch( "https://example.com/x")
-        #expect(collector.filename == "X.md")
+        try await makeService(fetcher, collector).fetch("https://example.com/x")
+        #expect(collector.filename == "X.html")
     }
 
     // MARK: - PDF → raw bytes
@@ -199,15 +202,15 @@ struct URLFetchServiceTests {
         #expect(collector.data == png)
     }
 
-    @Test func genuineHTMLStillConvertedToMarkdown() async throws {
+    @Test func genuineHTMLStoredVerbatimAsHTML() async throws {
         // Real HTML labeled text/html must NOT trip the sniffer (no binary magic).
         let collector = StoreCollector()
         let fetcher = FakeFetcher(response: response(
             "<html><head><title>Real Page</title></head><body><p>hi</p></body></html>",
             mime: "text/html", url: "https://example.com/page"))
-        let outcome = try await makeService(fetcher, collector).fetch( "https://example.com/page")
-        #expect(outcome.kind == .htmlConverted)
-        #expect(collector.filename == "Real Page.md")
+        let outcome = try await makeService(fetcher, collector).fetch("https://example.com/page")
+        #expect(outcome.kind == .html)
+        #expect(collector.filename == "Real Page.html")
     }
 
     @Test func realPDFContentTypeStillStoredAsPDF() async throws {

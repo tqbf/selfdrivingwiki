@@ -4,9 +4,9 @@ import Testing
 
 /// Verifies the window-wide drop routing (#163): an `http(s)` URL dragged from
 /// a browser, and a `.webloc` shortcut that resolves to one, flow through the
-/// "Add from URL" fetch path (`addURL` → HTML→Markdown), while genuine local
-/// files still ingest as raw bytes (`addFiles`). Uses a fake fetcher —
-/// no real network.
+/// "Add from URL" fetch path (`addURL` → HTML bytes preserved + markdown sidecar,
+/// issue #599), while genuine local files still ingest as raw bytes (`addFiles`).
+/// Uses a fake fetcher — no real network.
 @MainActor
 struct WikiStoreModelDropRoutingTests {
 
@@ -58,12 +58,19 @@ struct WikiStoreModelDropRoutingTests {
         await model.addDroppedURLs([webloc], fetcher: fetcher)
         model.reloadFromStore()
 
-        // Routed through addURL → converted markdown, NOT the raw plist bytes.
+        // Issue #599: routed through `addURL` → HTML bytes preserved as the
+        // source blob (filename `Article.html`), markdown extracted as a
+        // sidecar processed-markdown version. NOT the raw plist bytes.
         #expect(model.sources.count == 1)
-        #expect(model.sources.first?.filename == "Article.md")
+        #expect(model.sources.first?.filename == "Article.html")
         let id = model.sources.first!.id
         let bytes = try store.sourceContent(id: id)
-        #expect(String(data: bytes, encoding: .utf8) == "Body.")
+        // The source blob IS the original HTML (not the markdown "Body.").
+        #expect(String(data: bytes, encoding: .utf8) == "<title>Article</title><body><p>Body.</p></body>")
+        // The extracted markdown rides as a `.extraction` processed-markdown version.
+        let head = try #require(try store.processedMarkdownHead(sourceID: id))
+        #expect(head.content == "Body.")
+        #expect(head.origin == .extraction)
     }
 
     @Test func remoteHTTPURLRoutesThroughURLIngest() async throws {
@@ -81,7 +88,8 @@ struct WikiStoreModelDropRoutingTests {
         model.reloadFromStore()
 
         #expect(model.sources.count == 1)
-        #expect(model.sources.first?.filename == "Page.md")
+        // Issue #599: HTML bytes preserved, filename ends in `.html` (not `.md`).
+        #expect(model.sources.first?.filename == "Page.html")
     }
 
     @Test func localFileStillIngestsAsRawBytes() async throws {
@@ -126,7 +134,9 @@ struct WikiStoreModelDropRoutingTests {
         model.reloadFromStore()
 
         let names = model.sources.map(\.filename).sorted()
-        #expect(names == ["Web.md", "doc.txt"])
+        // Issue #599: HTML routed through `addURL` → filename ends in `.html`
+        // (the original HTML bytes are preserved, markdown stored as a sidecar).
+        #expect(names == ["Web.html", "doc.txt"])
     }
 
     @Test func unresolvableWeblocIsSkippedNotIngestedAsBytes() async throws {

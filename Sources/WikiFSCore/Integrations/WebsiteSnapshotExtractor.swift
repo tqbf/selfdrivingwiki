@@ -296,14 +296,22 @@ public enum WebsiteSnapshotExtractor {
         let rewritten = rewriteImageSrcs(in: scoped, using: srcMap)
         let markdown = HTMLToMarkdown.markdown(fromScopedTokens: rewritten)
 
-        // 7. Build the page source + snapshot.
+        // 7. Build the page source (issue #599: preserve the ORIGINAL HTML bytes
+        //    as the source blob — mirrors the non-snapshot HTML path; the
+        //    snapshot markdown with rewritten image srcs rides as the
+        //    extracted-markdown sidecar on the FormatPlan and is written as a
+        //    `.extraction`-origin processed-markdown version).
         let page = MaterializedSource(
             filename: filename,
-            data: Data(markdown.utf8),
+            data: Data(html.utf8),
             mimeType: nil,
-            provenance: provenance)
+            provenance: provenance,
+            extractedMarkdown: markdown)
         let snapshotPlan = FormatPlan(
-            filename: filename, data: Data(markdown.utf8), format: .htmlConverted)
+            filename: filename,
+            data: Data(html.utf8),
+            format: .html,
+            extractedMarkdown: markdown)
         return WebsiteSnapshot(page: page, images: images, plan: snapshotPlan)
     }
 }
