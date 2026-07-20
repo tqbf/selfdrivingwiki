@@ -332,8 +332,8 @@ struct Projection {
     /// public entry points (`children`/`node`/`contents`) create one of these on
     /// a scoped copy of the projection so every `openReadStore()` and
     /// `changeToken()` call within that operation reuses the same connection,
-    /// instead of opening a fresh store (with pragma setup + vec0 registration
-    /// + WAL checkpoint on close) for each leaf node (#291).
+    /// instead of opening a fresh store (with pragma setup + WAL checkpoint on
+    /// close) for each leaf node (#291).
     ///
     /// Thread-safe (NSLock-guarded): the holder is a reference type shared
     /// across value-type projection copies, so the lock guards the lazy open

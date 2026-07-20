@@ -4,8 +4,8 @@ import Foundation
 /// short text (a search query or a document chunk). The store depends on this
 /// abstraction — not on any specific embedder (NLEmbedding vs MiniLM) — so the
 /// active embedder can be swapped behind `EmbeddingService` without touching the
-/// chunk index or the `vec_distance_cosine` queries (which are dimension-agnostic
-/// as long as every vector uses one dimension).
+/// chunk index or the Swift-side dot product (which is dimension-agnostic as
+/// long as every vector uses one dimension).
 public protocol Embedder: Sendable {
     /// Stable identifier for this embedder + its output dimension, e.g.
     /// `"nlembedding-512"`, `"minilm-384"`. Stored in `embedding_meta`; a mismatch

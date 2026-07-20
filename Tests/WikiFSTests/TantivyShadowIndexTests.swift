@@ -10,7 +10,8 @@ import WikiFSSearch
 /// and the initial full build from `allSnapshots()`.
 ///
 /// This does NOT wire into the production search path — it's shadow-mode
-/// validation only. FTS5 + sqlite-vec + RRF remains primary.
+/// validation only. Tantivy BM25 + Swift cosine (`VectorCosine`) + RRF is
+/// primary.
 @Suite
 struct TantivyShadowIndexTests {
 

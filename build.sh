@@ -161,8 +161,8 @@ if [ -f "${PDF2MD_SRC}" ]; then
 else
   echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
 fi
-# sqlite-vec is now STATICALLY linked (Sources/CSqliteVec, -DSQLITE_CORE) and
-# registered per-connection — no runtime dylib to copy.
+# Semantic vector search is now pure Swift (`VectorCosine` in WikiFSSearch —
+# issue #628): no C extension to copy, no per-connection registration.
 # Vendored Mermaid v11.16.0 (UMD build). Used for BOTH rendering ```mermaid
 # fenced blocks in the reader AND validating them at save time (#669 — replaces
 # the third-party merval validator, eliminating version skew). Copied as

@@ -1,7 +1,6 @@
 import Foundation
 import CryptoKit
 import UniformTypeIdentifiers
-import CSqliteVec
 
 // `internal import` (SE-0409, Swift 6.0+) keeps GRDB types from leaking into
 // downstream modules — the same discipline as `QueueStore.swift`. Without
@@ -34,13 +33,13 @@ internal import GRDB
 ///   `ValueObservation` is a complement, not a replacement, because the event
 ///   carries domain metadata `(wikiID, kind, id, change)` the File Provider
 ///   needs for scoped invalidation.
-/// - sqlite-vec registers on the raw `sqlite3*` handle via
-///   `db.sqliteConnection` in `prepareDatabase` — one registration site per
-///   connection (better than the prior manual call in each init).
+/// - Semantic search is pure Swift: `VectorCosine` (in `WikiFSSearch`) computes
+///   cosine similarity as a vDSP dot product over L2-normalized chunk-embedding
+///   BLOBs read directly from `*_chunks` (issue #628 — the vendored C scalar
+///   target is retired; no extension is registered on any connection).
 ///
 /// **Implementation status:**
-/// - Infrastructure: connection setup, PRAGMAs, vec registration, migrator,
-///   `mutate()` seam — DONE.
+/// - Infrastructure: connection setup, PRAGMAs, migrator, `mutate()` seam — DONE.
 /// - Pages CRUD (listPages, getPage, createPage, updatePage, deletePage,
 ///   resolveTitleToID) — DONE (translated from proven SQL).
 /// - Singletons (system prompt, wiki index, log, metadata) — DONE.
@@ -120,8 +119,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - Init
 
     /// Open (creating if needed) the database at `databaseURL`, run migrations,
-    /// and register the sqlite-vec extension. Mirrors
-    /// `SQLiteWikiStore.init(databaseURL:)`.
+    /// and bootstrap search indexes. Mirrors `SQLiteWikiStore.init(databaseURL:)`.
     public init(databaseURL: URL) throws {
         var config = Configuration()
         config.foreignKeysEnabled = true
@@ -139,20 +137,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: "PRAGMA temp_store=MEMORY")
         }
 
-        // Register the statically-linked sqlite-vec on this connection
-        // (connection-scoped). Non-fatal: lexical search is now Tantivy-side
-        // (PR #649); the vec leg powers the semantic cosine path.
-        // `db.sqliteConnection` is `OpaquePointer?` (GRDB's
-        // `SQLiteConnection` typealias) — the raw `sqlite3*` handle.
-        config.prepareDatabase { db in
-            guard let handle = db.sqliteConnection else { return }
-            let rc = wikifs_vec_register(UnsafeMutableRawPointer(handle))
-            if rc == 0 {
-                DebugLog.store("GRDBWikiStore: sqlite-vec registered on connection (vec_distance_cosine available)")
-            } else {
-                DebugLog.store("GRDBWikiStore: sqlite3_vec_init FAILED rc=\(rc) — semantic cosine search disabled")
-            }
-        }
+        // No C extension registration anymore — the vendored scalar target is
+        // retired (issue #628). Semantic-cosine ranking is now pure Swift
+        // (`VectorCosine`), so the connection setup is plain PRAGMAs only.
 
         do {
             dbWriter = try DatabasePool(path: databaseURL.path, configuration: config)
@@ -219,12 +206,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: "PRAGMA temp_store=MEMORY")
         }
 
-        // Register vec on read-only connections too (pooled readers need it
-        // for `vec_distance_cosine` in search queries).
-        config.prepareDatabase { db in
-            guard let handle = db.sqliteConnection else { return }
-            _ = wikifs_vec_register(UnsafeMutableRawPointer(handle))
-        }
+        // No C extension registration on read-only connections either — pure
+        // Swift cosine (issue #628) reads `*_chunks.embedding` directly.
 
         do {
             dbWriter = try DatabasePool(path: readOnlyURL.path, configuration: config)
@@ -238,12 +221,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// Open an in-memory database for tests. Runs the full migration ladder
-    /// and vec registration exactly like the file-backed init, but on a
-    /// `DatabaseQueue` (single serialized connection). `DatabasePool` cannot
-    /// back `:memory:` because it spawns independent reader connections —
-    /// each `:memory:` connection is a separate empty DB. `DatabaseQueue`
-    /// serializes all access through one connection, so a single in-memory DB
-    /// is shared across every `read` / `write` on the store.
+    /// exactly like the file-backed init, but on a `DatabaseQueue` (single
+    /// serialized connection). `DatabasePool` cannot back `:memory:` because it
+    /// spawns independent reader connections — each `:memory:` connection is a
+    /// separate empty DB. `DatabaseQueue` serializes all access through one
+    /// connection, so a single in-memory DB is shared across every `read` /
+    /// `write` on the store.
     ///
     /// `#if DEBUG`-gated — production never constructs a store without a
     /// file. Tests should route through `TestStoreFactory.inMemory()` rather
@@ -265,11 +248,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: "PRAGMA cache_size=-65536")
             try db.execute(sql: "PRAGMA temp_store=MEMORY")
         }
-        // Register the statically-linked sqlite-vec on this single connection.
-        config.prepareDatabase { db in
-            guard let handle = db.sqliteConnection else { return }
-            _ = wikifs_vec_register(UnsafeMutableRawPointer(handle))
-        }
+        // No C extension registration — vendored scalar retired (issue #628).
 
         do {
             // `named: nil` opens a standalone `:memory:` database — each
@@ -607,7 +586,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 6
         }
 
-        // v6 → v7: page embeddings for semantic search (sqlite-vec).
+        // v6 → v7: page embeddings for semantic search.
         // The BLOB holds 512 × Float32 (2048 bytes) produced by Apple
         // NLEmbedding. ON DELETE CASCADE mirrors the v0 attachment FK:
         // removing a page removes its embedding.
@@ -709,8 +688,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 11
         }
 
-        // v11 → v12: source embeddings for semantic source search
-        // (sqlite-vec). Mirrors page_embeddings (v7). ON DELETE CASCADE:
+        // v11 → v12: source embeddings for semantic source search.
+        // Mirrors page_embeddings (v7). ON DELETE CASCADE:
         // removing a source removes its embedding. FK target is sources(id)
         // (renamed from ingested_files in v10). `foreign_keys=ON` is set in
         // the configuration block.
@@ -732,9 +711,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // never creates them. The historical step is preserved verbatim so a
         // DB at v12 follows the proven upgrade path; the v38 cleanup then
         // takes them away cleanly. The prose below describes the historical
-        // intent — the FTS5 path is GONE post-#634 (Tantivy is the sole BM25
-        // leg; sqlite-vec cosine is the semantic leg; `RankFusion.rrf` is
-        // unchanged).
+        // intent — FTS5 is GONE post-#634 (Tantivy is the sole BM25 leg), and
+        // the semantic cosine leg is now Swift-side (`VectorCosine`,
+        // issue #628). `RankFusion.rrf` fuses the two legs unchanged.
         //
         // PAGES: body (body_markdown) is inline on `pages`, so use
         // external-content FTS5 keyed on pages.rowid, maintained by AFTER
@@ -826,8 +805,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // chunking keeps each embedding input small.
         //
         // FK ON DELETE CASCADE: deleting a page/source removes its chunks. The
-        // vec query uses the `vec_distance_cosine` scalar in a GROUP-BY to
-        // pick each document's best (lowest-distance) chunk.
+        // semantic query ranks by each document's best-matching chunk (Swift-side
+        // dot product over the L2-normalized BLOBs — `VectorCosine`,
+        // issue #628).
         if version < 14 {
             try db.execute(sql: """
             CREATE TABLE page_chunks (
@@ -5322,34 +5302,52 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // one of which may be empty.
             let ftsRows = bm25Leg ?? []
 
-            // --- Semantic (vec cosine) pass + RRF ---
-            if Self.isVecAvailable(db),
-               let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=true")
-                let semRows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT p.id, p.title, p.updated_at, p.created_at
-                    FROM (
-                        SELECT page_id, MIN(vec_distance_cosine(embedding, ?)) AS best
-                        FROM page_chunks GROUP BY page_id
-                    ) r
-                    JOIN pages p ON p.id = r.page_id
-                    ORDER BY r.best ASC
-                    LIMIT ?;
-                    """,
-                    arguments: [queryBlob, pool]
-                ).map { row in
-                    WikiPageSummary(
-                        id: PageID(rawValue: row["id"]),
-                        title: row["title"],
-                        updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                        createdAt: Date(timeIntervalSince1970: row["created_at"])
-                    )
+            // --- Semantic (cosine) pass + RRF ---
+            // Replaced the prior `MIN(<cosine distance>(embedding, ?)) GROUP BY
+            // page_id` SQL scalar with Swift-side dot-product ranking over
+            // L2-normalized vectors (issue #628 — vendored C scalar retired).
+            // Stored vectors are unit-norm (`Embedder` contract), so dot == cosine.
+            // Gated on the embedder being loaded (else there's no query vector).
+            if EmbeddingService.isAvailable,
+               let queryBlob = EmbeddingService.embeddingBlob(for: query),
+               let queryVec = VectorCosine.decode(queryBlob) {
+                DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
+                // Single query: carry the summary columns + chunk embedding per row.
+                // Group by page keeping the best (max-sim) row in Swift — one
+                // round-trip, no `IN (...)` re-fetch. `page_chunks` is WITHOUT
+                // ROWID; a sequential clustered-index scan is fine at current
+                // scale (see `VectorCosine` scale-scope note).
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT p.id, p.title, p.updated_at, p.created_at, pc.embedding
+                    FROM page_chunks pc
+                    JOIN pages p ON p.id = pc.page_id;
+                    """)
+                var best: [String: (sim: Float, row: Row)] = [:]
+                best.reserveCapacity(rows.count)
+                for row in rows {
+                    let id: String = row["id"]
+                    let embedding: Data = row["embedding"]
+                    guard let v = VectorCosine.decode(embedding), v.count == queryVec.count else {
+                        DebugLog.store("search[pages]: skipped undecodable chunk for \(id)")
+                        continue
+                    }
+                    let sim = VectorCosine.dot(queryVec, v)
+                    if sim > (best[id]?.sim ?? -.infinity) { best[id] = (sim, row) }
                 }
+                let semRows = best
+                    .sorted { $0.value.sim > $1.value.sim }
+                    .prefix(pool)
+                    .map { _, entry in
+                        WikiPageSummary(
+                            id: PageID(rawValue: entry.row["id"]),
+                            title: entry.row["title"],
+                            updatedAt: Date(timeIntervalSince1970: entry.row["updated_at"]),
+                            createdAt: Date(timeIntervalSince1970: entry.row["created_at"])
+                        )
+                    }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=false")
+            DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -5406,30 +5404,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // for the full rationale.
             let ftsRows = bm25Leg ?? []
 
-            // --- Semantic (vec cosine) pass + RRF ---
-            if Self.isVecAvailable(db),
-               let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=true")
-                let semRows = try Row.fetchAll(
-                    db,
-                    sql: """
+            // --- Semantic (cosine) pass + RRF ---
+            // Swift-side dot product (issue #628) over L2-normalized chunk
+            // embeddings. Same shape as `searchSimilar` (pages).
+            if EmbeddingService.isAvailable,
+               let queryBlob = EmbeddingService.embeddingBlob(for: query),
+               let queryVec = VectorCosine.decode(queryBlob) {
+                DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
+                // Single query: carry the 12 summary columns + chunk embedding per
+                // row. The explicit column list (NEVER `SELECT s.*`) is the
+                // `readSourceSummary(from:)` contract — a regression guard kept
+                // from `searchSimilarSourcesNeverSelectsStar`.
+                let rows = try Row.fetchAll(db, sql: """
                     SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-                           s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
-                    FROM (
-                        SELECT source_id, MIN(vec_distance_cosine(embedding, ?)) AS best
-                        FROM source_chunks GROUP BY source_id
-                    ) r
-                    JOIN sources s ON s.id = r.source_id
-                    ORDER BY r.best ASC
-                    LIMIT ?;
-                    """,
-                    arguments: [queryBlob, pool]
-                ).map { row in
-                    try Self.readSourceSummary(from: row)
+                           s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role,
+                           sc.embedding
+                    FROM source_chunks sc
+                    JOIN sources s ON s.id = sc.source_id;
+                    """)
+                var best: [String: (sim: Float, row: Row)] = [:]
+                best.reserveCapacity(rows.count)
+                for row in rows {
+                    let id: String = row["id"]
+                    let embedding: Data = row["embedding"]
+                    guard let v = VectorCosine.decode(embedding), v.count == queryVec.count else {
+                        DebugLog.store("search[sources]: skipped undecodable chunk for \(id)")
+                        continue
+                    }
+                    let sim = VectorCosine.dot(queryVec, v)
+                    if sim > (best[id]?.sim ?? -.infinity) { best[id] = (sim, row) }
                 }
+                let semRows: [SourceSummary] = try best
+                    .sorted { $0.value.sim > $1.value.sim }
+                    .prefix(pool)
+                    .map { _, entry in try Self.readSourceSummary(from: entry.row) }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=false")
+            DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -5960,30 +5971,41 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // cosine semantic leg contributes.
             let ftsRows = bm25Leg ?? []
 
-            // --- Semantic (vec cosine) pass + RRF ---
-            if Self.isVecAvailable(db),
-               let queryBlob = EmbeddingService.embeddingBlob(for: query) {
-                DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=true")
-                let semRows = try Row.fetchAll(
-                    db,
-                    sql: """
+            // --- Semantic (cosine) pass + RRF ---
+            // Swift-side dot product (issue #628) over L2-normalized chunk
+            // embeddings. Same shape as `searchSimilar` (pages).
+            if EmbeddingService.isAvailable,
+               let queryBlob = EmbeddingService.embeddingBlob(for: query),
+               let queryVec = VectorCosine.decode(queryBlob) {
+                DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
+                let rows = try Row.fetchAll(db, sql: """
                     SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
-                           (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count
-                    FROM (
-                        SELECT chat_id, MIN(vec_distance_cosine(embedding, ?)) AS best
-                        FROM chat_chunks GROUP BY chat_id
-                    ) r
-                    JOIN chats c ON c.id = r.chat_id
-                    ORDER BY r.best ASC
-                    LIMIT ?;
-                    """,
-                    arguments: [queryBlob, pool]
-                ).map { row in
-                    Self.readChatSummary(from: row, summary: nil, summaryAt: nil)
+                           (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
+                           cc.embedding
+                    FROM chat_chunks cc
+                    JOIN chats c ON c.id = cc.chat_id;
+                    """)
+                var best: [String: (sim: Float, row: Row)] = [:]
+                best.reserveCapacity(rows.count)
+                for row in rows {
+                    let id: String = row["id"]
+                    let embedding: Data = row["embedding"]
+                    guard let v = VectorCosine.decode(embedding), v.count == queryVec.count else {
+                        DebugLog.store("search[chats]: skipped undecodable chunk for \(id)")
+                        continue
+                    }
+                    let sim = VectorCosine.dot(queryVec, v)
+                    if sim > (best[id]?.sim ?? -.infinity) { best[id] = (sim, row) }
                 }
+                let semRows = best
+                    .sorted { $0.value.sim > $1.value.sim }
+                    .prefix(pool)
+                    .map { _, entry in
+                        Self.readChatSummary(from: entry.row, summary: nil, summaryAt: nil)
+                    }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), vec=false")
+            DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -6183,13 +6205,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     // MARK: - GRDB implementation helpers
-
-    /// Whether the sqlite-vec scalar functions are registered on this connection.
-    /// Probed the same way as SQLiteWikiStore.isVecAvailable: `vec_distance_cosine`
-    /// exists iff the query resolves without error. Called inside dbWriter.read.
-    private static func isVecAvailable(_ db: Database) -> Bool {
-        (try? Row.fetchOne(db, sql: "SELECT vec_distance_cosine(x'00000000', x'00000000');")) != nil
-    }
 
     /// Read a ChatSummary from a GRDB Row. The `summary` and `summaryAt` columns
     /// are passed in so this works for both the 6-column search variants (nil) and
@@ -6429,15 +6444,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    /// Whether sqlite-vec scalar functions are registered on this connection.
-    /// Mirrors `SQLiteWikiStore.isVecAvailable`. Best-effort.
+    /// Whether the embedder is loaded — the semantic-cosine gate now that
+    /// the C scalar target is retired (issue #628). Best-effort re-embed still
+    /// routes through `EmbeddingService.isAvailable` directly (no separate
+    /// probe).
 
 
     /// Best-effort re-embed of `sourceID` from `body`. Runs POST-commit (never
     /// inside `mutate`): reads the source name on its own, runs MLX chunked
     /// embeddings out-of-transaction, then writes via the existing public
-    /// `storeSourceChunks` (its own transaction). Gated on vec availability.
-    /// Mirrors `SQLiteWikiStore.reembedSource` minus the lock-holding.
+    /// `storeSourceChunks` (its own transaction). Gated on the embedder being
+    /// loaded (the model must be available to embed). Mirrors
+    /// `SQLiteWikiStore.reembedSource` minus the lock-holding.
     private func reembedSource(sourceID: PageID, body: String) {
         guard let title = try? dbWriter.read({ db in
             try String.fetchOne(
@@ -6446,8 +6464,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 arguments: [sourceID.rawValue]
             )
         }) else { return }
-        let vecOK: Bool = (try? dbWriter.read { db in Self.isVecAvailable(db) }) ?? false
-        guard vecOK else { return }
+        // Embedder-gated (issue #628): no C scalar to probe anymore; the
+        // embedder must be loaded to produce chunk vectors.
+        guard EmbeddingService.isAvailable else { return }
         let text = body.isEmpty ? title : "\(title)\n\n\(body)"
         let chunks = EmbeddingService.chunkedEmbeddings(for: text)
         guard !chunks.isEmpty else {
@@ -7508,15 +7527,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - Test hooks (#if DEBUG)
 
-    #if DEBUG
-    /// Test hook: whether sqlite-vec is registered on this connection — proves
-    /// the statically-linked extension loaded. The semantic cosine path still
-    /// can't RANK under `swift test` (NLEmbedding is app-gated), but this
-    /// confirms the scalar functions are available. Mirrors
-    /// `SQLiteWikiStore.vecRegisteredForTesting`.
-    var vecRegisteredForTesting: Bool {
-        (try? dbWriter.read { db in Self.isVecAvailable(db) }) ?? false
-    }
-    #endif
-
+    // No C-scalar registration test hook anymore — the vendored scalar target
+    // is retired (issue #628). Semantic-cosine ranking is now pure Swift
+    // (`VectorCosine`); tests assert the ranker directly (`VectorCosineTests`)
+    // rather than probing a C-extension scalar on the connection.
 }
