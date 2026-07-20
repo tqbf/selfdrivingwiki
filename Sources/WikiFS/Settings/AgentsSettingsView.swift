@@ -65,90 +65,78 @@ struct AgentsSettingsView: View {
     }
 
     var body: some View {
-        // Collapsible title bar matching `PageDetailView` / `SourceDetailView`
-        // / `ChatView`. Collapsed shows just the "Agents" title row; expanded
-        // reveals the providers list below. The title is non-editable (a
-        // fixed label for the whole settings tab), so `isTitleDisabled` pins it.
-        CollapsibleDetailHeader(
-            systemImage: "cpu",
-            title: "Agents",
-            isTitleDisabled: true,
-            isExpanded: $isExpanded,
-            onTitleCommit: { _ in }
+        // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
+        // is a scroll container that sizes to content, which let the
+        // providers List grow unbounded and pushed the action bar off-
+        // screen. A plain VStack lets us give the List `.frame(maxHeight:
+        // .infinity)` so it fills available space and scrolls internally,
+        // while the action bar below stays pinned at the bottom.
+        providersSection
+            .frame(minWidth: 560, minHeight: 520, alignment: .top)
+        // #663: the Add Provider sheet. Non-destructive (nothing is written
+        // until an Add button is pressed — AC.2). The handoff to the editor
+        // uses `DispatchQueue.main.async` (see correction §5): letting this
+        // sheet finish dismissing before the editor presents avoids the
+        // SwiftUI hazard where the second sheet silently fails when the
+        // first is mid-dismissal.
+        .sheet(isPresented: $showAddSheet) {
+            AddProviderSheet(
+                existingIDs: Set(config.providers.map(\.id)),
+                onAdd: { provider in appendProvider(provider) },
+                onAddNeedsEditor: { provider in
+                    showAddSheet = false
+                    // #663: this provider was just appended by `onAdd`
+                    // above with no selected model. Mark it as a fresh add
+                    // so the editor's Cancel button removes it (see
+                    // `ProviderEditorView` Cancel handler).
+                    DispatchQueue.main.async {
+                        isAddingNewProvider = true
+                        editingProvider = provider
+                    }
+                })
+        }
+        .sheet(item: $editingProvider) { provider in
+            ProviderEditorView(
+                provider: provider,
+                cachedModels: config.cachedModels(forProvider: provider.id),
+                selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
+                isAddingNew: isAddingNewProvider,
+                credentialStore: credentialStore,
+                onSave: { updated, selectedModelId in
+                    applyEdit(updated, selectedModelId: selectedModelId)
+                    isAddingNewProvider = false
+                },
+                onDelete: {
+                    // Cancel on a freshly-added provider: remove it from
+                    // `config.providers` (no confirmation needed — it has
+                    // no model and was just appended; its API key, if any,
+                    // is left in the Keychain for a future add).
+                    if let pending = editingProvider {
+                        removeProvider(pending)
+                    }
+                    isAddingNewProvider = false
+                },
+                onRefreshModels: { provider, models in
+                    // #640: durable-persist path for probe-discovered models.
+                    // Runs on the parent (which owns `containerDirectory` +
+                    // `@State config`). Uses `settingCachedModels` directly so
+                    // ALL existing fields carry over (maxConcurrent in
+                    // particular — the parent's `save(_:)` helper drops it,
+                    // pre-existing bug at AgentsSettingsView.swift:250-255,
+                    // :360-362). `@Sendable` so the sheet's `Task` can call
+                    // it across actors.
+                    await persistDiscoveredModels(models, forProvider: provider.id)
+                })
+        }
+        .confirmationDialog(
+            "Delete \(providerPendingDeletion?.label ?? "provider")?",
+            isPresented: isShowingDeleteConfirmation,
+            titleVisibility: .visible
         ) {
-            // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
-            // is a scroll container that sizes to content, which let the
-            // providers List grow unbounded and pushed the action bar off-
-            // screen. A plain VStack lets us give the List `.frame(maxHeight:
-            // .infinity)` so it fills available space and scrolls internally,
-            // while the action bar below stays pinned at the bottom.
-            providersSection
-                .frame(minWidth: 560, minHeight: 520, alignment: .top)
-            // #663: the Add Provider sheet. Non-destructive (nothing is written
-            // until an Add button is pressed — AC.2). The handoff to the editor
-            // uses `DispatchQueue.main.async` (see correction §5): letting this
-            // sheet finish dismissing before the editor presents avoids the
-            // SwiftUI hazard where the second sheet silently fails when the
-            // first is mid-dismissal.
-            .sheet(isPresented: $showAddSheet) {
-                AddProviderSheet(
-                    existingIDs: Set(config.providers.map(\.id)),
-                    onAdd: { provider in appendProvider(provider) },
-                    onAddNeedsEditor: { provider in
-                        showAddSheet = false
-                        // #663: this provider was just appended by `onAdd`
-                        // above with no selected model. Mark it as a fresh add
-                        // so the editor's Cancel button removes it (see
-                        // `ProviderEditorView` Cancel handler).
-                        DispatchQueue.main.async {
-                            isAddingNewProvider = true
-                            editingProvider = provider
-                        }
-                    })
-            }
-            .sheet(item: $editingProvider) { provider in
-                ProviderEditorView(
-                    provider: provider,
-                    cachedModels: config.cachedModels(forProvider: provider.id),
-                    selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
-                    isAddingNew: isAddingNewProvider,
-                    credentialStore: credentialStore,
-                    onSave: { updated, selectedModelId in
-                        applyEdit(updated, selectedModelId: selectedModelId)
-                        isAddingNewProvider = false
-                    },
-                    onDelete: {
-                        // Cancel on a freshly-added provider: remove it from
-                        // `config.providers` (no confirmation needed — it has
-                        // no model and was just appended; its API key, if any,
-                        // is left in the Keychain for a future add).
-                        if let pending = editingProvider {
-                            removeProvider(pending)
-                        }
-                        isAddingNewProvider = false
-                    },
-                    onRefreshModels: { provider, models in
-                        // #640: durable-persist path for probe-discovered models.
-                        // Runs on the parent (which owns `containerDirectory` +
-                        // `@State config`). Uses `settingCachedModels` directly so
-                        // ALL existing fields carry over (maxConcurrent in
-                        // particular — the parent's `save(_:)` helper drops it,
-                        // pre-existing bug at AgentsSettingsView.swift:250-255,
-                        // :360-362). `@Sendable` so the sheet's `Task` can call
-                        // it across actors.
-                        await persistDiscoveredModels(models, forProvider: provider.id)
-                    })
-            }
-            .confirmationDialog(
-                "Delete \(providerPendingDeletion?.label ?? "provider")?",
-                isPresented: isShowingDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) { confirmDelete() }
-                Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
-            } message: {
-                Text("This removes the provider from the app. You can add it again later.")
-            }
+            Button("Delete", role: .destructive) { confirmDelete() }
+            Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
+        } message: {
+            Text("This removes the provider from the app. You can add it again later.")
         }
     }
 
@@ -156,13 +144,6 @@ struct AgentsSettingsView: View {
 
     private var providersSection: some View {
         VStack(spacing: 0) {
-            Text("Providers")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 6)
-
             if config.providers.isEmpty {
                 // Defensive — `loadOrSeed` guarantees at least one provider,
                 // but a hand-edited/corrupt file could empty the list.

@@ -507,16 +507,7 @@ struct WikiFSApp: App {
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.agents)
-                    .tabItem { Label("Agents", systemImage: "cpu") }
-                // Split out from the Agents tab so the provider list no
-                // longer pushes the permission pickers out of view when
-                // there are more than ~3 providers (the Form clipped at
-                // the window height without scrolling). The `@AppStorage`
-                // keys are view-independent so they work unchanged in a
-                // separate view.
-                PermissionsSettingsView()
-                    .tag(SettingsTab.permissions)
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
+                    .tabItem { Label("Agents", systemImage: "cpu") }            
             }
             .appEnvironment(tracker: activityTracker)
             .frame(minWidth: 560, minHeight: 520)
