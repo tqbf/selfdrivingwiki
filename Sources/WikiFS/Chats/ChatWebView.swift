@@ -116,7 +116,14 @@ struct ChatWebView: NSViewRepresentable {
     /// See Bug #1 in `makeNSView` for why these keys are needed.
     @discardableResult
     private static func setSPI(_ key: String, _ value: Any, on webView: WKWebView) -> Bool {
-        guard webView.responds(to: NSSelectorFromString("setValue:forKey:")) else { return false }
+        // The obvious guard — `responds(to: setValue:forKey:)` — is useless: every
+        // NSObject responds to it, so it never blocked an unknown key. KVC then
+        // throws NSUnknownKeyException, an ObjC exception Swift cannot catch, which
+        // aborts the app (macOS 26 dropped one of these keys; regression from #708).
+        // Probe the key itself instead: both SPI keys are plain properties whose
+        // getter selector IS the key, so `responds(to:)` on the key is a real
+        // presence check that disappears the moment the OS removes the property.
+        guard webView.responds(to: NSSelectorFromString(key)) else { return false }
         webView.setValue(value, forKey: key)
         return true
     }
