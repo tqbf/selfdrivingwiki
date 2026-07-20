@@ -67,8 +67,8 @@ struct AgentsSettingsView: View {
     var body: some View {
         // Collapsible title bar matching `PageDetailView` / `SourceDetailView`
         // / `ChatView`. Collapsed shows just the "Agents" title row; expanded
-        // reveals the Form below. The title is non-editable (a fixed label
-        // for the whole settings tab), so `isTitleDisabled` pins it.
+        // reveals the providers list below. The title is non-editable (a
+        // fixed label for the whole settings tab), so `isTitleDisabled` pins it.
         CollapsibleDetailHeader(
             systemImage: "cpu",
             title: "Agents",
@@ -76,11 +76,14 @@ struct AgentsSettingsView: View {
             isExpanded: $isExpanded,
             onTitleCommit: { _ in }
         ) {
-            Form {
-                providersSection
-            }
-            .formStyle(.grouped)
-            .frame(minWidth: 560, minHeight: 520)
+            // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
+            // is a scroll container that sizes to content, which let the
+            // providers List grow unbounded and pushed the action bar off-
+            // screen. A plain VStack lets us give the List `.frame(maxHeight:
+            // .infinity)` so it fills available space and scrolls internally,
+            // while the action bar below stays pinned at the bottom.
+            providersSection
+                .frame(minWidth: 560, minHeight: 520, alignment: .top)
             // #663: the Add Provider sheet. Non-destructive (nothing is written
             // until an Add button is pressed — AC.2). The handoff to the editor
             // uses `DispatchQueue.main.async` (see correction §5): letting this
@@ -152,68 +155,88 @@ struct AgentsSettingsView: View {
     // MARK: - Providers section
 
     private var providersSection: some View {
-        Section {
+        VStack(spacing: 0) {
+            Text("Providers")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 6)
+
             if config.providers.isEmpty {
                 // Defensive — `loadOrSeed` guarantees at least one provider,
                 // but a hand-edited/corrupt file could empty the list.
                 ProvidersEmptyState { showAddSheet = true }
-                    .frame(minHeight: 200)
-                    .listRowBackground(Color.clear)
             } else {
+                // List fills available vertical space and scrolls INTERNALLY;
+                // `maxHeight: .infinity` (not `minHeight: 160`) prevents the
+                // unbounded-grow that previously scrolled the action bar out
+                // of view. The action bar below is a SIBLING of the List in
+                // this VStack, so it stays pinned at the bottom and outside
+                // the List's scroll area.
                 List(config.providers, selection: $selectedProviderID) { provider in
                     providerRow(provider)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            selectedProviderID = provider.id
-                            isAddingNewProvider = false
-                            editingProvider = provider
-                        }
                 }
-                .frame(minHeight: 160)
                 .listStyle(.inset)
+                .frame(maxHeight: .infinity)
 
-                HStack {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Label("Add Provider", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button {
-                        if let provider = selectedProvider {
-                            providerPendingDeletion = provider
-                        }
-                    } label: {
-                        Image(systemName: "minus")
-                    }
-                    .disabled(selectedProvider == nil || config.providers.count <= 1)
-
-                    Button("Make Default") {
-                        if let id = selectedProviderID {
-                            save(config.settingDefault(id: id))
-                        }
-                    }
-                    .disabled(selectedProvider?.isDefault ?? true)
-
-                    Spacer()
-
-                    Button("Edit…") {
-                        if let provider = selectedProvider {
-                            isAddingNewProvider = false
-                            editingProvider = provider
-                        }
-                    }
-                    .disabled(selectedProvider == nil)
-                }
+                providerActionBar
             }
-        } header: {
-            Text("Providers")
-        } footer: {
-            Text("Double-click a provider to edit its command, environment, API key, and models.")
+
+            Text("Select a provider and click Edit… to edit its command, environment, API key, and models.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 14)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The Add / Remove / Make Default / Edit button row. Kept OUTSIDE the
+    /// List (a sibling in `providersSection`'s VStack) so it stays pinned at
+    /// the bottom of the pane and never scrolls off-screen.
+    private var providerActionBar: some View {
+        HStack {
+            Button {
+                showAddSheet = true
+            } label: {
+                Label("Add Provider", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button {
+                if let provider = selectedProvider {
+                    providerPendingDeletion = provider
+                }
+            } label: {
+                Image(systemName: "minus")
+            }
+            .disabled(selectedProvider == nil || config.providers.count <= 1)
+
+            Button("Make Default") {
+                if let id = selectedProviderID {
+                    save(config.settingDefault(id: id))
+                }
+            }
+            .disabled(selectedProvider?.isDefault ?? true)
+
+            Spacer()
+
+            Button("Edit…") {
+                if let provider = selectedProvider {
+                    // Editing an existing (not freshly-added) provider: clear
+                    // the new-add flag so the editor's Cancel button doesn't
+                    // delete it (see `ProviderEditorView` Cancel handler).
+                    isAddingNewProvider = false
+                    editingProvider = provider
+                }
+            }
+            .disabled(selectedProvider == nil)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
     }
 
     private func providerRow(_ provider: AgentProvider) -> some View {
