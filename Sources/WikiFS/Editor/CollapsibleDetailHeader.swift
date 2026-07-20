@@ -71,11 +71,12 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            DebugLog.tabs("CollapsibleDetailHeader: header double-tapped — wasExpanded=\(isExpanded)")
+        .onTapGesture {
+            DebugLog.tabs("CollapsibleDetailHeader: header tapped — wasExpanded=\(isExpanded)")
             withAnimation(.easeInOut(duration: 0.2)) {
                 isExpanded.toggle()
             }
         }
+        .hoverRowBackground()
     }
 }
