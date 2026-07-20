@@ -150,6 +150,14 @@ private final class ClosureMenuItemTarget: NSObject {
     @objc func invoke() { closure() }
 }
 
+private struct AddURLHandlerKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+
+private struct AddBookmarkHandlerKey: EnvironmentKey {
+    static let defaultValue: ((BookmarkTargetPickerContext) -> Void)? = nil
+}
+
 extension EnvironmentValues {
     /// Opens the "Add from URL" sheet, pre-filling the field with the given URL
     /// string (empty for the toolbar / empty-state buttons; the absolute URL for
@@ -160,11 +168,17 @@ extension EnvironmentValues {
     /// buttons) so external links can be ingested from any reader without
     /// threading a closure through every detail view. Mirrors how the reader
     /// already injects behavior via `\.openURL`.
-    @Entry var addURLHandler: ((String) -> Void)? = nil
+    var addURLHandler: ((String) -> Void)? {
+        get { self[AddURLHandlerKey.self] }
+        set { self[AddURLHandlerKey.self] = newValue }
+    }
 
     /// Presents `BookmarkTargetPickerSheet` for the given context — set once by
     /// `ContentView` and read deep in the reader tree via `WikiLinkMenuNSItems`,
     /// so a right-clicked internal wiki link can be filed into a bookmark folder
     /// without threading a closure through every detail view. Issue #188.
-    @Entry var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)? = nil
+    var addBookmarkHandler: ((BookmarkTargetPickerContext) -> Void)? {
+        get { self[AddBookmarkHandlerKey.self] }
+        set { self[AddBookmarkHandlerKey.self] = newValue }
+    }
 }
