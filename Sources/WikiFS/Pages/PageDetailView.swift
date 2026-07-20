@@ -28,6 +28,18 @@ struct PageDetailView: View {
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
+    /// Per-view collapse state for the Provenance panel (page-provenance
+    /// #page-provenance). Defaults collapsed; the heavy-ish origin/history
+    /// reads are gated on expansion so the hot `body` re-render stays cheap
+    /// (per the plan §7 risk table — keep the provenance read in a `@State`
+    /// loaded on expand, not inline in the view body).
+    @State private var isProvenanceExpanded = false
+    /// The HEAD origin (once loaded, when the panel is expanded). `nil`
+    /// indicates "not yet loaded" or "no version rows for this page".
+    @State private var provenanceOrigin: PageOrigin?
+    /// The full edit history (every `page_versions` row joined to its
+    /// activity + agent, oldest-first). Loaded alongside `provenanceOrigin`.
+    @State private var provenanceHistory: [PageOrigin] = []
 
     // Find bar state. The model is shared (hoisted to `ContentView` and injected
     // via environment) so the address bar's "Find on Page…" menu item can drive
@@ -60,6 +72,8 @@ struct PageDetailView: View {
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+                provenanceSection
 
                 HStack(spacing: 10) {
                     if isEditing {
@@ -180,6 +194,11 @@ struct PageDetailView: View {
             if store.activeTabID == lastKnownActiveTabID {
                 isEditing = false
             }
+            // Reset provenance state when the selection changes so a stale
+            // origin/history from the previous page doesn't flicker into the
+            // expanded panel before the `.task(id:)` reloads.
+            provenanceOrigin = nil
+            provenanceHistory = []
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
@@ -378,6 +397,44 @@ struct PageDetailView: View {
         guard let selection = store.selection,
               case .page(let id) = selection else { return nil }
         return store.summaries.first(where: { $0.id == id })?.updatedAt
+    }
+
+    // MARK: - Provenance (page origin / edit history, #page-provenance)
+
+    /// The id of the page currently shown in this detail view (the read-side
+    /// key the `WikiStoreModel` provenance accessors take).
+    private var currentPageID: PageID? {
+        guard case .page(let id) = store.selection else { return nil }
+        return id
+    }
+
+    /// Collapsible "Provenance" panel — created-by / last-edited-by / edit
+    /// history from the page-PROV graph (`agents` + `activities` +
+    /// `page_versions`). Defaults collapsed so the hot `_ = body` re-render
+    /// doesn't pay for a 4-table join per keystatechange; the `.task(id:)`
+    /// only fires when the panel expands or the page changes. Loaded via
+    /// `WikiStoreModel.pageOrigin(for:)` / `pageEditHistory(for:)` (through
+    /// the public `WikiStore` protocol, no downcast).
+    @ViewBuilder private var provenanceSection: some View {
+        if let pageID = currentPageID {
+            DisclosureGroup(isExpanded: $isProvenanceExpanded) {
+                ProvenancePanel(
+                    pageID: pageID,
+                    origin: provenanceOrigin,
+                    history: provenanceHistory)
+                .padding(.top, 4)
+            } label: {
+                Label("Provenance", systemImage: "clock.arrow.circlepath")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .task(id: ProvenanceTaskKey(pageID: pageID, expanded: isProvenanceExpanded)) {
+                // Only load when expanded; a collapsed panel needs no read.
+                guard isProvenanceExpanded else { return }
+                provenanceOrigin = store.pageOrigin(for: pageID)
+                provenanceHistory = store.pageEditHistory(for: pageID)
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -662,6 +719,124 @@ struct PageOutlineView: View {
         result = result.replacingOccurrences(of: "**", with: "")
         result = result.replacingOccurrences(of: "__", with: "")
         return result
+    }
+}
+
+// MARK: - Provenance panel (#page-provenance)
+
+/// Hashable key for `PageDetailView.provenanceSection`'s `.task(id:)` — fires
+/// both on selection change AND on the disclosure expanding, so the provenance
+/// read runs only when there's something to show.
+private struct ProvenanceTaskKey: Hashable {
+    let pageID: PageID
+    let expanded: Bool
+}
+
+/// The expanded contents of the "Provenance" `DisclosureGroup` in
+/// `PageDetailView`. Pure-render over its inputs (no I/O); the parent
+/// `PageDetailView` loads `.origin` + `.history` via its `.task(id:)` and
+/// passes them in here. Kept self-contained so the type checker resolves the
+/// `body` subtree independently (the parent body is large already).
+struct ProvenancePanel: View {
+    let pageID: PageID
+    let origin: PageOrigin?
+    let history: [PageOrigin]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let origin {
+                originRow(origin)
+            } else {
+                Text("No provenance yet")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            }
+            if !history.isEmpty {
+                Divider().opacity(0.5)
+                Text("Edit history")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(Array(history.enumerated()), id: \.element.versionID) { idx, entry in
+                    historyRow(idx, entry)
+                }
+            }
+        }
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder private func originRow(_ origin: PageOrigin) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Created-by / last-edited-by row.
+            HStack(spacing: 6) {
+                Text("Last saved by")
+                    .foregroundStyle(.secondary)
+                agentLabel(name: origin.agentName, kind: origin.agentKind)
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(origin.activityKind)
+                    .font(.callout.weight(.semibold))
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(origin.savedAt, style: .relative)
+                    .foregroundStyle(.secondary)
+                Text("ago")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func historyRow(_ idx: Int, _ entry: PageOrigin) -> some View {
+        HStack(spacing: 6) {
+            Text("\(idx)")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Text(entry.activityKind)
+                .font(.callout.weight(.semibold))
+            agentLabel(name: entry.agentName, kind: entry.agentKind)
+            Text("·")
+                .foregroundStyle(.secondary)
+            Text(entry.savedAt, style: .date)
+                .foregroundStyle(.secondary)
+            if entry.title.isEmpty == false {
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(entry.title)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
+    /// Render the agent identity. For `chat:<id>` agents, render the chatID
+    /// as a `[[chat:…]]`-style link (per #page-provenance §5.5 — consistent
+    /// with how `chat:<id>` provenance values surface elsewhere). For other
+    /// kinds, the agent name is shown verbatim with its kind label.
+    @ViewBuilder
+    private func agentLabel(name: String, kind: String) -> some View {
+        if name.hasPrefix("chat:") {
+            // Drop the `chat:` prefix to render the chat id cleanly with the
+            // chat icon. The full `chat:<id>` is preserved in the tooltip.
+            let chatID = String(name.dropFirst("chat:".count))
+            Label(chatID, systemImage: "bubble.left.and.bubble.right")
+                .help(name)
+                .foregroundStyle(.secondary)
+        } else if name.hasPrefix("agent:") {
+            Label(name, systemImage: "cpu")
+                .help("\(kind) agent")
+                .foregroundStyle(.secondary)
+        } else if name == "user" {
+            Label(name, systemImage: "person")
+                .foregroundStyle(.secondary)
+        } else if name == "legacy-import" {
+            Label("Imported (legacy)", systemImage: "tray.and.arrow.down")
+                .foregroundStyle(.secondary)
+        } else {
+            Text(name)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

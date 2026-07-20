@@ -80,6 +80,36 @@ struct StoreEmissionTests {
         #expect(events.last?.id == page.id.rawValue)
     }
 
+    /// AC.6 — `updatePage` after the page-provenance refactor composes the
+    /// version-append logic via `appendPageVersionLocked` (a private `db:`-
+    /// taking helper that does NOT emit). This MUST emit EXACTLY one
+    /// `.page .updated` event per call — the refactor's HIGH hazard
+    /// (`plans/page-provenance.md` §5.3) is that delegating to public
+    /// `appendPageVersion` would double-emit AND re-enter `mutate`. The
+    /// structural fix is one emit per public wrapper; this test catches a
+    /// regression by counting events.
+    ///
+    /// Uses a DISTINCT author (`lastEditedBy: "agent-edit"`) from the create
+    /// page (which had `createdBy: nil` → `last_edited_by = nil`) so the
+    /// `tryAmendPageVersion` same-actor coalescer cannot short-circuit and
+    /// `appendPageVersionLocked` actually runs. (Per AC.3 / §5.3 LOW note.)
+    @Test func test_updatePage_after_versioning_refactor_emits_single_page_updated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let page = try store.createPage(title: "Provenance")
+        try await drain(rec)
+        let beforeUpdate = rec.count
+        try store.updatePage(
+            id: page.id, title: "Provenance (edited)", body: "edited body",
+            lastEditedBy: "agent-edit")
+        // Exactly ONE new event for the update — no double-emit, no deadlock.
+        let events = try await awaitEvents(rec, expected: beforeUpdate + 1)
+        let newEvents = Array(events.dropFirst(beforeUpdate))
+        #expect(newEvents.count == 1, "updatePage must emit exactly one event (got \(newEvents.count))")
+        #expect(newEvents.first?.kind == .page)
+        #expect(newEvents.first?.change == .updated)
+        #expect(newEvents.first?.id == page.id.rawValue)
+    }
+
     @Test func deletePageEmitsPageDeleted() async throws {
         let (store, _, rec) = try makeHarness()
         let page = try store.createPage(title: "Hello")
