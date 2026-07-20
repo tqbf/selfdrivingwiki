@@ -149,7 +149,8 @@ After each agent response completes:
   - **Show internals** — reveals the raw event feed (tool calls, diagnostics).
   - **Hide tool calls** — filters tool-call rows.
   - **Exit status** — shows "Ended" or "Exited N" when the process finishes.
-  - **Reveal Log** — opens the raw log file in Finder.
+  - **Reveal Debug Folder** — opens the run's debug trace folder in Finder
+    (ACP messages, permissions, usage, stderr.log).
 
 ---
 

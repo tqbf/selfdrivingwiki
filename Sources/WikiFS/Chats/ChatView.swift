@@ -228,11 +228,6 @@ struct ChatView: View {
                     if let status = launcher.exitStatus {
                         Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
                     }
-                    if let logURL = launcher.logFileURL {
-                        Button("Reveal Log", systemImage: "doc.text.magnifyingglass") {
-                            NSWorkspace.shared.activateFileViewerSelecting([logURL])
-                        }
-                    }
                     if let debugURL = launcher.debugFolderURL {
                         Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
                             NSWorkspace.shared.activateFileViewerSelecting([debugURL])
