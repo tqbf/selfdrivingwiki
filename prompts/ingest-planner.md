@@ -30,7 +30,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
   "pages": [
     {
       "title": "Page Title",
-      "sourceFile": "source-1.md",
+      "sourceFile": "Neuralwatt-Cloud-Platform--01KXYMP7J6HZ3E34ZZX02HKS1F.html",
       "sourceRanges": "lines 1-80",
       "outline": "1-3 sentence description of what this page covers"
     }
@@ -42,7 +42,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 ### Field rules
 
 - `title`: the wiki page title (clear, specific, stable). Upserting an existing title updates it.
-- `sourceFile`: the actual filename in your working directory (e.g. "source-1.md").
+- `sourceFile`: the actual filename in your working directory — copy it verbatim from the source list above (the descriptive `<stem>--<ulid>.<ext>` leaf).
 - `sourceRanges`: a human-readable description of where in the source file the content for this page is (e.g. "lines 1-80" or "section 'Introduction'" or "entire file").
 - `outline`: a 1-3 sentence description of what the page will cover.
 - `sourceIDs`: the list of source IDs given above. Copy them verbatim.

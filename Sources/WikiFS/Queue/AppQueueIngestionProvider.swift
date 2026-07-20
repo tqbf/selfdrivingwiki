@@ -167,7 +167,9 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             sources.append(OperationRequest.StagedSource(
                 bytes: sourceBytes,
                 ext: sourceExt,
-                displayPath: ingestSourcePath(for: source)
+                displayPath: ingestSourcePath(for: source),
+                name: source.effectiveName,
+                sourceID: source.id.rawValue
             ))
         }
 

@@ -20,7 +20,13 @@ public struct ACPIngestPageAssignment: Codable, Equatable, Sendable {
     /// The wiki page title to create or update (upserting an existing title
     /// updates it — the planner checks `wikictl page list` for dedup).
     public let title: String
-    /// The staged source filename in the scratch directory (e.g. `"source-1.md"`).
+    /// The staged source filename in the scratch directory — a shell-safe,
+    /// provenance-carrying leaf of the form
+    /// `<shellSafeStem>--<full-ULID>.<ext>`
+    /// (e.g. `"Neuralwatt-Cloud-Platform--01KXYMP7J6HZ3E34ZZX02HKS1F.html"`).
+    /// The planner copies this verbatim from the source list in its prompt;
+    /// the executor dispatch keys on it via `distinctSourceFiles` /
+    /// `assignments(forSource:)` (exact string match).
     public let sourceFile: String
     /// Human-readable description of where in the source file the content for
     /// this page is (e.g. `"lines 1-80"`, `"section 'Intro'"`, `"entire file"`).
@@ -176,7 +182,12 @@ public enum ACPIngestPrompts {
             """
         }.joined(separator: "\n\n")
 
-        let primarySourceFile = assignments.first?.sourceFile ?? "source-1.md"
+        // The fallback is only reached when `assignments` is empty — an
+        // executor always has ≥1 page in practice (the launcher skips an
+        // empty-assignment source). `source.md` is an obviously-placeholder
+        // leaf (no `--<ulid>` suffix, no provenance) so a missing assignment
+        // is visible at a glance rather than masquerading as a real source.
+        let primarySourceFile = assignments.first?.sourceFile ?? "source.md"
 
         return PromptTemplate.fill(GeneratedPrompts.ingestExecutor, [
             "STATE_FILE_PATH": stateFilePath,
