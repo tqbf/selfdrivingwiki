@@ -118,7 +118,7 @@ struct AgentsSettingsView: View {
                 Button("Delete", role: .destructive) { confirmDelete() }
                 Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
             } message: {
-                Text("This removes its command and environment. Its API key stays in the Keychain until overwritten.")
+                Text("This removes the provider from the app. You can add it again later.")
             }
         }
     }

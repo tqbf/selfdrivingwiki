@@ -324,7 +324,12 @@ struct ACPRegistryClient: Sendable {
                 label: agent.name,
                 summary: agent.description ?? "",
                 detectExecutable: spawn.detect,
-                command: spawn.command
+                command: spawn.command,
+                // `npx` / `uvx` distributions use the runtime as `detectExecutable`
+                // — finding the runtime on PATH does NOT mean the agent package
+                // is installed, so don't auto-detect. Standalone-binary entries
+                // (the `.binary` case) keep the default `true`.
+                autoDetectable: spawn.autoDetectable
             )
         }
     }
@@ -341,18 +346,22 @@ struct ACPRegistryClient: Sendable {
     ///   to `darwin-x86_64` if the aarch64 entry is absent (the binary will
     ///   run under Rosetta on an Apple-Silicon Mac).
     /// - `uvx` → `command = ["uvx", package] + args`, `detectExecutable = "uvx"`.
+    ///
+    /// `autoDetectable` is `false` for `npx`/`uvx` (the runtime being on PATH
+    /// doesn't mean the package is installed) and `true` for `binary` (the
+    /// standalone executable IS the agent).
     private static func spawn(
         for distribution: ACPRegistryDistribution
-    ) -> (detect: String, command: [String])? {
+    ) -> (detect: String, command: [String], autoDetectable: Bool)? {
         switch distribution {
         case .npx(let npx):
             var command = ["npx", npx.package]
             if let args = npx.args { command.append(contentsOf: args) }
-            return ("npx", command)
+            return ("npx", command, false)
         case .uvx(let uvx):
             var command = ["uvx", uvx.package]
             if let args = uvx.args { command.append(contentsOf: args) }
-            return ("uvx", command)
+            return ("uvx", command, false)
         case .binary(let platforms):
             // Prefer the native arch; fall back to x86_64 (Rosetta).
             let platform = platforms["darwin-aarch64"] ?? platforms["darwin-x86_64"]
@@ -360,7 +369,7 @@ struct ACPRegistryClient: Sendable {
             let detect = bin.cmd.hasPrefix("./") ? String(bin.cmd.dropFirst(2)) : bin.cmd
             var command = [detect]
             if let args = bin.args { command.append(contentsOf: args) }
-            return (detect, command)
+            return (detect, command, true)
         }
     }
 }

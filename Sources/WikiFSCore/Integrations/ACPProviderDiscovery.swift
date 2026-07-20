@@ -13,6 +13,12 @@ import Foundation
 /// Discovery checks the BINARY exists — it does NOT verify the agent actually
 /// speaks ACP (that's validated when `ACPBackend` launches it). A found agent is
 /// a candidate, not a guarantee.
+///
+/// Entries where `KnownACPAgent.autoDetectable == false` are SKIPPED. Those
+/// entries' `detectExecutable` is a generic JS/Python runtime (`bun`, `npx`,
+/// `uvx`, `node`) — finding the runtime on PATH doesn't mean the agent package
+/// is installed (false positive). The user adds those manually via the Add
+/// Provider sheet and discovers models via the refresh-probe button.
 public struct DiscoveredACPAgent: Sendable, Equatable {
     public let agent: KnownACPAgent
     public let resolvedPath: String   // absolute path the binary was found at
@@ -29,11 +35,18 @@ public enum ACPProviderDiscovery {
     /// catalog). `resolve` maps an executable name to a `PathPreflight.Result`;
     /// the default resolves on the login-shell PATH. Returns the catalog agents
     /// whose binary was found, each with its resolved path.
+    ///
+    /// Non-autoDetectable entries (runtime-launched agents like `claude-acp`
+    /// via `bun`, or npx/uvx packages) are skipped — see
+    /// `KnownACPAgent.autoDetectable`.
     public static func discover(
         in catalog: [KnownACPAgent] = ACPProviderCatalog.agents,
         resolve: (String) -> PathPreflight.Result = PathPreflight.resolveOnLoginShell
     ) -> [DiscoveredACPAgent] {
         catalog.compactMap { agent in
+            // Skip runtime-launched agents — finding the runtime on PATH does
+            // NOT mean the agent package is installed.
+            guard agent.autoDetectable else { return nil }
             switch resolve(agent.detectExecutable) {
             case .found(let path):
                 return DiscoveredACPAgent(agent: agent, resolvedPath: path)

@@ -23,13 +23,29 @@ public struct KnownACPAgent: Sendable, Equatable, Identifiable {
     public let summary: String
     public let detectExecutable: String   // PATH binary whose presence = "installed"
     public let command: [String]          // ACP spawn argv (command[0] == detectExecutable by convention)
+    /// Whether `discover()` should auto-detect this agent by its `detectExecutable`
+    /// on PATH. `false` for entries whose `detectExecutable` is a generic JS/Python
+    /// **runtime** (`bun`, `npx`, `node`, `uvx`) — finding the runtime on PATH does
+    /// NOT mean the agent package is installed, so these false-positive if
+    /// auto-detected. The user adds them manually via the Add Provider sheet and
+    /// refreshes models via the probe button. Standalone-binary agents (gemini,
+    /// hermes, copilot, …) default to `true`.
+    public let autoDetectable: Bool
 
-    public init(id: String, label: String, summary: String, detectExecutable: String, command: [String]) {
+    public init(
+        id: String,
+        label: String,
+        summary: String,
+        detectExecutable: String,
+        command: [String],
+        autoDetectable: Bool = true
+    ) {
         self.id = id
         self.label = label
         self.summary = summary
         self.detectExecutable = detectExecutable
         self.command = command
+        self.autoDetectable = autoDetectable
     }
 }
 
@@ -49,7 +65,12 @@ public enum ACPProviderCatalog {
             label: "Claude",
             summary: "Claude Code via the official ACP wrapper (bunx @agentclientprotocol/claude-agent-acp).",
             detectExecutable: "bun",
-            command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"]),
+            command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
+            // `bun` is a generic JS runtime — finding it on PATH does NOT mean
+            // the `@agentclientprotocol/claude-agent-acp` package is installed.
+            // Don't auto-detect; the user adds this provider manually and
+            // discovers models via the refresh-probe button.
+            autoDetectable: false),
         KnownACPAgent(
             id: "gemini",
             label: "Gemini CLI",
