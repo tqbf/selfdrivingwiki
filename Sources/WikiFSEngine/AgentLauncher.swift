@@ -1174,6 +1174,24 @@ public final class AgentLauncher {
         runCommitedAt = now
         runProviderLabel = provider.id
         openLogFiles(in: scratch)
+        // Write the resolved provider/model/thinking snapshot to
+        // `<scratch>/models.json` ONCE at ingestion start — a sibling of
+        // `run.jsonl`/`run.stderr.log` — so a run's model config is inspectable
+        // post-hoc. See `plans/log-ingestion-models.md` + the static helper on
+        // `DebugRunLogger` (the instance isn't built yet at this point — it lives
+        // in `ACPBackend.startProcess`, called below; hence the static helper).
+        let (sourceFiles, sourceIDs) = Self.sourceFilesAndIDs(for: operation)
+        let modelsRecord = DebugRunLogger.makeRecord(
+            chatULID: queueItemID,
+            startedAt: now,
+            operationKind: operation.kind.rawValue,
+            providerId: provider.id,
+            providerLabel: provider.label,
+            selectedModelId: config.selectedModelId(forProvider: provider.id),
+            thinkingEffort: thinkingOption,
+            sourceFiles: sourceFiles,
+            sourceIDs: sourceIDs)
+        DebugRunLogger.writeModelsConfig(modelsRecord, to: scratch)
         // A one-shot run is "generating" for its whole duration. The edit lock
         // for one-shot runs is owned by `onLock`/`onUnlock` around the spawn.
         setGenerating(true)
@@ -2259,6 +2277,20 @@ public final class AgentLauncher {
     static func authorForRun(kind: WikiOperation.Kind, chatID: String?) -> String {
         if let chatID { return "\(ResourceKind.chat.linkPrefix!)\(chatID)" }
         return "agent:\(kind.rawValue)"
+    }
+
+    /// Extract the `(sourceFiles, sourceIDs)` pair from a staged `WikiOperation`
+    /// for the `models.json` record written at ingestion start. For `.ingest`
+    /// this is `(sourcePaths, sourcePaths.map(WikiOperation.sourceID(fromPath:)))`;
+    /// for any other operation kind, both are `[]`. Pure — no I/O — so it can be
+    /// unit-tested directly from a nonisolated test context (`nonisolated` opts
+    /// out of the class default `@MainActor` isolation; it touches no instance
+    /// state, no UI, no processes).
+    nonisolated static func sourceFilesAndIDs(for operation: WikiOperation) -> (sourceFiles: [String], sourceIDs: [String]) {
+        if case .ingest(let sourcePaths, _, _, _) = operation {
+            return (sourcePaths, sourcePaths.map { WikiOperation.sourceID(fromPath: $0) })
+        }
+        return ([], [])
     }
 
     /// Start a stdin-backed query chat. The first user message is sent
