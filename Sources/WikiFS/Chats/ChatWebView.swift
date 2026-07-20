@@ -110,17 +110,6 @@ struct ChatWebView: NSViewRepresentable {
     /// writes `text` to `NSPasteboard`.
     static let copyMessageName = "copyText"
 
-    /// Sets a private WebKit SPI key on the WebView, guarding against a future OS
-    /// that no longer recognizes the key (KVC `setValue(_:forKey:)` throws on an
-    /// unknown key, which would tear down the view). Returns whether it was set.
-    /// See Bug #1 in `makeNSView` for why these keys are needed.
-    @discardableResult
-    private static func setSPI(_ key: String, _ value: Any, on webView: WKWebView) -> Bool {
-        guard webView.responds(to: NSSelectorFromString("setValue:forKey:")) else { return false }
-        webView.setValue(value, forKey: key)
-        return true
-    }
-
     func makeNSView(context: Context) -> WKWebView {
         // Register the blob scheme handler BEFORE the first load (same wiring
         // as `WikiReaderView`, reader lines ~326–348) so `wiki-blob://source/<id>`
@@ -143,17 +132,6 @@ struct ChatWebView: NSViewRepresentable {
         webView.underPageBackgroundColor = .clear
         webView.pageZoom = zoom
         webView.allowsBackForwardNavigationGestures = false
-        // Bug #1: keep the overlay scroller inside the WebView's visible bounds so it
-        // can no longer paint over the window's traffic lights (Agent / Extraction
-        // Queue window). WKWebView manages its own NSScrollView privately (no public
-        // `scrollView` on macOS), so this goes through the SPI WebKit itself exposes
-        // for exactly this:
-        //  • _clipsToVisibleRect — clips drawing (incl. the scroller) to the visible rect.
-        //  • _automaticallyAdjustsContentInsets — off, so the scroller is NOT positioned
-        //    against the title-bar band.
-        // Guarded so a future OS that renames/removes these keys can't crash the view.
-        Self.setSPI("_clipsToVisibleRect", true, on: webView)
-        Self.setSPI("_automaticallyAdjustsContentInsets", false, on: webView)
         context.coordinator.webView = webView
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
