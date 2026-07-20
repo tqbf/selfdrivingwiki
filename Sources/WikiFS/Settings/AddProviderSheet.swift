@@ -36,11 +36,13 @@ struct AddProviderSheet: View {
     /// provider (so the sheet itself touches no state outside its model).
     let onAdd: (AgentProvider) -> Void
 
-    /// Invoked alongside `onAdd` when the freshly-added provider should land
-    /// in the editor (custom command, or a non-detected catalog agent whose
-    /// PATH status the user may want to address). The parent throttles this
-    /// via `DispatchQueue.main.async` so the editor sheet doesn't pre-empt
-    /// this sheet's dismissal (a known SwiftUI hazard — see
+    /// Invoked alongside `onAdd` so the freshly-added provider lands in the
+    /// editor — EVERY newly-added provider opens the editor so the user MUST
+    /// pick a model before the provider is usable (otherwise the row would
+    /// sit in the list with a "No model captured yet" warning and the
+    /// launcher would refuse to spawn). The parent throttles this via
+    /// `DispatchQueue.main.async` so the editor sheet doesn't pre-empt this
+    /// sheet's dismissal (a known SwiftUI hazard — see
     /// `plans/663-combined-plan.md` correction §5).
     let onAddNeedsEditor: (AgentProvider) -> Void
 
@@ -253,17 +255,15 @@ struct AddProviderSheet: View {
     }
 
     private func handleAdd(_ provider: AgentProvider) {
-        // Persist via the parent (the parent owns `config` + the `containerDirectory`).
-        // The needsEditor heuristic (correction §4) drops the non-existent
-        // `catalogEntryRequiresKey` reference and keys off `model.detected`:
-        // a freshly-added detected agent skips the editor (fast path); a
-        // custom provider or a non-detected catalog agent lands in the editor
-        // for env/key/command follow-up.
-        let needsEditor = model.needsEditor(for: provider)
+        // Persist via the parent (the parent owns `config` + the
+        // `containerDirectory`). The editor ALWAYS opens after an Add — every
+        // freshly-added provider must have a model picked before it lands in
+        // the list as usable, otherwise the row shows a "No model captured
+        // yet" warning and the launcher refuses to spawn (`SpawnModelGuard`).
+        // Previously a `needsEditor` heuristic skipped the editor for
+        // cleanly-detected PATH agents, which left them with no model.
         onAdd(provider)
-        if needsEditor {
-            onAddNeedsEditor(provider)
-        }
+        onAddNeedsEditor(provider)
         dismiss()
     }
 }
@@ -392,16 +392,6 @@ final class AddProviderModel {
         let found = await Task.detached { ACPProviderDiscovery.discover() }.value
         detected = found
         isScanning = false
-    }
-
-    /// Heuristic (correction §4): the editor should auto-open for a freshly-
-    /// added provider when (a) the command is empty (custom add) or (b) the
-    /// agent wasn't detected on PATH (catalog add for an agent whose binary
-    /// is missing — the user may want to tweak the command/env/key). A cleanly
-    /// detected catalog agent skips the editor (the fast path).
-    func needsEditor(for provider: AgentProvider) -> Bool {
-        if provider.command?.isEmpty ?? true { return true }
-        return !detected.contains(where: { $0.agent.id == provider.id })
     }
 
     /// `custom` / `custom-2` / `custom-3` … — the existing collision-loop
