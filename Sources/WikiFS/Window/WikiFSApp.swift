@@ -722,6 +722,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Make Cancel the escape-equivalent so ⎋ dismisses without quitting.
         alert.buttons.last?.keyEquivalent = "\u{1b}"
 
+        // Activate the app so the alert appears frontmost. On macOS 14+, the
+        // new activate() API replaces the deprecated activate(ignoringOtherApps:).
+        NSApp.activate()
+
         // Present as a sheet on the current key window when possible; fall back
         // to a modal dialog when no window is available (e.g. all windows
         // closed but app still active in accessory mode).
