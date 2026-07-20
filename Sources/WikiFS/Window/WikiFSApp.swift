@@ -58,7 +58,7 @@ struct WikiFSApp: App {
     @State private var showingFileProviderSetupWarning = false
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
-    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.about.rawValue
+    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
@@ -499,11 +499,6 @@ struct WikiFSApp: App {
 
         Settings {
             TabView(selection: settingsSelectedTab) {
-                AboutView()
-                    .tag(SettingsTab.about)
-                    .tabItem { Label("About", systemImage: "info.circle") }
-                GeneralSettingsView()
-                    .tabItem { Label("General", systemImage: "gearshape") }
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
@@ -531,7 +526,6 @@ struct WikiFSApp: App {
 
     /// Settings tab tags used by the TabView selection and `@AppStorage`.
     enum SettingsTab: String {
-        case about
         case zotero
         case extraction
         case agents
@@ -539,10 +533,13 @@ struct WikiFSApp: App {
     }
 
     /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
-    /// Settings `TabView(selection:)`.
+    /// Settings `TabView(selection:)`. Falls back to `.zotero` (the new
+    /// first tab) when the stored raw value is missing or references a
+    /// removed tab (e.g. `.about` / `.general` from before the About and
+    /// General tabs were removed).
     private var settingsSelectedTab: Binding<SettingsTab> {
         Binding(
-            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .about },
+            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .zotero },
             set: { settingsSelectedTabRaw = $0.rawValue }
         )
     }
@@ -588,8 +585,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var reopenMostRecentWiki: (() -> Void)?
 
     /// `@AppStorage` key for the "ask before quitting" toggle (Settings →
-    /// General). Default is "ask" (true) when unset — matching the feature's
-    /// purpose. Referenced by `GeneralSettingsView`.
+    /// Permissions → App Behavior). Default is "ask" (true) when unset —
+    /// matching the feature's purpose. Referenced by
+    /// `PermissionsSettingsView`.
     static let confirmQuitKey = "confirmBeforeQuitting"
 
     static var confirmBeforeQuitting: Bool {
