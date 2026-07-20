@@ -10,9 +10,10 @@ import WikiFSCore
 /// - **AC.2**: `AddProviderSheet` writes nothing to config until an Add
 ///   button is pressed — cancel = no change.
 /// - **AC.6**: `seed()` returns only `[claudeAcpDefault]`.
-/// - **needsEditor heuristic** — a freshly-added catalog agent without a
-///   detected binary opens the editor; a cleanly-detected one skips it; a
-///   custom add with no command opens it.
+/// - **forced editor**: every newly-added provider opens the editor (the
+///   user MUST pick a model before the provider is usable). The old
+///   `needsEditor` heuristic that skipped the editor for cleanly-detected
+///   PATH agents was removed — it left providers with no model.
 ///
 /// The `AddProviderSheet` view body itself isn't rendered here — AC.2 is
 /// asserted at the protocol seam: constructing the sheet + invoking only
@@ -74,47 +75,6 @@ struct AddProviderSheetTests {
         let config = AgentProvidersConfig(providers: [])
         #expect(config.providers.map(\.id) == ["claude-acp"])
         #expect(config.defaultProvider.id == "claude-acp")
-    }
-
-    // MARK: - needsEditor heuristic (correction §4)
-
-    @Test func needsEditorTrueForCustomWithEmptyCommand() {
-        // The custom-add path lands the user in the editor for env/key
-        // follow-up. The heuristic's first branch (`provider.command` empty
-        // or nil) catches this.
-        let model = AddProviderModel(existingIDs: [])
-        let custom = AgentProvider(
-            id: "custom", label: "My Agent",
-            command: nil,
-            env: [:], enabled: true, isDefault: false)
-        #expect(model.needsEditor(for: custom) == true)
-    }
-
-    @Test func needsEditorFalseForDetectedCatalogAgent() {
-        // A cleanly-detected catalog agent skips the editor (fast path: 2
-        // clicks total). Construct a model whose `detected` list contains
-        // the agent — that's the post-scan state.
-        let agent = ACPProviderCatalog.agents.first(where: { $0.id == "claude-acp" })!
-        let discovered = DiscoveredACPAgent(agent: agent, resolvedPath: "/opt/homebrew/bin/bun")
-        let model = AddProviderModel(existingIDs: [])
-        model.detected = [discovered]
-        model.isScanning = false
-        let provider = AgentProvider.acp(from: agent)
-        #expect(model.needsEditor(for: provider) == false)
-    }
-
-    @Test func needsEditorTrueForNonDetectedCatalogAgent() {
-        // A catalog agent whose binary is NOT on PATH (added from the
-        // "Other known agents" section) opens the editor — the user may
-        // want to tweak the command/env/key (e.g. adding an API key for a
-        // provider whose binary will be installed later).
-        let agent = ACPProviderCatalog.agents.first(where: { $0.id == "gemini" })!
-        let model = AddProviderModel(existingIDs: [])
-        // Empty `detected` simulates "gemini not on PATH."
-        model.detected = []
-        model.isScanning = false
-        let provider = AgentProvider.acp(from: agent)
-        #expect(model.needsEditor(for: provider) == true)
     }
 
     // MARK: - freshCustomID — collision loop
