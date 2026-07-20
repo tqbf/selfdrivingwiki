@@ -342,9 +342,9 @@ struct ContentView: View {
 
     // MARK: - Keyboard shortcuts
 
-    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, Cmd+1–9, and Cmd+L
-    /// shortcuts. Placed in the detail background so they're always in the
-    /// responder chain.
+    /// Hidden buttons that provide Cmd+W, Cmd+Shift+T, Cmd+1–9, Cmd+L, and the
+    /// five global "Add" shortcuts (Cmd+Shift+P/U/F/D/C). Placed in the detail
+    /// background so they're always in the responder chain.
     @ViewBuilder
     private var keyboardShortcutButtons: some View {
         // Cmd+W: Close active tab
@@ -366,6 +366,39 @@ struct ContentView: View {
         }
         .keyboardShortcut("l", modifiers: .command)
         .opacity(0).allowsHitTesting(false)
+
+        // Cmd+Shift+P: Add Page (same handler as the sidebar + / welcome addPage).
+        Button("") { store.newPageInNewTab() }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
+
+        // Cmd+Shift+U: Add from URL (present the sheet with an empty field,
+        // same as the sidebar onAddFromURL / welcome addURLHandler?("")).
+        Button("") { pendingAddURL = PendingAddURL(url: "") }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
+
+        // Cmd+Shift+F: Add File (open panel → store.addFiles; mirrors
+        // WikiDetailView.addFile exactly).
+        Button("") {
+            if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
+                Task { await store.addFiles([url]) }
+            }
+        }
+        .keyboardShortcut("f", modifiers: [.command, .shift])
+        .opacity(0).allowsHitTesting(false)
+
+        // Cmd+Shift+D: Add Folder (present ImportMarkdownSheet, same as the
+        // sidebar / welcome showingImportMarkdown toggle).
+        Button("") { showingImportMarkdown = true }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
+
+        // Cmd+Shift+C: Add Chat (same handler as the chats sidebar + / the
+        // address-bar "new chat" button — store.openTab(.newChat)).
+        Button("") { store.openTab(.newChat) }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
 
         // Cmd+1 through Cmd+9: Switch to tab by position (first 9 tabs only)
         ForEach(Array(store.tabs.prefix(9).enumerated()), id: \.element.id) { i, tab in
