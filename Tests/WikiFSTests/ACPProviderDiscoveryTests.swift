@@ -53,18 +53,50 @@ struct ACPProviderDiscoveryTests {
         }
     }
 
+    @Test func claudeAcpIsNotAutoDetectable() {
+        // Claude via ACP runs through `bun` — a generic JS runtime. Finding `bun`
+        // on PATH does NOT mean `@agentclientprotocol/claude-agent-acp` is
+        // installed, so the catalog entry must be marked `autoDetectable: false`.
+        let claude = ACPProviderCatalog.agents.first(where: { $0.id == "claude-acp" })
+        #expect(claude != nil)
+        #expect(claude?.autoDetectable == false)
+    }
+
+    @Test func skipsNonAutoDetectableEvenWhenBinaryIsFound() {
+        // A runtime-launched agent (detectExecutable == "bun" here) must NOT
+        // appear in `discover()` output, even when its runtime is on PATH —
+        // otherwise users see "Claude detected" just because they have bun.
+        let catalog = [
+            KnownACPAgent(id: "claude-acp", label: "Claude", summary: "",
+                         detectExecutable: "bun", command: ["bun", "x", "pkg"],
+                         autoDetectable: false),
+            KnownACPAgent(id: "gemini", label: "Gemini", summary: "",
+                         detectExecutable: "gemini", command: ["gemini", "--acp"]),
+        ]
+        let resolve: (String) -> PathPreflight.Result = { exe in
+            // Both binaries "found" — but only the autoDetectable one should surface.
+            .found(path: "/usr/local/bin/\(exe)")
+        }
+        let found = ACPProviderDiscovery.discover(in: catalog, resolve: resolve)
+        #expect(found.map(\.agent.id) == ["gemini"])
+    }
+
     // MARK: - Live (this machine's PATH)
 
     @Test
     func liveDiscoveryMatchesFilesystem() {
-        // Machine-agnostic: for each catalog agent, discovery must report it
-        // installed iff its binary is actually on the login-shell PATH. No
-        // hard-coded agent names — so this passes on a CI runner that has none
-        // installed (all missing → none reported) and still validates the real
-        // login-shell resolver end-to-end on a machine that has some.
+        // Machine-agnostic: for each *auto-detectable* catalog agent, discovery
+        // must report it installed iff its binary is actually on the login-shell
+        // PATH. Non-autoDetectable agents (e.g. claude-acp via `bun`) are
+        // NEVER reported, regardless of whether their runtime is on PATH — so
+        // they're excluded from this equivalence check (and asserted absent
+        // separately below). No hard-coded agent names — so this passes on a
+        // CI runner that has none installed (all missing → none reported) and
+        // still validates the real login-shell resolver end-to-end on a machine
+        // that has some.
         let discovered = ACPProviderDiscovery.discover()
         let discoveredIDs = Set(discovered.map(\.agent.id))
-        for agent in ACPProviderCatalog.agents {
+        for agent in ACPProviderCatalog.agents where agent.autoDetectable {
             switch PathPreflight.resolveOnLoginShell(executable: agent.detectExecutable) {
             case .found:
                 #expect(discoveredIDs.contains(agent.id),
@@ -73,6 +105,12 @@ struct ACPProviderDiscoveryTests {
                 #expect(!discoveredIDs.contains(agent.id),
                         "discovery reported a non-installed agent \(agent.id)")
             }
+        }
+        // Non-autoDetectable agents are never discovered, even if their runtime
+        // happens to be on PATH (e.g. `bun` for claude-acp).
+        for agent in ACPProviderCatalog.agents where !agent.autoDetectable {
+            #expect(!discoveredIDs.contains(agent.id),
+                    "discovery reported a non-autoDetectable agent \(agent.id)")
         }
         // Resolved paths are absolute for whatever was found.
         for d in discovered {

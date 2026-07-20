@@ -140,6 +140,9 @@ struct ACPRegistryTests {
         #expect(agent.command == ["npx", "@agentclientprotocol/claude-agent-acp@0.59.0", "--acp"])
         // Convention: command[0] == detectExecutable.
         #expect(agent.command.first == agent.detectExecutable)
+        // `npx` is a generic JS runtime — finding it on PATH does NOT mean the
+        // agent package is installed, so auto-detect would false-positive.
+        #expect(agent.autoDetectable == false)
     }
 
     @Test func mapsNpxWithoutArgs() throws {
@@ -165,6 +168,8 @@ struct ACPRegistryTests {
         #expect(agent.detectExecutable == "uvx")
         #expect(agent.command == ["uvx", "fast-agent-acp==0.9.16", "-x"])
         #expect(agent.command.first == agent.detectExecutable)
+        // `uvx` is a generic Python runtime — same false-positive risk as `npx`.
+        #expect(agent.autoDetectable == false)
     }
 
     @Test func mapsBinaryStripsLeadingDotSlash() throws {
@@ -180,6 +185,9 @@ struct ACPRegistryTests {
         #expect(agent.detectExecutable == "amp-acp")
         #expect(agent.command == ["amp-acp", "serve"])
         #expect(agent.command.first == agent.detectExecutable)
+        // `binary` distributions ship a standalone executable — the binary IS
+        // the agent, so finding it on PATH means the agent is installed.
+        #expect(agent.autoDetectable == true)
     }
 
     @Test func mapsBinaryWithoutLeadingDotSlash() throws {

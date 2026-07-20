@@ -37,6 +37,13 @@ struct AgentsSettingsView: View {
     /// hardcoded seed buttons (Add Claude / Add Hermes / Add OpenCode) with
     /// a non-destructive, catalog-driven sheet. Cancel = no change (AC.2).
     @State private var showAddSheet = false
+    /// #663: tracks whether the editor was opened from the Add flow (true)
+    /// or from Edit…/double-click on an EXISTING provider (false). When true,
+    /// the editor's Cancel button removes the freshly-added provider from
+    /// `config.providers` — a newly-added provider with no model MUST NOT
+    /// persist in the list (otherwise the row sits with a "No model captured
+    /// yet" warning and the launcher refuses to spawn).
+    @State private var isAddingNewProvider = false
     /// Per-view collapse state for the `CollapsibleDetailHeader`. Starts
     /// expanded — a Settings panel is something the user opened to interact
     /// with, so showing the form by default (rather than hiding it behind a
@@ -89,7 +96,14 @@ struct AgentsSettingsView: View {
                     onAdd: { provider in appendProvider(provider) },
                     onAddNeedsEditor: { provider in
                         showAddSheet = false
-                        DispatchQueue.main.async { editingProvider = provider }
+                        // #663: this provider was just appended by `onAdd`
+                        // above with no selected model. Mark it as a fresh add
+                        // so the editor's Cancel button removes it (see
+                        // `ProviderEditorView` Cancel handler).
+                        DispatchQueue.main.async {
+                            isAddingNewProvider = true
+                            editingProvider = provider
+                        }
                     })
             }
             .sheet(item: $editingProvider) { provider in
@@ -97,9 +111,21 @@ struct AgentsSettingsView: View {
                     provider: provider,
                     cachedModels: config.cachedModels(forProvider: provider.id),
                     selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
+                    isAddingNew: isAddingNewProvider,
                     credentialStore: credentialStore,
                     onSave: { updated, selectedModelId in
                         applyEdit(updated, selectedModelId: selectedModelId)
+                        isAddingNewProvider = false
+                    },
+                    onDelete: {
+                        // Cancel on a freshly-added provider: remove it from
+                        // `config.providers` (no confirmation needed — it has
+                        // no model and was just appended; its API key, if any,
+                        // is left in the Keychain for a future add).
+                        if let pending = editingProvider {
+                            removeProvider(pending)
+                        }
+                        isAddingNewProvider = false
                     },
                     onRefreshModels: { provider, models in
                         // #640: durable-persist path for probe-discovered models.
@@ -121,7 +147,7 @@ struct AgentsSettingsView: View {
                 Button("Delete", role: .destructive) { confirmDelete() }
                 Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
             } message: {
-                Text("This removes its command and environment. Its API key stays in the Keychain until overwritten.")
+                Text("This removes the provider from the app. You can add it again later.")
             }
         }
     }
@@ -200,6 +226,10 @@ struct AgentsSettingsView: View {
 
             Button("Edit…") {
                 if let provider = selectedProvider {
+                    // Editing an existing (not freshly-added) provider: clear
+                    // the new-add flag so the editor's Cancel button doesn't
+                    // delete it (see `ProviderEditorView` Cancel handler).
+                    isAddingNewProvider = false
                     editingProvider = provider
                 }
             }
@@ -377,9 +407,9 @@ struct AgentsSettingsView: View {
     /// #663: non-destructive append — replaces `addSeed(_:)` and the
     /// pre-persist tail of `addCustom()`. Called by `AddProviderSheet`'s
     /// `onAdd`. Persists the provider immediately (the row appears in the
-    /// list as soon as the sheet dismisses); the editor opens separately
-    /// via the `onAddNeedsEditor` callback when the heuristic in
-    /// `AddProviderModel.needsEditor(for:)` says so.
+    /// list as soon as the sheet dismisses); the editor ALWAYS opens
+    /// separately via the `onAddNeedsEditor` callback so the user is forced
+    /// to pick a model before the provider is usable.
     ///
     /// Dedup: a provider with the same id is NOT replaced — the call is a
     /// no-op (the `AddProviderSheet` already hides already-added agents
@@ -406,8 +436,13 @@ struct AgentsSettingsView: View {
             set: { if !$0 { providerPendingDeletion = nil } })
     }
 
-    private func confirmDelete() {
-        guard let provider = providerPendingDeletion else { return }
+    /// #663: removes a provider from `config.providers` and re-normalizes
+    /// (promotes a new default if the deleted one was default). Shared by
+    /// the delete-confirmation flow (`confirmDelete`) and the editor's
+    /// Cancel-on-new-provider path. No confirmation dialog — callers decide
+    /// whether to gate behind a confirmation (`providerPendingDeletion`).
+    private func removeProvider(_ provider: AgentProvider) {
+        guard config.providers.contains(where: { $0.id == provider.id }) else { return }
         var updated = config
         updated.providers.removeAll { $0.id == provider.id }
         // Re-running init() re-normalizes: promotes a new default if the
@@ -420,6 +455,11 @@ struct AgentsSettingsView: View {
         if selectedProviderID == provider.id {
             selectedProviderID = config.providers.first?.id
         }
+    }
+
+    private func confirmDelete() {
+        guard let provider = providerPendingDeletion else { return }
+        removeProvider(provider)
         providerPendingDeletion = nil
     }
 
@@ -499,12 +539,24 @@ private struct ProviderEditorView: View {
 
     let credentialStore: any ACPCredentialStore
     let onSave: (AgentProvider, String?) -> Void
+    /// #663: invoked when the user cancels the editor on a freshly-added
+    /// provider (only fired when `isAddingNew == true`). The parent removes
+    /// the provider from `config.providers` — a newly-added provider with no
+    /// model MUST NOT persist in the list.
+    let onDelete: (() -> Void)?
     /// #640: durable-persist callback for discovered models. The probe calls
     /// this on success so the discovered list lands in `agent-providers.json`
     /// immediately (survives the user never clicking Save — same behavior as
     /// the launcher's post-spawn `cacheDiscoveredModels`). nil when the parent
     /// does not support refresh (kept optional for the hosted-test seam).
     let onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)?
+
+    /// #663: true when this editor was opened from the Add flow (the provider
+    /// was just appended with no model). Drives the Cancel button: when true,
+    /// Cancel removes the provider from `config.providers` via `onDelete`;
+    /// when false (Edit…/double-click on an existing provider), Cancel keeps
+    /// the provider as-is.
+    let isAddingNew: Bool
 
     /// #640: the probe's lifecycle state. Equatable so SwiftUI skips body
     /// re-renders when the state hasn't changed (e.g. `.idle` → `.idle`).
@@ -525,8 +577,10 @@ private struct ProviderEditorView: View {
         provider: AgentProvider,
         cachedModels: [CachedModelInfo],
         selectedModelId: String,
+        isAddingNew: Bool = false,
         credentialStore: any ACPCredentialStore,
         onSave: @escaping (AgentProvider, String?) -> Void,
+        onDelete: (() -> Void)? = nil,
         onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)? = nil
     ) {
         self.originalID = provider.id
@@ -538,8 +592,10 @@ private struct ProviderEditorView: View {
         self._apiKey = State(initialValue: "")
         self._selectedModelId = State(initialValue: selectedModelId)
         self._cachedModels = State(initialValue: cachedModels)
+        self.isAddingNew = isAddingNew
         self.credentialStore = credentialStore
         self.onSave = onSave
+        self.onDelete = onDelete
         self.onRefreshModels = onRefreshModels
     }
 
@@ -666,11 +722,26 @@ private struct ProviderEditorView: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                Button("Cancel") {
+                    // #663: a freshly-added provider with no model MUST NOT
+                    // persist in the list — fire the parent's `onDelete`
+                    // callback so it's removed before the sheet dismisses.
+                    // Editing an EXISTING provider (Cancel) keeps it as-is.
+                    if isAddingNew {
+                        onDelete?()
+                    }
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty)
+                    // #663: a provider cannot be saved without a selected model
+                    // — otherwise the row sits with a "No model captured yet"
+                    // warning and the launcher refuses to spawn
+                    // (`SpawnModelGuard`). The "Provider default" picker option
+                    // (tag "") counts as no selection: it leaves the provider
+                    // with no selectedModelId.
+                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty || selectedModelId.isEmpty)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)

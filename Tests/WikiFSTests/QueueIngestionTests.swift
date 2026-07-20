@@ -103,6 +103,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     func runIngestion(
         wikiID: String,
         sourceIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -119,6 +120,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
 
     func runLint(
         wikiID: String,
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -136,6 +138,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     func runLintPages(
         wikiID: String,
         pageIDs: [PageID],
+        queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
