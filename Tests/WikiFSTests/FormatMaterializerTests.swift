@@ -266,6 +266,83 @@ struct FormatMaterializerTests {
         }
     }
 
+    // MARK: - enrich(_:using:) — async defuddle enrichment (issue #761)
+
+    @Test func enrichWithNilExtractorKeepsTagBasedMarkdown() async {
+        let html = "<html><head><title>Cool Page</title></head><body><article><p>Hi</p></article></body></html>"
+        let plan = FormatMaterializer.dispatch(
+            data: Data(html.utf8), contentType: "text/html",
+            stem: "article", extensionHint: nil)
+        let (enriched, technique) = await FormatMaterializer.enrich(plan, using: nil)
+        // nil extractor → no change, technique is tag-based.
+        #expect(enriched.extractedMarkdown == plan.extractedMarkdown)
+        #expect(technique == "html-to-markdown")
+    }
+
+    @Test func enrichWithFailingExtractorFallsBackToTagBased() async {
+        struct FailingExtractor: HtmlMarkdownExtractor {
+            func extract(html: String) async -> HtmlExtractionResult? { nil }
+        }
+        let html = "<html><head><title>Cool Page</title></head><body><article><p>Hi</p></article></body></html>"
+        let plan = FormatMaterializer.dispatch(
+            data: Data(html.utf8), contentType: "text/html",
+            stem: "article", extensionHint: nil)
+        let (enriched, technique) = await FormatMaterializer.enrich(plan, using: FailingExtractor())
+        // Extractor returned nil → keep tag-based markdown, technique is fallback.
+        #expect(enriched.extractedMarkdown == plan.extractedMarkdown)
+        #expect(technique == "html-to-markdown")
+    }
+
+    @Test func enrichWithSuccessfulExtractorUsesDefuddleMarkdown() async {
+        struct StubExtractor: HtmlMarkdownExtractor {
+            func extract(html: String) async -> HtmlExtractionResult? {
+                HtmlExtractionResult(markdown: "## Defuddle Title\n\nClean content.", title: "Defuddle Title")
+            }
+        }
+        let html = "<html><head><title>Old Title</title></head><body><article><p>Hi</p></article></body></html>"
+        let plan = FormatMaterializer.dispatch(
+            data: Data(html.utf8), contentType: "text/html",
+            stem: "article", extensionHint: nil)
+        let (enriched, technique) = await FormatMaterializer.enrich(plan, using: StubExtractor())
+        // Defuddle markdown replaces tag-based; technique is "defuddle".
+        #expect(enriched.extractedMarkdown == "## Defuddle Title\n\nClean content.")
+        #expect(technique == "defuddle")
+        // Filename derived from defuddle's title.
+        #expect(enriched.filename == "Defuddle Title.html")
+        // Original HTML bytes preserved (issue #599 two-layer model).
+        #expect(enriched.data == Data(html.utf8))
+    }
+
+    @Test func enrichSkipsNonHTMLFormats() async {
+        struct StubExtractor: HtmlMarkdownExtractor {
+            func extract(html: String) async -> HtmlExtractionResult? {
+                HtmlExtractionResult(markdown: "should not be used", title: nil)
+            }
+        }
+        // PDF — not HTML.
+        let plan = FormatMaterializer.dispatch(
+            data: Data([0x25, 0x50, 0x44, 0x46]), contentType: "application/pdf",
+            stem: "doc", extensionHint: nil)
+        let (enriched, technique) = await FormatMaterializer.enrich(plan, using: StubExtractor())
+        #expect(enriched.extractedMarkdown == plan.extractedMarkdown)  // nil — no sidecar for PDF
+        #expect(technique == "html-to-markdown")
+    }
+
+    @Test func enrichUsesDispatchStemWhenExtractorTitleIsNil() async {
+        struct StubExtractor: HtmlMarkdownExtractor {
+            func extract(html: String) async -> HtmlExtractionResult? {
+                HtmlExtractionResult(markdown: "content", title: nil)
+            }
+        }
+        let html = "<html><head><title>Original Title</title></head><body><article><p>Hi</p></article></body></html>"
+        let plan = FormatMaterializer.dispatch(
+            data: Data(html.utf8), contentType: "text/html",
+            stem: "fallback-stem", extensionHint: nil)
+        let (enriched, _) = await FormatMaterializer.enrich(plan, using: StubExtractor())
+        // No defuddle title → keep the dispatch-derived filename.
+        #expect(enriched.filename == "Original Title.html")
+    }
+
     // MARK: - Helpers
 
     /// Walk up from `#filePath` to the directory containing `Package.swift`.

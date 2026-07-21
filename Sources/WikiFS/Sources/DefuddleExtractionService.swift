@@ -44,7 +44,10 @@ enum DefuddleExtractionService {
     /// Resolve the bundled bun runtime + the defuddle script.
     /// Priority for each: bundled → dev build dir → well-known system location.
     /// Returns nil only if EITHER artifact is unresolvable (caller falls back).
-    static func resolve() -> (bun: URL, script: URL)? {
+    ///
+    /// `nonisolated` — pure filesystem checks, no actor state. Called from both
+    /// `@MainActor` (the extract path) and non-isolated test contexts.
+    static nonisolated func resolve() -> (bun: URL, script: URL)? {
         guard let bun = resolveBun(), let script = resolveDefuddle() else {
             return nil
         }
@@ -184,7 +187,7 @@ enum DefuddleExtractionService {
     // MARK: - Binary resolution
 
     /// Resolve the bun runtime. `isExecutableFile` — bun is exec'd directly.
-    private static func resolveBun() -> URL? {
+    private static nonisolated func resolveBun() -> URL? {
         let fm = FileManager.default
         for candidate in candidateHelperDirectories() {
             let bun = candidate.appendingPathComponent("bun", isDirectory: false)
@@ -204,7 +207,7 @@ enum DefuddleExtractionService {
 
     /// Resolve the defuddle script. `fileExists` (NOT `isExecutableFile`) — bun
     /// reads the script rather than exec'ing it, so readability is what matters.
-    private static func resolveDefuddle() -> URL? {
+    private static nonisolated func resolveDefuddle() -> URL? {
         let fm = FileManager.default
         for candidate in candidateHelperDirectories() {
             let script = candidate.appendingPathComponent("defuddle", isDirectory: false)
