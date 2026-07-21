@@ -378,6 +378,9 @@ struct WikiFSApp: App {
             }
             return nil
         }
+        appDelegate.cancelInFlightForQuit = { [weak queueEngine] in
+            await queueEngine?.cancelAllInFlight()
+        }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
                 openWindowBridge.openWiki?(wikiID)
@@ -571,6 +574,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The quit dialog message is tailored based on what's running.
     var activeOperationDescription: (() -> String?)?
 
+    /// Called when the user confirms quitting while operations are in flight.
+    /// Cancels all in-flight queue items so crash recovery on restart skips
+    /// them (they're `.cancelled`, not `.running`). Must complete BEFORE
+    /// `NSApp.reply(toApplicationShouldTerminate:)` is called.
+    var cancelInFlightForQuit: (() async -> Void)?
+
     /// Called from `applicationShouldHandleReopen` (Dock click) to restore a
     /// wiki window when the user reopens the app with no visible windows.
     /// Opens the MRU wiki's window, or the main window (empty-state) if no
@@ -737,17 +746,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             where: { $0.isVisible && $0.canBecomeKey }
         ) {
             alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn, let cancel = self.cancelInFlightForQuit {
+                    // Cancel in-flight items BEFORE replying to terminate so
+                    // crash recovery on restart skips them (.cancelled, not
+                    // .running). The Task awaits cancellation, then replies
+                    // on the main actor.
+                    Task {
+                        await cancel()
+                        await MainActor.run {
+                            NSApp.reply(toApplicationShouldTerminate: true)
+                        }
+                    }
+                } else {
+                    NSApp.reply(
+                        toApplicationShouldTerminate:
+                            response == .alertFirstButtonReturn
+                    )
+                }
+            }
+        } else {
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn, let cancel = self.cancelInFlightForQuit {
+                Task {
+                    await cancel()
+                    await MainActor.run {
+                        NSApp.reply(toApplicationShouldTerminate: true)
+                    }
+                }
+            } else {
                 NSApp.reply(
                     toApplicationShouldTerminate:
                         response == .alertFirstButtonReturn
                 )
             }
-        } else {
-            let response = alert.runModal()
-            NSApp.reply(
-                toApplicationShouldTerminate:
-                    response == .alertFirstButtonReturn
-            )
         }
 
         // We've deferred the decision to the alert callback.

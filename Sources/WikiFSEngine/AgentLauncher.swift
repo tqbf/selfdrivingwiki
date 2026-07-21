@@ -137,6 +137,13 @@ public final class AgentLauncher {
     /// Exposed without `private(set)` so tests can simulate pre-existing exit
     /// status via `@testable import WikiFS`.
     public var exitStatus: Int32?
+    /// True when any `.turnFailed` event was observed during the current run
+    /// (e.g. the ACP turn ceiling was exceeded). Checked by `run()` and
+    /// `runACPIngestPlannerExecutors` after the stream drains — a turn-ceiling
+    /// failure must NOT be reported as success. The run calls `finish(status:-1)`
+    /// and the provider throws so the queue item transitions to `.failed`
+    /// instead of `.completed`. Cleared in `resetRunArtifacts()`.
+    @ObservationIgnored public var runHadTurnFailure = false
     /// Set when the PATH preflight fails (claude not resolvable) or the spawn
     /// itself throws; shown in the UI instead of spawning. Cleared on the next
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
@@ -1291,7 +1298,10 @@ public final class AgentLauncher {
                 await capturePhaseUsage(backend: self.backend, session: handle, providerLabel: provider.label)
             }
             if isRunning {
-                finish(status: exitStatus ?? 0)
+                // #765: if the turn ceiling was exceeded (or any .turnFailed
+                // event was observed), report failure so the queue item
+                // transitions to .failed instead of .completed.
+                finish(status: runHadTurnFailure ? -1 : (exitStatus ?? 0))
             }
         } catch {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
@@ -1691,7 +1701,9 @@ public final class AgentLauncher {
         // `warmProcess` independently of the session map.)
         await backend.cancel(SessionHandle(id: ""))
 
-        finish(status: 0)
+        // #765: if any phase hit the turn ceiling (or any .turnFailed event),
+        // report failure so the queue item transitions to .failed.
+        finish(status: runHadTurnFailure ? -1 : 0)
     }
 
     // MARK: - Phase 4: Parallel executor dispatch
@@ -2053,7 +2065,8 @@ public final class AgentLauncher {
             captureProcessID(session: session)
             await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
             await backend.cancel(session)
-            finish(status: 0)
+            // #765: respect turn-ceiling failures from the fallback session.
+            finish(status: runHadTurnFailure ? -1 : 0)
         } else {
             finish(status: -1)
         }
@@ -3041,6 +3054,13 @@ public final class AgentLauncher {
             isStreamingThinkingRow = false
         }
 
+        // Track turn-ceiling / turn-failure events so the run completion path
+        // can report failure instead of success (#765: a swallowed turn-ceiling
+        // orphans the queue item in .running/.completed instead of .failed).
+        if case .turnFailed = event {
+            runHadTurnFailure = true
+        }
+
         // Forward to the queue's per-item transcript callback (Activity window).
         // Fired on every event so the tracker gets a live, complete transcript.
         if let onAgentEvent {
@@ -3182,6 +3202,7 @@ public final class AgentLauncher {
         rawTranscript = ""
         stderr = ""
         exitStatus = nil
+        runHadTurnFailure = false
         isInteractiveSession = false
         setGenerating(false)
         runningKind = nil
