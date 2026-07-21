@@ -279,6 +279,13 @@ let package = Package(
                            // are #if os(macOS)-guarded (#754, #780).
                            .target(name: "WikiFSEngine",
                                    condition: .when(platforms: [.macOS])),
+                           // On Linux, several test files do `import SQLite3`
+                           // to call sqlite3_* directly. The SDK's Swift module
+                           // map isn't auto-available there — link the CSQLite
+                           // system-module wrapper, same as WikiFSCore does
+                           // (#754, #780).
+                           .target(name: "CSQLite",
+                                   condition: .when(platforms: [.linux])),
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
             swiftSettings: strictSwiftSettings
