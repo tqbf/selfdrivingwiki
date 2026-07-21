@@ -254,22 +254,24 @@ struct ContentView: View {
         // whole group into the `»` overflow. Declared here it centers within the
         // detail region, so it survives the sidebar opening.
         .toolbar {
-            // The omnibox group (Back / Forward + search field) is placed
-            // `.navigation` so it flows flush-left from the leading edge of the
-            // detail region (no centering gap). `AddressBarView` sizes the group
-            // to an explicit width that fills up to the trailing wiki switcher —
-            // the empty title space that would otherwise sit between them is
-            // reclaimed by hiding the window title (see `OmniboxSearchField`'s
-            // `viewDidMoveToWindow`). Declared on the detail column so it survives
-            // the sidebar opening.
+            // Safari layout: the Back/Forward/Home cluster is pinned flush-left
+            // (`.navigation`) and the omnibox field is centered (`.principal`).
+            // Splitting them into two items lets NSToolbar center the field
+            // independently of the fixed-width nav cluster. The field is sized to
+            // a fraction of the detail region (`OmniboxLayout.fieldWidth`) with
+            // margins on each side, so it never fills the region edge-to-edge —
+            // the condition that used to tip the whole group into the `»`
+            // overflow. The empty title space is reclaimed by hiding the window
+            // title (`.toolbar(removing: .title)` below).
             ToolbarItem(placement: .navigation) {
+                OmniboxNavButtons(store: store, homePageID: activeHomePageID)
+            }
+            ToolbarItem(placement: .principal) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
                                detailWidth: detailWidth,
                                sidebarVisible: columnVisibility != .detailOnly,
-                               homePageID: activeHomePageID,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
-
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
         // alone only empties the *text* — the toolbar still reserves ~160pt for the
