@@ -108,8 +108,14 @@ struct ScrollableTextEditor: NSViewRepresentable {
         scrollView.drawsBackground = false
 
         let textView = Self.makeConfiguredTextView(font: font)
-        textView.delegate = context.coordinator
+        // Seed the text BEFORE wiring the delegate. Assigning `.string` resets
+        // the selection and posts `NSTextViewDidChangeSelectionNotification`
+        // synchronously; with the delegate already attached that would call
+        // `onCaretChange` — a SwiftUI `@State` write — while `makeNSView` is
+        // still running inside SwiftUI's update pass ("Modifying state during
+        // view update").
         textView.string = text
+        textView.delegate = context.coordinator
         if let dropTV = textView as? DropLinkTextView {
             dropTV.sidebarDropBuilder = sidebarDropBuilder
         }
@@ -125,8 +131,15 @@ struct ScrollableTextEditor: NSViewRepresentable {
         // Sync text only when it changed externally (avoids clobbering the
         // user's in-flight edit). Setting `.string` resets undo + selection,
         // so we must skip it when the text view is already in sync.
+        //
+        // The selection reset fires `textViewDidChangeSelection` synchronously,
+        // which would report a caret move back into SwiftUI `@State` from
+        // inside the update pass. Flag the window so `reportCaret` ignores it:
+        // a programmatic text sync is not a user caret move.
         if textView.string != text {
+            context.coordinator.isApplyingProgrammaticChange = true
             textView.string = text
+            context.coordinator.isApplyingProgrammaticChange = false
         }
         if textView.font?.fontName != font.fontName
             || textView.font?.pointSize != font.pointSize {
@@ -146,15 +159,24 @@ struct ScrollableTextEditor: NSViewRepresentable {
         }
 
         // Consume a pending scroll request.
+        //
+        // `setSelectedRange` also posts the selection notification synchronously,
+        // so it needs the same suppression as the text sync above. Unlike a text
+        // sync, though, the caret genuinely did move (the user jumped to a
+        // heading) and the outline highlight should follow — so re-report it on
+        // a hop, once SwiftUI's update pass has finished.
         if let request = scrollRequest,
            context.coordinator.appliedScrollVersion != request.version {
             context.coordinator.appliedScrollVersion = request.version
             let length = (textView.string as NSString).length
             let clamped = min(max(0, request.charOffset), length)
             let range = NSRange(location: clamped, length: 0)
+            context.coordinator.isApplyingProgrammaticChange = true
             textView.setSelectedRange(range)
             textView.scrollRangeToVisible(range)
             textView.window?.makeFirstResponder(textView)
+            context.coordinator.isApplyingProgrammaticChange = false
+            context.coordinator.reportCaretAfterUpdate(in: textView)
         }
     }
 
@@ -216,6 +238,12 @@ struct ScrollableTextEditor: NSViewRepresentable {
         /// Avoids redundant SwiftUI updates: only reports the caret when its
         /// index actually changed.
         private var lastReportedCaret: Int?
+        /// True while `updateNSView` is mutating the text view itself (syncing
+        /// `.string`, applying a scroll request). AppKit posts the resulting
+        /// change/selection notifications synchronously, so any delegate
+        /// callback that writes back into SwiftUI would land in the middle of
+        /// the view update. Every such write is gated on this being false.
+        var isApplyingProgrammaticChange = false
 
         // MARK: - Autocomplete (#680)
 
@@ -232,6 +260,12 @@ struct ScrollableTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            // Assigning `.string` does not post this notification, but editing
+            // APIs that pair `replaceCharacters` with `didChangeText()` do. If
+            // one ever runs from `updateNSView`, the binding write below would
+            // mutate `store.draftBody` mid-update — and the value would be
+            // whatever we just pushed in, so there is nothing to report back.
+            guard !isApplyingProgrammaticChange else { return }
             if parent.text != textView.string {
                 parent.text = textView.string
             }
@@ -317,7 +351,18 @@ struct ScrollableTextEditor: NSViewRepresentable {
             autocompleteController = nil
         }
 
+        /// Reports the caret once the current SwiftUI update pass has finished.
+        /// Used for programmatic caret moves that the outline *should* follow
+        /// (a heading jump) but that cannot be published synchronously.
+        func reportCaretAfterUpdate(in textView: NSTextView) {
+            Task { @MainActor [weak textView] in
+                guard let textView else { return }
+                self.reportCaret(in: textView)
+            }
+        }
+
         private func reportCaret(in textView: NSTextView) {
+            guard !isApplyingProgrammaticChange else { return }
             let caret = textView.selectedRange().location
             guard caret != lastReportedCaret else { return }
             lastReportedCaret = caret

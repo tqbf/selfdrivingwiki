@@ -996,7 +996,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadedMarkdown = markdown
             pageLoaded = false
             isLoadingBinding = isLoading
-            isLoading.wrappedValue = true
+            // Never write this binding synchronously: `startLoad` is called from
+            // `makeNSView` / `updateNSView`, i.e. from inside SwiftUI's update
+            // pass, and a direct write there is "Modifying state during view
+            // update". Skip entirely when already loading (the common case on
+            // first mount, where `isLoading` starts `true`) and otherwise hop to
+            // the next main-actor turn. Mirrors
+            // `ComposerTextView.Coordinator.recomputeHeight` (#436).
+            if !isLoading.wrappedValue {
+                Task { @MainActor in isLoading.wrappedValue = true }
+            }
             loadStart = DispatchTime.now()
             // Measure the synchronous click→startLoad window: openTab →
             // loadDrafts (getPage + stripped) → SwiftUI re-render → this
