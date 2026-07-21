@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import Foundation
 
 // The Mach-O entry point for this extension is overridden to `_NSExtensionMain`
@@ -19,3 +20,5 @@ import Foundation
 func _nsExtensionMain() -> Int32
 
 _ = _nsExtensionMain
+#endif  // os(macOS)
+

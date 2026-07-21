@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 
 /// Enumerates the children of one container from the SQLite projection, and
@@ -183,3 +184,5 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         NSFileProviderPage(Data(String(offset).utf8))
     }
 }
+#endif  // os(macOS)
+

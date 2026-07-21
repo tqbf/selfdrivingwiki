@@ -312,6 +312,10 @@ let package = Package(
         ),
         // The File Provider extension binary. build.sh repackages this into a
         // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
+        //
+        // Declared unconditionally in targets[]; the fileProviderTargetExtension
+        // array below holds the macOS-only flag set. The .filter { } clause at
+        // the end drops it from the manifest on Linux.
         .executableTarget(
             name: "WikiFSFileProvider",
             dependencies: ["WikiFSCore"],
@@ -332,25 +336,31 @@ let package = Package(
         // Drop macOS-only executables on Linux — SwiftPM builds every target
         // in the package during `swift test`, not just test-target deps.
         // These targets either #include Obj-C frameworks or use launchd /
-        // File Provider / NSXPC APIs unavailable on Linux; building them
-        // there fails. macOS is unaffected; the existing WIKIFS_APP_STORE=1
-        // route still works as before (#754, #780).
+        // NSXPC APIs unavailable on Linux; building them there fails.
+        // macOS is unaffected; the existing WIKIFS_APP_STORE=1 route still
+        // works as before (#754, #780).
         //
         // - podcast-token-helper: Obj-C executable, needs Foundation.h +
-        //   AppleMediaServices private framework.
+        //   AppleMediaServices private framework. Not a dep of WikiFSAppTests,
+        //   so filtering it out of the manifest is safe (no orphan reference).
         // - wikictl: macOS CLI client; calls WikiDaemonConnection (guarded
         //   #if os(macOS)) and DarwinNotifier.postChange (also guarded).
-        //   Five call sites for WikiDaemonConnection in main.swift.
-        // - WikiFSFileProvider: the File Provider extension binary.
-        //   `import FileProvider` (NSFileProviderExtension /
-        //   NSFileProviderManager) — macOS-only framework.
+        //   Not a dep of WikiFSAppTests, so filtering is safe.
+        //
+        // NOTE: WikiFSFileProvider is NOT filtered here — it's a dep of
+        // WikiFSAppTests (with .when(platforms: [.macOS])), so removing it
+        // from the manifest breaks the dep-name resolution with a confusing
+        // "Source files for target WikiFSFileProvider should be located
+        // under 'Sources/WikiFSFileProvider'" error. Instead, the target
+        // declaration itself is conditionally wrapped with #if os(macOS)
+        // above — SwiftPM skips it on Linux and the conditional dep
+        // resolves to "not applicable on this platform".
         //
         // NOTE: wikid is intentionally NOT filtered — it has a Linux
         // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
         #if os(Linux)
         if $0.name == "podcast-token-helper" { return false }
         if $0.name == "wikictl" { return false }
-        if $0.name == "WikiFSFileProvider" { return false }
         #endif
         return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
     }

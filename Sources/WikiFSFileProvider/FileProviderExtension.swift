@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 
 /// The replicated File Provider extension principal class. Read-only: it serves
@@ -99,3 +100,5 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 userInfo: [NSLocalizedDescriptionKey: "Self Driving Wiki is read-only"])
     }
 }
+#endif  // os(macOS)
+
