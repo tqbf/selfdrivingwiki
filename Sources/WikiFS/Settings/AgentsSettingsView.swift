@@ -313,6 +313,19 @@ struct AgentsSettingsView: View {
             case .noneCaptured, .selected, .disabled:
                 EmptyView()
             }
+            // #612: info-tone nudge when the provider's selected model is a
+            // known free-tier model (e.g. opencode/big-pickle). NOT a
+            // prohibition — the user can still select it; this is a gentle
+            // steer toward a stronger model. Uses `.secondary` (muted info
+            // tone), NOT `.orange` (warning) — see macos-design caption idiom.
+            if let modelId = config.selectedModelId(forProvider: provider.id),
+               let nudge = FreeTierModelNudge.message(for: modelId) {
+                Text(nudge)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 180)
+            }
         }
     }
 

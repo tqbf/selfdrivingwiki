@@ -77,7 +77,27 @@ struct StageProviderModelPicker: View {
             .help(resolvedModels.isEmpty
                   ? "Chat with this provider once to discover its models."
                   : "Pick a model for the \(label) stage. “Same as provider” uses the provider's selected model.")
+
+            // #612: info-tone nudge when the stage's resolved model (pinned or
+            // inherited from the provider) is a known free-tier model (e.g.
+            // opencode/big-pickle). NOT a prohibition — the user can still
+            // select it; this is a gentle steer toward a stronger model. Uses
+            // `.secondary` (muted info tone), NOT `.orange` (warning).
+            if let nudge = freeTierNudge {
+                Text(nudge)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    /// #612: the free-tier nudge message for this stage's resolved model, or
+    /// `nil` when the model is not a known free-tier model. Resolves through
+    /// `config.modelId(forStage:)` so it fires whether the user pinned a
+    /// specific model OR left "Same as provider" and the provider's own
+    /// `selectedModelId` is free-tier. PURE (reads only the config).
+    private var freeTierNudge: String? {
+        FreeTierModelNudge.message(for: config.modelId(forStage: stageKey))
     }
 
     /// Reads/writes `config.stageProviderIds[stageKey]`. On set, routes through
