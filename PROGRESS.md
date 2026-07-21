@@ -5,31 +5,38 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 ## 2026-07-20 — Fix swift CI: build+cache fixed; test hang addressed (branch `ci-speedup`, PR #732)
 
 **Outcome.** Build + cache + test steps all green in CI. The test hang that
-timed out CI at 30 min was addressed by bounding the `CheckedContinuation`
-test suites with `.serialized, .timeLimit(.minutes(2))` (mirroring
-`ACPPermissionTimeoutTests` #664) and keying the actions/cache on
-`Package.resolved` only (dropping the Sources hash + restore-keys that were
-producing one cache entry per commit and blowing the 10 GB/repo LRU).
+timed out CI at 30 min was a **cooperative thread pool starvation** caused by
+blocking calls (`Thread.sleep`, `Process.waitUntilExit()`) in `@MainActor` and
+`--parallel` test suites. On CI's 3-vCPU runner, a few blocking calls exhaust
+the pool and deadlock every other test.
 
-**What works in CI:**
-- ✅ **Build step** uses plain `xcrun swift build` (removed the fragile
-  `xcrun swift build 2>/dev/null` probe that masked real build errors).
-- ✅ **Cache step** keyed on `Package.resolved` only — no more per-commit
-  cache misses.
-- ✅ **Test step** runs `xcrun swift test --parallel`; the 4 plan-named suites
-  (`QueueExtractionTests`, `ACPTurnRecoveryTests`, `ACPWiringTests`,
-  `QueueEngineTests`) carry `.serialized, .timeLimit(.minutes(2))` so a
-  stuck continuation can no longer hang the runner. Two WKWebView suites
-  (`YouTubeEmbedWebViewTests`, `QuoteHighlightWebViewTests`) also carry
-  `.serialized`.
+**Root cause.** The last successful CI (July 19, `95123a80`) used a 2-tier
+approach with a SKIP list for heavy suites. Commit `5101e42` removed the tiers,
+running the full suite in one job. The in-memory fixtures (#658) fixed the
+*speed* but not the *blocking* — `Thread.sleep(6)` in `PageVersionTests`
+(blocks the main actor for 6s) and `waitUntilExit()` in `PdfExtractionServiceTests`
+(parks a cooperative pool thread) starve the pool on constrained CI runners.
 
-**Approach.**
-- P0-1: cache key on `Package.resolved` only (drop Sources hash, drop restore-keys).
-- P0-2: `.serialized, .timeLimit(.minutes(2))` on the 4 plan-named suites.
-- P1-3/P1-4: removed the `if xcrun swift build 2>/dev/null; else swift build`
-  probe; build is `xcrun swift build`, test is `xcrun swift test --parallel`.
-- Beyond plan: `.serialized` on the 2 WKWebView suites that also use
-  `CheckedContinuation` (`YouTubeEmbedWebViewTests`, `QuoteHighlightWebViewTests`).
+**Fix.**
+- Replaced all `Thread.sleep` in tests with `Task.sleep` (non-blocking):
+  `PageVersionTests.amendAfterWindowExpiresAppends` (6s → `.seconds(6)`),
+  `ChatSummaryTests.summaryBumpsUpdatedAt` (10ms), `NavigationHistoryTests`
+  (2ms × 2 tests).
+- Replaced all `Process.waitUntilExit()` in `PdfExtractionServiceTests` with
+  a `terminationHandler` + `CheckedContinuation` wrapper (`asyncWaitUntilExit`)
+  — same semantics, non-blocking.
+- Added `.serialized, .timeLimit(.minutes(2))` to the 4 `CheckedContinuation`
+  suites (`QueueExtractionTests`, `ACPTurnRecoveryTests`, `ACPWiringTests`,
+  `QueueEngineTests`) as a safety net.
+- Added `.serialized` to 2 WKWebView suites (`YouTubeEmbedWebViewTests`,
+  `QuoteHighlightWebViewTests`).
+
+**CI workflow changes.**
+- Cache key on `Package.resolved` only (dropped `Sources/**/*.swift` hash +
+  `restore-keys` that produced one cache entry per commit, blowing the 10 GB
+  LRU).
+- Plain `xcrun swift build` / `xcrun swift test --parallel` (removed the
+  fragile `xcrun swift build 2>/dev/null` probe that masked build errors).
 
 ## 2026-07-20 — Queue a chat message while the agent is working (branch `chat-queue`, PR #751)
 
