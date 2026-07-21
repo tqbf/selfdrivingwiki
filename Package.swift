@@ -89,8 +89,7 @@ let package = Package(
             name: "WikiFSMarkdown",
             dependencies: ["WikiFSTypes", "WikiFSLinks"],
             path: "Sources/WikiFSMarkdown",
-            swiftSettings: strictSwiftSettings,
-            linkerSettings: [.linkedFramework("JavaScriptCore")]
+            swiftSettings: strictSwiftSettings
         ),
         // Search/embedding cluster — Embedder protocol, NLEmbedder, embedding
         // service, text chunker, rank fusion, wiki index. Depends only on
@@ -102,13 +101,16 @@ let package = Package(
             name: "WikiFSSearch",
             dependencies: [
                 "WikiFSTypes",
-                // Phase 0 spike: TantivySwift (Rantivy FFI + @TantivyDocument macro).
+                // Phase 0 spike: TantivySwift (Tantivy FFI + @TantivyDocument macro).
                 // Natural home for search-engine integration (plans/tantivy-search-sidecar.md §8.1).
-                .product(name: "TantivySwift", package: "tantivy.swift"),
+                // macOS-only: the pre-built XCFramework ships only a macOS arm64 slice.
+                // Guarded with #if os(macOS) in source; the dependency is conditional so
+                // Linux `swift build --target WikiFSSearch` doesn't try to build it (#754).
+                .product(name: "TantivySwift", package: "tantivy.swift",
+                         condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/WikiFSSearch",
-            swiftSettings: strictSwiftSettings,
-            linkerSettings: [.linkedFramework("NaturalLanguage")]
+            swiftSettings: strictSwiftSettings
         ),
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
