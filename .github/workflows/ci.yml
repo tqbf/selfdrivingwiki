@@ -107,10 +107,17 @@ jobs:
         # so only WikiFSCoreTests tests are discovered. The skip list
         # excludes suites that block the cooperative thread pool on CI's
         # limited vCPUs (DispatchSemaphore, Process.waitUntilExit, etc.).
+        #
+        # --target WikiFSCoreTests (matching the build step above): bare
+        # `swift test` would also try to build every other target in
+        # Package.swift — including `podcast-token-helper` (an Objective-C
+        # executable that #includes Foundation/Foundation.h, which isn't
+        # available on Linux). Scoping to WikiFSCoreTests skips macOS-only
+        # executables that can't link on Linux (#754, #780).
         timeout-minutes: 15
         env:
-          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
-        run: swift test --parallel --skip "$SKIP"
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
+        run: swift test --parallel --target WikiFSCoreTests --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest
