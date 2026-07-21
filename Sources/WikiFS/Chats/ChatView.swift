@@ -161,17 +161,34 @@ struct ChatView: View {
             // later ingest/lint run doesn't inherit it and strand the view on
             // `AgentQueueView`. (AC.1)
             if !isRunning { showsInternals = false }
-            // #740: when a turn completes, deliver the FIRST queued message as
-            // the next turn's input (playlist: one per turn). The rest stay queued
-            // and each fires in order as subsequent turns complete. Only fires what
-            // was explicitly queued via the Queue button — a half-typed draft stays
-            // in the composer untouched (it isn't part of `queuedMessages`). The
-            // dispatch goes through the same `submitMessage` path used by a normal
-            // Send, so it reuses the interactive/continue/start routing without
-            // disturbing the draft.
+            // #759: covers the session-end-between-turns case — when the whole
+            // process exits with a queued message still pending, deliver it as the
+            // next turn via the same `submitMessage` path used by a normal Send.
+            // (Per-turn completion is handled by the `isGenerating` observer below;
+            // both observers are safe to co-fire because `firePendingQueuedMessage`
+            // drains exactly one item and then the queue is empty — the second
+            // observer's guard no-ops.)
             if !isRunning, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
+        }
+        // #759: the per-turn completion signal. An interactive session keeps
+        // `isRunning == true` across turns (the claude process stays alive), so the
+        // observer above would never fire between turns — the queued message would
+        // sit forever until the session ended. The real "turn done, ready for next
+        // input" transition is `isGenerating` going false (set in `setGenerating(false)`
+        // at the `endsGeneration` event, or in `finish()` on process death). Fire the
+        // first queued message there, one per turn. Only fires what was explicitly
+        // queued via the Queue button / Return-during-generation — a half-typed draft
+        // stays in the composer untouched (it isn't part of `queuedMessages`).
+        .onChange(of: launcher.isGenerating) { _, isGenerating in
+            guard !isGenerating else { return }
+            // Skip the initial "not generating" state and any transition that isn't
+            // a turn boundary: only fire while the session is still alive. (When the
+            // process dies, `isRunning` goes false too and the observer above handles
+            // delivery — this guard avoids a redundant dispatch on that path.)
+            guard launcher.isRunning, !queuedMessages.isEmpty else { return }
+            firePendingQueuedMessage()
         }
         .task(id: chatID) {
             // Reload persisted messages whenever the chatID changes (or the store
@@ -433,12 +450,17 @@ struct ChatView: View {
     /// The composer, placed once as a VStack sibling below the transcript (the
     /// live placement). For a persisted (non-live) chat it also carries the
     /// "another chat is responding" caption when the kind's launcher is busy.
+    ///
+    /// #759: the queued-message list renders ABOVE the composer text field so
+    /// stacked "up next" items read as a playlist feeding into the input,
+    /// not as an afterthought dangling below it. (macos-design: muted,
+    /// above the affordance they feed, clearly secondary.)
     private var chatComposer: some View {
         VStack(spacing: 4) {
-            composer(enabled: isComposerEnabled)
             if !queuedMessages.isEmpty {
                 queuedMessagesList
             }
+            composer(enabled: isComposerEnabled)
             if let caption = composerCaption {
                 Text(caption)
                     .font(.caption)
@@ -488,6 +510,21 @@ struct ChatView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+            // #759: edit-before-fires affordance. Pulls this message back into
+            // the composer draft for editing, removing it from the queue. Only
+            // acts when the draft is empty — a half-typed draft is preserved
+            // (write rules: never lose the user's in-flight text). The user can
+            // finish/discard their draft first and then edit the queued item.
+            Button {
+                editQueuedMessage(at: index)
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Edit this queued message")
+            .disabled(hasDraftText)
             Button {
                 queuedMessages.remove(at: index)
             } label: {
@@ -1217,6 +1254,18 @@ struct ChatView: View {
     /// are rebuilt from current attachments on the next queue/send).
     private func recallQueuedMessage() {
         guard let pending = queuedMessages.popLast() else { return }
+        store.draftChatMessage = pending.preview
+    }
+
+    /// #759: pull a specific queued message back into the composer draft for
+    /// editing, removing it from its slot in the queue. The remaining items
+    /// shift down (the first still fires next). Only acts when the draft is
+    /// empty (guarded by the row's `.disabled(hasDraftText)`) — a half-typed
+    /// draft is never overwritten. The user re-queues the edited text via
+    /// Send/Queue as normal.
+    private func editQueuedMessage(at index: Int) {
+        guard !hasDraftText, queuedMessages.indices.contains(index) else { return }
+        let pending = queuedMessages.remove(at: index)
         store.draftChatMessage = pending.preview
     }
 
