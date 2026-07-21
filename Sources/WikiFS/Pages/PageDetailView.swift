@@ -25,9 +25,15 @@ struct PageDetailView: View {
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
+    @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("pageOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
+    /// Provenance for the inspector's History tab. Loaded via `.task(id:)`
+    /// keyed on `currentPageID` so it re-fires on page navigation.
+    @State private var provenanceOrigin: PageOrigin?
+    @State private var provenanceHistory: [PageOrigin] = []
 
     // Find bar state. The model is shared (hoisted to `ContentView` and injected
     // via environment) so the address bar's "Find on Page…" menu item can drive
@@ -152,6 +158,15 @@ struct PageDetailView: View {
         .onChange(of: findModel.currentMatchIndex) { _, _ in
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
+        }
+        .task(id: currentPageID) {
+            guard let pageID = currentPageID else {
+                provenanceOrigin = nil
+                provenanceHistory = []
+                return
+            }
+            provenanceOrigin = store.pageOrigin(for: pageID)
+            provenanceHistory = store.pageEditHistory(for: pageID)
         }
         .alert(
             "Title Already Exists",
@@ -324,16 +339,20 @@ struct PageDetailView: View {
 
             if isOutlineExpanded {
                 DetailInspectorView(
-                    pageID: currentPageID,
-                    markdown: store.draftBody,
-                    caretCharIndex: caretCharIndex,
-                    store: store) { heading in
-                    if isEditing {
-                        editorScrollRequest = EditorScrollRequest(
-                            charOffset: heading.charOffset,
-                            version: (editorScrollRequest?.version ?? 0) + 1)
-                    } else {
-                        store.jumpToAnchorInCurrentSelection(heading.id)
+                    inspectorTab: $inspectorTab,
+                    outlineWidth: $outlineWidth,
+                    origin: provenanceOrigin?.provenanceEntry,
+                    history: provenanceHistory.map(\.provenanceEntry),
+                    store: store) {
+                    PageOutlineView(markdown: store.draftBody,
+                                    caretCharIndex: caretCharIndex) { heading in
+                        if isEditing {
+                            editorScrollRequest = EditorScrollRequest(
+                                charOffset: heading.charOffset,
+                                version: (editorScrollRequest?.version ?? 0) + 1)
+                        } else {
+                            store.jumpToAnchorInCurrentSelection(heading.id)
+                        }
                     }
                 }
             }
@@ -671,295 +690,6 @@ struct PageOutlineView: View {
         result = result.replacingOccurrences(of: "**", with: "")
         result = result.replacingOccurrences(of: "__", with: "")
         return result
-    }
-}
-
-// MARK: - Inspector panel (Xcode-style tabbed right sidebar)
-
-/// The selected tab in the `DetailInspectorView`. Persisted in `@AppStorage`
-/// so the user's last-used tab is restored on reopen.
-enum InspectorTab: String, CaseIterable {
-    case outline
-    case history
-}
-
-/// Xcode-style inspector panel for `PageDetailView`. Shows a segmented tab
-/// bar at the top (Outline / History) and the selected tab's content below.
-///
-/// - **Outline tab**: renders `PageOutlineView` (heading list + caret tracking).
-/// - **History tab**: renders `ProvenancePanel` (page origin + edit history).
-///
-/// The resizable width divider lives at this level (not in `PageOutlineView`)
-/// so both tabs share the same column width. Provenance is loaded via a
-/// `.task(id:)` keyed on `pageID` — re-firing whenever the page changes.
-struct DetailInspectorView: View {
-    let pageID: PageID?
-    let markdown: String
-    var caretCharIndex: Int?
-    var store: WikiStoreModel?
-    let onSelectHeading: (HeadingItem) -> Void
-
-    @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
-    @AppStorage("outlineWidth") private var outlineWidth: Double = 260
-    @State private var dragStartWidth: Double? = nil
-
-    @State private var provenanceOrigin: PageOrigin?
-    @State private var provenanceHistory: [PageOrigin] = []
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Draggable divider on the inspector's leading edge — shared by
-            // both tabs so the column width is always resizable.
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal, 4)
-                .contentShape(Rectangle())
-                .onHover { isHovering in
-                    if isHovering {
-                        NSCursor.resizeLeftRight.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            if dragStartWidth == nil {
-                                dragStartWidth = outlineWidth
-                            }
-                            if let start = dragStartWidth {
-                                let newWidth = start - Double(value.translation.width)
-                                outlineWidth = max(180, min(500, newWidth))
-                            }
-                        }
-                        .onEnded { _ in
-                            dragStartWidth = nil
-                        }
-                )
-                .zIndex(1)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Picker("Inspector", selection: $inspectorTab) {
-                    Label("Outline", systemImage: "list.bullet.indent")
-                        .tag(InspectorTab.outline)
-                    Label("History", systemImage: "clock.arrow.circlepath")
-                        .tag(InspectorTab.history)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(8)
-
-                Divider()
-
-                switch inspectorTab {
-                case .outline:
-                    PageOutlineView(markdown: markdown,
-                                    caretCharIndex: caretCharIndex,
-                                    onSelect: onSelectHeading)
-                case .history:
-                    ScrollView {
-                        ProvenancePanel(
-                            pageID: pageID ?? PageID(rawValue: ""),
-                            origin: provenanceOrigin,
-                            history: provenanceHistory,
-                            store: store)
-                        .padding()
-                    }
-                }
-            }
-            .frame(width: outlineWidth)
-            .background(Color(nsColor: .windowBackgroundColor))
-        }
-        .task(id: pageID) {
-            guard let pageID else {
-                provenanceOrigin = nil
-                provenanceHistory = []
-                return
-            }
-            provenanceOrigin = store?.pageOrigin(for: pageID)
-            provenanceHistory = store?.pageEditHistory(for: pageID) ?? []
-        }
-    }
-}
-
-// MARK: - Provenance panel (#page-provenance)
-
-/// The content of the inspector's "History" tab — page origin + edit history
-/// from the page-PROV graph. Pure-render over its inputs (no I/O); the parent
-/// `DetailInspectorView` loads `.origin` + `.history` via its `.task(id:)` and
-/// passes them in here. Kept self-contained so the type checker resolves the
-/// `body` subtree independently (the parent body is large already).
-///
-/// #745: history rows are clickable. A `chat:<id>` provenance entry
-/// navigates to the chat tab (via `store.openTab(.chat(...))`); an
-/// `agent:<kind>` one-shot-run entry opens the Activity window (via the
-/// `\.openActivityWindow` environment closure). Neither applies → no-op.
-struct ProvenancePanel: View {
-    let pageID: PageID
-    let origin: PageOrigin?
-    let history: [PageOrigin]
-    /// The wiki store — used to navigate to chat tabs on row click (#745).
-    /// Weak-ish: the parent `PageDetailView` owns a `@Bindable` reference,
-    /// so this never outlives the view.
-    var store: WikiStoreModel?
-    @Environment(\.openActivityWindow) private var openActivityWindow
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let origin {
-                originRow(origin)
-            } else {
-                Text("No provenance yet")
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-            }
-            if !history.isEmpty {
-                Divider().opacity(0.5)
-                Text("Edit history")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(history, id: \.versionID) { entry in
-                    historyRow(entry)
-                }
-            }
-        }
-        .font(.callout)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder private func originRow(_ origin: PageOrigin) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Created-by / last-edited-by-row, date-first to match the
-            // history rows below.
-            HStack(spacing: 6) {
-                Text(origin.savedAt,
-                     format: .dateTime.month().day().year().hour().minute())
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                operationBadge(origin.activityKind)
-                Text("by")
-                    .foregroundStyle(.secondary)
-                agentLabel(origin)
-            }
-        }
-    }
-
-    @ViewBuilder private func historyRow(_ entry: PageOrigin) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            // Date — leading, fixed-width for column alignment.
-            Text(entry.savedAt,
-                 format: .dateTime.month().day().year().hour().minute())
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 140, alignment: .leading)
-
-            operationBadge(entry.activityKind)
-
-            agentLabel(entry)
-
-            Spacer()
-
-            if entry.title.isEmpty == false {
-                Text(entry.title)
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-        .contentShape(Rectangle())
-        .hoverRowBackground()
-        .onTapGesture { handleProvenanceTap(entry) }
-    }
-
-    /// A compact colored badge for the provenance activity kind
-    /// (`import` → blue, `edit` → green, others → gray). Makes the
-    /// operation scannable in the history list.
-    @ViewBuilder
-    private func operationBadge(_ kind: String) -> some View {
-        let color: Color = switch kind {
-        case "import": .blue
-        case "edit":   .green
-        default:       .secondary
-        }
-        Text(kind.capitalized)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-            .foregroundStyle(color)
-    }
-
-    /// Navigate to the provenance entry's origin (#745):
-    /// - `chat:<id>` → open the chat tab in the wiki's tab bar.
-    /// - `agent:<kind>` → open the Activity (queue) window.
-    /// - Otherwise → no-op (don't break).
-    private func handleProvenanceTap(_ entry: PageOrigin) {
-        if entry.agentName.hasPrefix("chat:") {
-            let chatID = String(entry.agentName.dropFirst("chat:".count))
-            guard !chatID.isEmpty else { return }
-            let id = PageID(rawValue: chatID)
-            DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
-            store?.openTab(.chat(id))
-        } else if entry.agentName.hasPrefix("agent:") {
-            DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
-            openActivityWindow?()
-        }
-    }
-
-    /// Render the agent identity (#745). For `chat:<id>` agents, prefer the
-    /// resolved `runTitle` (the chat's display title) over the raw ULID. When
-    /// the chat has been deleted (title is nil), fall back to a muted
-    /// "Deleted chat" label. For `agent:<kind>` one-shot runs, show a
-    /// friendly label derived from the kind (e.g. "Ingest" / "Lint") rather
-    /// than the raw `agent:ingest` string. Other kinds render verbatim.
-    @ViewBuilder
-    private func agentLabel(_ entry: PageOrigin) -> some View {
-        let name = entry.agentName
-        if name.hasPrefix("chat:") {
-            if let runTitle = entry.runTitle, !runTitle.isEmpty {
-                Label(runTitle, systemImage: "bubble.left.and.bubble.right")
-                    .help(name)
-                    .foregroundStyle(.secondary)
-            } else {
-                // Chat was deleted or the title is unavailable — show a
-                // muted placeholder instead of the raw ULID.
-                Label("Deleted chat", systemImage: "bubble.left.and.bubble.right")
-                    .help(name)
-                    .foregroundStyle(.tertiary)
-            }
-        } else if name.hasPrefix("agent:") {
-            // One-shot run: resolve a friendly label from the kind suffix.
-            let kind = String(name.dropFirst("agent:".count))
-            let label = friendlyRunLabel(for: kind)
-            Label(label, systemImage: "cpu")
-                .help("\(kind) agent")
-                .foregroundStyle(.secondary)
-        } else if name == "user" {
-            Label(name, systemImage: "person")
-                .foregroundStyle(.secondary)
-        } else if name == "legacy-import" {
-            Label("Imported (legacy)", systemImage: "tray.and.arrow.down")
-                .foregroundStyle(.secondary)
-        } else {
-            Text(name)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Map an `agent:<kind>` suffix to a human-readable run label (#745).
-    /// `ingest` → "Ingestion", `lint` → "Lint", `query` → "Query".
-    /// Unknown kinds fall back to the capitalized kind.
-    private nonisolated func friendlyRunLabel(for kind: String) -> String {
-        switch kind {
-        case "ingest": return "Ingestion"
-        case "lint": return "Lint"
-        case "query": return "Query"
-        default: return kind.capitalized
-        }
     }
 }
 
