@@ -1,4 +1,5 @@
 import Foundation
+#if os(macOS)
 
 // MARK: - TantivySearchService
 
@@ -128,3 +129,4 @@ public final class TantivySearchService: Sendable {
         }
     }
 }
+#endif // os(macOS)

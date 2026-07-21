@@ -1,4 +1,5 @@
 import Foundation
+#if os(macOS)
 import TantivySwift
 
 // MARK: - TantivyIndexer
@@ -226,3 +227,4 @@ public actor TantivyIndexer {
         self.index = try TantivySwiftIndex<TantivySearchDocument>(path: indexPath)
     }
 }
+#endif // os(macOS)

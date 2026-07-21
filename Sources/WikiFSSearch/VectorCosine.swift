@@ -1,5 +1,7 @@
-import Accelerate
 import Foundation
+#if canImport(Accelerate)
+import Accelerate
+#endif
 
 /// Pure-Swift cosine similarity over the L2-normalized Float32 embeddings stored
 /// in `page_chunks`/`source_chunks`/`chat_chunks`. This is the MIT-clean
@@ -50,7 +52,14 @@ public enum VectorCosine {
     public static func dot(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count > 0, a.count == b.count else { return 0 }
         var sum: Float = 0
+        #if canImport(Accelerate)
         vDSP_dotpr(a, 1, b, 1, &sum, vDSP_Length(a.count))
+        #else
+        // Pure-Swift fallback — identical result, slower without SIMD. Acceptable on
+        // Linux where embeddings are unavailable anyway (isAvailable == false → dot
+        // is dormant). See VectorCosine.swift:22-26 re: SIMD only mattering >~50-100k.
+        for i in 0..<a.count { sum += a[i] * b[i] }
+        #endif
         return sum
     }
 

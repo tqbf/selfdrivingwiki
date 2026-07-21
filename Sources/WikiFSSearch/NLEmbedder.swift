@@ -1,4 +1,5 @@
 import Foundation
+#if os(macOS)
 @preconcurrency import NaturalLanguage
 
 /// Apple `NLEmbedding` behind the `Embedder` protocol (512-dim). This is the
@@ -36,3 +37,4 @@ public struct NLEmbedder: Embedder {
         return doubles.map(Float.init)
     }
 }
+#endif // os(macOS)
