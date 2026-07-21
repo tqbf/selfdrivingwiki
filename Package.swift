@@ -126,7 +126,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/WikiFSCore",
-            swiftSettings: strictSwiftSettings,
+            swiftSettings: strictSwiftSettings
         ),
         // — which the File Provider extension must NOT (com.apple.fileprovider-
         // nonui forbids Metal on macOS 26). Core reaches the implementation via
