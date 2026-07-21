@@ -70,18 +70,21 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Wiki selector in the sidebar header — like the account header at
-            // the top of Notes/Mail's navigator. It collapses with the sidebar
-            // when the leading panel toggle hides it, so it leaves the toolbar
-            // (which now holds only the nav cluster + omnibox + Change Log toggle).
-            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            Divider()
             sectionSelectorBar
                 .padding(.top, 8)
             Divider()
             bookmarksOrList
+        }
+        // Wiki switcher pinned to the sidebar's bottom bar — like Xcode's
+        // navigator footer or Finder's status bar. It collapses with the
+        // sidebar when the leading panel toggle hides it, leaving the toolbar
+        // to hold only the nav cluster + omnibox.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Divider()
+            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
         }
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,
