@@ -162,6 +162,7 @@ struct PageDetailView: View {
                         .help("Toggle Outline")
                     }
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
