@@ -333,34 +333,40 @@ let package = Package(
             ]
         ),
     ].filter {
-        // Drop macOS-only executables on Linux — SwiftPM builds every target
-        // in the package during `swift test`, not just test-target deps.
-        // These targets either #include Obj-C frameworks or use launchd /
-        // NSXPC APIs unavailable on Linux; building them there fails.
+        // Drop macOS-only executables / targets on Linux — SwiftPM builds every
+        // target in the package during `swift test`, not just test-target deps.
+        // These targets either #include Obj-C frameworks, use launchd / NSXPC /
+        // AppKit / SwiftUI APIs unavailable on Linux, or pull in CGraphics-only
+        // C++ deps (Cmlx → cublasLt.h CUDA backend, missing on Linux runners).
         // macOS is unaffected; the existing WIKIFS_APP_STORE=1 route still
         // works as before (#754, #780).
         //
+        // Filtered:
         // - podcast-token-helper: Obj-C executable, needs Foundation.h +
         //   AppleMediaServices private framework. Not a dep of WikiFSAppTests,
-        //   so filtering it out of the manifest is safe (no orphan reference).
+        //   so filtering it out of the manifest is safe.
         // - wikictl: macOS CLI client; calls WikiDaemonConnection (guarded
         //   #if os(macOS)) and DarwinNotifier.postChange (also guarded).
         //   Not a dep of WikiFSAppTests, so filtering is safe.
-        //
-        // NOTE: WikiFSFileProvider is NOT filtered here — it's a dep of
-        // WikiFSAppTests (with .when(platforms: [.macOS])), so removing it
-        // from the manifest breaks the dep-name resolution with a confusing
-        // "Source files for target WikiFSFileProvider should be located
-        // under 'Sources/WikiFSFileProvider'" error. Instead, the target
-        // declaration itself is conditionally wrapped with #if os(macOS)
-        // above — SwiftPM skips it on Linux and the conditional dep
-        // resolves to "not applicable on this platform".
+        // - WikiFS: the app executable. Imports AppKit/SwiftUI unconditionally;
+        //   links WikiFSMLX → mlx-swift-lm → mlx-swift → Cmlx, which tries to
+        //   compile its CUDA backend on Linux (cublasLt.h not found).
+        // - WikiFSMLX: links MLXEmbedders (mlx-swift-lm). Same CUDA build issue.
+        // - WikiFSAppTests: empty on Linux (all source #if os(macOS)-guarded)
+        //   but pulls WikiFSMLX via a conditional dep — SwiftPM still resolves
+        //   the package, and `swift test` builds the Cmlx dep transitively.
+        // - WikiFSFileProvider: handled differently (sources #if os(macOS)-
+        //   guarded; target stays in manifest so WikiFSAppTests' dep name
+        //   resolves). See comment on its declaration above.
         //
         // NOTE: wikid is intentionally NOT filtered — it has a Linux
         // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
         #if os(Linux)
         if $0.name == "podcast-token-helper" { return false }
         if $0.name == "wikictl" { return false }
+        if $0.name == "WikiFS" { return false }
+        if $0.name == "WikiFSMLX" { return false }
+        if $0.name == "WikiFSAppTests" { return false }
         #endif
         return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
     }
