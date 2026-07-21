@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Stores extraction secrets — the Anthropic + Gemini API keys and an optional
 /// Docling Serve bearer token — behind a protocol so clients and tests never

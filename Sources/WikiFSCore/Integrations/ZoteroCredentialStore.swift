@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Stores the Zotero API key — a secret, unlike `ZoteroConfig`'s library ID and
 /// directory override, which are plain JSON. Behind a protocol so `ZoteroClient`
