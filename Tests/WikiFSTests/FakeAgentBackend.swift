@@ -2,7 +2,6 @@ import Foundation
 import WikiFSEngine
 import Testing
 import WikiFSEngine
-@testable import WikiFS
 @testable import WikiFSEngine
 @testable import WikiFSCore
 

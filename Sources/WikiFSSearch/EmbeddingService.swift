@@ -37,6 +37,7 @@ public enum EmbeddingService {
     /// Used by `GRDBWikiStore.ensureEmbedderConsistency()` for the
     /// `embedding_meta` cutover check.
     public static func selectedEmbedderIdentifier() -> String {
+        #if os(macOS)
         guard Bundle.main.bundlePath.hasSuffix(".app") else {
             return NLEmbedder.identifier  // test / CLI context: no model loads
         }
@@ -44,11 +45,16 @@ public enum EmbeddingService {
             return miniLMIdentifier
         }
         return NLEmbedder.identifier
+        #else
+        // Linux: no NLEmbedder, no MiniLM — embeddings are unavailable.
+        return "unavailable-linux"
+        #endif
     }
 
     /// Async: load the selected embedder into memory. Call once from `WikiStoreModel`
     /// startup, before the search-index upgrade runs. Idempotent (a no-op once loaded).
     public static func configure() async {
+        #if os(macOS)
         guard lock.withLock({ _embedder == nil }) else { return }
         guard Bundle.main.bundlePath.hasSuffix(".app") else { return }
 
@@ -77,6 +83,12 @@ public enum EmbeddingService {
             let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
             DebugLog.store("embed.model LOAD \(String(format: "%.1f", loadMs)) ms nlembedder main=\(Thread.isMainThread) loaded=true")
         }
+        #else
+        // Linux: no NLEmbedder, no MiniLM — embeddings are permanently unavailable.
+        // isAvailable stays false; the store handles this (cosine leg skipped, search
+        // returns BM25-less results — acceptable per issue #754 acceptance).
+        DebugLog.store("EmbeddingService.configure: no-op on Linux (embeddings unavailable)")
+        #endif
     }
 
     /// True when the active embedder is loaded and usable.

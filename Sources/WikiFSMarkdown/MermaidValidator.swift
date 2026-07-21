@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(JavaScriptCore)
 import JavaScriptCore
+#endif
 
 // MARK: - MermaidValidator
 
@@ -62,6 +64,7 @@ public final class MermaidValidator: @unchecked Sendable {
         }
     }
 
+    #if canImport(JavaScriptCore)
     private let context: JSContext
     private let validate: JSValue
     private let lock = NSLock()
@@ -136,6 +139,13 @@ public final class MermaidValidator: @unchecked Sendable {
     public func invalidBlocks(markdown: String) -> [BlockResult] {
         validate(markdown: markdown).filter { !$0.isValid }
     }
+
+    #else
+    // Linux stub: JavaScriptCore is unavailable. All methods are no-ops.
+    public init?(jsSource: String) { return nil }
+    public func validate(markdown: String) -> [BlockResult] { return [] }
+    public func invalidBlocks(markdown: String) -> [BlockResult] { return [] }
+    #endif
 
     /// Format invalid blocks into a human/agent-readable message (one header
     /// line + a line per error). Empty string when there are no issues.
@@ -255,6 +265,7 @@ public final class MermaidValidator: @unchecked Sendable {
         return rest.allSatisfy { $0 == " " }
     }
 
+    #if canImport(JavaScriptCore)
     // MARK: - JS bridging
 
     private func validateSingle(at index: Int, source: String) -> BlockResult {
@@ -475,8 +486,10 @@ globalThis.__merval = {
   }
 };
 """
+    #endif
 }
 
+#if canImport(JavaScriptCore)
 /// Thread-safe holder for the most recent `JSContext` exception, so the
 /// validator's exception handler (which can't safely capture `self`) can record
 /// a failure and `validateSingle` can read it back for diagnostics.
@@ -486,3 +499,4 @@ final class ExceptionSink: @unchecked Sendable {
     func set(_ value: String?) { lock.lock(); stored = value; lock.unlock() }
     func value() -> String? { lock.lock(); defer { lock.unlock() }; return stored }
 }
+#endif

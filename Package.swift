@@ -89,8 +89,7 @@ let package = Package(
             name: "WikiFSMarkdown",
             dependencies: ["WikiFSTypes", "WikiFSLinks"],
             path: "Sources/WikiFSMarkdown",
-            swiftSettings: strictSwiftSettings,
-            linkerSettings: [.linkedFramework("JavaScriptCore")]
+            swiftSettings: strictSwiftSettings
         ),
         // Search/embedding cluster — Embedder protocol, NLEmbedder, embedding
         // service, text chunker, rank fusion, wiki index. Depends only on
@@ -102,13 +101,16 @@ let package = Package(
             name: "WikiFSSearch",
             dependencies: [
                 "WikiFSTypes",
-                // Phase 0 spike: TantivySwift (Rantivy FFI + @TantivyDocument macro).
+                // Phase 0 spike: TantivySwift (Tantivy FFI + @TantivyDocument macro).
                 // Natural home for search-engine integration (plans/tantivy-search-sidecar.md §8.1).
-                .product(name: "TantivySwift", package: "tantivy.swift"),
+                // macOS-only: the pre-built XCFramework ships only a macOS arm64 slice.
+                // Guarded with #if os(macOS) in source; the dependency is conditional so
+                // Linux `swift build --target WikiFSSearch` doesn't try to build it (#754).
+                .product(name: "TantivySwift", package: "tantivy.swift",
+                         condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/WikiFSSearch",
-            swiftSettings: strictSwiftSettings,
-            linkerSettings: [.linkedFramework("NaturalLanguage")]
+            swiftSettings: strictSwiftSettings
         ),
         // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
         // implementation, and the @Observable WikiStoreModel. Depended on by
@@ -235,16 +237,33 @@ let package = Package(
                 ]),
             ]
         ),
+        // Portable logic tests — store, links, markdown algebra, registry,
+        // shellwords, ranks, chunking, embeddings-meta, concurrency, queue/engine,
+        // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
-            name: "WikiFSTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFS", "WikiFSMLX", "WikiFSEngine", "WikiFSFileProvider", "wikid",
-                           // ACP model types for ACPBackendTests (no live subprocess — pure translator tests).
-                           .product(name: "ACPModel", package: "swift-acp"),
-                           // Phase 0 spike: TantivySmokeTests exercises the @TantivyDocument
-                           // macro + UniFFI FFI bridge end-to-end.
-                           .product(name: "TantivySwift", package: "tantivy.swift")],
+            name: "WikiFSCoreTests",
+            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+                           .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
-            // Matches WikiFSCore so the gated podcast test files compile in/out too.
+            swiftSettings: strictSwiftSettings
+        ),
+        // macOS-only tests — AppKit/WebKit/FileProvider/SwiftUI-hosted views,
+        // Tantivy integration, MLX embedder, PDF extraction, JS linter/validator.
+        // Every file is wrapped in #if os(macOS) so on Linux this compiles to an
+        // empty module and `swift test` runs only WikiFSCoreTests (#754).
+        .testTarget(
+            name: "WikiFSAppTests",
+            dependencies: [
+                "WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+                .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
+                .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
+                .target(name: "WikiFSFileProvider", condition: .when(platforms: [.macOS])),
+                .target(name: "wikid", condition: .when(platforms: [.macOS])),
+                .product(name: "TantivySwift", package: "tantivy.swift",
+                         condition: .when(platforms: [.macOS])),
+                .product(name: "ACPModel", package: "swift-acp"),
+            ],
+            path: "Tests/WikiFSAppTests",
             swiftSettings: strictSwiftSettings
         ),
         // The File Provider extension binary. build.sh repackages this into a
