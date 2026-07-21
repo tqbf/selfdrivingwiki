@@ -820,8 +820,8 @@ struct ProvenancePanel: View {
                 Text("Edit history")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
-                ForEach(Array(history.enumerated()), id: \.element.versionID) { idx, entry in
-                    historyRow(idx, entry)
+                ForEach(history, id: \.versionID) { entry in
+                    historyRow(entry)
                 }
             }
         }
@@ -832,42 +832,40 @@ struct ProvenancePanel: View {
 
     @ViewBuilder private func originRow(_ origin: PageOrigin) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            // Created-by / last-edited-by row.
+            // Created-by / last-edited-by-row, date-first to match the
+            // history rows below.
             HStack(spacing: 6) {
-                Text("Last saved by")
+                Text(origin.savedAt,
+                     format: .dateTime.month().day().year().hour().minute())
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                operationBadge(origin.activityKind)
+                Text("by")
                     .foregroundStyle(.secondary)
                 agentLabel(origin)
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text(origin.activityKind)
-                    .font(.callout.weight(.semibold))
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text(origin.savedAt, style: .relative)
-                    .foregroundStyle(.secondary)
-                Text("ago")
-                    .foregroundStyle(.secondary)
             }
         }
     }
 
-    @ViewBuilder private func historyRow(_ idx: Int, _ entry: PageOrigin) -> some View {
-        HStack(spacing: 6) {
-            Text("\(idx)")
+    @ViewBuilder private func historyRow(_ entry: PageOrigin) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // Date — leading, fixed-width for column alignment.
+            Text(entry.savedAt,
+                 format: .dateTime.month().day().year().hour().minute())
+                .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .monospacedDigit()
-            Text(entry.activityKind)
-                .font(.callout.weight(.semibold))
+                .frame(width: 140, alignment: .leading)
+
+            operationBadge(entry.activityKind)
+
             agentLabel(entry)
-            Text("·")
-                .foregroundStyle(.secondary)
-            Text(entry.savedAt, style: .date)
-                .foregroundStyle(.secondary)
+
+            Spacer()
+
             if entry.title.isEmpty == false {
-                Text("·")
-                    .foregroundStyle(.secondary)
                 Text(entry.title)
-                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -875,6 +873,24 @@ struct ProvenancePanel: View {
         .contentShape(Rectangle())
         .hoverRowBackground()
         .onTapGesture { handleProvenanceTap(entry) }
+    }
+
+    /// A compact colored badge for the provenance activity kind
+    /// (`import` → blue, `edit` → green, others → gray). Makes the
+    /// operation scannable in the history list.
+    @ViewBuilder
+    private func operationBadge(_ kind: String) -> some View {
+        let color: Color = switch kind {
+        case "import": .blue
+        case "edit":   .green
+        default:       .secondary
+        }
+        Text(kind.capitalized)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(color)
     }
 
     /// Navigate to the provenance entry's origin (#745):
