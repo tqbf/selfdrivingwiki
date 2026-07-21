@@ -78,6 +78,7 @@ references a backend the executor won't use. Reconciliation:
 
 ---
 
+<<<<<<< HEAD
 ## Follow-up: Active quota probing (not needed for v1)
 
 Paseo (`~/work/paseo/packages/server/src/services/quota-fetcher/`) uses **active
@@ -94,6 +95,9 @@ enhancement for the auto-revive path — instead of guessing reset times (5h/7d
 defaults), the coordinator could optionally poll the provider's quota API to
 check if a provider has revived. A `ProviderUsageFetcher` protocol (one method:
 `fetchUsage() async throws -> ProviderUsage`) would mirror paseo's interface.
+=======
+## File change summary
+>>>>>>> 021a4a6 (docs: add quota-fallback plan (#727))
 
 | File | Change |
 |------|--------|
