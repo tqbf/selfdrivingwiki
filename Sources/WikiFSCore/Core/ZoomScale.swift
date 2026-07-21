@@ -1,4 +1,8 @@
+#if canImport(CoreGraphics)
 import CoreGraphics
+#elseif !os(macOS)
+typealias CGFloat = Double
+#endif
 
 /// Pure, stateless namespace for text-zoom arithmetic used by the reader and
 /// editor surfaces.

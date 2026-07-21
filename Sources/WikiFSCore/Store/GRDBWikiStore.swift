@@ -1,6 +1,8 @@
 import Foundation
 import CryptoKit
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 // `internal import` (SE-0409, Swift 6.0+) keeps GRDB types from leaking into
 // downstream modules — the same discipline as `QueueStore.swift`. Without
@@ -3132,9 +3134,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // (a CSV-ish PDFKit parse would extend the write transaction past the
         // 5 s busy_timeout — issue #229).
         let ext = (filename as NSString).pathExtension.lowercased()
+        let utiMime: String? = {
+            #if canImport(UniformTypeIdentifiers)
+            return ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            return nil
+            #endif
+        }()
         let mime = mimeType
             ?? ContentSniff.mimeType(of: data)
-            ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+            ?? utiMime
             ?? MimeType.mime(forExtension: ext)  // #620: .mmd → text/mermaid (UTType can't resolve it)
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
@@ -3292,8 +3301,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             let id = PageID(rawValue: ULID.generate())
             let ext = (filename as NSString).pathExtension.lowercased()
-            let mime = mimeType
-                ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+            let utiMime: String? = {
+                #if canImport(UniformTypeIdentifiers)
+                return ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+                #else
+                return nil
+                #endif
+            }()
+            let mime = mimeType ?? utiMime
             let now = Date()
             // Display-name resolution mirrors addSource — pass empty Data.
             let displayName: String?

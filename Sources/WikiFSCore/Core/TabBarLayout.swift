@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(CoreGraphics)
 import CoreGraphics
+#elseif !os(macOS)
+// On Linux, CoreGraphics is unavailable. CGFloat is Double on 64-bit.
+typealias CGFloat = Double
+#endif
 
 /// Pure layout math for the tab strip: given how many tabs are open and how much
 /// horizontal room there is, decide how wide each visible tab should be, how many
