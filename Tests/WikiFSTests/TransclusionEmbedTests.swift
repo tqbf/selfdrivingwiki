@@ -475,4 +475,62 @@ struct TransclusionEmbedTests {
         let js = try #require(recorder.calls.first)
         #expect(js.contains("Page not found"))
     }
+
+    // MARK: - §12.4 Bridge coercion (#725 regression)
+
+    /// `WKWebView` bridges a JS object literal (`postMessage({ … })`) to an
+    /// `NSDictionary` whose values are boxed as `Any` / `NSString` — NOT
+    /// `String`. The handler originally did `message.body as? [String: String]`,
+    /// which ALWAYS fails against this shape and silently dropped every embed
+    /// fetch → "Loading…" forever (#725). These tests exercise the real
+    /// bridge payload shape through `EmbedFetchMessageHandler.coerceBody(_:)`
+    /// — the entry point the (bypassed) `processEmbedFetch`-direct tests never
+    /// reached, which is why the bug shipped.
+
+    @Test func coerceBodyAcceptsNSDictionaryBridgeShape() {
+        // Exact shape WKWebView delivers: NSDictionary with NSString values.
+        let bridgeBody: NSDictionary = [
+            "nodeId": NSString(string: "n-bridge"),
+            "kind":   NSString(string: "page"),
+            "id":     NSString(string: "01HZPAGE"),
+            "target": NSString(string: ""),
+            "path":   NSString(string: ""),
+            "name":   NSString(string: "Foo"),
+        ]
+
+        let coerced = EmbedFetchMessageHandler.coerceBody(bridgeBody as Any)
+        #expect(coerced != nil)
+        #expect(coerced?["nodeId"] == "n-bridge")
+        #expect(coerced?["kind"]   == "page")
+        #expect(coerced?["id"]     == "01HZPAGE")
+        #expect(coerced?["target"] == "")
+        #expect(coerced?["path"]   == "")
+        #expect(coerced?["name"]   == "Foo")
+    }
+
+    @Test func coerceBodyDefaultsMissingKeysToEmptyString() {
+        // A real embed may post only a subset (e.g. a name-only page embed has
+        // empty id/path/target). `processEmbedFetch` reads with `?? ""`; coerce
+        // must mirror that so no key is ever absent.
+        let bridgeBody: NSDictionary = [
+            "nodeId": NSString(string: "n-sparse"),
+            "kind":   NSString(string: "page"),
+        ]
+        let coerced = EmbedFetchMessageHandler.coerceBody(bridgeBody as Any)
+        #expect(coerced?.count == 6)
+        #expect(coerced?["nodeId"] == "n-sparse")
+        #expect(coerced?["id"]     == "")
+        #expect(coerced?["target"] == "")
+        #expect(coerced?["path"]   == "")
+        #expect(coerced?["name"]   == "")
+    }
+
+    @Test func coerceBodyRejectsNonDictionary() {
+        // A string / number / array body is unparseable → nil (the handler
+        // logs "embedFetch dropped: unparseable body" rather than silently
+        // returning).
+        #expect(EmbedFetchMessageHandler.coerceBody("oops" as Any) == nil)
+        #expect(EmbedFetchMessageHandler.coerceBody(42 as Any) == nil)
+        #expect(EmbedFetchMessageHandler.coerceBody([1, 2, 3] as Any) == nil)
+    }
 }
