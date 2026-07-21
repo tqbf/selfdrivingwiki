@@ -28,18 +28,6 @@ struct PageDetailView: View {
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
-    /// Per-view collapse state for the Provenance panel (page-provenance
-    /// #page-provenance). Defaults collapsed; the heavy-ish origin/history
-    /// reads are gated on expansion so the hot `body` re-render stays cheap
-    /// (per the plan §7 risk table — keep the provenance read in a `@State`
-    /// loaded on expand, not inline in the view body).
-    @State private var isProvenanceExpanded = false
-    /// The HEAD origin (once loaded, when the panel is expanded). `nil`
-    /// indicates "not yet loaded" or "no version rows for this page".
-    @State private var provenanceOrigin: PageOrigin?
-    /// The full edit history (every `page_versions` row joined to its
-    /// activity + agent, oldest-first). Loaded alongside `provenanceOrigin`.
-    @State private var provenanceHistory: [PageOrigin] = []
 
     // Find bar state. The model is shared (hoisted to `ContentView` and injected
     // via environment) so the address bar's "Find on Page…" menu item can drive
@@ -83,8 +71,6 @@ struct PageDetailView: View {
                         }
                         .font(.callout)
                         .foregroundStyle(.secondary)
-
-                        provenanceSection
                     }
                 }
 
@@ -137,11 +123,6 @@ struct PageDetailView: View {
             if store.activeTabID == lastKnownActiveTabID {
                 isEditing = false
             }
-            // Reset provenance state when the selection changes so a stale
-            // origin/history from the previous page doesn't flicker into the
-            // expanded panel before the `.task(id:)` reloads.
-            provenanceOrigin = nil
-            provenanceHistory = []
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
@@ -219,12 +200,12 @@ struct PageDetailView: View {
                 // in a fixed position).
                 Spacer()
                 Button {
-                    DebugLog.tabs("PageDetailView: Toggle Outline tapped (editing)")
+                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped (editing)")
                     isOutlineExpanded.toggle()
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .help("Toggle Outline")
+                .help("Toggle Inspector")
             } else {
                 Button("Edit",
                        systemImage: "pencil") {
@@ -275,12 +256,12 @@ struct PageDetailView: View {
                 // in the editing branch above).
                 Spacer()
                 Button {
-                    DebugLog.tabs("PageDetailView: Toggle Outline tapped")
+                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped")
                     isOutlineExpanded.toggle()
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .help("Toggle Outline")
+                .help("Toggle Inspector")
             }
             }
             .frame(maxWidth: .infinity)
@@ -342,8 +323,11 @@ struct PageDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if isOutlineExpanded {
-                PageOutlineView(markdown: store.draftBody,
-                                caretCharIndex: caretCharIndex) { heading in
+                DetailInspectorView(
+                    pageID: currentPageID,
+                    markdown: store.draftBody,
+                    caretCharIndex: caretCharIndex,
+                    store: store) { heading in
                     if isEditing {
                         editorScrollRequest = EditorScrollRequest(
                             charOffset: heading.charOffset,
@@ -441,70 +425,14 @@ struct PageDetailView: View {
         return store.summaries.first(where: { $0.id == id })?.updatedAt
     }
 
-    // MARK: - Provenance (page origin / edit history, #page-provenance)
+    // MARK: - Inspector support
 
-    /// The id of the page currently shown in this detail view (the read-side
-    /// key the `WikiStoreModel` provenance accessors take).
+    /// The id of the page currently shown in this detail view — the key the
+    /// `DetailInspectorView` uses to load provenance via
+    /// `WikiStoreModel.pageOrigin(for:)` / `pageEditHistory(for:)`.
     private var currentPageID: PageID? {
         guard case .page(let id) = store.selection else { return nil }
         return id
-    }
-
-    /// Collapsible "Provenance" panel — created-by / last-edited-by / edit
-    /// history from the page-PROV graph (`agents` + `activities` +
-    /// `page_versions`). Defaults collapsed so the hot `_ = body` re-render
-    /// doesn't pay for a 4-table join per keystatechange; the `.task(id:)`
-    /// only fires when the panel expands or the page changes. Loaded via
-    /// `WikiStoreModel.pageOrigin(for:)` / `pageEditHistory(for:)` (through
-    /// the public `WikiStore` protocol, no downcast).
-    @ViewBuilder private var provenanceSection: some View {
-        if let pageID = currentPageID {
-            DisclosureGroup(isExpanded: $isProvenanceExpanded) {
-                ProvenancePanel(
-                    pageID: pageID,
-                    origin: provenanceOrigin,
-                    history: provenanceHistory,
-                    store: store)
-                .padding(.top, 4)
-            } label: {
-                HStack {
-                    Label("Provenance", systemImage: "clock.arrow.circlepath")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .hoverRowBackground()
-                // Explicit single-tap toggle — mirrors
-                // `CollapsibleDetailHeader.toggleExpanded()` (#717/#722). The
-                // native `DisclosureGroup` label tap does not fire reliably in
-                // this nested/expanded-content context (same class of issue
-                // #722 fixed for the title bar), so we drive the toggle from
-                // an explicit `.onTapGesture` on the label instead. The
-                // `.task(id:)` lazy-load below is unchanged (origin/history
-                // read only fires on first expand).
-                .onTapGesture { toggleProvenance() }
-            }
-            .task(id: ProvenanceTaskKey(pageID: pageID, expanded: isProvenanceExpanded)) {
-                // Only load when expanded; a collapsed panel needs no read.
-                guard isProvenanceExpanded else { return }
-                provenanceOrigin = store.pageOrigin(for: pageID)
-                provenanceHistory = store.pageEditHistory(for: pageID)
-            }
-        }
-    }
-
-    /// Single-tap toggle for the provenance row — mirrors
-    /// `CollapsibleDetailHeader.toggleExpanded()` so the provenance bubble
-    /// animates with the same easing as the title-bar header. Routed through
-    /// `DebugLog.tabs` so `log show` can confirm exactly one toggle fires per
-    /// click (no double-toggle with the native `DisclosureGroup` gesture).
-    private func toggleProvenance() {
-        DebugLog.tabs("PageDetailView: provenance row tapped — wasExpanded=\(isProvenanceExpanded)")
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isProvenanceExpanded.toggle()
-        }
     }
 
     // MARK: - Subviews
@@ -593,8 +521,6 @@ struct PageOutlineView: View {
     let onSelect: (HeadingItem) -> Void
     
     @State private var headings: [HeadingItem] = []
-    @AppStorage("outlineWidth") private var outlineWidth: Double = 75.0
-    @State private var dragStartWidth: Double? = nil
     /// Tracks which heading the outline last scrolled itself to, so we only
     /// auto-scroll when the active heading actually changes (not on every
     /// keystroke that stays within the same heading).
@@ -616,96 +542,52 @@ struct PageOutlineView: View {
     }
     
     var body: some View {
-        HStack(spacing: 0) {
-            // Draggable divider on the outline's leading edge. A 1pt separator
-            // line with a wider invisible hit area so it's easy to grab.
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal, 4)
-                .contentShape(Rectangle())
-            .onHover { isHovering in
-                if isHovering {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if dragStartWidth == nil {
-                            dragStartWidth = outlineWidth
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(headings) { heading in
+                        let isActive = heading.id == activeHeadingID
+                        Button(action: {
+                            onSelect(heading)
+                        }) {
+                            Text(heading.text)
+                                .font(.system(size: 13))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(.leading, CGFloat((heading.level - 1) * 12))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
-                        if let start = dragStartWidth {
-                            let newWidth = start - Double(value.translation.width)
-                            outlineWidth = max(60, min(600, newWidth))
-                        }
-                    }
-                    .onEnded { _ in
-                        dragStartWidth = nil
-                    }
-            )
-            .zIndex(1)
-            
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Outline")
-                    .font(.headline)
-                    .padding()
-                    
-                Divider()
-                
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            ForEach(headings) { heading in
-                                let isActive = heading.id == activeHeadingID
-                                Button(action: {
-                                    onSelect(heading)
-                                }) {
-                                    Text(heading.text)
-                                        .font(.system(size: 13))
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                        .padding(.leading, CGFloat((heading.level - 1) * 12))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(isActive ? .primary : .secondary)
-                                .background(
-                                    isActive
-                                        ? Color.accentColor.opacity(0.12)
-                                        : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 4)
-                                )
-                                .id(heading.id)
-                                .onHover { isHovering in
-                                    if isHovering {
-                                        NSCursor.pointingHand.push()
-                                    } else {
-                                        NSCursor.pop()
-                                    }
-                                }
-                            }
-                        }
-                        .padding()
-                    }
-                    .onChange(of: caretCharIndex) { _, _ in
-                        let target = activeHeadingID
-                        guard target != scrolledToHeadingID else { return }
-                        scrolledToHeadingID = target
-                        if let target {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                proxy.scrollTo(target, anchor: .center)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .background(
+                            isActive
+                                ? Color.accentColor.opacity(0.12)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 4)
+                        )
+                        .id(heading.id)
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
                             }
                         }
                     }
                 }
+                .padding()
             }
-            .frame(width: outlineWidth)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .onChange(of: caretCharIndex) { _, _ in
+                let target = activeHeadingID
+                guard target != scrolledToHeadingID else { return }
+                scrolledToHeadingID = target
+                if let target {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                }
+            }
         }
         .onAppear {
             parseHeadings()
@@ -792,19 +674,121 @@ struct PageOutlineView: View {
     }
 }
 
-// MARK: - Provenance panel (#page-provenance)
+// MARK: - Inspector panel (Xcode-style tabbed right sidebar)
 
-/// Hashable key for `PageDetailView.provenanceSection`'s `.task(id:)` — fires
-/// both on selection change AND on the disclosure expanding, so the provenance
-/// read runs only when there's something to show.
-private struct ProvenanceTaskKey: Hashable {
-    let pageID: PageID
-    let expanded: Bool
+/// The selected tab in the `DetailInspectorView`. Persisted in `@AppStorage`
+/// so the user's last-used tab is restored on reopen.
+enum InspectorTab: String, CaseIterable {
+    case outline
+    case history
 }
 
-/// The expanded contents of the "Provenance" `DisclosureGroup` in
-/// `PageDetailView`. Pure-render over its inputs (no I/O); the parent
-/// `PageDetailView` loads `.origin` + `.history` via its `.task(id:)` and
+/// Xcode-style inspector panel for `PageDetailView`. Shows a segmented tab
+/// bar at the top (Outline / History) and the selected tab's content below.
+///
+/// - **Outline tab**: renders `PageOutlineView` (heading list + caret tracking).
+/// - **History tab**: renders `ProvenancePanel` (page origin + edit history).
+///
+/// The resizable width divider lives at this level (not in `PageOutlineView`)
+/// so both tabs share the same column width. Provenance is loaded via a
+/// `.task(id:)` keyed on `pageID` — re-firing whenever the page changes.
+struct DetailInspectorView: View {
+    let pageID: PageID?
+    let markdown: String
+    var caretCharIndex: Int?
+    var store: WikiStoreModel?
+    let onSelectHeading: (HeadingItem) -> Void
+
+    @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("outlineWidth") private var outlineWidth: Double = 260
+    @State private var dragStartWidth: Double? = nil
+
+    @State private var provenanceOrigin: PageOrigin?
+    @State private var provenanceHistory: [PageOrigin] = []
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Draggable divider on the inspector's leading edge — shared by
+            // both tabs so the column width is always resizable.
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+                .onHover { isHovering in
+                    if isHovering {
+                        NSCursor.resizeLeftRight.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragStartWidth == nil {
+                                dragStartWidth = outlineWidth
+                            }
+                            if let start = dragStartWidth {
+                                let newWidth = start - Double(value.translation.width)
+                                outlineWidth = max(180, min(500, newWidth))
+                            }
+                        }
+                        .onEnded { _ in
+                            dragStartWidth = nil
+                        }
+                )
+                .zIndex(1)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Picker("Inspector", selection: $inspectorTab) {
+                    Label("Outline", systemImage: "list.bullet.indent")
+                        .tag(InspectorTab.outline)
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                        .tag(InspectorTab.history)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(8)
+
+                Divider()
+
+                switch inspectorTab {
+                case .outline:
+                    PageOutlineView(markdown: markdown,
+                                    caretCharIndex: caretCharIndex,
+                                    onSelect: onSelectHeading)
+                case .history:
+                    ScrollView {
+                        ProvenancePanel(
+                            pageID: pageID ?? PageID(rawValue: ""),
+                            origin: provenanceOrigin,
+                            history: provenanceHistory,
+                            store: store)
+                        .padding()
+                    }
+                }
+            }
+            .frame(width: outlineWidth)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+        .task(id: pageID) {
+            guard let pageID else {
+                provenanceOrigin = nil
+                provenanceHistory = []
+                return
+            }
+            provenanceOrigin = store?.pageOrigin(for: pageID)
+            provenanceHistory = store?.pageEditHistory(for: pageID) ?? []
+        }
+    }
+}
+
+// MARK: - Provenance panel (#page-provenance)
+
+/// The content of the inspector's "History" tab — page origin + edit history
+/// from the page-PROV graph. Pure-render over its inputs (no I/O); the parent
+/// `DetailInspectorView` loads `.origin` + `.history` via its `.task(id:)` and
 /// passes them in here. Kept self-contained so the type checker resolves the
 /// `body` subtree independently (the parent body is large already).
 ///
