@@ -109,7 +109,7 @@ struct QuoteHighlightWebViewTests {
         print("DBG_WINDOW_FIND_TYPE=\(wfType ?? "nil")")
         print("DBG_ARTICLE_HTML=\(articleHTML ?? "nil")")
         print("DBG_PROBE=\(probe ?? "nil")")
-        #expect(true)
+        #expect(Bool(true))
     }
 
     @Test func highlightWrapsExactQuoteInMark() async throws {
