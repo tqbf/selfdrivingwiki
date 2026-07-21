@@ -1516,6 +1516,7 @@ public final class AgentLauncher {
         let plannerHints = hints(for: .planner)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         guard let plannerSession = await runPhaseWithFallback(
 =======
         guard let plannerSession = await runPhaseOutcome(
@@ -1525,6 +1526,9 @@ public final class AgentLauncher {
             prompt: plannerPrompt,
             phaseName: "planner",
 >>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
+=======
+        guard let plannerSession = await runPhaseWithFallback(
+>>>>>>> 50b7310 (feat: #727 slice 4 — fallback retry loop + fork reconciliation)
             stage: .planner,
             chain: plannerChain,
             quotaFallback: quotaFallback,
@@ -1647,6 +1651,7 @@ public final class AgentLauncher {
                 let executorChain = config.providerChain(forStage: ACPIngestStage.executor.rawValue)
                 let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
 <<<<<<< HEAD
+<<<<<<< HEAD
                 if let session = await runPhaseWithFallback(
 =======
                 if let session = await runPhaseOutcome(
@@ -1656,6 +1661,9 @@ public final class AgentLauncher {
                     prompt: executorPrompt,
                     phaseName: "executor[\(sourceFile)]",
 >>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
+=======
+                if let session = await runPhaseWithFallback(
+>>>>>>> 50b7310 (feat: #727 slice 4 — fallback retry loop + fork reconciliation)
                     stage: .executor,
                     chain: executorChain,
                     quotaFallback: quotaFallback,
@@ -1716,6 +1724,7 @@ public final class AgentLauncher {
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
         currentIngestPhase = "finalizer"
 <<<<<<< HEAD
+<<<<<<< HEAD
         let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
         let finalizerSourceFileNames = sourceFileNames
         if let session = await runPhaseWithFallback(
@@ -1727,6 +1736,11 @@ public final class AgentLauncher {
             prompt: finalizerPrompt,
             phaseName: "finalizer",
 >>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
+=======
+        let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
+        let finalizerSourceFileNames = sourceFileNames
+        if let session = await runPhaseWithFallback(
+>>>>>>> 50b7310 (feat: #727 slice 4 — fallback retry loop + fork reconciliation)
             stage: .finalizer,
             chain: finalizerChain,
             quotaFallback: quotaFallback,
@@ -2007,6 +2021,9 @@ public final class AgentLauncher {
     }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 50b7310 (feat: #727 slice 4 — fallback retry loop + fork reconciliation)
     /// #727: run one ingest phase with quota fallback. Walks the provider
     /// chain; on quota exhaustion, marks the provider dead and retries on
     /// the next live provider. Returns the session on success, nil on
@@ -2153,8 +2170,11 @@ public final class AgentLauncher {
         return nil
     }
 
+<<<<<<< HEAD
 =======
 >>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
+=======
+>>>>>>> 50b7310 (feat: #727 slice 4 — fallback retry loop + fork reconciliation)
     /// #727: wraps `runPhase` for the existing call sites. In Slice 3 this is
     /// behavior-preserving — it returns the session on `.success` and nil on
     /// `.failed` or `.quotaExhausted` (no retry yet). Slice 4 replaces this
