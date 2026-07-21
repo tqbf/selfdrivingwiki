@@ -48,6 +48,13 @@ struct ChatView: View {
     @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
+    /// #740: a message the user queued while the agent was generating a
+    /// response. It auto-fires as the next turn's input once the current turn
+    /// completes (observing `launcher.isRunning` going false). `nil` when
+    /// nothing is queued. Separate from the D3 generation-gate queue
+    /// (`isAwaitingGenerationSlot`, which gates *another* chat's send) because
+    /// this is the *same* chat's "type the next message now" path.
+    @State private var pendingMessage: PendingQueuedMessage? = nil
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
     /// v1 app-wide, default off (yolo). Applies to the next conversation.
     ///
@@ -153,6 +160,15 @@ struct ChatView: View {
             // later ingest/lint run doesn't inherit it and strand the view on
             // `AgentQueueView`. (AC.1)
             if !isRunning { showsInternals = false }
+            // #740: when a turn completes, deliver the queued message as the next
+            // turn's input. Only fires what was explicitly queued via the Queue
+            // button — a half-typed draft stays in the composer untouched (it isn't
+            // part of `pendingMessage`). The dispatch goes through the same
+            // `submitMessage` path used by a normal Send, so it reuses the
+            // interactive/continue/start routing without disturbing the draft.
+            if !isRunning, pendingMessage != nil {
+                firePendingQueuedMessage()
+            }
         }
         .task(id: chatID) {
             // Reload persisted messages whenever the chatID changes (or the store
@@ -417,12 +433,54 @@ struct ChatView: View {
     private var chatComposer: some View {
         VStack(spacing: 4) {
             composer(enabled: isComposerEnabled)
+            if let pending = pendingMessage {
+                queuedMessageAffordance(pending)
+            }
             if let caption = composerCaption {
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
         }
+        // #740: animate the queued affordance in/out (macos-design: every
+        // state change gets a transition). `PendingQueuedMessage` is Equatable.
+        .animation(.snappy, value: pendingMessage)
+    }
+
+    /// #740: the muted "Queued" affordance shown under the composer while a
+    /// message is stashed for delivery when the current turn ends. Unobtrusive
+    /// by design (macos-design discipline): a secondary-tinted capsule with a
+    /// clock glyph, the (truncated) queued text, and a cancel (✕) that clears
+    /// `pendingMessage` so it won't auto-fire.
+    @ViewBuilder
+    private func queuedMessageAffordance(_ pending: PendingQueuedMessage) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("Queued:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(pending.preview)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button {
+                pendingMessage = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Cancel the queued message")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.10), in: Capsule())
+        .transition(.opacity)
     }
 
     /// The paseo-style toolbar row that sits INSIDE the composer box, along its
@@ -449,6 +507,14 @@ struct ChatView: View {
             PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
             if showsStopButton {
+                // #740: during a running turn the stop button stays primary (red,
+                // trailing). When the user has drafted a follow-up and nothing is
+                // queued yet, a secondary "Queue" button appears just before it so
+                // the next message is captured for delivery the moment this turn
+                // ends. ⌘↩ routes here (not Send) while generating.
+                if showsQueueButton && hasDraftText {
+                    queueButton
+                }
                 stopButton
             } else if hasDraftText {
                 // Paseo: the send button appears only once there's something to
@@ -976,6 +1042,36 @@ struct ChatView: View {
         .help("Stop the current response")
     }
 
+    /// #740: whether the "Queue" affordance should appear next to the stop
+    /// button. Shown only during THIS chat's query generation (not while
+    /// merely awaiting a generation slot — that's another session's turn) and
+    /// only when nothing is already queued.
+    private var showsQueueButton: Bool {
+        launcher.isGenerating
+            && launcher.runningKind == .query
+            && pendingMessage == nil
+    }
+
+    /// #740: the "Queue" button — sits just before the stop button during a
+    /// running turn. Stylistically a sibling of the send button (filled
+    /// circle + up-arrow) but tinted accent (blue) so it reads as "queue
+    /// next" rather than "send now". Inherits ⌘↩ so keyboard users can queue
+    /// without reaching for the mouse; the normal Send button's ⌘↩ shortcut
+    /// is hidden during generation so there's no conflict.
+    private var queueButton: some View {
+        Button(action: queueMessage) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
+                .background(Color.accentColor.opacity(0.9), in: Circle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(!hasDraftText)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help("Queue for when the response finishes")
+    }
+
     /// The trailing send button in the composer's bottom toolbar — a green
     /// circle with a white up-arrow (paseo). Only shown when the composer has
     /// text (see `composerToolbar`).
@@ -1047,21 +1143,61 @@ struct ChatView: View {
         // by `canSend`, but the Return key in ComposerTextView calls this
         // unconditionally — so the same guard here prevents the message from
         // being silently dropped (issue #380). The draft is preserved so the
-        // user can send it once the agent finishes.
+        // user can send it once the agent finishes. (#740: to queue instead,
+        // the user presses the Queue button — see `queueMessage`.)
         guard canSend else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
+        let wireMessage = buildWireMessage(from: message)
         store.clearActiveChatDraft()
-        // Build the wire message: prepend attachment references so the agent
-        // has context about the dragged-in pages/sources (issue #385).
-        let wireMessage: String
-        if !attachments.isEmpty {
-            let refs = attachments.map { $0.referenceText }.joined(separator: "\n")
-            wireMessage = "\(refs)\n\n\(message)"
-            attachments = []
-        } else {
-            wireMessage = message
-        }
+        attachments = []
+        submitMessage(wireMessage)
+    }
+
+    /// #740: stash the composer's current draft as the queued message — fires
+    /// automatically when the active turn completes (see the
+    /// `launcher.isRunning` observer). Clears the draft + attachments exactly
+    /// like `sendMessage` would at send time, so the composer is free for the
+    /// user to draft a *different* follow-up while the queued one waits. Only
+    /// valid during THIS chat's generation (see `showsQueueButton`); the
+    /// `guard` here defends against an out-of-band invocation.
+    private func queueMessage() {
+        guard launcher.isGenerating else { return }
+        let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        // Replacing an existing queued message is allowed — the new draft wins.
+        pendingMessage = PendingQueuedMessage(
+            wireMessage: buildWireMessage(from: message),
+            preview: message)
+        store.clearActiveChatDraft()
+        attachments = []
+    }
+
+    /// Delivers the queued message as the next turn's input when the current
+    /// turn completes. Routes through `submitMessage` (so it reuses the
+    /// interactive/continue/start routing) WITHOUT touching the composer's
+    /// draft — a half-typed follow-up the user may be mid-edit on is preserved
+    /// (#740 guardrail).
+    private func firePendingQueuedMessage() {
+        guard let pending = pendingMessage else { return }
+        pendingMessage = nil
+        submitMessage(pending.wireMessage)
+    }
+
+    /// Builds the wire message exactly like the legacy `sendMessage` body:
+    /// prepend attachment reference text (issue #385) so the agent has the
+    /// dragged-in context. Extracted so the queue path reuses the same shaping.
+    private func buildWireMessage(from message: String) -> String {
+        guard !attachments.isEmpty else { return message }
+        let refs = attachments.map { $0.referenceText }.joined(separator: "\n")
+        return "\(refs)\n\n\(message)"
+    }
+
+    /// Dispatches a fully-shaped wire message to the agent without touching the
+    /// composer draft or attachments. Shared by `sendMessage` (normal Send)
+    /// and `firePendingQueuedMessage` (#740 auto-fire), so the queued deliver
+    /// path is identical to a manual send — only the *timing* differs.
+    private func submitMessage(_ wireMessage: String) {
         if launcher.isInteractiveSession {
             // Live chat mid-session: append a turn to the existing session.
             launcher.sendInteractiveMessage(wireMessage)
@@ -1118,11 +1254,17 @@ struct ChatView: View {
         // Draft state (.newChat with chatID == nil): always enabled (a wiki
         // is open inside ContentView; nothing is generating).
         guard chatID != nil else {
+            // #740: allow drafting the first question even while some (unlikely)
+            // non-interactive generation is in flight.
             return launcher.isInteractiveSession || !launcher.isRunning
+                || launcher.isGenerating
         }
-        // The active live chat: enabled when a turn isn't in flight.
+        // The active live chat: #740 — editable during THIS chat's generation so
+        // the user can draft the next message; the Send button queues instead of
+        // firing immediately while `isGenerating` (see `composerToolbar`).
         if isLiveChat {
             return launcher.isInteractiveSession || !launcher.isRunning
+                || launcher.isGenerating
         }
         // D3: a persisted (non-live) chat is continuable when its kind's launcher
         // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
@@ -1150,7 +1292,12 @@ struct ChatView: View {
         // A session is always alive when ChatView is rendered inside
         // ContentView, so the old `activeWikiID != nil` check is
         // always true here.
+        // #740: typing (drafting) is allowed during generation so the user can
+        // compose the next message while the agent responds. Sending during
+        // generation is still gated by `canSendPredicate` (via `!isGenerating`),
+        // so this only enables drafting — the Send button routes to Queue.
         launcher.isInteractiveSession || !launcher.isRunning
+            || launcher.isGenerating
     }
 
     private var canSend: Bool {
@@ -1190,6 +1337,17 @@ struct ChatView: View {
         }
         return launcher.isInteractiveSession ? "Send" : "Start Query"
     }
+}
+
+/// #740: a message the user *queued* while the agent was generating a
+/// response (Send during a running turn). `wireMessage` carries attachment
+/// references (built at queue time, exactly like `sendMessage`); `preview` is
+/// the trimmed user text shown in the muted "Queued" affordance (without the
+/// prepended `[[kind:…]]` refs). Auto-fires via `submitMessage` when the turn
+/// completes; the user may cancel it before it fires.
+private struct PendingQueuedMessage: Equatable {
+    let wireMessage: String
+    let preview: String
 }
 
 /// A sidebar item dragged onto the chat composer as context for the next
