@@ -4,7 +4,7 @@ import WikiFSSearch
 
 // MARK: - AutocompleteHooks
 
-/// Closures injected by a hosting view (`ChatView` for the composer,
+/// Closures injected by a hosting view (`ChatDetailView` for the composer,
 /// `PageDetailView`/`SourceDetailView` for the editor) so the autocomplete
 /// controller stays decoupled from `WikiFSCore` (the store handle) and
 /// `WikiFSLinks` (the formatter).
@@ -481,9 +481,9 @@ final class WikiLinkAutocompleteController {
     /// Pure: map `ParsedLink.LinkType` (the prefix vocabulary — `page:` /
     /// `source:` / `chat:`) → `TantivyDocumentKind` (the search index
     /// vocabulary). Single source of truth so a rename hits both sides.
-    /// `nonisolated` for test reach. Mirrors `ChatView.tantivyKind(for:)` so
+    /// `nonisolated` for test reach. Mirrors `ChatDetailView.tantivyKind(for:)` so
     /// the editor and the composer route through parallel single sources of
-    /// truth (the editor's lives next to its only non-ChatView consumer —
+    /// truth (the editor's lives next to its only non-ChatDetailView consumer —
     /// `SidebarDropBuilder.wikiLinkAutocompleteHooks`).
     nonisolated static func tantivyKind(for kind: ParsedLink.LinkType) -> TantivyDocumentKind {
         switch kind {

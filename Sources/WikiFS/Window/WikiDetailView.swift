@@ -156,7 +156,7 @@ struct WikiDetailView: View {
         case .newChat:
             // D2: draft state — empty composer until the first send retargets the
             // tab to .chat(id). chatID == nil signals the draft state.
-            ChatView(
+            ChatDetailView(
                 chatID: nil,
                 store: store,
                 launcher: chatLauncher,
@@ -214,7 +214,7 @@ struct WikiDetailView: View {
         case .chat(let id):
             // D2: unified surface. Chats are always write-capable, so the single
             // chat launcher is bound directly.
-            ChatView(
+            ChatDetailView(
                 chatID: id,
                 store: store,
                 launcher: chatLauncher,

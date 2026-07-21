@@ -311,7 +311,7 @@ public enum AgentOperationRunner {
         }
 
         // Guard: refuse mid-generation. The composer is already disabled in that
-        // state (ChatView.isComposerEnabled), but this is a hard guard so
+        // state (ChatDetailView.isComposerEnabled), but this is a hard guard so
         // a race (enabled-check → send) can never interrupt a live turn.
         let decision = continueTakeoverDecision(
             isRunning: launcher.isRunning,
@@ -355,7 +355,7 @@ public enum AgentOperationRunner {
         DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count)")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
-        // flips ChatView to live for this tab (seq continues, title
+        // flips ChatDetailView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
         DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chatID.rawValue)")

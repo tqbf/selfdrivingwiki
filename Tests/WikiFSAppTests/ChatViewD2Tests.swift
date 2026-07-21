@@ -7,7 +7,7 @@ import WikiFSEngine
 @testable import WikiFSEngine
 @testable import WikiFSCore
 
-/// Tests for Phase D2 — the unified `ChatView` surface (pillar 2).
+/// Tests for Phase D2 — the unified `ChatDetailView` surface (pillar 2).
 ///
 /// Covers four gate points:
 ///   (a) source-of-truth rule: `activeChatID == chatID` → live events; else
@@ -47,7 +47,7 @@ struct ChatViewD2Tests {
         // Simulate the runner passing chatID — the launcher records it.
         // We can't call startInteractiveQuery without a real backend, but we can
         // verify the property is settable (it's `var`, not private(set)), which is
-        // the contract ChatView relies on.
+        // the contract ChatDetailView relies on.
         launcher.activeChatID = chatID
         #expect(launcher.activeChatID == chatID)
     }
@@ -228,7 +228,7 @@ struct ChatViewD2Tests {
         #expect(model.selection == .newChat)
     }
 
-    // MARK: - Integration: persisted chat renders through ChatView path
+    // MARK: - Integration: persisted chat renders through ChatDetailView path
 
     @Test func persistedChat_hasMessages_readFromStore() throws {
         let (model, store) = try tempModel()
@@ -256,7 +256,7 @@ struct ChatViewD2Tests {
     /// text — regardless of whether the mount is available. The mount guard was
     /// removed because the agent reads via wikictl (DB-direct), not the mount.
     @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
-        #expect(ChatView.canSendPredicate(
+        #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
             canType: true,
             isGenerating: false,
@@ -267,7 +267,7 @@ struct ChatViewD2Tests {
     /// `canSendPredicate` returns true even when the mount is NOT available —
     /// the mount guard was removed (issue #441).
     @Test func canSendPredicateTrueWithoutMount() {
-        #expect(ChatView.canSendPredicate(
+        #expect(ChatDetailView.canSendPredicate(
             hasMount: false,
             canType: true,
             isGenerating: false,
@@ -277,7 +277,7 @@ struct ChatViewD2Tests {
 
     /// `canSendPredicate` returns false when generating (can't send mid-response).
     @Test func canSendPredicateFalseWhileGenerating() {
-        #expect(ChatView.canSendPredicate(
+        #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
             canType: true,
             isGenerating: true,
@@ -287,7 +287,7 @@ struct ChatViewD2Tests {
 
     /// `canSendPredicate` returns false when the composer is disabled.
     @Test func canSendPredicateFalseWhenCannotType() {
-        #expect(ChatView.canSendPredicate(
+        #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
             canType: false,
             isGenerating: false,
@@ -297,7 +297,7 @@ struct ChatViewD2Tests {
 
     /// `canSendPredicate` returns false with no draft text.
     @Test func canSendPredicateFalseWithNoDraftText() {
-        #expect(ChatView.canSendPredicate(
+        #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
             canType: true,
             isGenerating: false,

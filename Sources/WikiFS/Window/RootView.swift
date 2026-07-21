@@ -57,7 +57,7 @@ struct RootView: View {
         session.pendingWikiLink = nil
         // `WikiReaderView.onWikiLinkHandler(for:)` is app-layer; importing it
         // here would create a layering cycle (`WikiFS` viewing `WikiReaderView`
-        // is fine — we already do in `ChatView`). Defer via `Task @MainActor`
+        // is fine — we already do in `ChatDetailView`). Defer via `Task @MainActor`
         // so `ContentView`'s first layout has committed before the selection
         // mutation travels through `store` → `.onChange` → sidebar/detail.
         let handler = WikiReaderView.onWikiLinkHandler(for: session.store)

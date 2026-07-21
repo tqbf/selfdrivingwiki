@@ -6,13 +6,13 @@ import WikiFSCore
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Tests for `ChatView.shouldShowPreflightBanner` (#613) — surfaces a
+/// Tests for `ChatDetailView.shouldShowPreflightBanner` (#613) — surfaces a
 /// previously-captured `AgentLauncher.preflightError` in the chat surface so a
 /// rolled-back chat doesn't silently revert to the empty draft composer.
 ///
 /// The preflight error is ALREADY captured at the right choke-point
 /// (`AgentLauncher.startInteractiveQuery` / `backend.start` catch); the gap is
-/// purely UI: `ChatView` never read it. These tests pin the rendering predicate
+/// purely UI: `ChatDetailView` never read it. These tests pin the rendering predicate
 /// (visibility matrix + text-pass-through) plus an integration check that the
 /// rollback behavior in `AgentOperationRunner.startChat` is preserved (the
 /// banner is purely additive on top of the rollback; it does NOT replace it).
@@ -26,7 +26,7 @@ import WikiFSCore
 
     /// Success path: no preflight error → no banner (zero behavioral change).
     @Test func bannerHidden_whenPreflightErrorIsNil() {
-        #expect(!ChatView.shouldShowPreflightBanner(
+        #expect(!ChatDetailView.shouldShowPreflightBanner(
             preflightError: nil,
             chatID: nil,
             isLiveChat: false))
@@ -36,7 +36,7 @@ import WikiFSCore
         // Defensive: an empty-string preflightError (shouldn't happen in
         // practice but guards against a future regression at the capture
         // site) still renders no banner.
-        #expect(!ChatView.shouldShowPreflightBanner(
+        #expect(!ChatDetailView.shouldShowPreflightBanner(
             preflightError: "",
             chatID: nil,
             isLiveChat: false))
@@ -45,7 +45,7 @@ import WikiFSCore
     /// AC.1: post-rollback draft state — preflightError set, chatID nil (the
     /// rolled-back tab reverted to .newChat), no live session. Banner shows.
     @Test func bannerShown_whenPreflightErrorSet_inDraftState() {
-        #expect(ChatView.shouldShowPreflightBanner(
+        #expect(ChatDetailView.shouldShowPreflightBanner(
             preflightError: "Provider 'Claude' has no command configured.",
             chatID: nil,
             isLiveChat: false))
@@ -56,7 +56,7 @@ import WikiFSCore
     /// lands on when a rolled-back tab couldn't be retargeted).
     @Test func bannerShown_whenPreflightErrorSet_onPersistedNonLiveChat() {
         let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
-        #expect(ChatView.shouldShowPreflightBanner(
+        #expect(ChatDetailView.shouldShowPreflightBanner(
             preflightError: "An ingestion is in progress.",
             chatID: id,
             isLiveChat: false))
@@ -67,7 +67,7 @@ import WikiFSCore
     /// banner alongside a live streaming session.
     @Test func bannerHidden_whenPreflightErrorSet_onLiveChat() {
         let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
-        #expect(!ChatView.shouldShowPreflightBanner(
+        #expect(!ChatDetailView.shouldShowPreflightBanner(
             preflightError: "stale error",
             chatID: id,
             isLiveChat: true))
@@ -80,7 +80,7 @@ import WikiFSCore
     /// as-is when the banner is showing.
     @Test func bannerMessage_forwardsPreflightErrorVerbatim() {
         let msg = "Failed to launch claude: permission denied"
-        let bannerText = ChatView.preflightBannerMessage(
+        let bannerText = ChatDetailView.preflightBannerMessage(
             preflightError: msg,
             chatID: nil,
             isLiveChat: false)
@@ -88,7 +88,7 @@ import WikiFSCore
     }
 
     @Test func bannerMessage_isNil_whenPreflightErrorIsNil() {
-        #expect(ChatView.preflightBannerMessage(
+        #expect(ChatDetailView.preflightBannerMessage(
             preflightError: nil,
             chatID: nil,
             isLiveChat: false) == nil)
@@ -96,7 +96,7 @@ import WikiFSCore
 
     @Test func bannerMessage_isNil_whenLiveChat() {
         let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
-        #expect(ChatView.preflightBannerMessage(
+        #expect(ChatDetailView.preflightBannerMessage(
             preflightError: "stale error",
             chatID: id,
             isLiveChat: true) == nil)
@@ -111,7 +111,7 @@ import WikiFSCore
         No model selected for provider 'OpenCode'. \
         Open Settings → Agents and pick a model before running.
         """
-        let bannerText = ChatView.preflightBannerMessage(
+        let bannerText = ChatDetailView.preflightBannerMessage(
             preflightError: msg,
             chatID: nil,
             isLiveChat: false)
@@ -160,7 +160,7 @@ import WikiFSCore
 
         // And the banner predicate fires for this state — the user would
         // see the message instead of an empty draft composer.
-        #expect(ChatView.shouldShowPreflightBanner(
+        #expect(ChatDetailView.shouldShowPreflightBanner(
             preflightError: launcher.preflightError,
             chatID: nil,
             isLiveChat: false))
@@ -179,8 +179,8 @@ import WikiFSCore
 
         // The banner surfaces the error regardless of whether `startChat`
         // was the one that set it. The rollback flow in `startChat` is a
-        // separate concern — `ChatView` just reads the field it's handed.
-        #expect(ChatView.shouldShowPreflightBanner(
+        // separate concern — `ChatDetailView` just reads the field it's handed.
+        #expect(ChatDetailView.shouldShowPreflightBanner(
             preflightError: launcher.preflightError,
             chatID: nil,
             isLiveChat: false))

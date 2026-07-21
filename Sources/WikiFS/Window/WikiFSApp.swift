@@ -77,7 +77,7 @@ struct WikiFSApp: App {
     // The quit-confirmation logic lives on AppDelegate itself.
 
     init() {
-        // Migrate the renamed chat-zoom @AppStorage key before any ChatView reads
+        // Migrate the renamed chat-zoom @AppStorage key before any ChatDetailView reads
         // it. Idempotent: copies `conversation.zoom` → `chat.zoom` only when the
         // new key is unset and the old key is set; no-op for fresh installs.
         AppStorageMigration.migrateZoomKey(in: .standard)

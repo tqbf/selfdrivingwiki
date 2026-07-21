@@ -118,7 +118,7 @@ struct ComposerAutocompleteHostedTests {
         }
     }
 
-    /// Mirrors `ChatView.chatAutocompleteHooks.format` so the test's inserted
+    /// Mirrors `ChatDetailView.chatAutocompleteHooks.format` so the test's inserted
     /// string matches production shape. Pure / Sendable.
     static func formatHit(_ hit: TantivyShadowSearchResult) -> String {
         let kind: ParsedLink.LinkType

@@ -39,7 +39,7 @@ struct ComposerTextView: NSViewRepresentable {
     /// `.frame(height: measuredHeight)`.
     @Binding var measuredHeight: CGFloat
     /// When true, the text view becomes first responder (keyboard focus) once
-    /// it's added to a window. Used by ChatView's draft state so the user can
+    /// it's added to a window. Used by ChatDetailView's draft state so the user can
     /// start typing immediately after clicking "Add chat".
     var autoFocus: Bool = false
 
@@ -52,7 +52,7 @@ struct ComposerTextView: NSViewRepresentable {
     ///
     /// Three injected closures so the AppKit coordinator stays pure about the
     /// engine + formatter (it doesn't import `WikiFSCore` / `DroppedLinkFormatter`
-    /// directly — the SwiftUI parent wires those in from `ChatView`):
+    /// directly — the SwiftUI parent wires those in from `ChatDetailView`):
     ///   - `fetch`: runs the Tantivy `autocomplete(partial:kinds:...)` query.
     ///     Must be async-cancellable on the caller side (the coordinator cancels
     ///     the prior in-flight Task before each new keystroke — AC #5). Returns
@@ -353,7 +353,7 @@ struct ComposerTextView: NSViewRepresentable {
         /// `autocomplete` hooks, `debounce`, and `scheduleDebounce`. Safe to
         /// call on every `textDidChange` (no-op when the parent hasn't
         /// changed). The chat composer doesn't change `autocomplete` after
-        /// makeNSView (it's bound once in ChatView) — but `updateNSView`
+        /// makeNSView (it's bound once in ChatDetailView) — but `updateNSView`
         /// could in principle swap closures, so we re-sync the binding
         /// through the controller's hooks provider.
         private func ensureAutocompleteController() {

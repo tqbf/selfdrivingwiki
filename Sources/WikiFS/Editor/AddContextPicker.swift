@@ -9,7 +9,7 @@ import WikiFSCore
 /// Modeled on `ProviderSelector` / `PermissionModeSelector` so it reads as a
 /// sibling chip in the composer toolbar: a glyph trigger, a searchable popover,
 /// hover-highlighted rows. It emits a `SidebarDragPayload` (the app's existing
-/// attach currency) via `onAdd`, so `ChatView` builds the `ChatAttachment` with
+/// attach currency) via `onAdd`, so `ChatDetailView` builds the `ChatAttachment` with
 /// the same code that a sidebar drop uses.
 struct AddContextPicker: View {
     @Bindable var store: WikiStoreModel

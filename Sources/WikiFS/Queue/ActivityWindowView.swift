@@ -744,7 +744,7 @@ struct ActivityWindowView: View {
     /// agent (preflight failure, cancelled before run) won't have one. The
     /// debug folder contains the complete trace (ACP messages, permissions,
     /// usage, stderr.log), which supersedes the per-run `run.jsonl` log that
-    /// used to be exposed separately. Mirrors the ChatView's debug button.
+    /// used to be exposed separately. Mirrors the ChatDetailView's debug button.
     @ViewBuilder
     private func revealMenu(for item: QueueItem) -> some View {
         if let debugURL = activityTracker.debugURL(for: item.id) {
