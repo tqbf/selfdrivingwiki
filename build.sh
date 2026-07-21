@@ -88,6 +88,24 @@ GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_COMMIT_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 BUILD_VERSION="${GIT_COMMIT_COUNT}-${GIT_SHA}"
 
+# ---------------------------------------------------------------------------
+# Up-front prerequisite gate: bun (fail fast BEFORE the Swift compile)
+# ---------------------------------------------------------------------------
+# The bundling section (~L132) copies the resolved bun binary into helpers/,
+# but that runs AFTER `swift build` — without this gate a developer missing
+# bun waits through the full compile before discovering it. See #762.
+# Resolution chain mirrors the bundling logic, with a PATH fallback.
+BUN_SRC="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+if [ ! -x "${BUN_SRC}" ]; then
+  BUN_SRC="$(command -v bun 2>/dev/null || true)"
+fi
+if [ -z "${BUN_SRC}" ] || [ ! -x "${BUN_SRC}" ]; then
+  echo "✗ FATAL: bun not found" >&2
+  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2
+  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2
+  exit 1
+fi
+
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
 BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
@@ -127,9 +145,10 @@ else
   echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
 fi
 # Bun runtime — bundled so ACP providers (claude-acp via bunx) work without a
-# system-wide install. Resolved from BUN_INSTALL or ~/.bun. REQUIRED: if absent
-# the build fails rather than shipping a broken app that errors at spawn time.
-BUN_SRC="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+# system-wide install. Resolved up-front (BUN_INSTALL → ~/.bun → PATH) and
+# gated before the Swift compile; see #762. Here we just copy the already-
+# resolved binary into helpers/. REQUIRED: if absent the build fails rather
+# than shipping a broken app that errors at spawn time.
 if [ -x "${BUN_SRC}" ]; then
   cp "${BUN_SRC}" "${HELPERS_DIR}/bun"
   echo "  ✓ bundled bun ($(file -b "${BUN_SRC}" | cut -d, -f1))"

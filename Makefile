@@ -165,6 +165,21 @@ deps:
 	@echo "  ✓ build.sh present"
 	@echo "→ Prerequisites OK."
 
+# bun is required for the full .app build (bundled into Contents/Helpers for
+# ACP providers), but NOT for `check`/`test` which only call `swift build`/
+# `swift test`. Gate it here as a prereq of build/release only. See #762.
+# Resolution: BUN_INSTALL/bin/bun → ~/.bun/bin/bun → `command -v bun` (PATH).
+bun-check:
+	@BUN_SRC="${BUN_INSTALL:-$$HOME/.bun}/bin/bun"; \
+	if [ ! -x "$$BUN_SRC" ]; then BUN_SRC=$$(command -v bun 2>/dev/null || true); fi; \
+	if [ -z "$$BUN_SRC" ] || [ ! -x "$$BUN_SRC" ]; then \
+	  echo "✗ FATAL: bun not found" >&2; \
+	  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2; \
+	  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2; \
+	  exit 1; \
+	fi
+	@echo "  ✓ bun found"
+
 # ---------------------------------------------------------------------------
 # Build (delegates to ./build.sh: swift build + bundle + codesign)
 # ---------------------------------------------------------------------------
@@ -184,10 +199,10 @@ $(APP_ICON): $(ICON_SCRIPT)
 
 icon: $(APP_ICON)
 
-build: deps $(APP_ICON) $(GENERATED_PROMPTS) version
+build: deps bun-check $(APP_ICON) $(GENERATED_PROMPTS) version
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
-release: deps $(APP_ICON) $(GENERATED_PROMPTS) version
+release: deps bun-check $(APP_ICON) $(GENERATED_PROMPTS) version
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
