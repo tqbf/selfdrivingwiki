@@ -332,16 +332,21 @@ let package = Package(
         // Drop macOS-only executables on Linux — SwiftPM builds every target
         // in the package during `swift test`, not just test-target deps.
         // These targets either #include Obj-C frameworks or use launchd /
-        // private-framework APIs unavailable on Linux; building them there
-        // fails. macOS is unaffected; the existing WIKIFS_APP_STORE=1 route
-        // still works as before (#754, #780).
+        // private-framework / NSXPC APIs unavailable on Linux; building them
+        // there fails. macOS is unaffected; the existing WIKIFS_APP_STORE=1
+        // route still works as before (#754, #780).
+        //
+        // - podcast-token-helper: Obj-C executable, needs Foundation.h +
+        //   AppleMediaServices private framework.
+        // - wikictl: macOS CLI client; calls WikiDaemonConnection (guarded
+        //   #if os(macOS)) and DarwinNotifier.postChange (also guarded).
+        //   Five call sites for WikiDaemonConnection in main.swift.
         //
         // NOTE: wikid is intentionally NOT filtered — it has a Linux
         // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
-        // Its Linux build issues (stdout concurrency-safety, req scope leak)
-        // need fixing at the source, not target filtering. See issue #780.
         #if os(Linux)
         if $0.name == "podcast-token-helper" { return false }
+        if $0.name == "wikictl" { return false }
         #endif
         return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
     }
