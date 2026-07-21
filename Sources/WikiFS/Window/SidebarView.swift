@@ -70,9 +70,14 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // The wiki switcher moved into the window toolbar (Safari-style,
-            // trailing the omnibox); the sidebar now starts at the section
-            // selector.
+            // Wiki selector in the sidebar header — like the account header at
+            // the top of Notes/Mail's navigator. It collapses with the sidebar
+            // when the leading panel toggle hides it, so it leaves the toolbar
+            // (which now holds only the nav cluster + omnibox + Change Log toggle).
+            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            Divider()
             sectionSelectorBar
                 .padding(.top, 8)
             Divider()
