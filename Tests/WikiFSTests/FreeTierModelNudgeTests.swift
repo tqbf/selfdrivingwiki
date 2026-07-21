@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-@testable import WikiFS
 import WikiFSCore
 
 /// Pure-logic tests for `FreeTierModelNudge` (#612).
