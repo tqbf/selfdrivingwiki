@@ -633,9 +633,9 @@ struct ChatView: View {
     private func header(for chat: ChatSummary) -> some View {
         // The header is split into two rows:
         //
-        //   1. Title + date (inside `CollapsibleDetailHeader`'s expanded
-        //      content) — constrained to `readableContentWidth` so the
-        //      editable title and date stay readable.
+        //   1. Title row — full view width (the `.hoverRowBackground()` pill
+        //      stretches edge-to-edge). The expanded content (date) is capped
+        //      at `readableContentWidth` internally by `CollapsibleDetailHeader`.
         //
         //   2. The action toolbar row (Show in List / Share / Reveal in
         //      Finder / Reveal Debug Folder + outline toggle) — rendered as
@@ -665,7 +665,6 @@ struct ChatView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
 
             if isHeaderExpanded {
                 chatActionBar

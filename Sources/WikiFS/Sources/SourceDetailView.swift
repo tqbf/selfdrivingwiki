@@ -744,7 +744,6 @@ struct SourceDetailView: View {
 
             }
         }
-        .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
         .padding(PageEditorMetrics.contentInset)
     }
 
