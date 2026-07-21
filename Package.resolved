@@ -1,5 +1,5 @@
 {
-  "originHash" : "3a48c4b0426543780125b80080b43d5577c1ea0fd7a9237770c274cd19418315",
+  "originHash" : "b1811bcc9ca4a9c9267c4fec89bc48b9760e71c6ab52b05458b45b2241ffd86e",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wsargent/swift-acp",
       "state" : {
-        "revision" : "3f99b2ccaf9f35966dec4817ebc4fdf72b9049be",
-        "version" : "0.2.0"
+        "revision" : "13d1517b53f163333d7f4f76013715bd74aa1a8b",
+        "version" : "0.2.1"
       }
     },
     {

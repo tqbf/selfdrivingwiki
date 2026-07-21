@@ -39,7 +39,7 @@ let package = Package(
         // transport reads, actor head-of-line blocking on request_permission,
         // discarded stderr, unexposed PID). The fork fixes all four. Upstream PRs
         // offered when the upstream resumes.
-        .package(url: "https://github.com/wsargent/swift-acp", from: "0.2.0"),
+        .package(url: "https://github.com/wsargent/swift-acp", from: "0.2.1"),
         // GRDB.swift — GRDB toolkit for SQLite. Phase 1 pilot: QueueStore uses
         // DatabaseQueue + DatabaseMigrator replacing hand-rolled sqlite3_* calls
         // (plans/grdb-adoption.md §6). The default GRDB product uses the system
