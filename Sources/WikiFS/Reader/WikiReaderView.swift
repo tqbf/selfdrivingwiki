@@ -866,13 +866,43 @@ private final class LinkHoverMessageHandler: NSObject, WKScriptMessageHandler {
 /// owning web view's Coordinator, which resolves + fetches + renders the body
 /// off-main and injects via `sdwInjectEmbed` (Plan v2 §4.3). Retained by the
 /// `WKUserContentController`; weakly references the view so there's no cycle.
+///
+/// `internal` (not `private`) so ``coerceBody(_:)`` is exercisable from
+/// `TransclusionEmbedTests` — the bridge cast that shipped #725 was untested
+/// because the handler was unreachable from the test module.
 @MainActor
-private final class EmbedFetchMessageHandler: NSObject, WKScriptMessageHandler {
+internal final class EmbedFetchMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WikiReaderWebView?
     init(target: WikiReaderWebView?) { self.target = target }
+
+    /// Coerces the JS-bridge payload into the `[String: String]` shape
+    /// ``WikiReaderRep.Coordinator/handleEmbedFetch(body:)`` expects.
+    ///
+    /// WKWebView bridges a JS object literal (`postMessage({ … })`) to an
+    /// `NSDictionary` whose values are boxed as `Any` (e.g. `NSString`), **not**
+    /// `String`. A direct `message.body as? [String: String]` cast therefore
+    /// ALWAYS fails and silently drops the message → embed stuck on "Loading…"
+    /// (#725). Cast to `[String: Any]` first, then extract each value as
+    /// `String`, defaulting to `""` to match `processEmbedFetch`'s `?? ""`
+    /// reads. Returns `nil` only when the body isn't a dictionary at all (the
+    /// "unparseable" log path).
+    ///
+    /// Keys verified against `processEmbedFetch(body:)` and the JS `postMessage`
+    /// payload: `nodeId`, `kind`, `id`, `target`, `path`, `name`.
+    static func coerceBody(_ raw: Any) -> [String: String]? {
+        guard let dict = raw as? [String: Any] else { return nil }
+        return ["nodeId", "kind", "id", "target", "path", "name"]
+            .reduce(into: [String: String]()) { result, key in
+                result[key] = (dict[key] as? String) ?? ""
+            }
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let view = target,
-              let body = message.body as? [String: String] else { return }
+        guard let view = target else { return }
+        guard let body = Self.coerceBody(message.body) else {
+            DebugLog.reader("embedFetch dropped: unparseable body")
+            return
+        }
         view.coordinator?.handleEmbedFetch(body: body)
     }
 }

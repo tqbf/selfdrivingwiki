@@ -26,6 +26,29 @@ struct TransclusionEmbedTests {
         #expect(!out.contains("!"))               // bang consumed
     }
 
+    /// #725 regression: the JS `postEmbed` guard reads `data-sdw-state` from the
+    /// `<details>` element (`details.getAttribute('data-sdw-state')`). If the
+    /// `empty` initial state is on the inner `.sdw-embed-body` div instead of the
+    /// `<details>` element itself, `state` is `''` → the guard
+    /// `if(state !== 'empty') return` bails → no `postMessage` → no fetch →
+    /// "Loading…" forever. Assert the attribute is on the `<details>` host, not
+    /// just the body div.
+    @Test func pageEmbedStateAttrOnDetailsHost() {
+        let out = WikiLinkMarkdown.linkified(
+            "![[Home]]", isResolved: { _, _ in true })
+        // The <details> element must carry data-sdw-state="empty" — the JS reads
+        // it from the details host, not the inner body div.
+        #expect(out.contains("<details class=\"sdw-transclusion\""))
+        // Find the details tag and verify it has the state attr
+        let detailsRange = out.range(of: "<details class=\"sdw-transclusion\"")
+        #expect(detailsRange != nil)
+        let afterDetails = String(out[detailsRange!.upperBound...])
+        let summaryRange = afterDetails.range(of: ">")  // end of the details opening tag
+        #expect(summaryRange != nil)
+        let tagContents = String(afterDetails[..<summaryRange!.lowerBound])
+        #expect(tagContents.contains("data-sdw-state=\"empty\""))
+    }
+
     @Test func pageEmbedIsDistinctFromCiteLink() {
         let out = WikiLinkMarkdown.linkified(
             "[[Home]] and ![[Home]]", isResolved: { _, _ in true })
@@ -474,5 +497,63 @@ struct TransclusionEmbedTests {
         #expect(recorder.calls.count == 1)
         let js = try #require(recorder.calls.first)
         #expect(js.contains("Page not found"))
+    }
+
+    // MARK: - §12.4 Bridge coercion (#725 regression)
+
+    /// `WKWebView` bridges a JS object literal (`postMessage({ … })`) to an
+    /// `NSDictionary` whose values are boxed as `Any` / `NSString` — NOT
+    /// `String`. The handler originally did `message.body as? [String: String]`,
+    /// which ALWAYS fails against this shape and silently dropped every embed
+    /// fetch → "Loading…" forever (#725). These tests exercise the real
+    /// bridge payload shape through `EmbedFetchMessageHandler.coerceBody(_:)`
+    /// — the entry point the (bypassed) `processEmbedFetch`-direct tests never
+    /// reached, which is why the bug shipped.
+
+    @Test func coerceBodyAcceptsNSDictionaryBridgeShape() {
+        // Exact shape WKWebView delivers: NSDictionary with NSString values.
+        let bridgeBody: NSDictionary = [
+            "nodeId": NSString(string: "n-bridge"),
+            "kind":   NSString(string: "page"),
+            "id":     NSString(string: "01HZPAGE"),
+            "target": NSString(string: ""),
+            "path":   NSString(string: ""),
+            "name":   NSString(string: "Foo"),
+        ]
+
+        let coerced = EmbedFetchMessageHandler.coerceBody(bridgeBody as Any)
+        #expect(coerced != nil)
+        #expect(coerced?["nodeId"] == "n-bridge")
+        #expect(coerced?["kind"]   == "page")
+        #expect(coerced?["id"]     == "01HZPAGE")
+        #expect(coerced?["target"] == "")
+        #expect(coerced?["path"]   == "")
+        #expect(coerced?["name"]   == "Foo")
+    }
+
+    @Test func coerceBodyDefaultsMissingKeysToEmptyString() {
+        // A real embed may post only a subset (e.g. a name-only page embed has
+        // empty id/path/target). `processEmbedFetch` reads with `?? ""`; coerce
+        // must mirror that so no key is ever absent.
+        let bridgeBody: NSDictionary = [
+            "nodeId": NSString(string: "n-sparse"),
+            "kind":   NSString(string: "page"),
+        ]
+        let coerced = EmbedFetchMessageHandler.coerceBody(bridgeBody as Any)
+        #expect(coerced?.count == 6)
+        #expect(coerced?["nodeId"] == "n-sparse")
+        #expect(coerced?["id"]     == "")
+        #expect(coerced?["target"] == "")
+        #expect(coerced?["path"]   == "")
+        #expect(coerced?["name"]   == "")
+    }
+
+    @Test func coerceBodyRejectsNonDictionary() {
+        // A string / number / array body is unparseable → nil (the handler
+        // logs "embedFetch dropped: unparseable body" rather than silently
+        // returning).
+        #expect(EmbedFetchMessageHandler.coerceBody("oops" as Any) == nil)
+        #expect(EmbedFetchMessageHandler.coerceBody(42 as Any) == nil)
+        #expect(EmbedFetchMessageHandler.coerceBody([1, 2, 3] as Any) == nil)
     }
 }

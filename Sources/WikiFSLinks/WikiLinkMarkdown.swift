@@ -731,9 +731,10 @@ public enum WikiLinkMarkdown {
         \(TransclusionAttr.fragment)="\(fragAttr)" \
         \(TransclusionAttr.name)="\(nameEscaped)" \
         \(TransclusionAttr.path)="" \
-        \(TransclusionAttr.node)="\(node)">\
+        \(TransclusionAttr.node)="\(node)" \
+        \(TransclusionAttr.state)="empty">\
         <summary><span class="sdw-embed-title">\(titleEscaped)</span></summary>\
-        <div class="sdw-embed-body" \(TransclusionAttr.state)="empty">\
+        <div class="sdw-embed-body">\
         <span class="sdw-embed-placeholder">Loading…</span>\
         </div>\
         </details>\n
