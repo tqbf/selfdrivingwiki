@@ -3025,6 +3025,18 @@ public final class AgentLauncher {
                     self.setGenerating(false)
                     self.flushTranscript()
                     self.generateChatSummary()
+                    // Fire per-message summarization on the turn boundary — not
+                    // just in finish(). Interactive chats stay alive across many
+                    // turns without ever reaching finish(), so the sink must run
+                    // here or summarizePendingMessages never fires for them
+                    // (DB evidence: 0 of 285 chat_messages had summary columns
+                    // set). Safe because: flushTranscript() already persisted
+                    // the turn's events to the DB above; the sink's compute-once
+                    // guard (summary == nil) skips already-summarized rows; and
+                    // model mode dispatches the actual LLM call off-main via
+                    // Task.detached, so it doesn't block this turn. The finish()
+                    // call remains as a safety net for the one-shot run() path.
+                    self.fireMessageSummarySink()
                     // Capture the per-turn usage delta and forward it to the
                     // menu bar tracker (if wired). Reads the backend's
                     // cumulative session snapshot and emits the delta vs the
