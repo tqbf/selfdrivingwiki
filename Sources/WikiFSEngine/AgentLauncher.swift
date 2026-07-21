@@ -1406,10 +1406,24 @@ public final class AgentLauncher {
         // prior behavior. Pinning DIFFERENT providers per ingest stage is an
         // explicit user choice; the per-stage model ids are routed to the
         // shared subprocess as today.
-        let provider = providersConfig().provider(forStage: ACPIngestStage.planner.rawValue)
-        let plannerModel = providersConfig().modelId(forStage: ACPIngestStage.planner.rawValue)
-        let executorModel = providersConfig().modelId(forStage: ACPIngestStage.executor.rawValue)
-        let finalizerModel = providersConfig().modelId(forStage: ACPIngestStage.finalizer.rawValue)
+        // #727: resolve the provider chain for the planner stage + create the
+        // per-run quota fallback coordinator. The chain is the stage-resolved
+        // provider first, then the other enabled providers in display order.
+        let config = providersConfig()
+        let plannerChain = config.providerChain(forStage: ACPIngestStage.planner.rawValue)
+        let quotaFallback = QuotaFallbackCoordinator()
+        guard let firstProvider = quotaFallback.firstLive(in: plannerChain) else {
+            preflightError = "All configured providers are exhausted. Try again later."
+            finish(status: -1)
+            return
+        }
+        // Resolve spawn config for the first provider (for the model validation
+        // below + the baseHints). Fallback providers' spawn is resolved lazily
+        // by runPhaseWithFallback.
+        let provider = firstProvider
+        let plannerModel = config.modelId(forStage: ACPIngestStage.planner.rawValue)
+        let executorModel = config.modelId(forStage: ACPIngestStage.executor.rawValue)
+        let finalizerModel = config.modelId(forStage: ACPIngestStage.finalizer.rawValue)
         guard let spawn = resolveACPProviderSpawn(provider) else {
             DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
             preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
@@ -1486,25 +1500,31 @@ public final class AgentLauncher {
         // --- Phase 1: Planner ---
         DebugLog.agent("runACPIngest: Phase 1 — Planner (model=\(plannerModel ?? "nil"))")
         currentIngestPhase = "planner"
+        // #727: plannerProfile + plannerPrompt are now built inside
+        // runPhaseWithFallback (per-provider, per-attempt). The old hints
+        // local is still used by the single-session fallback path.
         let plannerHints = hints(for: .planner)
-        let plannerProfile = BackendProfile(
-            providerHints: plannerHints,
-            scratchDirectory: scratch,
-            isReadOnly: false,
-            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
-        let plannerPrompt = ACPIngestPrompts.plannerPrompt(
-            stateFilePath: stateFilePath,
-            stagedSourcePaths: stagedSourcePaths,
-            sourceIDs: sourceIDs)
 
-        guard let plannerSession = await runPhaseOutcome(
-            backend: backend,
-            profile: plannerProfile,
-            systemPrompt: systemPrompt,
-            prompt: plannerPrompt,
-            phaseName: "planner",
+        guard let plannerSession = await runPhaseWithFallback(
             stage: .planner,
-            baselineModelId: nil  // planner uses createSession — baseline from newSession (fresh)
+            chain: plannerChain,
+            quotaFallback: quotaFallback,
+            systemPrompt: systemPrompt,
+            stageModelId: plannerModel,
+            baselineModelId: nil,  // planner uses createSession — baseline from newSession (fresh)
+            forkFrom: nil,
+            buildPrompt: { _ in
+                ACPIngestPrompts.plannerPrompt(
+                    stateFilePath: stateFilePath,
+                    stagedSourcePaths: stagedSourcePaths,
+                    sourceIDs: sourceIDs)
+            },
+            scratch: scratch,
+            makeCLIProfile: makeCLIProfile,
+            operation: operation,
+            wikiRoot: wikiRoot,
+            wikiID: wikiID,
+            phaseName: "planner"
         ) else {
             // Planner failed — fall back to single-session ACP ingest on the
             // same resolution (the #604 collapsed default provider).
@@ -1594,16 +1614,8 @@ public final class AgentLauncher {
                 guard isRunning else { break }  // cancelled
                 let assignments = plan.assignments(forSource: sourceFile)
                 guard !assignments.isEmpty else { continue }
-                let executorProfile = BackendProfile(
-                    providerHints: executorHints,
-                    scratchDirectory: scratch,
-                    isReadOnly: false,
-                    cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
-                let executorPrompt = ACPIngestPrompts.executorPrompt(
-                    stateFilePath: stateFilePath,
-                    assignments: assignments,
-                    allPageTitles: plan.allPageTitles,
-                    sourceIDs: sourceIDs)
+                // #727: executorProfile + executorPrompt are now built inside
+                // runPhaseWithFallback (per-provider, per-attempt).
                 DebugLog.agent("runACPIngest: Phase 2 — Executor[\(sourceFile)] (\(assignments.count) page(s))")
                 currentIngestPhase = "executor[\(sourceFile)]"
                 // Partial failure: log and continue to next executor.
@@ -1611,18 +1623,34 @@ public final class AgentLauncher {
                 // so the executor inherits the planner's source context. If fork
                 // is unsupported (or the planner session was already closed), the
                 // runPhase helper falls back to a fresh `backend.start()`.
+                let executorAssignments = assignments
+                let executorProvider = provider
+                let executorChain = config.providerChain(forStage: ACPIngestStage.executor.rawValue)
                 let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
-                if let session = await runPhaseOutcome(
-                    backend: backend,
-                    profile: executorProfile,
-                    systemPrompt: systemPrompt,
-                    prompt: executorPrompt,
-                    phaseName: "executor[\(sourceFile)]",
+                if let session = await runPhaseWithFallback(
                     stage: .executor,
+                    chain: executorChain,
+                    quotaFallback: quotaFallback,
+                    systemPrompt: systemPrompt,
+                    stageModelId: executorModel,
                     baselineModelId: plannerModel,  // §4.5 HIGH #2 — planner's RESOLVED model, NOT stale stored
-                    forkFrom: forkFrom
+                    forkFrom: forkFrom,
+                    buildPrompt: { _ in
+                        ACPIngestPrompts.executorPrompt(
+                            stateFilePath: stateFilePath,
+                            assignments: executorAssignments,
+                            allPageTitles: plan.allPageTitles,
+                            sourceIDs: sourceIDs)
+                    },
+                    scratch: scratch,
+                    makeCLIProfile: makeCLIProfile,
+                    operation: operation,
+                    wikiRoot: wikiRoot,
+                    wikiID: wikiID,
+                    phaseName: "executor[\(sourceFile)]"
                 ) {
-                    await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
+                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted().first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
+                    await capturePhaseUsage(backend: backend, session: session, providerLabel: execProvider.label)
                     if let acp = backend as? ACPBackend {
                         await acp.closeSession(session)
                     } else {
@@ -1655,26 +1683,32 @@ public final class AgentLauncher {
         }
 
         // --- Phase 3: Finalizer ---
-        let finalizerHints = hints(for: .finalizer)
-        let finalizerProfile = BackendProfile(
-            providerHints: finalizerHints,
-            scratchDirectory: scratch,
-            isReadOnly: false,
-            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
-        let finalizerPrompt = ACPIngestPrompts.finalizerPrompt(
-            stateFilePath: stateFilePath,
-            sourceFileNames: sourceFileNames,
-            sourceIDs: sourceIDs)
+        // #727: finalizerProfile + finalizerPrompt are now built inside
+        // runPhaseWithFallback (per-provider, per-attempt).
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
         currentIngestPhase = "finalizer"
-        if let session = await runPhaseOutcome(
-            backend: backend,
-            profile: finalizerProfile,
-            systemPrompt: systemPrompt,
-            prompt: finalizerPrompt,
-            phaseName: "finalizer",
+        let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
+        let finalizerSourceFileNames = sourceFileNames
+        if let session = await runPhaseWithFallback(
             stage: .finalizer,
-            baselineModelId: nil  // finalizer uses createSession — baseline from newSession (fresh)
+            chain: finalizerChain,
+            quotaFallback: quotaFallback,
+            systemPrompt: systemPrompt,
+            stageModelId: finalizerModel,
+            baselineModelId: nil,  // finalizer uses createSession — baseline from newSession (fresh)
+            forkFrom: nil,
+            buildPrompt: { _ in
+                ACPIngestPrompts.finalizerPrompt(
+                    stateFilePath: stateFilePath,
+                    sourceFileNames: finalizerSourceFileNames,
+                    sourceIDs: sourceIDs)
+            },
+            scratch: scratch,
+            makeCLIProfile: makeCLIProfile,
+            operation: operation,
+            wikiRoot: wikiRoot,
+            wikiID: wikiID,
+            phaseName: "finalizer"
         ) {
             await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
             if let acp = backend as? ACPBackend {
@@ -1690,6 +1724,9 @@ public final class AgentLauncher {
         // gone — we pass a dummy SessionHandle because cancel() targets
         // `warmProcess` independently of the session map.)
         await backend.cancel(SessionHandle(id: ""))
+        // #727: teardown any fallback backends (different providers spawned
+        // mid-run by the quota fallback coordinator).
+        await quotaFallback.finishFallbackBackends(excludingPrimaryProvider: quotaFallback.plannerProviderId)
 
         finish(status: 0)
     }
@@ -1928,6 +1965,152 @@ public final class AgentLauncher {
         case success(SessionHandle)
         case failed              // non-quota failure (spawn error, process died, ceiling)
         case quotaExhausted(QuotaSignal)   // ← drives the fallback walk
+    }
+
+    /// #727: run one ingest phase with quota fallback. Walks the provider
+    /// chain; on quota exhaustion, marks the provider dead and retries on
+    /// the next live provider. Returns the session on success, nil on
+    /// terminal failure (all exhausted, or non-quota failure).
+    ///
+    /// Each provider gets its OWN `ACPBackend` actor (different
+    /// executable/args/apiKey). The first attempt reuses `self.backend`
+    /// (the warm subprocess `run()` built); subsequent attempts build a
+    /// fresh backend via `resolveBackend`. The coordinator records each
+    /// backend for teardown.
+    ///
+    /// Fork reconciliation (named step): when the executor's provider differs
+    /// from the planner's actual post-fallback provider, `forkFrom` is set to
+    /// nil (cross-backend session reference is invalid).
+    private func runPhaseWithFallback(
+        stage: ACPIngestStage,
+        chain: [AgentProvider],
+        quotaFallback: QuotaFallbackCoordinator,
+        systemPrompt: String,
+        stageModelId: String?,
+        baselineModelId: String?,
+        forkFrom: SessionHandle?,
+        buildPrompt: (AgentProvider) -> String,
+        scratch: URL,
+        makeCLIProfile: (WikiOperation) -> CLIProfile,
+        operation: WikiOperation,
+        wikiRoot: String,
+        wikiID: String,
+        phaseName: String
+    ) async -> SessionHandle? {
+        var attemptChain = chain
+        while let provider = quotaFallback.firstLive(in: attemptChain) {
+            // Resolve spawn config for THIS provider.
+            guard let spawn = resolveACPProviderSpawn(provider) else {
+                DebugLog.agent("runPhaseWithFallback[\(phaseName)]: no spawn for \(provider.id) — skipping")
+                attemptChain = attemptChain.filter { $0.id != provider.id }
+                continue
+            }
+            // Build hints + profile for this provider.
+            var hints = AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: spawn.command,
+                apiKey: spawn.apiKey,
+                selectedModelId: stageModelId)
+            _ = hints  // keep the var for potential per-stage model injection
+            // Re-inject the stage model id (providerHints already does this
+            // via selectedModelId, but be explicit).
+            if let stageModelId, !stageModelId.isEmpty {
+                hints[HintKey.acpSelectedModelId.rawValue] = stageModelId
+            }
+
+            // Decide which backend to use: reuse self.backend for the FIRST
+            // attempt (the planner's provider — warm subprocess), build a
+            // fresh one for fallback providers.
+            let isFirstAttempt = (attemptChain.first?.id == provider.id)
+            let isPlannerBackend = (stage == .planner && isFirstAttempt)
+            let backend: AgentBackend
+            if isPlannerBackend {
+                // Reuse the warm subprocess (self.backend was built by run()).
+                backend = self.backend
+            } else if provider.id == quotaFallback.plannerProviderId {
+                // Reuse the planner's actual backend (post-fallback).
+                backend = quotaFallback.backends[provider.id] ?? self.backend
+            } else {
+                // Fresh backend for a fallback provider.
+                // #727: resolve the same policy/budget/ceiling run() used.
+                let policy = resolvePermissionMode(.ingest)
+                let budget: Duration? = .seconds(60)
+                let ceiling = TurnLivenessPolicy.ceiling(for: .ingest)
+                backend = resolveBackend(policy, budget, ceiling)
+                quotaFallback.recordBackend(backend, forProvider: provider.id)
+            }
+
+            // Fork reconciliation: disable fork when the executor's provider
+            // differs from the planner's actual post-fallback provider.
+            var effectiveForkFrom = forkFrom
+            if stage == .executor,
+               let plannerPid = quotaFallback.plannerProviderId,
+               plannerPid != provider.id {
+                DebugLog.agent("runPhaseWithFallback[\(phaseName)]: fork disabled — executor provider \(provider.id) differs from planner \(plannerPid)")
+                effectiveForkFrom = nil
+            }
+
+            // Isolated scratch dir for fallback providers (avoid contention).
+            let phaseScratch: URL
+            if isPlannerBackend || provider.id == quotaFallback.plannerProviderId {
+                phaseScratch = scratch
+            } else {
+                phaseScratch = scratch.appending(path: "fallback-\(provider.id)")
+                try? FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true)
+            }
+
+            let profile = BackendProfile(
+                providerHints: hints,
+                scratchDirectory: phaseScratch,
+                isReadOnly: false,
+                cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+
+            let prompt = buildPrompt(provider)
+
+            let outcome = await runPhase(
+                backend: backend,
+                profile: profile,
+                systemPrompt: systemPrompt,
+                prompt: prompt,
+                phaseName: phaseName,
+                stage: stage,
+                baselineModelId: baselineModelId,
+                forkFrom: effectiveForkFrom)
+
+            switch outcome {
+            case .success(let session):
+                // Record the planner's actual provider for fork reconciliation.
+                if stage == .planner {
+                    quotaFallback.recordPlanner(providerId: provider.id, backend: backend)
+                }
+                return session
+
+            case .quotaExhausted(let signal):
+                // Cancel the failed backend BEFORE re-entering the loop.
+                if !isPlannerBackend || provider.id != quotaFallback.plannerProviderId {
+                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: cancelling failed backend for \(signal.providerId)")
+                    await backend.cancel(SessionHandle(id: ""))
+                }
+                quotaFallback.markExhausted(signal.providerId,
+                                            resetTime: signal.resetTime,
+                                            kind: signal.kind)
+                // Surface the fallback in the transcript.
+                let nextProvider = quotaFallback.firstLive(in: attemptChain.filter { $0.id != provider.id })
+                if let next = nextProvider {
+                    mergeOrAppend(.raw("⚠️ \(provider.label) quota exhausted — falling back to \(next.label)…"))
+                } else {
+                    mergeOrAppend(.raw("⚠️ \(provider.label) quota exhausted — no more providers to fall back to."))
+                }
+                attemptChain = attemptChain.filter { $0.id != provider.id }
+                continue   // retry on the next live provider
+
+            case .failed:
+                return nil  // non-quota failure — no fallback
+            }
+        }
+        // All providers exhausted.
+        mergeOrAppend(.raw("All providers exhausted for \(stage.label) phase."))
+        return nil
     }
 
     /// #727: wraps `runPhase` for the existing call sites. In Slice 3 this is

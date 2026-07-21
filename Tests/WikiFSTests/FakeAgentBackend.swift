@@ -62,6 +62,13 @@ actor FakeAgentBackend: AgentBackend {
     private(set) var allYieldedEvents: [AgentEvent] = []
     /// Model hints seen in start profiles (the `acpSelectedModelId` provider hint).
     private(set) var startModelHints: [String?] = []
+    /// #727: provider ids seen in start profiles (the `acpProviderId` hint),
+    /// in start order. Used by the integration tests to assert that two
+    /// different providers were actually spawned (not just two `start` calls
+    /// on the same backend).
+    private(set) var startedProviderIds: [String] = []
+    /// #727: the full profiles passed to each `start()` call, in order.
+    private(set) var recordedProfiles: [BackendProfile] = []
 
     // MARK: - Scripted behavior
 
@@ -89,6 +96,8 @@ actor FakeAgentBackend: AgentBackend {
         behaviorIndex += 1
 
         startModelHints.append(profile.providerHints[HintKey.acpSelectedModelId.rawValue])
+        startedProviderIds.append(profile.providerHints[HintKey.acpProviderId.rawValue] ?? "unknown")
+        recordedProfiles.append(profile)
 
         if behavior.shouldFailOnStart {
             throw FakeBackendError.startFailed
