@@ -46,6 +46,12 @@ let package = Package(
         // SQLite (same as SQLiteWikiStore) — they coexist on different database
         // files with no conflict.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
+        // swift-crypto — Apple's Swift Crypto package. On macOS, `CryptoKit`
+        // (system framework) provides SHA256 etc. On Linux, this package
+        // provides the identical API under the `Crypto` module. Already a
+        // transitive dependency via GRDB; declared directly so WikiFSCore can
+        // depend on the `Crypto` product on Linux (#754, #780).
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         // tantivy.swift — Rust Tantivy full-text search via UniFFI bindings + an
         // @TantivyDocument macro. Phase 0 build spike (plans/tantivy-search-sidecar.md):
         // verify the pre-built XCFramework (libtantivy-rs.xcframework) resolves under
@@ -137,6 +143,11 @@ let package = Package(
                 // On Linux, `import SQLite3` needs this system module wrapper.
                 // On macOS, the SDK provides SQLite3 directly.
                 .target(name: "CSQLite", condition: .when(platforms: [.linux])),
+                // On macOS, `CryptoKit` (system framework) provides SHA256.
+                // On Linux, `swift-crypto` (transitive via GRDB) provides the
+                // identical API under the `Crypto` module (#754, #780).
+                .product(name: "Crypto", package: "swift-crypto",
+                         condition: .when(platforms: [.linux])),
             ],
             path: "Sources/WikiFSCore",
             swiftSettings: strictSwiftSettings,
