@@ -12,12 +12,13 @@ import CoreGraphics
 /// `fieldWidth(detailWidth:sidebarVisible:switcherExtra:)`.
 enum OmniboxLayout {
     struct Metrics: Equatable {
-        /// Space reserved to the field's right for the wiki switcher (at the
-        /// baseline name length) plus the transcript toggle, when they're shown.
+        /// Space reserved to the field's right for the trailing Change Log
+        /// toggle (the only toolbar item after the omnibox now that the wiki
+        /// switcher has moved into the sidebar header).
         var trailingWithSwitcher: CGFloat
-        /// Space reserved when the switcher + transcript have spilled into the `»`
-        /// overflow — only the small overflow button remains, so the field fills
-        /// nearly to the window edge.
+        /// Space reserved when the toggle has spilled into the `»` overflow —
+        /// only the small overflow button remains, so the field fills nearly to
+        /// the window edge.
         var trailingOverflow: CGFloat
         /// The field never shrinks below this (a couple of words); past this point
         /// the switcher is pushed into overflow rather than the field shrinking more.
@@ -52,7 +53,7 @@ enum OmniboxLayout {
         var homeButtonExtra: CGFloat
 
         static let `default` = Metrics(
-            trailingWithSwitcher: 180,
+            trailingWithSwitcher: 110,
             trailingOverflow: 60,
             minWidth: 120,
             maxWidth: 1200,
@@ -90,17 +91,17 @@ enum OmniboxLayout {
                    switcherExtra: switcherExtra, metrics: metrics)
     }
 
-    /// The field width if the switcher is kept on-screen: the field fills from its
-    /// leading edge to just short of the switcher. Can fall below `minWidth`,
-    /// which is the signal that the switcher no longer fits.
+    /// The field width if the trailing toggle is kept on-screen: the field fills
+    /// from its leading edge to just short of the toggle. Can fall below
+    /// `minWidth`, which is the signal that the toggle no longer fits.
     static func widthKeepingSwitcher(windowWidth: CGFloat, fieldLeadingX: CGFloat,
                                      switcherExtra: CGFloat, metrics: Metrics = .default) -> CGFloat {
         windowWidth - metrics.trailingWithSwitcher - switcherExtra - fieldLeadingX
     }
 
-    /// Whether the wiki switcher fits on-screen beside a field no narrower than
-    /// `minWidth`. When false, NSToolbar drops the switcher into the `»` overflow
-    /// and the field reclaims that trailing space (see `fieldWidth`).
+    /// Whether the trailing Change Log toggle fits on-screen beside a field no
+    /// narrower than `minWidth`. When false, NSToolbar drops the toggle into the
+    /// `»` overflow and the field reclaims that trailing space (see `fieldWidth`).
     static func switcherFits(windowWidth: CGFloat, fieldLeadingX: CGFloat,
                              switcherExtra: CGFloat, metrics: Metrics = .default) -> Bool {
         widthKeepingSwitcher(windowWidth: windowWidth, fieldLeadingX: fieldLeadingX,

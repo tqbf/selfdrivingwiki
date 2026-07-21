@@ -195,14 +195,6 @@ struct ContentView: View {
             && KeychainZoteroCredentialStore().apiKey() != nil
     }
 
-    /// The active wiki's display name (as shown in the toolbar's `WikiSwitcher`),
-    /// passed to the omnibox so it can reserve room for a long switcher and shrink
-    /// instead of pushing the switcher into overflow. Mirrors `WikiSwitcher`'s
-    /// `activeDescriptor`.
-    private var activeWikiName: String {
-        session.descriptor.displayName
-    }
-
     /// The active wiki's configured home page, if any (issue #280). `nil` hides
     /// the omnibox home button.
     private var activeHomePageID: PageID? {
@@ -272,20 +264,13 @@ struct ContentView: View {
             // the sidebar opening.
             ToolbarItem(placement: .navigation) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
-                               wikiName: activeWikiName,
                                detailWidth: detailWidth,
                                sidebarVisible: columnVisibility != .detailOnly,
                                homePageID: activeHomePageID,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
 
-            // The wiki switcher moves out of the sidebar header into the toolbar,
-            // trailing the omnibox (like a browser account / profile control).
-            ToolbarItem(placement: .primaryAction) {
-                WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-            }
-
-            // Change-log sidebar toggle, trailing the switcher — the standard
+            // Change-log sidebar toggle, trailing the omnibox — the standard
             // inspector-toggle position (rightmost, like Notes/Freeform).
             ToolbarItem(placement: .primaryAction) {
                 Button {

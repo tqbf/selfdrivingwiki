@@ -7,15 +7,16 @@ import Testing
 /// Sizing/overflow behavior of the toolbar omnibox. Uses a fixed `Metrics` so the
 /// thresholds are exact and independent of the real switcher/transcript widths.
 @Suite struct OmniboxLayoutTests {
-    // trailingWithSwitcher 180, trailingOverflow 60, min 120, max 1200.
+    // trailingWithSwitcher 110 (Change Log toggle only — the wiki switcher moved
+    // into the sidebar header), trailingOverflow 60, min 120, max 1200.
     let m = OmniboxLayout.Metrics.default
 
     // MARK: Switcher visible
 
     @Test func fillsToTheSwitcherOnAWideWindow() {
-        // 1200 - 180 (switcher+transcript) - 0 (baseline name) - 200 (leading) = 820.
+        // 1200 - 110 (toggle) - 0 (baseline name) - 200 (leading) = 890.
         let w = OmniboxLayout.fieldWidth(windowWidth: 1200, fieldLeadingX: 200, switcherExtra: 0)
-        #expect(w == 820)
+        #expect(w == 890)
         #expect(OmniboxLayout.switcherFits(windowWidth: 1200, fieldLeadingX: 200, switcherExtra: 0))
     }
 
@@ -23,7 +24,7 @@ import Testing
         let base = OmniboxLayout.fieldWidth(windowWidth: 1200, fieldLeadingX: 200, switcherExtra: 0)
         let long = OmniboxLayout.fieldWidth(windowWidth: 1200, fieldLeadingX: 200, switcherExtra: 150)
         #expect(long == base - 150)
-        #expect(long == 670)
+        #expect(long == 740)
     }
 
     @Test func aShorterWikiNameLetsTheFieldGrow() {
@@ -42,39 +43,39 @@ import Testing
     // MARK: Overflow threshold + expansion
 
     @Test func switcherStaysUntilTheFieldReachesItsFloor() {
-        // 500 - 180 - 200 = 120 == floor: switcher still fits, exactly.
-        #expect(OmniboxLayout.switcherFits(windowWidth: 500, fieldLeadingX: 200, switcherExtra: 0))
-        #expect(OmniboxLayout.fieldWidth(windowWidth: 500, fieldLeadingX: 200, switcherExtra: 0) == 120)
+        // 430 - 110 - 200 = 120 == floor: toggle still fits, exactly.
+        #expect(OmniboxLayout.switcherFits(windowWidth: 430, fieldLeadingX: 200, switcherExtra: 0))
+        #expect(OmniboxLayout.fieldWidth(windowWidth: 430, fieldLeadingX: 200, switcherExtra: 0) == 120)
     }
 
     @Test func switcherOverflowsJustBelowTheFloor() {
-        // 490 - 180 - 200 = 110 < floor: switcher drops into » overflow.
-        #expect(!OmniboxLayout.switcherFits(windowWidth: 490, fieldLeadingX: 200, switcherExtra: 0))
+        // 420 - 110 - 200 = 110 < floor: toggle drops into » overflow.
+        #expect(!OmniboxLayout.switcherFits(windowWidth: 420, fieldLeadingX: 200, switcherExtra: 0))
     }
 
     @Test func fieldExpandsToFillFreedSpaceOnceSwitcherOverflows() {
-        // At 490 the switcher overflows; the field must expand past its floor to
-        // fill the freed trailing space (490 - 60 overflow - 200 leading = 230),
+        // At 420 the toggle overflows; the field must expand past its floor to
+        // fill the freed trailing space (420 - 60 overflow - 200 leading = 160),
         // not stay stranded at the 120 floor.
-        let w = OmniboxLayout.fieldWidth(windowWidth: 490, fieldLeadingX: 200, switcherExtra: 0)
-        #expect(w == 230)
+        let w = OmniboxLayout.fieldWidth(windowWidth: 420, fieldLeadingX: 200, switcherExtra: 0)
+        #expect(w == 160)
         #expect(w > m.minWidth)
     }
 
     @Test func crossingTheThresholdJumpsWiderNotNarrower() {
-        // Just above the threshold the switcher shows (field at floor); just below,
+        // Just above the threshold the toggle shows (field at floor); just below,
         // it overflows and the field jumps *wider* to reclaim the space.
-        let showing = OmniboxLayout.fieldWidth(windowWidth: 500, fieldLeadingX: 200, switcherExtra: 0)
-        let overflowed = OmniboxLayout.fieldWidth(windowWidth: 490, fieldLeadingX: 200, switcherExtra: 0)
+        let showing = OmniboxLayout.fieldWidth(windowWidth: 430, fieldLeadingX: 200, switcherExtra: 0)
+        let overflowed = OmniboxLayout.fieldWidth(windowWidth: 429, fieldLeadingX: 200, switcherExtra: 0)
         #expect(showing == 120)
         #expect(overflowed > showing)
     }
 
     @Test func aLongWikiNameTriggersOverflowSooner() {
-        // Same window; a long name reserves more, so the switcher overflows at a
+        // Same window; a long name reserves more, so the toggle overflows at a
         // width where a baseline name would still fit.
-        #expect(OmniboxLayout.switcherFits(windowWidth: 620, fieldLeadingX: 200, switcherExtra: 0))
-        #expect(!OmniboxLayout.switcherFits(windowWidth: 620, fieldLeadingX: 200, switcherExtra: 150))
+        #expect(OmniboxLayout.switcherFits(windowWidth: 560, fieldLeadingX: 200, switcherExtra: 0))
+        #expect(!OmniboxLayout.switcherFits(windowWidth: 560, fieldLeadingX: 200, switcherExtra: 150))
     }
 
     // MARK: Clamps
@@ -105,8 +106,8 @@ import Testing
     }
 
     @Test func overflowSpacerIsZeroExactlyAtTheCap() {
-        // kept == maxWidth exactly: 200 + 1200 + 180 = 1580.
-        let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 1580, fieldLeadingX: 200, switcherExtra: 0)
+        // kept == maxWidth exactly: 200 + 1200 + 110 = 1510.
+        let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 1510, fieldLeadingX: 200, switcherExtra: 0)
         #expect(s == 0)
     }
 
@@ -116,7 +117,7 @@ import Testing
         let w = OmniboxLayout.fieldWidth(windowWidth: 2000, fieldLeadingX: 200, switcherExtra: 0)
         let s = OmniboxLayout.overflowSpacerWidth(windowWidth: 2000, fieldLeadingX: 200, switcherExtra: 0)
         #expect(200 + w + s + m.trailingWithSwitcher == 2000)
-        #expect(s == 420)
+        #expect(s == 490)
     }
 
     @Test func overflowSpacerGrowsOneForOneWithWindowWidthPastTheCap() {
@@ -220,13 +221,13 @@ import Testing
     }
 
     @Test func overflowExpansionStillWorksThroughTheDetailWidthDriver() {
-        // A detail region too narrow to keep the switcher: the field must expand past
+        // A detail region too narrow to keep the toggle: the field must expand past
         // its floor to reclaim the freed trailing space (same behavior as the core,
         // reached via the detail-width overload).
-        let w = OmniboxLayout.fieldWidth(detailWidth: 360, sidebarVisible: true, switcherExtra: 0)
-        // 360 - 70 chrome - 180 keepsSwitcher = 110 < 120 floor → overflow path:
-        // 360 - 70 - 60 overflow = 230.
-        #expect(w == 230)
+        let w = OmniboxLayout.fieldWidth(detailWidth: 260, sidebarVisible: true, switcherExtra: 0)
+        // 260 - 70 chrome - 110 keepsSwitcher = 80 < 120 floor → overflow path:
+        // 260 - 70 - 60 overflow = 130.
+        #expect(w == 130)
         #expect(w > m.minWidth)
     }
 

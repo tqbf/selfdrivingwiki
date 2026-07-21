@@ -54,7 +54,6 @@ struct AddressBarLayoutHostedTests {
         let view = AddressBarView(
             store: model,
             isFocused: .constant(false),
-            wikiName: "My Wiki",
             detailWidth: detailWidth,
             sidebarVisible: sidebarVisible,
             homePageID: homePageID,

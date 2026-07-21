@@ -18,10 +18,6 @@ import WikiFSCore
 struct AddressBarView: View {
     @Bindable var store: WikiStoreModel
     @Binding var isFocused: Bool
-    /// The active wiki's display name, shown in the trailing switcher. A longer
-    /// name widens that switcher, so the omnibox reserves extra room for it and
-    /// shrinks — keeping the switcher on-screen instead of overflowing.
-    var wikiName: String
     /// The width of the detail column (the region the toolbar spans), measured by a
     /// `GeometryReader` in `ContentView`. This shrinks when the left sidebar opens
     /// and is unaffected by the right transcript panel — exactly the omnibox's
@@ -287,41 +283,31 @@ struct AddressBarView: View {
         .transition(.opacity)
     }
 
-    /// The omnibox field's width, from the measured detail-region width, the sidebar
-    /// state, and the wiki name. The arithmetic (stretch, shrink, overflow-expand)
-    /// lives in `OmniboxLayout` so it can be unit-tested; here we only supply the
-    /// measurements. `switcherExtra` is how much wider the current wiki name renders
-    /// than the baseline name — the switcher's fixed icon/chevron overhead cancels
-    /// out, so only text width matters.
+    /// The omnibox field's width, from the measured detail-region width and the
+    /// sidebar state. The arithmetic (stretch, shrink, overflow-expand) lives in
+    /// `OmniboxLayout` so it can be unit-tested; here we only supply the
+    /// measurements. The wiki switcher has moved out of the toolbar into the
+    /// sidebar header, so there's no name-driven width delta to pass —
+    /// `switcherExtra` is always zero (the only trailing toolbar item now is the
+    /// Change Log toggle, whose width is captured in
+    /// `OmniboxLayout.Metrics.trailingWithSwitcher`).
     private var fieldWidth: CGFloat {
-        let switcherExtra = headlineTextWidth(wikiName)
-            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
-        return OmniboxLayout.fieldWidth(
+        OmniboxLayout.fieldWidth(
             detailWidth: detailWidth,
             sidebarVisible: sidebarVisible,
             homeButtonShown: homePageID != nil,
-            switcherExtra: switcherExtra)
+            switcherExtra: 0)
     }
 
     /// Extra width appended after the field in `omniboxGroup` once `fieldWidth`
-    /// has hit its cap — keeps the trailing switcher/toggle flush against the
-    /// window edge instead of stalling short of it. Zero everywhere below the cap.
+    /// has hit its cap — keeps the trailing toggle flush against the window edge
+    /// instead of stalling short of it. Zero everywhere below the cap.
     private var overflowSpacerWidth: CGFloat {
-        let switcherExtra = headlineTextWidth(wikiName)
-            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
-        return OmniboxLayout.overflowSpacerWidth(
+        OmniboxLayout.overflowSpacerWidth(
             detailWidth: detailWidth,
             sidebarVisible: sidebarVisible,
             homeButtonShown: homePageID != nil,
-            switcherExtra: switcherExtra)
-    }
-
-    /// Rendered width of `text` in the switcher's font (`.headline`). Only the
-    /// *difference* from the baseline name is used, so the switcher's fixed
-    /// icon/chevron overhead cancels out and this need only be accurate for the text.
-    private func headlineTextWidth(_ text: String) -> CGFloat {
-        let font = NSFont.preferredFont(forTextStyle: .headline)
-        return (text as NSString).size(withAttributes: [.font: font]).width
+            switcherExtra: 0)
     }
 
     // MARK: - Actions
@@ -556,11 +542,6 @@ enum AddressBarMetrics {
     /// `OmniboxLayout.Metrics.openLeadingChrome`/`closedLeadingChrome`; changing it
     /// here requires updating those constants by the same delta.
     static let navToOmniboxGap: CGFloat = 14
-    /// The wiki-switcher name the trailing reservation is tuned against. A name
-    /// wider than this reserves the extra width (the omnibox yields it); a narrower
-    /// one lets the omnibox reclaim it. Only the width *difference* is used, so the
-    /// switcher's fixed icon/chevron overhead cancels out. See `OmniboxLayout`.
-    static let baselineSwitcherName = "My Wiki"
     /// Left padding from the pill's rounded edge to the Page Menu icon, so the
     /// icon sits inside the omnibox rather than hugging the edge.
     static let iconLeadingInset: CGFloat = 8
