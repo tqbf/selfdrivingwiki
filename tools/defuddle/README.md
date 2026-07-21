@@ -21,8 +21,13 @@ absent).
 ## Version
 
 - **defuddle 0.19.1** (from `~/.local/lib/node_modules/defuddle`)
-- The script is the published `dist/cli.js` CommonJS bundle — 7416 bytes, no
-  external `require`s, run directly by bun.
+- `tools/defuddle/defuddle` is a **`bun build` bundle** of the published
+  `dist/cli.js` entry point — ~2.45 MB, 351 modules inlined. It is NOT a
+  verbatim copy of `dist/cli.js`: that file is just the CLI entry and has
+  unresolvable `require`s when stood alone (`commander`, `./node`, `./utils`,
+  `./frontmatter`, `./fetch`, `./utils/linkedom-compat`, …). `bun build`
+  resolves and inlines all of them so the resulting file is genuinely
+  self-contained and runs directly under bun with no `node_modules`.
 
 ## Usage (how the app invokes it)
 
@@ -63,11 +68,18 @@ closed** after writing so defuddle sees EOF.
 # 1. Install/update defuddle globally (npm)
 npm install -g defuddle            # or: npm install -g defuddle@latest
 
-# 2. Resolve the real file (the bin is a symlink to dist/cli.js)
+# 2. Resolve the real entry point (the bin is a symlink to dist/cli.js).
+#    NOTE: macOS ships BSD readlink (no -f). If this errors, install GNU
+#    coreutils (`brew install coreutils`) and use `greadlink -f`, or just
+#    hard-code ~/.local/lib/node_modules/defuddle/dist/cli.js.
 SRC="$(readlink -f ~/.local/bin/defuddle)"
 
-# 3. Copy the bundle into this directory
-cp "$SRC" tools/defuddle/defuddle
+# 3. Bundle the CLI entry point into a single self-contained file. `bun build`
+#    resolves and inlines all of cli.js's requires (commander, ./node, ./utils,
+#    ./frontmatter, ./fetch, ./utils/linkedom-compat, …) — 351 modules,
+#    ~2.45 MB. A plain `cp "$SRC"` does NOT work: cli.js alone is not
+#    self-contained and bun would fail with "Cannot find module './node'".
+~/.bun/bin/bun build "$SRC" --outfile tools/defuddle/defuddle --target=bun
 
 # 4. Update the version number in this README and in
 #    Sources/WikiFS/Sources/DefuddleExtractionService.swift comments if needed.
@@ -76,7 +88,7 @@ cp "$SRC" tools/defuddle/defuddle
 swift test --filter DefuddleExtractionService
 ```
 
-The copy is a single self-contained bundle — no `node_modules`, no install
+The bundle is a single self-contained file — no `node_modules`, no install
 step at build time. `build.sh` copies it into `Contents/Helpers/defuddle` and
 codesigns it (a plain script in `Helpers/` must be signed or the app seal
 fails; same as pdf2md).
