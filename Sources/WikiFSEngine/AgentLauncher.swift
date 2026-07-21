@@ -1515,7 +1515,16 @@ public final class AgentLauncher {
         // local is still used by the single-session fallback path.
         let plannerHints = hints(for: .planner)
 
+<<<<<<< HEAD
         guard let plannerSession = await runPhaseWithFallback(
+=======
+        guard let plannerSession = await runPhaseOutcome(
+            backend: backend,
+            profile: plannerProfile,
+            systemPrompt: systemPrompt,
+            prompt: plannerPrompt,
+            phaseName: "planner",
+>>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
             stage: .planner,
             chain: plannerChain,
             quotaFallback: quotaFallback,
@@ -1637,7 +1646,16 @@ public final class AgentLauncher {
                 let executorProvider = provider
                 let executorChain = config.providerChain(forStage: ACPIngestStage.executor.rawValue)
                 let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
+<<<<<<< HEAD
                 if let session = await runPhaseWithFallback(
+=======
+                if let session = await runPhaseOutcome(
+                    backend: backend,
+                    profile: executorProfile,
+                    systemPrompt: systemPrompt,
+                    prompt: executorPrompt,
+                    phaseName: "executor[\(sourceFile)]",
+>>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
                     stage: .executor,
                     chain: executorChain,
                     quotaFallback: quotaFallback,
@@ -1697,9 +1715,18 @@ public final class AgentLauncher {
         // runPhaseWithFallback (per-provider, per-attempt).
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
         currentIngestPhase = "finalizer"
+<<<<<<< HEAD
         let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
         let finalizerSourceFileNames = sourceFileNames
         if let session = await runPhaseWithFallback(
+=======
+        if let session = await runPhaseOutcome(
+            backend: backend,
+            profile: finalizerProfile,
+            systemPrompt: systemPrompt,
+            prompt: finalizerPrompt,
+            phaseName: "finalizer",
+>>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
             stage: .finalizer,
             chain: finalizerChain,
             quotaFallback: quotaFallback,
@@ -1979,6 +2006,7 @@ public final class AgentLauncher {
         case quotaExhausted(QuotaSignal)   // ← drives the fallback walk
     }
 
+<<<<<<< HEAD
     /// #727: run one ingest phase with quota fallback. Walks the provider
     /// chain; on quota exhaustion, marks the provider dead and retries on
     /// the next live provider. Returns the session on success, nil on
@@ -2125,6 +2153,8 @@ public final class AgentLauncher {
         return nil
     }
 
+=======
+>>>>>>> 5a951b4 (feat: #727 slice 3 — runPhase typed outcome (PhaseOutcome))
     /// #727: wraps `runPhase` for the existing call sites. In Slice 3 this is
     /// behavior-preserving — it returns the session on `.success` and nil on
     /// `.failed` or `.quotaExhausted` (no retry yet). Slice 4 replaces this
