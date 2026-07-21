@@ -650,10 +650,10 @@ struct PageVersionTests {
     /// (the write-path change was the real fix); v39→40 adds the per-message
     /// summary columns (`plans/chat-summary.md` §3.3).
     @Test func v39SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 40,
-                "schemaVersion must report 40 after the chat-message-summary bump")
+        #expect(GRDBWikiStore.schemaVersion == 41,
+                "schemaVersion must report 41 after the wikictl-prompt-migration bump")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "40", "fresh DB stamps user_version = 40 (got \(v))")
+        #expect(v == "41", "fresh DB stamps user_version = 41 (got \(v))")
     }
 }

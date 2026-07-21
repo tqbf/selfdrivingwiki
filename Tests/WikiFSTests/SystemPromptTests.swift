@@ -153,6 +153,115 @@ struct SystemPromptTests {
         #expect(prompt.body != SystemPrompt.defaultBody)
     }
 
+    // MARK: - v40→v41 migration: $WIKICTL → bare wikictl
+
+    /// The v40→v41 migration replaces `$WIKICTL` with bare `wikictl` and
+    /// `$WIKICTL page upsert` → `wikictl page add` in stored system prompts.
+    /// Existing wikis seeded under the old default still carry `$WIKICTL`
+    /// instructions; the migration fixes them on next open.
+    @Test func v40ToV41MigratesDollarWikictlToBare() throws {
+        let url = tempDatabaseURL()
+
+        // 1. Create a fresh DB at the current schema (v41). Then stamp it
+        //    back to v40 and inject an old $WIKICTL-era prompt body.
+        do {
+            let store = try GRDBWikiStore(databaseURL: url)
+            _ = try store.getSystemPrompt()
+        }
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        let oldBody = """
+        # System Prompt (v40-era)
+
+        Always invoke it as `$WIKICTL`.
+
+        ## Commands
+
+        - `$WIKICTL page list`
+        - `$WIKICTL page upsert`
+        - `$WIKICTL page get`
+        - `$WIKICTL page delete`
+
+        Read back what you just wrote.
+        """
+        let sql = """
+        UPDATE system_prompt SET body_markdown = '\(oldBody.replacingOccurrences(of: "'", with: "''"))' WHERE id = 1;
+        PRAGMA user_version = 40;
+        """
+        #expect(sqlite3_exec(raw, sql, nil, nil, nil) == SQLITE_OK)
+
+        // 2. Reopen — the v40→v41 migration should fire.
+        let store = try GRDBWikiStore(databaseURL: url)
+        let prompt = try store.getSystemPrompt()
+
+        // 3. $WIKICTL is gone; bare wikictl is in its place.
+        #expect(!prompt.body.contains("$WIKICTL"),
+               "migration must replace all $WIKICTL references; body still contains it")
+        #expect(prompt.body.contains("wikictl page list"))
+        // page upsert → page add.
+        #expect(!prompt.body.contains("page upsert"),
+               "migration must replace 'page upsert' with 'page add'")
+        #expect(prompt.body.contains("wikictl page add"))
+        // Non-command content rides through.
+        #expect(prompt.body.contains("Read back what you just wrote."))
+        // user_version advanced to 41.
+        #expect(Int(store.pragmaValue("user_version")) == 41)
+    }
+
+    /// The v40→v41 migration is idempotent: re-opening an already-migrated
+    /// DB is a no-op (the `$WIKICTL` guard prevents double-processing).
+    @Test func v40ToV41MigrationIsIdempotent() throws {
+        let url = tempDatabaseURL()
+
+        // Same setup: stamp to v40 with an old $WIKICTL body.
+        do {
+            let store = try GRDBWikiStore(databaseURL: url)
+            _ = try store.getSystemPrompt()
+        }
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        #expect(sqlite3_exec(raw, """
+        UPDATE system_prompt SET body_markdown = 'Use $WIKICTL page upsert' WHERE id = 1;
+        PRAGMA user_version = 40;
+        """, nil, nil, nil) == SQLITE_OK)
+
+        // First open runs the migration.
+        let store1 = try GRDBWikiStore(databaseURL: url)
+        let prompt1 = try store1.getSystemPrompt()
+        #expect(!prompt1.body.contains("$WIKICTL"))
+        #expect(prompt1.body.contains("wikictl page add"))
+
+        // Second open: already at v41, migration is a no-op. Body unchanged.
+        let store2 = try GRDBWikiStore(databaseURL: url)
+        let prompt2 = try store2.getSystemPrompt()
+        #expect(prompt2.body == prompt1.body)
+    }
+
+    /// A v40 DB whose prompt does NOT contain `$WIKICTL` (user edited away
+    /// from the default) is untouched by the migration.
+    @Test func v40ToV41MigrationSkipsPromptWithoutDollarWikictl() throws {
+        let url = tempDatabaseURL()
+        let customBody = "# My custom prompt\n\nNo wikictl references here.\n"
+
+        do {
+            let store = try GRDBWikiStore(databaseURL: url)
+            try store.updateSystemPrompt(body: customBody)
+        }
+        // Stamp back to v40; the body has no $WIKICTL.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 40;", nil, nil, nil) == SQLITE_OK)
+
+        let store = try GRDBWikiStore(databaseURL: url)
+        let prompt = try store.getSystemPrompt()
+        #expect(prompt.body == customBody,
+               "migration must not touch a prompt that has no $WIKICTL")
+    }
+
     // MARK: - Change token advances on a prompt-only edit
 
     @Test func changeTokenAdvancesOnSystemPromptEdit() throws {

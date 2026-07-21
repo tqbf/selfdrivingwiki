@@ -57,7 +57,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 40
+    private static let currentSchemaVersion = 41
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1168,19 +1168,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // after it).
         if version < 40 {
             let columns = try Self.tableColumnInfo("chat_messages", in: db)
-            guard !columns.contains("summary") else {
-                try db.execute(sql: "PRAGMA user_version = 40;")
-                version = 40
-                return
-            }
-            try db.inTransaction(.immediate) {
-                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary TEXT;")
-                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_kind TEXT;")
-                try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_at REAL;")
-                return .commit
+            if !columns.contains("summary") {
+                try db.inTransaction(.immediate) {
+                    try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary TEXT;")
+                    try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_kind TEXT;")
+                    try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN summary_at REAL;")
+                    return .commit
+                }
             }
             try db.execute(sql: "PRAGMA user_version = 40;")
             version = 40
+        }
+
+        // v40→v41: migrate stored system prompts from `$WIKICTL` → bare
+        // `wikictl` (which is on PATH), and `wikictl page upsert` →
+        // `wikictl page add`. The default prompt was already updated, but
+        // existing wikis keep their seeded copy forever (`INSERT OR IGNORE`),
+        // and `$WIKICTL` doesn't always expand correctly in the agent's
+        // subprocess shell. Idempotent: a no-op on already-migrated prompts.
+        if version < 41 {
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT body_markdown FROM system_prompt WHERE id = 1;"
+            ),
+               let body = row["body_markdown"] as String?,
+               body.contains("$WIKICTL") {
+                let migrated = body
+                    .replacingOccurrences(of: "$WIKICTL", with: "wikictl")
+                    .replacingOccurrences(
+                        of: "wikictl page upsert", with: "wikictl page add"
+                    )
+                try db.execute(
+                    sql: "UPDATE system_prompt SET body_markdown = ?, updated_at = ? WHERE id = 1;",
+                    arguments: [migrated, Date.timeIntervalSinceReferenceDate]
+                )
+            }
+            try db.execute(sql: "PRAGMA user_version = 41;")
+            version = 41
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
