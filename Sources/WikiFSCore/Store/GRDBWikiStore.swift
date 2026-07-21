@@ -4518,7 +4518,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 LEFT JOIN activities act ON act.id = pv.activity_id
                 LEFT JOIN agents a ON a.id = act.agent_id
                 WHERE pv.page_id = ?
-                ORDER BY pv.id ASC;
+                ORDER BY pv.id DESC;
                 """,
                 arguments: [pageID.rawValue]
             )
