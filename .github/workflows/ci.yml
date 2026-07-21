@@ -78,10 +78,12 @@ jobs:
       - name: Install Swift
         uses: swift-actions/setup-swift@v2
         with:
-          # mlx-swift-lm declares swift-tools-version: 6.1; Swift 6.0
-          # can't resolve it. macOS CI uses Xcode (Swift 6.3+); Linux
-          # needs at least 6.1 to match.
-          swift-version: "6.1"
+          # mlx-swift (a transitive dep of mlx-swift-lm) declares
+          # swift-tools-version: 6.3.0 in its Package.swift. SwiftPM
+          # resolves ALL package deps even if unused on this platform,
+          # so we need Swift 6.3+ to parse the manifest. macOS CI uses
+          # Xcode (Swift 6.3+); Linux needs to match.
+          swift-version: "6.3"
       - name: Swift version
         run: swift --version
       - name: Generate codegen files (version + prompts)
