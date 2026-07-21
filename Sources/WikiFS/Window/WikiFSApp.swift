@@ -404,7 +404,9 @@ struct WikiFSApp: App {
                 fileProvider: fileProvider
             )
             .background(WindowBridgeProbe(bridge: openWindowBridge))
-            .appEnvironment(tracker: activityTracker)
+            .appEnvironment(
+                tracker: activityTracker,
+                openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
@@ -471,7 +473,9 @@ struct WikiFSApp: App {
                 fileProvider: fileProvider
             )
             .background(WindowBridgeProbe(bridge: openWindowBridge))
-            .appEnvironment(tracker: activityTracker)
+            .appEnvironment(
+                tracker: activityTracker,
+                openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
             }
@@ -805,9 +809,13 @@ extension FileProviderFacade {
 /// `ExtractionSettingsView`).
 extension View {
     @MainActor
-    func appEnvironment(tracker: QueueActivityTracker) -> some View {
+    func appEnvironment(
+        tracker: QueueActivityTracker,
+        openActivityWindow: (() -> Void)? = nil
+    ) -> some View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self
             .environment(tracker)
+            .environment(\.openActivityWindow, openActivityWindow)
     }
 }

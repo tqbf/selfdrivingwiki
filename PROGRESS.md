@@ -2,6 +2,29 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-20 — Provenance panel run names + clickable entries (#745, branch `provenance-panel`)
+
+**Problem.** The Provenance panel showed the raw chat ULID (`chat:<ULID>`)
+for chat-driven page edits and raw `agent:<kind>` for one-shot runs. Users
+couldn't identify which run produced a version or navigate to it.
+
+**Changes.** Added `runTitle: String?` to `PageOrigin` — the chat's display
+title, resolved via a correlated subquery that JOINs the `chats` table on
+the stripped chat ULID (`substr(a.name, 6)`). Rewrote `ProvenancePanel`:
+`agentLabel` now shows the chat title (or "Deleted chat" for deleted chats)
+instead of the raw ULID, and friendly labels ("Ingestion" / "Lint" / "Query")
+for `agent:<kind>` runs. History rows are now clickable:
+`.contentShape(Rectangle())` + `.hoverRowBackground()` + `.onTapGesture`.
+Click routing: `chat:<id>` → `store.openTab(.chat(id))`; `agent:<kind>` →
+Activity window via a new `openActivityWindow` environment bridge
+(`OpenWindowBridge.openActivityWindow` → `MenuBarItemController.showQueueWindow`).
+
+**Files.** `PageOrigin.swift` (+runTitle), `GRDBWikiStore.swift` (SQL subquery
++ decoder), `PageDetailView.swift` (panel rewrite), `OpenWindowBridge.swift`
+(+openActivityWindow), `MenuBarItemController.swift` (wire in start()),
+`WikiFSApp.swift` (inject into environment), new
+`ActivityWindowEnvironmentKey.swift`. Build + test pass (3253 tests).
+
 ## 2026-07-20 — Queue a chat message while the agent is working (branch `chat-queue`, PR #751)
 
 **Problem.** While the agent was generating a chat turn, the composer was
