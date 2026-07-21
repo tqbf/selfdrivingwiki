@@ -98,6 +98,21 @@ public enum EmbeddingService {
         return available
     }
 
+    #if DEBUG
+    /// Test-only hook: install a stub embedder so the Swift-side cosine path
+    /// (`searchSimilar*`) can be exercised under `swift test` without the
+    /// app-gated NLEmbedding/MiniLM. The caller is responsible for calling
+    /// ``resetTestEmbedder`` to restore the default (nil) state afterwards.
+    public static func installTestEmbedder(_ embedder: any Embedder) {
+        lock.withLock { _embedder = embedder }
+    }
+
+    /// Test-only: clear any embedder installed via ``installTestEmbedder``.
+    public static func resetTestEmbedder() {
+        lock.withLock { _embedder = nil }
+    }
+    #endif
+
     /// One Float32 BLOB for a short string (a search query). Returns `nil` when the
     /// embedder is unavailable.
     public static func embeddingBlob(for text: String) -> Data? {
