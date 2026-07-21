@@ -835,36 +835,7 @@ private struct ProviderEditorView: View {
                 }
 
                 DisclosureGroup(isExpanded: $showAdvanced) {
-                    Section {
-                        ForEach($envRows) { $row in
-                            HStack {
-                                TextField("KEY", text: $row.key)
-                                    .fontDesign(.monospaced)
-                                    .frame(maxWidth: 160)
-                                TextField("value", text: $row.value)
-                                    .fontDesign(.monospaced)
-                                Button {
-                                    envRows.removeAll { $0.id == row.id }
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                        Button {
-                            envRows.append(EnvRow(key: "", value: ""))
-                        } label: {
-                            Label("Add Variable", systemImage: "plus")
-                        }
-                        .buttonStyle(.borderless)
-                    } header: {
-                        Text("Environment")
-                    } footer: {
-                        Text("Non-secret configuration only — API keys and other secrets belong in the field below, never here (this list is stored in plain JSON).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
+                    envVarsSection
                     Section {
                         SecureField("API Key", text: $apiKey, prompt: Text("optional"))
                     } header: {
@@ -904,7 +875,7 @@ private struct ProviderEditorView: View {
                     // (`SpawnModelGuard`). The "Provider default" picker option
                     // (tag "") counts as no selection: it leaves the provider
                     // with no selectedModelId.
-                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty || selectedModelId.isEmpty)
+                    .disabled(!canSave)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -938,6 +909,156 @@ private struct ProviderEditorView: View {
                 isAvailable = if case .found = result { true } else { false }
             }
         }
+    }
+
+    // MARK: - Env-var editor (#738)
+
+    /// The env-var Section with tightened layout, inline validation hints, and
+    /// suggested-keys guidance. Replaces the old bare KEY/value `HStack` list
+    /// with aligned columns, per-row red error text, and a muted common-keys
+    /// hint line surfaced from `EnvVarHints`.
+    @ViewBuilder
+    private var envVarsSection: some View {
+        Section {
+            ForEach($envRows) { $row in
+                envRowView(for: $row)
+            }
+            Button {
+                envRows.append(EnvRow(key: "", value: ""))
+            } label: {
+                Label("Add Variable", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+        } header: {
+            HStack(spacing: 4) {
+                Text("Environment")
+                if let hintError = envSectionError {
+                    Spacer()
+                    Text(hintError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Non-secret configuration only — API keys and other secrets belong in the field below, never here (this list is stored in plain JSON).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let hints = EnvVarHints.hints(forProviderID: originalID),
+                   !hints.isEmpty {
+                    suggestedKeysView(hints)
+                }
+            }
+        }
+    }
+
+    /// One env-var row: aligned KEY/value columns + remove button + a red
+    /// per-row error hint when the key is empty-with-value or duplicated.
+    @ViewBuilder
+    private func envRowView(for row: Binding<EnvRow>) -> some View {
+        let trimmedKey = row.wrappedValue.key.trimmingCharacters(in: .whitespaces)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                TextField("KEY", text: row.key)
+                    .fontDesign(.monospaced)
+                    .frame(maxWidth: 160)
+                TextField("value", text: row.value)
+                    .fontDesign(.monospaced)
+                Button {
+                    envRows.removeAll { $0.id == row.wrappedValue.id }
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove variable")
+            }
+            // Per-row inline error: empty key with a non-empty value, or a
+            // duplicated key. By design we do NOT flag a fully-empty row
+            // (both key+value blank) — it gets dropped on save, matching the
+            // pre-existing `save()` behavior.
+            if let rowError = envRowError(for: trimmedKey, rawRow: row.wrappedValue) {
+                Text(rowError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    /// Muted "Common variables" hint line listing the suggested keys for the
+    /// current provider, so users don't have to guess exact names when
+    /// following troubleshooting guidance (#733 / #737).
+    @ViewBuilder
+    private func suggestedKeysView(_ hints: [EnvVarHints.Hint]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Common variables for this provider:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(hints, id: \.key) { hint in
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(hint.key)
+                        .font(.caption)
+                        .fontDesign(.monospaced)
+                    Text("— \(hint.description)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    // MARK: Env-var validation
+
+    /// Set of key strings (trimmed) that appear more than once across the
+    /// env rows. Empty when no duplicates. Computed on every render but cheap
+    /// (env lists are short — at most a handful of rows).
+    private var duplicateKeys: Set<String> {
+        var counts: [String: Int] = [:]
+        for row in envRows {
+            let key = row.key.trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { continue }
+            counts[key, default: 0] += 1
+        }
+        return Set(counts.filter { $0.value > 1 }.keys)
+    }
+
+    /// A per-row error message for the given trimmed key, or `nil` when the
+    /// row is valid. A fully-empty row (empty key + empty value) is NOT an
+    /// error — it gets dropped on save.
+    private func envRowError(for trimmedKey: String, rawRow: EnvRow) -> String? {
+        if trimmedKey.isEmpty {
+            // Only flag when the value is non-empty — a fully blank row is a
+            // not-yet-filled row, which is fine (dropped on save).
+            return rawRow.value.isEmpty ? nil : "Key is required"
+        }
+        if duplicateKeys.contains(trimmedKey) {
+            return "Duplicate key"
+        }
+        return nil
+    }
+
+    /// A section-level error summary (shown in the header) when there are any
+    /// duplicate or empty-key-with-value rows. `nil` when env rows are clean.
+    private var envSectionError: String? {
+        if !duplicateKeys.isEmpty {
+            return "Resolve duplicate keys"
+        }
+        for row in envRows {
+            let key = row.key.trimmingCharacters(in: .whitespaces)
+            if key.isEmpty && !row.value.isEmpty {
+                return "Resolve empty keys"
+            }
+        }
+        return nil
+    }
+
+    /// Whether the editor can be saved. Combines the pre-existing model/label
+    /// guards (#663) with the #738 env-var validation (no duplicate or
+    /// empty-with-value keys).
+    private var canSave: Bool {
+        let labelClean = label.trimmingCharacters(in: .whitespaces)
+        guard !labelClean.isEmpty, !selectedModelId.isEmpty else { return false }
+        return envSectionError == nil
     }
 
     /// #640: drive the ACP model-discovery probe for THIS provider. Mirrors
