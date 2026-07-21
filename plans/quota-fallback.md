@@ -78,7 +78,22 @@ references a backend the executor won't use. Reconciliation:
 
 ---
 
-## File change summary
+## Follow-up: Active quota probing (not needed for v1)
+
+Paseo (`~/work/paseo/packages/server/src/services/quota-fetcher/`) uses **active
+API polling** instead of passive error-text heuristics:
+
+- **z.ai:** `GET https://api.z.ai/api/biz/subscription/list` (Bearer token from
+  `ZAI_API_KEY`/`GLM_API_KEY`). Returns subscription status + validity.
+- **Claude:** OAuth credentials from keychain, fetches from Claude's usage API
+  (five_hour + seven_day utilization windows with `resets_at` timestamps).
+
+The v1 passive approach (error-text heuristics on `JSONRPCError`) is simpler
+and needs no additional auth. The active probe could be used as a follow-up
+enhancement for the auto-revive path — instead of guessing reset times (5h/7d
+defaults), the coordinator could optionally poll the provider's quota API to
+check if a provider has revived. A `ProviderUsageFetcher` protocol (one method:
+`fetchUsage() async throws -> ProviderUsage`) would mirror paseo's interface.
 
 | File | Change |
 |------|--------|

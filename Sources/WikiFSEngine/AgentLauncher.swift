@@ -1497,7 +1497,7 @@ public final class AgentLauncher {
             stagedSourcePaths: stagedSourcePaths,
             sourceIDs: sourceIDs)
 
-        guard let plannerSession = await runPhase(
+        guard let plannerSession = await runPhaseOutcome(
             backend: backend,
             profile: plannerProfile,
             systemPrompt: systemPrompt,
@@ -1612,7 +1612,7 @@ public final class AgentLauncher {
                 // is unsupported (or the planner session was already closed), the
                 // runPhase helper falls back to a fresh `backend.start()`.
                 let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
-                if let session = await runPhase(
+                if let session = await runPhaseOutcome(
                     backend: backend,
                     profile: executorProfile,
                     systemPrompt: systemPrompt,
@@ -1667,7 +1667,7 @@ public final class AgentLauncher {
             sourceIDs: sourceIDs)
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
         currentIngestPhase = "finalizer"
-        if let session = await runPhase(
+        if let session = await runPhaseOutcome(
             backend: backend,
             profile: finalizerProfile,
             systemPrompt: systemPrompt,
@@ -1921,7 +1921,20 @@ public final class AgentLauncher {
     /// forked session inherits the parent's context — no `backend.start()` call
     /// is needed. If fork returns nil (unsupported), falls back to `backend.start()`
     /// (fresh session, current behavior).
-    private func runPhase(
+    /// #727: the typed outcome of `runPhase`, so the launcher's fallback loop
+    /// can distinguish quota-exhaustion (retry on next provider) from other
+    /// failures (no retry).
+    enum PhaseOutcome {
+        case success(SessionHandle)
+        case failed              // non-quota failure (spawn error, process died, ceiling)
+        case quotaExhausted(QuotaSignal)   // ← drives the fallback walk
+    }
+
+    /// #727: wraps `runPhase` for the existing call sites. In Slice 3 this is
+    /// behavior-preserving — it returns the session on `.success` and nil on
+    /// `.failed` or `.quotaExhausted` (no retry yet). Slice 4 replaces this
+    /// with `runPhaseWithFallback` which walks the chain on `.quotaExhausted`.
+    private func runPhaseOutcome(
         backend: AgentBackend,
         profile: BackendProfile,
         systemPrompt: String,
@@ -1931,6 +1944,37 @@ public final class AgentLauncher {
         baselineModelId: String?,
         forkFrom: SessionHandle? = nil
     ) async -> SessionHandle? {
+        let outcome = await runPhase(
+            backend: backend,
+            profile: profile,
+            systemPrompt: systemPrompt,
+            prompt: prompt,
+            phaseName: phaseName,
+            stage: stage,
+            baselineModelId: baselineModelId,
+            forkFrom: forkFrom)
+        switch outcome {
+        case .success(let session):
+            return session
+        case .quotaExhausted:
+            // Slice 3: no retry yet — treat as a failure (behavior-preserving).
+            // Slice 4 wires this to the fallback loop.
+            return nil
+        case .failed:
+            return nil
+        }
+    }
+
+    private func runPhase(
+        backend: AgentBackend,
+        profile: BackendProfile,
+        systemPrompt: String,
+        prompt: String,
+        phaseName: String,
+        stage: ACPIngestStage,
+        baselineModelId: String?,
+        forkFrom: SessionHandle? = nil
+    ) async -> PhaseOutcome {
         self.backend = backend
         // #544 live progress: install the live-usage callback on this phase's
         // backend so usage_updates stream to the Activity window during the
@@ -1997,9 +2041,24 @@ public final class AgentLauncher {
 
             setGenerating(true)
             let stream = await backend.send(TurnInput(userText: prompt), into: session)
+            // #727: capture a quota signal if a `.turnFailed(.quotaExhausted)`
+            // appears in the stream. Do NOT return mid-iteration — break the
+            // loop so the AsyncStream drains to completion (or is cancelled),
+            // then return the outcome after the loop.
+            var pendingQuota: QuotaSignal? = nil
             for await event in stream {
                 lastActivityAt = Date()
                 mergeOrAppend(event)
+                if case .turnFailed(let reason) = event,
+                   case .quotaExhausted(let provider, let resetTime) = reason {
+                    pendingQuota = QuotaSignal(
+                        providerId: provider,
+                        resetTime: resetTime,
+                        kind: ProviderQuotaDetector.providerFamily(forProviderId: provider) == .zai
+                            ? .zaiErrorCode(0)  // placeholder kind — updated from detector below
+                            : .claudeSession
+                    )
+                }
                 if AgentEvent.endsGeneration(event) {
                     setGenerating(false)
                     flushTranscript()
@@ -2008,10 +2067,22 @@ public final class AgentLauncher {
                 }
             }
             DebugLog.agent("runACPIngest[\(phaseName)]: stream drained")
-            return session
+            if let signal = pendingQuota {
+                return .quotaExhausted(signal)
+            }
+            return .success(session)
         } catch {
+            // #727: check whether the start() error is itself a quota error
+            // (rare — quota usually surfaces at sendPrompt time, but some
+            // agents reject at auth).
+            if let signal = ProviderQuotaDetector.detect(
+                providerId: profile.providerHints[HintKey.acpProviderId.rawValue] ?? "unknown",
+                error: error
+            ) {
+                return .quotaExhausted(signal)
+            }
             DebugLog.agent("runACPIngest[\(phaseName)]: FAILED: \(error.localizedDescription)")
-            return nil
+            return .failed
         }
     }
 
@@ -2040,7 +2111,7 @@ public final class AgentLauncher {
         var promptText = operation.prompt(wikiRoot: wikiRoot)
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
 
-        if let session = await runPhase(
+        if let session = await runPhaseOutcome(
             backend: backend,
             profile: profile,
             systemPrompt: systemPrompt,
