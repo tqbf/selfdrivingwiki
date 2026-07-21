@@ -243,7 +243,8 @@ let package = Package(
         .testTarget(
             name: "WikiFSCoreTests",
             dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFSEngine",
-                           .product(name: "ACPModel", package: "swift-acp")],
+                           .product(name: "ACPModel", package: "swift-acp"),
+                           .product(name: "Markdown", package: "swift-markdown")],
             path: "Tests/WikiFSTests",
             swiftSettings: strictSwiftSettings
         ),
