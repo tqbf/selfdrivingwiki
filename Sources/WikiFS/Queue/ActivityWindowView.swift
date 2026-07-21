@@ -309,11 +309,6 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func contextMenu(for item: QueueItem) -> some View {
-        if copyableText(for: item) != nil {
-            Button("Copy Transcript", systemImage: "doc.on.doc") {
-                copyTranscript(for: item)
-            }
-        }
         let debugURL = activityTracker.debugURL(for: item.id)
         if let debugURL {
             Divider()
@@ -516,12 +511,6 @@ struct ActivityWindowView: View {
                 }
             }
             Spacer()
-            if copyableText(for: item) != nil {
-                Button("Copy Transcript", systemImage: "doc.on.doc") {
-                    copyTranscript(for: item)
-                }
-                .help("Copy transcript as plain text")
-            }
             revealMenu(for: item)
             switch item.state {
             case .running, .queued:
@@ -747,13 +736,6 @@ struct ActivityWindowView: View {
 
         let progressText = activityTracker.progressLog(for: item.id)
         return progressText.isEmpty ? nil : progressText
-    }
-
-    /// Copy the selected item's transcript to the pasteboard as plain text.
-    private func copyTranscript(for item: QueueItem) {
-        guard let text = copyableText(for: item) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 
     /// #635: retry the given queue item WITHOUT swallowing the throw. The
