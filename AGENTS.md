@@ -100,6 +100,41 @@ agents, NOT Polytoken):
   read the stack at the moment of death. Reach for this *before* rebuild-and-
   guess when there's no `.ips`.
 
+* **Swift async bridging of nullable Objective-C object returns can trap
+  (`EXC_BREAKPOINT`/`SIGTRAP`) instead of throwing (#756).** When an Obj-C
+  method's completion handler is `(NSURL?, NSError?)` (or any nullable object
+  pointer: `URL?`, `Array?`, `Dictionary?`), Swift's `async` bridge imports it
+  as a **non-optional** `async throws -> URL` and routes nil through
+  `<Type>._unconditionallyBridgeFromObjectiveC(_:)`, which **traps before the
+  `throws`/`try` machinery can intervene** — an uncatchable runtime death, not
+  a catchable error. `try await`, `CheckedContinuation` wrappers, and timeouts
+  give **no protection**; the trap is before they run.
+  - **The rule:** before `await`ing an Apple `async` API whose bridged return is
+    a non-optional `URL`/`NSURL` (or non-optional `Array`/`Dictionary` where the
+    underlying completion is nullable), check Apple's docs for nil as a
+    documented return. If nil is possible, **use the completion-handler overload
+    directly** and branch on the `URL?`:
+    ```swift
+    // BAD — traps on nil:
+    let url = try await manager.getUserVisibleURL(for: id)
+    // GOOD — nil becomes a recoverable error:
+    manager.getUserVisibleURL(for: id) { url, error in
+        if let url { resume(.success(url)) }
+        else { resume(.failure(error ?? MyError.urlNil)) }
+    }
+    ```
+  - **Known-affected families to watch for:** `NSFileProviderManager.getUserVisibleURL(for:)`
+    (fixed at `FileProviderFacade.userVisibleURL`), `FileManager.url(for:in:appropriateFor:create:)`,
+    `NSItemProvider.loadObject(ofClass:)`/`loadItem(forTypeIdentifier:)`, and any
+    future `NSFileProviderManager`/`NSFileCoordinator` API returning a nullable URL.
+    `Void`-returning bridges (`add(domain)`, `remove(domain)`) are safe; `[NSFileProviderDomain]`
+    array bridges fail-soft to `[]` in this codebase (already wrapped in `try?` + `?? []`).
+    `FileProviderExtension` overrides are server-side callbacks *we implement* with the
+    completion-handler signature — no async bridge, no trap surface.
+  - Audit recipe if a new unexplained `EXC_BREAKPOINT`/`SIGTRAP` appears: `rg -n 'try await .*(getUserVisibleURL|urlForItem|url\(for:|loadObject|loadItem)' Sources/`
+    and look for any non-optional `URL` await where the Obj-C completion is `(NSURL?, …)`.
+    See `plans/fileprovider-crash-fix.md` for the full root-cause writeup.
+
 * **SQLite concurrency (graph-model Phase 0): the store is method-atomic —
   every `SQLiteWikiStore` entry point holds an internal recursive lock; writes
   still flow through the `@MainActor` model; off-main reads go through
