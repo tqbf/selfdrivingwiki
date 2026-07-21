@@ -2681,7 +2681,8 @@ public final class WikiStoreModel {
             let mimeType: String? = nil
             #endif
             let provider = MarkdownFolderMaterializer(
-                filename: file.filename, data: file.data, mimeType: mimeType)
+                filename: file.filename, data: file.data, mimeType: mimeType,
+                directoryURL: directory)
             do {
                 let materialized = try await provider.materialize()
                 let summary = try storeMaterialized(materialized)

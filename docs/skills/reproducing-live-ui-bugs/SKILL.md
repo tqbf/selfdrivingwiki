@@ -1,5 +1,5 @@
 ---
-description: Steps for debugging a live UI bug that passes all unit tests but fails in the running app, when you cannot see the screen.
+description: Steps for debugging a live UI bug that passes all unit tests but fails in the running app, when you cannot see the screen. Also covers SwiftUI runtime issues that only Xcode displays — "Modifying state during view update", purple runtime warnings, Hang Risk — including how to capture them from the CLI via `log stream` and bisect a view body to find the real source.
 ---
 
 # Debugging a live UI bug that passes tests
@@ -132,6 +132,55 @@ Two wiring failures this playbook has actually surfaced:
 - Assert after polling — `apply`-style calls are fire-and-forget
   `evaluateJavaScript`, so the effect lands asynchronously.
 
+## SwiftUI runtime issues ("Modifying state during view update")
+
+A separate invisible-failure class: SwiftUI emits **runtime issues**, not compile
+warnings. They appear in **no build log**, and `swift test` does not display
+them — a clean build plus a green CLI test run is *not* evidence they're absent.
+Xcode shows them; everything else looks fine.
+
+**Capture them from the CLI.** They are `os_log` faults to a system subsystem:
+
+```sh
+/usr/bin/log stream --predicate \
+  'subsystem == "com.apple.runtime-issues" and category == "SwiftUI"' \
+  --style compact
+```
+
+Run that alongside the tests (start the stream, `sleep 2`, run, `sleep 3`, kill)
+and count `Modifying state`. That turns an Xcode-only symptom into a scriptable
+pass/fail you can bisect against. Drop the `category` clause to also see
+`Hang Risk` (priority inversions) and other categories.
+
+**Choose the runner deliberately.** `swift test` mounts hosted views *without a
+window server*, so some suites never lay out and stay silent; `xcodebuild`
+renders for real and exposes strictly more. One real case: xcodebuild surfaced 8
+occurrences where `swift test` showed 2. **Verify UI fixes under xcodebuild.**
+
+**Distrust the reported location.** The warning names whichever view body was
+mid-evaluation when the graph committed — *not* the code that wrote the state.
+A real case pointed at `PageDetailView.editorContent`; the write was in
+`WikiReaderView`, a different file two layers down, and `PageDetailView` needed
+no change at all. Treat the location as a starting point, never a conclusion.
+
+**Bisect the body — don't theorize.** With the capture loop above as the oracle:
+
+1. Establish a baseline count on the smallest failing test (aim for a sub-second
+   incremental run).
+2. Wrap subtrees of the suspect `body` in `if false { … }`, re-run, re-count.
+3. Narrow until the count drops to 0; the last subtree removed owns the write.
+4. Read the representable that subtree mounts, and check its Coordinator for
+   `@State`/`@Binding` writes reachable from `makeNSView`/`updateNSView`.
+5. `diff` the file against a backup afterwards to prove the scaffolding is gone.
+
+Watch for a branch rendering that you didn't expect: state seeded in `.onAppear`
+means the *other* branch renders on first paint, so a view can warn from code the
+test looks like it never exercises. That detail is usually what makes the counts
+across tests look inexplicable.
+
+The underlying invariant, and the defer/suppress fix patterns, are in AGENTS.md
+("Never write SwiftUI state synchronously from an `NSViewRepresentable`…").
+
 ## Anti-patterns to avoid
 
 - Theorizing about content without reading the real DB row.
@@ -142,3 +191,8 @@ Two wiring failures this playbook has actually surfaced:
   host the **real** container so the lifecycle is exercised.
 - `print`-based logging that vanishes when the app isn't launched from a
   terminal.
+- Treating "the build is clean" or "`swift test` passed" as proof a SwiftUI
+  runtime issue is fixed — neither runner reports them. Re-measure with the
+  `log stream` capture above, under `xcodebuild`, and show the count going to 0.
+- Trusting the file/method the runtime issue names without confirming a state
+  write actually lives there.
