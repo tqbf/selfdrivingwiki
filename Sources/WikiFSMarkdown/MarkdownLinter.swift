@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(JavaScriptCore)
 import JavaScriptCore
+#endif
 
 // MARK: - MarkdownLinter
 
@@ -98,6 +100,7 @@ public final class MarkdownLinter: @unchecked Sendable {
         ]
     }
 
+    #if canImport(JavaScriptCore)
     private let context: JSContext
     private let lint: JSValue
     private let applyFixes: JSValue
@@ -198,6 +201,13 @@ public final class MarkdownLinter: @unchecked Sendable {
         return FixOutcome(fixed: fixed, unfixable: unfixable)
     }
 
+    #else
+    // Linux stub: JavaScriptCore is unavailable. All methods are no-ops.
+    public init?(jsSource: String) { return nil }
+    public func lint(markdown: String) -> [LintResult] { return [] }
+    public func fix(markdown: String) -> FixOutcome { FixOutcome(fixed: markdown, unfixable: []) }
+    #endif
+
     // MARK: - describe
 
     /// Format findings into a human/agent-readable message (one header line +
@@ -256,6 +266,7 @@ public final class MarkdownLinter: @unchecked Sendable {
     /// every save. `let` → initialized exactly once (thread-safe dispatch_once).
     public static let shared: MarkdownLinter? = MarkdownLinter.loadDefault()
 
+    #if canImport(JavaScriptCore)
     // MARK: - finding mapping
 
     /// Map a raw markdownlint finding dictionary to `LintResult`.
@@ -278,4 +289,5 @@ public final class MarkdownLinter: @unchecked Sendable {
             isFixable: isFixable
         )
     }
+    #endif
 }
