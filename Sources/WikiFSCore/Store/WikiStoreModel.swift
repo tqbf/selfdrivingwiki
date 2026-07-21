@@ -303,17 +303,14 @@ public final class WikiStoreModel {
     /// derived index) — search silently falls back to FTS5 in that case.
     #if os(macOS)
     @ObservationIgnored public var tantivySearch: TantivySearchService?
-<<<<<<< HEAD
     #else
     // Linux: Tantivy is unavailable — the search path uses nil bm25Leg (FTS5 fallback).
     @ObservationIgnored public var tantivySearch: Any?
     #endif
-=======
     /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
     /// `WikiSession` → `SessionManager` → `WikiFSApp`. `nil` means fall back to
     /// the tag-based `HTMLToMarkdown` path (CI, clean dev before `make build`).
     @ObservationIgnored public var htmlMarkdownExtractor: (any HtmlMarkdownExtractor)?
->>>>>>> 11bd242 (defuddle extraction service + ingestion wiring (#761))
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
 
