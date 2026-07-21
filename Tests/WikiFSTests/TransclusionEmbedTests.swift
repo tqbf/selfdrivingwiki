@@ -26,6 +26,29 @@ struct TransclusionEmbedTests {
         #expect(!out.contains("!"))               // bang consumed
     }
 
+    /// #725 regression: the JS `postEmbed` guard reads `data-sdw-state` from the
+    /// `<details>` element (`details.getAttribute('data-sdw-state')`). If the
+    /// `empty` initial state is on the inner `.sdw-embed-body` div instead of the
+    /// `<details>` element itself, `state` is `''` → the guard
+    /// `if(state !== 'empty') return` bails → no `postMessage` → no fetch →
+    /// "Loading…" forever. Assert the attribute is on the `<details>` host, not
+    /// just the body div.
+    @Test func pageEmbedStateAttrOnDetailsHost() {
+        let out = WikiLinkMarkdown.linkified(
+            "![[Home]]", isResolved: { _, _ in true })
+        // The <details> element must carry data-sdw-state="empty" — the JS reads
+        // it from the details host, not the inner body div.
+        #expect(out.contains("<details class=\"sdw-transclusion\""))
+        // Find the details tag and verify it has the state attr
+        let detailsRange = out.range(of: "<details class=\"sdw-transclusion\"")
+        #expect(detailsRange != nil)
+        let afterDetails = String(out[detailsRange!.upperBound...])
+        let summaryRange = afterDetails.range(of: ">")  // end of the details opening tag
+        #expect(summaryRange != nil)
+        let tagContents = String(afterDetails[..<summaryRange!.lowerBound])
+        #expect(tagContents.contains("data-sdw-state=\"empty\""))
+    }
+
     @Test func pageEmbedIsDistinctFromCiteLink() {
         let out = WikiLinkMarkdown.linkified(
             "[[Home]] and ![[Home]]", isResolved: { _, _ in true })

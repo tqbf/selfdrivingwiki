@@ -5,34 +5,37 @@ Fix #725: page/source embeds (`![[PageName]]`, `![[source:X]]`) render the
 collapsed `<details>` with the right title, but on expand the body stays on
 "Loading…" forever. The lazy JS→Swift fetch never starts.
 
-## Root cause (HIGH confidence — see tmp/sdw-plans/embed-loading-rootcause.md)
-`Sources/WikiFS/Reader/WikiReaderView.swift:875` — the `embedFetch`
-`WKScriptMessageHandler`:
+## Root cause (CONFIRMED at runtime — see tmp/sdw-plans/embed-loading-rootcause.md)
+**Two bugs**, both required to produce the symptom:
 
-```swift
-func userContentController(_ …, didReceive message: WKScriptMessage) {
-    guard let view = target,
-          let body = message.body as? [String: String] else { return }   // ❌ ALWAYS FAILS
-    view.coordinator?.handleEmbedFetch(body: body)
-}
+### Bug 1: `data-sdw-state` on wrong element (PRIMARY — JS never fires)
+`Sources/WikiFSLinks/WikiLinkMarkdown.swift:736` — `transclusionEmbedHTML` emits
+`data-sdw-state="empty"` on the **inner `.sdw-embed-body` div**:
+```html
+<details class="sdw-transclusion" ... >  ← NO data-sdw-state
+  <summary>…</summary>
+  <div class="sdw-embed-body" data-sdw-state="empty">Loading…</div>
+</details>
 ```
 
-The JS posts a **plain object literal** (`WikiReaderView.swift:832-834`):
-`window.webkit.messageHandlers.embedFetch.postMessage({ nodeId, kind, id, target, path, name })`.
-WKWebView bridges a JS object via `postMessage` to an `NSDictionary` whose
-values are boxed as **`Any`** (not `String`). The downcast `as? [String: String]`
-requires *every* value to be a `String`; against the `Any`-boxed dictionary it
-**always fails** → `body == nil` → `guard … else { return }` silently drops the
-message → no fetch → "Loading…" forever, no log, no error. Exact symptom match.
+But the JS `postEmbed` (`WikiReaderView.swift:821`) reads it from the `<details>` element:
+```js
+var state = details.getAttribute('data-sdw-state') || '';  // ← reads from <details>
+if(state !== 'empty'){ return; }   // ← state is '' → ALWAYS RETURNS → no postMessage
+```
 
-**Ruled out with evidence** (all verified correct): WKUserScript timing (re-injects
-on every `loadHTMLString`, same pattern as the working hover listener +
-MutationObserver safety net); `embedProxy`→Coordinator wiring; the
-`querySelectorAll`/`.sdw-embed-body`/`data-sdw-state="empty"` selectors (match
-emitted HTML); `processEmbedFetch` fetch/readPool/error-handling (no bare
-`try?`). The existing `TransclusionEmbedTests` construct `Coordinator()` directly
-and call `processEmbedFetch(body:)` with a literal `[String: String]` — they
-**bypass the broken bridge cast**, which is why the bug shipped.
+`sdwInjectEmbed` sets `data-sdw-state` on **both** the host and body:
+```js
+host.setAttribute('data-sdw-state', 'loaded');   // sets on <details>
+body.setAttribute('data-sdw-state', 'loaded');   // sets on inner div
+```
+
+So the JS was designed for the initial `empty` state to be on the `<details>` (host), but the HTML emitted it on the inner div. **The message handler was never called** — confirmed by the absence of ANY `embed-fetch` log line at runtime.
+
+### Bug 2: `WKScriptMessageHandler` cast always fails (SECONDARY — would fail even if JS fired)
+`Sources/WikiFS/Reader/WikiReaderView.swift:875` — the cast `message.body as? [String: String]`
+always fails because WKWebView bridges JS object literals to `NSDictionary` with `Any`-boxed
+values. Fixed by `coerceBody(_:)` casting to `[String: Any]` first.
 
 ## Fix
 1. **Swap the cast** to the type the bridge actually delivers (`[String: Any]`),
