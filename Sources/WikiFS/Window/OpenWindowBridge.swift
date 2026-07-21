@@ -37,6 +37,12 @@ final class OpenWindowBridge {
     /// item is AppKit and can't read SwiftUI environment values directly).
     var openSettings: (() -> Void)?
 
+    /// Opens the Activity (queue) window for `.ingestion` — the window that
+    /// shows ingestion and lint runs (#745). Set by `MenuBarItemController`
+    /// when it creates the window. Used by the Provenance panel to navigate
+    /// from a provenance entry to the run that produced it.
+    var openActivityWindow: (() -> Void)?
+
     /// Opens Settings on a specific tab. Sets the `@AppStorage` key that the
     /// Settings `TabView(selection:)` binds to, then calls `openSettings`.
     /// `tabRawValue` is one of: "about", "zotero", "extraction", "agents".

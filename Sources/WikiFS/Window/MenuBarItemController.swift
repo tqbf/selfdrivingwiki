@@ -80,6 +80,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         guard statusItem == nil else { return }
         DebugLog.tabs("MenuBarItemController.start: creating status item")
 
+        // #745: wire the Activity window opener so the Provenance panel can
+        // navigate to it from an `agent:<kind>` provenance entry. Done in
+        // `start()` (not `init`) because the closure captures `self`.
+        openWindowBridge.openActivityWindow = { [weak self] in
+            self?.showQueueWindow(for: .ingestion)
+        }
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
 

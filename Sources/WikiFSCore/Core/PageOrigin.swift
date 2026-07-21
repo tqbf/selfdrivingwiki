@@ -42,6 +42,13 @@ public struct PageOrigin: Sendable, Equatable {
     /// Optional activity `external_ref` (run dir or chatID). Not yet
     /// populated by the write path (Phase 2).
     public let externalRef: String?
+    /// A human-readable run name resolved from the provenance payload (#745).
+    /// For `chat:<id>` agents this is the chat's display title (LEFT JOIN'd
+    /// from the `chats` table on the stripped chat ULID). For `agent:<kind>`
+    /// one-shot runs, this is `nil` (the `agentKind` + `activityKind` provide
+    /// the label). `nil` when the chat has been deleted or the agent is not a
+    /// chat-backed run.
+    public let runTitle: String?
     /// When the save committed (the activity's `started_at`/`ended_at`,
     /// which match `page_versions.saved_at`).
     public let savedAt: Date
@@ -55,6 +62,7 @@ public struct PageOrigin: Sendable, Equatable {
         activityKind: String,
         plan: String?,
         externalRef: String?,
+        runTitle: String? = nil,
         savedAt: Date
     ) {
         self.versionID = versionID
@@ -65,6 +73,7 @@ public struct PageOrigin: Sendable, Equatable {
         self.activityKind = activityKind
         self.plan = plan
         self.externalRef = externalRef
+        self.runTitle = runTitle
         self.savedAt = savedAt
     }
 }

@@ -4410,10 +4410,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// migrations). READ-ONLY → emits no `ResourceChangeEvent`.
     public func pageOrigin(pageID: PageID) throws -> PageOrigin? {
         try dbWriter.read { db in
+            // The `runTitle` column (#745): for `chat:<id>` agents, LEFT JOIN the
+            // `chats` table on the stripped chat ID to resolve the chat's display
+            // title. `substr(a.name, 6)` strips the `chat:` prefix (5 chars + 1).
+            // Non-chat agents (agent:*, user, legacy-import) produce NULL →
+            // `runTitle` degrades to nil.
             let cols = """
             pv.id, pv.title, pv.blob_hash,
             a.name, a.kind,
             act.kind, act.plan, act.external_ref,
+            (SELECT c.title FROM chats c WHERE c.id = substr(a.name, 6) AND a.name LIKE 'chat:%'),
             pv.saved_at
             """
             // 1. Prefer the active ref (matches pageHeadVersionIDLocked).
@@ -4459,10 +4465,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `tryAmendPageVersion`). Read-only: emits nothing.
     public func pageEditHistory(pageID: PageID) throws -> [PageOrigin] {
         try dbWriter.read { db in
+            // Same `runTitle` subquery as `pageOrigin` (#745) — resolves the chat
+            // title for `chat:<id>` agents; NULL for other agent kinds.
             let cols = """
             pv.id, pv.title, pv.blob_hash,
             a.name, a.kind,
             act.kind, act.plan, act.external_ref,
+            (SELECT c.title FROM chats c WHERE c.id = substr(a.name, 6) AND a.name LIKE 'chat:%'),
             pv.saved_at
             """
             let rows = try Row.fetchAll(
@@ -4484,12 +4493,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Decode a `PageOrigin` from a joined row. NULL activity/agent columns
     /// degrade gracefully (matches `originFrom(row:)` for sources).
     private static func pageOriginFrom(row: Row) -> PageOrigin {
-        // Position 0..8 mirrors the SELECT column order in `pageOrigin`/
+        // Position 0..9 mirrors the SELECT column order in `pageOrigin`/
         // `pageEditHistory`. `pv.id`/`pv.title`/`pv.blob_hash`/`pv.saved_at`
         // are NOT NULL per the `page_versions` schema; the LEFT-joined
         // `agents` + `activities` columns can be NULL (a pre-v39 page whose
         // activity's agent was deleted, or a root version whose activity_id is
         // somehow null). `String?` decodes both cases; `?? default` degrades.
+        // Position 8 is the `runTitle` subquery (#745) — NULL for non-chat
+        // agents or when the chat has been deleted.
         let versionID: String = (row[0] as String?) ?? ""
         let title: String = (row[1] as String?) ?? ""
         let blobHash: String? = row[2]
@@ -4498,7 +4509,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let activityKind: String? = row[5]
         let plan: String? = row[6]
         let externalRef: String? = row[7]
-        let savedAt: Double = (row[8] as Double?) ?? 0
+        let runTitle: String? = row[8]
+        let savedAt: Double = (row[9] as Double?) ?? 0
         return PageOrigin(
             versionID: versionID,
             title: title,
@@ -4508,6 +4520,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             activityKind: activityKind ?? "import",
             plan: plan,
             externalRef: externalRef,
+            runTitle: runTitle,
             savedAt: Date(timeIntervalSince1970: savedAt)
         )
     }

@@ -436,7 +436,8 @@ struct PageDetailView: View {
                 ProvenancePanel(
                     pageID: pageID,
                     origin: provenanceOrigin,
-                    history: provenanceHistory)
+                    history: provenanceHistory,
+                    store: store)
                 .padding(.top, 4)
             } label: {
                 HStack {
@@ -779,10 +780,20 @@ private struct ProvenanceTaskKey: Hashable {
 /// `PageDetailView` loads `.origin` + `.history` via its `.task(id:)` and
 /// passes them in here. Kept self-contained so the type checker resolves the
 /// `body` subtree independently (the parent body is large already).
+///
+/// #745: history rows are clickable. A `chat:<id>` provenance entry
+/// navigates to the chat tab (via `store.openTab(.chat(...))`); an
+/// `agent:<kind>` one-shot-run entry opens the Activity window (via the
+/// `\.openActivityWindow` environment closure). Neither applies → no-op.
 struct ProvenancePanel: View {
     let pageID: PageID
     let origin: PageOrigin?
     let history: [PageOrigin]
+    /// The wiki store — used to navigate to chat tabs on row click (#745).
+    /// Weak-ish: the parent `PageDetailView` owns a `@Bindable` reference,
+    /// so this never outlives the view.
+    var store: WikiStoreModel?
+    @Environment(\.openActivityWindow) private var openActivityWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -814,7 +825,7 @@ struct ProvenancePanel: View {
             HStack(spacing: 6) {
                 Text("Last saved by")
                     .foregroundStyle(.secondary)
-                agentLabel(name: origin.agentName, kind: origin.agentKind)
+                agentLabel(origin)
                 Text("·")
                     .foregroundStyle(.secondary)
                 Text(origin.activityKind)
@@ -836,7 +847,7 @@ struct ProvenancePanel: View {
                 .monospacedDigit()
             Text(entry.activityKind)
                 .font(.callout.weight(.semibold))
-            agentLabel(name: entry.agentName, kind: entry.agentKind)
+            agentLabel(entry)
             Text("·")
                 .foregroundStyle(.secondary)
             Text(entry.savedAt, style: .date)
@@ -850,23 +861,54 @@ struct ProvenancePanel: View {
                     .truncationMode(.tail)
             }
         }
+        .contentShape(Rectangle())
+        .hoverRowBackground()
+        .onTapGesture { handleProvenanceTap(entry) }
     }
 
-    /// Render the agent identity. For `chat:<id>` agents, render the chatID
-    /// as a `[[chat:…]]`-style link (per #page-provenance §5.5 — consistent
-    /// with how `chat:<id>` provenance values surface elsewhere). For other
-    /// kinds, the agent name is shown verbatim with its kind label.
+    /// Navigate to the provenance entry's origin (#745):
+    /// - `chat:<id>` → open the chat tab in the wiki's tab bar.
+    /// - `agent:<kind>` → open the Activity (queue) window.
+    /// - Otherwise → no-op (don't break).
+    private func handleProvenanceTap(_ entry: PageOrigin) {
+        if entry.agentName.hasPrefix("chat:") {
+            let chatID = String(entry.agentName.dropFirst("chat:".count))
+            guard !chatID.isEmpty else { return }
+            let id = PageID(rawValue: chatID)
+            DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
+            store?.openTab(.chat(id))
+        } else if entry.agentName.hasPrefix("agent:") {
+            DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
+            openActivityWindow?()
+        }
+    }
+
+    /// Render the agent identity (#745). For `chat:<id>` agents, prefer the
+    /// resolved `runTitle` (the chat's display title) over the raw ULID. When
+    /// the chat has been deleted (title is nil), fall back to a muted
+    /// "Deleted chat" label. For `agent:<kind>` one-shot runs, show a
+    /// friendly label derived from the kind (e.g. "Ingest" / "Lint") rather
+    /// than the raw `agent:ingest` string. Other kinds render verbatim.
     @ViewBuilder
-    private func agentLabel(name: String, kind: String) -> some View {
+    private func agentLabel(_ entry: PageOrigin) -> some View {
+        let name = entry.agentName
         if name.hasPrefix("chat:") {
-            // Drop the `chat:` prefix to render the chat id cleanly with the
-            // chat icon. The full `chat:<id>` is preserved in the tooltip.
-            let chatID = String(name.dropFirst("chat:".count))
-            Label(chatID, systemImage: "bubble.left.and.bubble.right")
-                .help(name)
-                .foregroundStyle(.secondary)
+            if let runTitle = entry.runTitle, !runTitle.isEmpty {
+                Label(runTitle, systemImage: "bubble.left.and.bubble.right")
+                    .help(name)
+                    .foregroundStyle(.secondary)
+            } else {
+                // Chat was deleted or the title is unavailable — show a
+                // muted placeholder instead of the raw ULID.
+                Label("Deleted chat", systemImage: "bubble.left.and.bubble.right")
+                    .help(name)
+                    .foregroundStyle(.tertiary)
+            }
         } else if name.hasPrefix("agent:") {
-            Label(name, systemImage: "cpu")
+            // One-shot run: resolve a friendly label from the kind suffix.
+            let kind = String(name.dropFirst("agent:".count))
+            let label = friendlyRunLabel(for: kind)
+            Label(label, systemImage: "cpu")
                 .help("\(kind) agent")
                 .foregroundStyle(.secondary)
         } else if name == "user" {
@@ -878,6 +920,18 @@ struct ProvenancePanel: View {
         } else {
             Text(name)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Map an `agent:<kind>` suffix to a human-readable run label (#745).
+    /// `ingest` → "Ingestion", `lint` → "Lint", `query` → "Query".
+    /// Unknown kinds fall back to the capitalized kind.
+    private nonisolated func friendlyRunLabel(for kind: String) -> String {
+        switch kind {
+        case "ingest": return "Ingestion"
+        case "lint": return "Lint"
+        case "query": return "Query"
+        default: return kind.capitalized
         }
     }
 }
