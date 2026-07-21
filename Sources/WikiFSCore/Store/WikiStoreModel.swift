@@ -2672,7 +2672,8 @@ public final class WikiStoreModel {
             let ext = (file.filename as NSString).pathExtension.lowercased()
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
             let provider = MarkdownFolderMaterializer(
-                filename: file.filename, data: file.data, mimeType: mimeType)
+                filename: file.filename, data: file.data, mimeType: mimeType,
+                directoryURL: directory)
             do {
                 let materialized = try await provider.materialize()
                 let summary = try storeMaterialized(materialized)

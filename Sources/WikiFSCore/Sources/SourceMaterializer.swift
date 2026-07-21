@@ -216,7 +216,9 @@ public struct LocalFileMaterializer: SourceMaterializer {
             mimeType: mimeType,
             provenance: SourceProvenance(
                 agentName: agentName,
-                activityKind: "import"
+                activityKind: "import",
+                plan: fileURL.path,
+                externalRef: fileURL.path
             ),
             extractedMarkdown: plan.extractedMarkdown)
     }
@@ -499,11 +501,15 @@ public struct MarkdownFolderMaterializer: SourceMaterializer {
     public let filename: String
     public let data: Data
     public let mimeType: String?
+    /// The folder the import walked. Persisted as `plan`/`externalRef` so the
+    /// origin chip can reveal it in Finder. `nil` for pre-change callers.
+    public let directoryURL: URL?
 
-    public init(filename: String, data: Data, mimeType: String? = nil) {
+    public init(filename: String, data: Data, mimeType: String? = nil, directoryURL: URL? = nil) {
         self.filename = filename
         self.data = data
         self.mimeType = mimeType
+        self.directoryURL = directoryURL
     }
 
     public func materialize() async throws -> MaterializedSource {
@@ -513,7 +519,9 @@ public struct MarkdownFolderMaterializer: SourceMaterializer {
             mimeType: mimeType,
             provenance: SourceProvenance(
                 agentName: agentName,
-                activityKind: "import"
+                activityKind: "import",
+                plan: directoryURL?.path,
+                externalRef: directoryURL?.path
             )
         )
     }

@@ -547,7 +547,7 @@ struct SourceDetailView: View {
                     if let key = file.zoteroItemKey, !key.isEmpty {
                         metadataSeparator
                         let zoteroLabel = SourceProvenanceLabel.combine(
-                            provider: "Zotero", agentName: "zotero",
+                            provider: "Zotero",
                             ext: file.ext, mimeType: file.mimeType)
                         if let url = zoteroItemURL(itemKey: key) {
                             // The "Zotero" tag itself is the link — clicking it jumps
@@ -820,62 +820,94 @@ struct SourceDetailView: View {
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.agentName {
         case "website":
+            let websiteLabel = SourceProvenanceLabel.combine(
+                provider: "Website", ext: file.ext, mimeType: file.mimeType)
             let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if let url = URL(string: urlString), url.scheme != nil {
                 Button {
                     NSWorkspace.shared.open(url)
                 } label: {
-                    Label("Website", systemImage: "globe")
+                    Label(websiteLabel, systemImage: "globe")
                 }
                 .buttonStyle(.link)
                 .help("Open original: \(urlString)")
             } else {
-                Label("Website", systemImage: "globe")
+                Label(websiteLabel, systemImage: "globe")
             }
         case "markdown-folder":
-            Label("Folder", systemImage: "folder")
+            // Two-dimensional label (#644): "Folder / Markdown" when the content
+            // type is derivable, or just "Folder" when it's unknown.
+            let folderLabel = SourceProvenanceLabel.combine(
+                provider: "Folder", ext: file.ext, mimeType: file.mimeType)
+            let folderPath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !folderPath.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: folderPath)])
+                } label: {
+                    Label(folderLabel, systemImage: "folder")
+                }
+                .buttonStyle(.link)
+                .help("Reveal original folder: \(folderPath)")
+            } else {
+                Label(folderLabel, systemImage: "folder")
+            }
         case "apple-podcast":
             // Byteless source (a transcript) — link to the episode page, like the
             // website tag. Never "File": a podcast source carries no file bytes.
+            let podcastLabel = SourceProvenanceLabel.combine(
+                provider: "Apple Podcast", ext: file.ext, mimeType: file.mimeType)
             let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if let url = URL(string: urlString), url.scheme != nil {
                 Button {
                     NSWorkspace.shared.open(url)
                 } label: {
-                    Label("Apple Podcast", systemImage: "waveform")
+                    Label(podcastLabel, systemImage: "waveform")
                 }
                 .buttonStyle(.link)
                 .help("Open episode: \(urlString)")
             } else {
-                Label("Apple Podcast", systemImage: "waveform")
+                Label(podcastLabel, systemImage: "waveform")
             }
         case "youtube", "vimeo", "spotify", "soundcloud", "remote-media":
             // Phase 4b byteless media providers. The watch/listen URL lives on
             // `origin.plan` (the pasted link, normalized); never "File" — these
             // sources carry no file bytes. (Issue #618.)
             let info = mediaProviderInfo(origin.agentName)
+            let mediaLabel = SourceProvenanceLabel.combine(
+                provider: info.label, ext: file.ext, mimeType: file.mimeType)
             let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if let url = URL(string: urlString), url.scheme != nil {
                 Button {
                     NSWorkspace.shared.open(url)
                 } label: {
-                    Label(info.label, systemImage: info.systemImage)
+                    Label(mediaLabel, systemImage: info.systemImage)
                 }
                 .buttonStyle(.link)
                 .help("\(info.helpVerb): \(urlString)")
             } else {
-                Label(info.label, systemImage: info.systemImage)
+                Label(mediaLabel, systemImage: info.systemImage)
             }
         default:
             // Local-file (and any unrecognized import provider). Two-dimensional
             // label (#644): "File / Mermaid", "File / PDF", "File / Markdown",
-            // or just "File" when the content type is unknown. The provider
-            // does not imply a single content type — a drag-drop can carry
-            // anything — so the suffix is meaningful here.
+            // or just "File" when the content type is unknown. A drag-drop can
+            // carry anything, so the suffix is meaningful here.
             let fileLabel = SourceProvenanceLabel.combine(
-                provider: "File", agentName: origin.agentName,
-                ext: file.ext, mimeType: file.mimeType)
-            Label(fileLabel, systemImage: "doc")
+                provider: "File", ext: file.ext, mimeType: file.mimeType)
+            let filePath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !filePath.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: filePath)])
+                } label: {
+                    Label(fileLabel, systemImage: "doc")
+                }
+                .buttonStyle(.link)
+                .help("Reveal original file: \(filePath)")
+            } else {
+                Label(fileLabel, systemImage: "doc")
+            }
         }
     }
 

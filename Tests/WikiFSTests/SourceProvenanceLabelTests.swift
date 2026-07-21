@@ -6,6 +6,9 @@ import WikiFSTypes
 /// Tests for `SourceProvenanceLabel` — the pure two-dimensional
 /// `{provider} / {content type}` combiner used by `SourceDetailView`'s
 /// inline origin tag. Issue #644.
+///
+/// No provider is assumed to imply a content type — the suffix is always
+/// derived from the actual file extension / MIME type.
 struct SourceProvenanceLabelTests {
 
     // MARK: - contentTypeLabel
@@ -42,90 +45,78 @@ struct SourceProvenanceLabelTests {
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "", mimeType: "application/octet-stream") == nil)
     }
 
-    // MARK: - providerImpliesContentType
-
-    @Test func urlProvidersImplyContentType() {
-        // URL-based media/web providers — the suffix is redundant.
-        let implied = ["website", "markdown-folder", "apple-podcast",
-                       "youtube", "vimeo", "spotify", "soundcloud", "remote-media"]
-        for agent in implied {
-            #expect(SourceProvenanceLabel.providerImpliesContentType(agent),
-                    "Expected \(agent) to imply its content type")
-        }
-    }
-
-    @Test func fileAndZoteroDoNotImplyContentType() {
-        // File / Zotero imports can carry anything — the suffix is meaningful.
-        #expect(!SourceProvenanceLabel.providerImpliesContentType("local-file"))
-        #expect(!SourceProvenanceLabel.providerImpliesContentType("zotero"))
-        #expect(!SourceProvenanceLabel.providerImpliesContentType("legacy-import"))
-        #expect(!SourceProvenanceLabel.providerImpliesContentType(""))
-    }
-
     // MARK: - combine
 
     @Test func combineFileWithContentType() {
         // The issue #644 design table — File branch.
         #expect(SourceProvenanceLabel.combine(
-            provider: "File", agentName: "local-file",
+            provider: "File",
             ext: "mmd", mimeType: "text/mermaid") == "File / Mermaid")
         #expect(SourceProvenanceLabel.combine(
-            provider: "File", agentName: "local-file",
+            provider: "File",
             ext: "pdf", mimeType: "application/pdf") == "File / PDF")
         #expect(SourceProvenanceLabel.combine(
-            provider: "File", agentName: "local-file",
+            provider: "File",
             ext: "md", mimeType: "text/markdown") == "File / Markdown")
     }
 
     @Test func combineZoteroWithContentType() {
         // The issue #644 design table — Zotero branch.
         #expect(SourceProvenanceLabel.combine(
-            provider: "Zotero", agentName: "zotero",
+            provider: "Zotero",
             ext: "pdf", mimeType: "application/pdf") == "Zotero / PDF")
         #expect(SourceProvenanceLabel.combine(
-            provider: "Zotero", agentName: "zotero",
+            provider: "Zotero",
             ext: "md", mimeType: "text/markdown") == "Zotero / Markdown")
         #expect(SourceProvenanceLabel.combine(
-            provider: "Zotero", agentName: "zotero",
+            provider: "Zotero",
             ext: "mmd", mimeType: "text/mermaid") == "Zotero / Mermaid")
+    }
+
+    @Test func combineFolderWithContentType() {
+        // A markdown-folder import is stored as markdown, so the chip reads
+        // "Folder / Markdown" — the content type is never assumed.
+        #expect(SourceProvenanceLabel.combine(
+            provider: "Folder",
+            ext: "md", mimeType: "text/markdown") == "Folder / Markdown")
+        // If a folder somehow contained a PDF, it would read "Folder / PDF".
+        #expect(SourceProvenanceLabel.combine(
+            provider: "Folder",
+            ext: "pdf", mimeType: "application/pdf") == "Folder / PDF")
+    }
+
+    @Test func combineWebsiteWithContentType() {
+        // No provider implies a content type — a website source stored as
+        // markdown reads "Website / Markdown".
+        #expect(SourceProvenanceLabel.combine(
+            provider: "Website",
+            ext: "md", mimeType: "text/markdown") == "Website / Markdown")
+        #expect(SourceProvenanceLabel.combine(
+            provider: "Website",
+            ext: "pdf", mimeType: "application/pdf") == "Website / PDF")
     }
 
     @Test func combineOmitsSuffixWhenContentTypeUnknown() {
         // Unknown content type — collapse to just the provider label so the
         // tag never reads "File / " or "Zotero / ".
         #expect(SourceProvenanceLabel.combine(
-            provider: "File", agentName: "local-file",
+            provider: "File",
             ext: "docx", mimeType: nil) == "File")
         #expect(SourceProvenanceLabel.combine(
-            provider: "Zotero", agentName: "zotero",
+            provider: "Zotero",
             ext: "", mimeType: "application/octet-stream") == "Zotero")
-    }
-
-    @Test func combineOmitsSuffixWhenProviderImpliesContentType() {
-        // URL-based providers — the suffix would be redundant. Even when a
-        // content type COULD be derived (e.g. a YouTube source somehow has a
-        // .mp4 ext), the provider label already tells the user what it is.
+        // A YouTube source with no derivable ext/MIME reads just "YouTube".
         #expect(SourceProvenanceLabel.combine(
-            provider: "YouTube", agentName: "youtube",
-            ext: "mp4", mimeType: "video/mp4") == "YouTube")
-        #expect(SourceProvenanceLabel.combine(
-            provider: "Website", agentName: "website",
-            ext: "html", mimeType: "text/html") == "Website")
-        #expect(SourceProvenanceLabel.combine(
-            provider: "Apple Podcast", agentName: "apple-podcast",
-            ext: "mp3", mimeType: "audio/mpeg") == "Apple Podcast")
-        #expect(SourceProvenanceLabel.combine(
-            provider: "Folder", agentName: "markdown-folder",
-            ext: "md", mimeType: "text/markdown") == "Folder")
+            provider: "YouTube",
+            ext: nil, mimeType: nil) == "YouTube")
     }
 
     @Test func combineWorksWithUnexpectedProviderFallback() {
         // The view's default case (anything not explicitly switched on) falls
         // through to "File" with whatever agentName was observed. An unknown
-        // agent that ISN'T in the implies list still keeps the suffix, since
-        // we can't assume what it carries.
+        // agent still keeps the suffix, since we can't assume what it carries.
         #expect(SourceProvenanceLabel.combine(
-            provider: "File", agentName: "future-provider",
+            provider: "File",
             ext: "pdf", mimeType: nil) == "File / PDF")
     }
 }
