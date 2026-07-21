@@ -165,6 +165,30 @@ agents, NOT Polytoken):
   `mutate(`). Adding a new public mutator? Route it through `mutate()` or the
   guard fails. See `plans/event-bus.md`.
 
+* **Never write SwiftUI state synchronously from an `NSViewRepresentable`'s
+  `makeNSView`/`updateNSView`, or from anything reachable from them.** Both run
+  inside SwiftUI's update pass, so a `@State`/`@Binding` write there is
+  "Modifying state during view update, this will cause undefined behavior."
+  `WikiReaderView.Coordinator.startLoad` wrote `isLoading.wrappedValue = true`
+  from `makeNSView` and warned on *every* reader mount.
+  - **The trap is indirection.** AppKit setters post delegate notifications
+    **synchronously**, so the write is often several frames deep and not visible
+    at the call site: `textView.string = …` → `textViewDidChangeSelection` →
+    `onCaretChange` → `@State`. Assigning `.string`, `setSelectedRange`,
+    `selectRowIndexes`, and friends all do this. Wiring `delegate` *before*
+    seeding content in `makeNSView` is the classic way to trip it.
+  - **The rule:** in a Coordinator, either **defer** the write
+    (`Task { @MainActor in … }` — see `ComposerTextView.Coordinator.recomputeHeight`)
+    or **suppress** it while you are the one mutating the view (an
+    `isApplyingProgrammaticChange` flag bracketing the mutation, with the
+    write-back path gated on it — see `ScrollableTextEditor`). Programmatic
+    mutation is not user input; don't report it back into SwiftUI.
+  - **These are runtime issues, not compile warnings.** They appear in no build
+    log, and `swift test` does not display them, so a clean build and a green
+    CLI test run are *not* evidence they're absent. Capture and bisect procedure:
+    [`docs/skills/reproducing-live-ui-bugs/SKILL.md`](docs/skills/reproducing-live-ui-bugs/SKILL.md)
+    §"SwiftUI runtime issues".
+
 * Never use `print` for diagnostics — route all logging through `DebugLog`
   (`os_log` → Console.app, subsystem `com.selfdrivingwiki.debug`) so it's visible
   no matter how the app launched. The only exception is real CLI stdout (e.g.
