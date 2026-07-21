@@ -42,7 +42,7 @@ jobs:
           # blowing past GitHub's 10 GB/repo LRU — every run evicted and
           # cold-built MLX C++ (~1374 units, ~15 min). One entry per dep set
           # stops the eviction; warm build is ~2 min.
-          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-swift-v2-${{ hashFiles('Package.resolved', 'Package.swift') }}
       - name: Build
         # The "Select Xcode" step above ran `sudo xcode-select -s`, so one
         # toolchain works directly. The previous `if xcrun swift build
