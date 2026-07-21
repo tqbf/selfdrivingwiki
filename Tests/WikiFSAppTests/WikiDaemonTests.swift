@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WikiFSCore
@@ -333,3 +334,4 @@ struct WikiDaemonTests {
         #expect(daemon.openStore(wikiID: b.id))
     }
 }
+#endif // os(macOS)

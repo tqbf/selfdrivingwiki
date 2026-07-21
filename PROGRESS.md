@@ -2,6 +2,28 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-21 — Add Linux Swift CI job (branch `linux-ci`, #754)
+
+**Outcome.** Added a `linux-swift` CI job to `.github/workflows/ci.yml`
+that builds and tests the portable `WikiFSCoreTests` target on
+`ubuntu-latest` with Swift 6.0. This validates the #754 portability split
+and catches Linux-only build breaks early.
+
+**Changes.**
+- `.github/workflows/ci.yml`: new `linux-swift` job using
+  `swift-actions/setup-swift@v2`, runs `make version prompts` (codegen),
+  caches `.build`, `swift build --target WikiFSCoreTests`, then
+  `swift test --parallel --skip` with the same skip list as macOS.
+- `Tests/WikiFSAppTests/EnvVarHintsTests.swift`: wrapped in
+  `#if os(macOS)` — it `@testable import WikiFS` (macOS-only executable).
+- `Tests/WikiFSAppTests/WikiDaemonTests.swift`: wrapped in
+  `#if os(macOS)` — it `@testable import wikid` (macOS-only executable).
+- `plans/linux-ci-runner.md`: plan document.
+
+**Validation.** `swift build` and `swift test` (3333 tests, all pass) on
+macOS. The Linux build will be validated by the CI job itself once the PR
+is pushed — we cannot test Linux locally on macOS.
+
 ## 2026-07-20 — Fix swift CI: build+cache fixed; test hang addressed (branch `ci-speedup`, PR #732)
 
 **Outcome.** Build + cache + test steps all green in CI. The test hang that

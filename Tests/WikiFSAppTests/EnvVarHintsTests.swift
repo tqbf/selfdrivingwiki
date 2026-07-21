@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 @testable import WikiFS
@@ -86,3 +87,4 @@ struct EnvVarHintsTests {
         }
     }
 }
+#endif // os(macOS)
