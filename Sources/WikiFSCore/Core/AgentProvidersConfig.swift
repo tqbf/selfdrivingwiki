@@ -245,6 +245,20 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         return selectedProvider()
     }
 
+    /// #727: the ordered provider chain for a stage — the stage's resolved
+    /// provider FIRST, then the OTHER enabled providers in display order
+    /// (excluding duplicates of the first). The launcher walks this chain,
+    /// skipping providers marked dead by the `QuotaFallbackCoordinator`.
+    /// PURE so the chain is unit-tested without a subprocess.
+    ///
+    /// If only one provider is enabled (the common case today), the chain is
+    /// `[first]` and there is no fallback — quota exhaustion fails the item.
+    public func providerChain(forStage stage: String) -> [AgentProvider] {
+        let first = provider(forStage: stage)
+        let others = enabledProviders.filter { $0.id != first.id }
+        return [first] + others
+    }
+
     /// Resolve the concrete model id for a stage using the stage-resolved
     /// provider (`provider(forStage:)`). Returns the stage's pinned model id
     /// when set + non-empty; otherwise falls back to that provider's

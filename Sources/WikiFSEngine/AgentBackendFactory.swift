@@ -69,6 +69,7 @@ public enum AgentBackendFactory {
         if let selectedModelId, !selectedModelId.isEmpty {
             hints[HintKey.acpSelectedModelId.rawValue] = selectedModelId
         }
+        hints[HintKey.acpProviderId.rawValue] = provider.id
         // Phase 2 (plans/acp-multi-provider.md): thread the provider's extra
         // environment into the spawn via the established `env.`-prefix
         // convention (`ACPBackend.start` expands `env.*` hints into the child

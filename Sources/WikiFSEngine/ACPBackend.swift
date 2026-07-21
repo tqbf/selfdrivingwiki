@@ -184,6 +184,12 @@ public actor ACPBackend: AgentBackend {
 
     private var warmProcess: WarmProcess?
 
+    /// #727: the provider id this backend was spawned for (threaded in via
+    /// `HintKey.acpProviderId` from the launcher). nil until `start()` is
+    /// called. Used by the `send()` catch block to pass to
+    /// `ProviderQuotaDetector` for family disambiguation.
+    private var providerId: String?
+
     /// The per-run debug logger (verbose ACP wire trace). Created in
     /// `startProcess()` from `profile.debugLogURL`. nil when debug logging is
     /// disabled or the folder can't be created. Captured into off-actor tasks
@@ -314,6 +320,11 @@ public actor ACPBackend: AgentBackend {
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
         DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)")
+        // #727: capture the provider id so the send catch block can pass it
+        // to ProviderQuotaDetector for family disambiguation.
+        if let pid = profile.providerHints[HintKey.acpProviderId.rawValue] {
+            providerId = pid
+        }
         // Warm-subprocess reuse (Phase 1, plans/acp-session-efficiency.md): if a
         // warm process already exists (spawned by a prior `start()` call on this
         // backend), skip the expensive launch+initialize+authenticate and just
@@ -980,7 +991,24 @@ public actor ACPBackend: AgentBackend {
                     if let debugTurn {
                         debugLogger?.logPromptError(error, turn: debugTurn)
                     }
-                    for event in Self.turnEndEvents(error: error) {
+                    // #727: check whether this is a quota-exhaustion error
+                    // before yielding the generic turn-failed event. If the
+                    // detector returns a signal, map it to
+                    // `.quotaExhausted` so the launcher's fallback loop can
+                    // mark the provider dead and retry on the next one.
+                    let mappedError: Error
+                    if let signal = ProviderQuotaDetector.detect(
+                        providerId: providerId ?? "unknown",
+                        error: error
+                    ) {
+                        mappedError = ACPBackendError.quotaExhausted(
+                            provider: signal.providerId,
+                            resetTime: signal.resetTime
+                        )
+                    } else {
+                        mappedError = error
+                    }
+                    for event in Self.turnEndEvents(error: mappedError) {
                         continuation.yield(event)
                     }
                 }
@@ -1743,6 +1771,8 @@ public actor ACPBackend: AgentBackend {
                 reason = .agentError(error.localizedDescription)
             case .processDiedBeforeResult:
                 reason = .agentError(error.localizedDescription)
+            case .quotaExhausted(let provider, let resetTime):
+                reason = .quotaExhausted(provider: provider, resetTime: resetTime)
             default:
                 reason = .agentError(error.localizedDescription)
             }
@@ -2211,6 +2241,13 @@ enum ACPBackendError: Error, LocalizedError {
     /// may be available if the agent supports it). Surfaced as a user-visible,
     /// actionable error rather than a silent freeze.
     case processDiedBeforeResult
+    /// #727: the provider returned a quota-exhaustion error (Claude
+    /// session/weekly/Opus limit, or z.ai/GLM error code 1310/1316/1317/
+    /// 1318/1319/1308). The provider is exhausted until `resetTime`; the
+    /// launcher should fall through to the next enabled provider in the
+    /// stage's chain. `resetTime` is nil when the error did not carry a
+    /// timestamp — the coordinator applies a conservative default.
+    case quotaExhausted(provider: String, resetTime: Date?)
 
     var errorDescription: String? {
         switch self {
@@ -2243,6 +2280,9 @@ enum ACPBackendError: Error, LocalizedError {
             Claude finished but the connection dropped before the result arrived. \
             Your answer was shown; you can send the next message.
             """
+        case .quotaExhausted(let provider, let resetTime):
+            let resetStr = resetTime.map { " until \($0)" } ?? ""
+            return "Provider \(provider) quota exhausted\(resetStr)."
         }
     }
 }

@@ -84,13 +84,15 @@ import ACPModel
         #expect(hints.isEmpty)
     }
 
-    /// Only the executable (no args) → just `acpAgentPath`.
+    /// Only the executable (no args) → `acpAgentPath` + `acpProviderId`
+    /// (the provider id is always threaded, #727).
     @Test func providerHintsPathOnly() {
         let provider = AgentProvider(id: "x", label: "X")
         let hints = AgentBackendFactory.providerHints(
             provider: provider, resolvedCommand: ["/bin/agent"], apiKey: nil)
-        #expect(hints.count == 1)
+        #expect(hints.count == 2)
         #expect(hints[HintKey.acpAgentPath.rawValue] == "/bin/agent")
+        #expect(hints[HintKey.acpProviderId.rawValue] == "x")
     }
 
     // MARK: - AgentSpawnConfig.environment (Phase 2, plans/acp-multi-provider.md)
