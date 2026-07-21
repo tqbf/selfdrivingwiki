@@ -502,250 +502,268 @@ struct SourceDetailView: View {
     // MARK: - Header
 
     private var headerSection: some View {
-        CollapsibleDetailHeader(
-            systemImage: symbol,
-            title: displayName,
-            placeholder: "Untitled",
-            titleLineLimit: 2,
-            isTitleDisabled: isEditLockedExternally,
-            isExpanded: $isHeaderExpanded,
-            onTitleCommit: { store.renameSource(id: file.id, to: $0) }
-        ) {
-            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-                HStack(spacing: 8) {
-                Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
-                metadataSeparator
-                // Compact, single-line dates — "Added Jun 26, 2026 · Updated
-                // Jun 28". The exact clock time was noise here (and wrapped);
-                // it lives in the version menu where it's actually decided.
-                Text("Added \(Self.compactDate(file.createdAt))")
-                if file.updatedAt != file.createdAt {
-                    Text("· Updated \(Self.compactDate(file.updatedAt))")
-                }
-                // For non-PDF markdown the origin is plain provenance text here;
-                // for PDFs the interactive extraction chip lives on the action
-                // row beside Ingest (see below), not in this metadata line.
-                if let head = headVersion, !isPDF,
-                   let label = Self.markdownOriginLabel(for: head.origin) {
+        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+            CollapsibleDetailHeader(
+                systemImage: symbol,
+                title: displayName,
+                placeholder: "Untitled",
+                titleLineLimit: 2,
+                isTitleDisabled: isEditLockedExternally,
+                isExpanded: $isHeaderExpanded,
+                onTitleCommit: { store.renameSource(id: file.id, to: $0) }
+            ) {
+                VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                    HStack(spacing: 8) {
+                    Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
                     metadataSeparator
-                    Text("\(label) \(Self.compactDate(head.createdAt))")
-                }
-                // Zotero provenance sits inline on the metadata line rather than
-                // in its own row — the big title already names the item, so this
-                // just needs the "Zotero" origin tag + a jump-back link.
-                // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
-                // or just "Zotero" when the content type is unknown.
-                if let key = file.zoteroItemKey, !key.isEmpty {
-                    metadataSeparator
-                    let zoteroLabel = SourceProvenanceLabel.combine(
-                        provider: "Zotero", agentName: "zotero",
-                        ext: file.ext, mimeType: file.mimeType)
-                    if let url = zoteroItemURL(itemKey: key) {
-                        // The "Zotero" tag itself is the link — clicking it jumps
-                        // back to the item in the Zotero app (no separate button).
-                        Button {
-                            NSWorkspace.shared.open(url)
-                        } label: {
+                    // Compact, single-line dates — "Added Jun 26, 2026 · Updated
+                    // Jun 28". The exact clock time was noise here (and wrapped);
+                    // it lives in the version menu where it's actually decided.
+                    Text("Added \(Self.compactDate(file.createdAt))")
+                    if file.updatedAt != file.createdAt {
+                        Text("· Updated \(Self.compactDate(file.updatedAt))")
+                    }
+                    // For non-PDF markdown the origin is plain provenance text here;
+                    // for PDFs the interactive extraction chip lives on the action
+                    // row beside Ingest (see below), not in this metadata line.
+                    if let head = headVersion, !isPDF,
+                       let label = Self.markdownOriginLabel(for: head.origin) {
+                        metadataSeparator
+                        Text("\(label) \(Self.compactDate(head.createdAt))")
+                    }
+                    // Zotero provenance sits inline on the metadata line rather than
+                    // in its own row — the big title already names the item, so this
+                    // just needs the "Zotero" origin tag + a jump-back link.
+                    // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
+                    // or just "Zotero" when the content type is unknown.
+                    if let key = file.zoteroItemKey, !key.isEmpty {
+                        metadataSeparator
+                        let zoteroLabel = SourceProvenanceLabel.combine(
+                            provider: "Zotero", agentName: "zotero",
+                            ext: file.ext, mimeType: file.mimeType)
+                        if let url = zoteroItemURL(itemKey: key) {
+                            // The "Zotero" tag itself is the link — clicking it jumps
+                            // back to the item in the Zotero app (no separate button).
+                            Button {
+                                NSWorkspace.shared.open(url)
+                            } label: {
+                                Label(zoteroLabel, systemImage: "books.vertical")
+                            }
+                            .buttonStyle(.link)
+                            .help("View in Zotero")
+                        } else {
                             Label(zoteroLabel, systemImage: "books.vertical")
                         }
-                        .buttonStyle(.link)
-                        .help("View in Zotero")
-                    } else {
-                        Label(zoteroLabel, systemImage: "books.vertical")
+                    } else if let origin, origin.agentName != "legacy-import" {
+                        // Phase 3a provider origin: website → clickable link to the
+                        // origin URL; local-file → "File"; markdown-folder → "Folder".
+                        metadataSeparator
+                        providerOriginTag(origin)
                     }
-                } else if let origin, origin.agentName != "legacy-import" {
-                    // Phase 3a provider origin: website → clickable link to the
-                    // origin URL; local-file → "File"; markdown-folder → "Folder".
-                    metadataSeparator
-                    providerOriginTag(origin)
                 }
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 8) {
-                if isEditing {
-                    HStack(spacing: 10) {
-                        Button("Save Changes", systemImage: "checkmark.circle") {
-                            DebugLog.tabs("SourceDetailView: Save Changes tapped")
-                            commitEdit()
-                        }
-                        .keyboardShortcut("s", modifiers: .command)
-                        .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                  || (headVersion?.content == editBuffer))
-
-                        Button("Cancel", systemImage: "xmark.circle") {
-                            DebugLog.tabs("SourceDetailView: Cancel tapped")
-                            isEditing = false
-                        }
-                        .keyboardShortcut(.escape, modifiers: [])
-
-                        if isOutlineApplicable {
-                            // Pin save/cancel at the leading edge and the
-                            // outline toggle at the trailing edge so the row's
-                            // layout is independent of the parent's proposed
-                            // width (which changes when the outline pane or
-                            // the header expands/collapses).
-                            Spacer()
-                            Button {
-                                DebugLog.tabs("SourceDetailView: Toggle Outline tapped (editing)")
-                                isOutlineExpanded.toggle()
-                            } label: {
-                                Image(systemName: "sidebar.right")
-                            }
-                            .help("Toggle Outline")
+                    if isThisFileExtracting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Extracting…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                } else {
-                    // Row 1 — primary source actions: the extraction chip leads
-                    // ("this is the derivation, and here's what you do with it"),
-                    // then Ingest, then Extract Markdown when no derivation exists
-                    // yet. Above the utility row so the wiki goal reads first.
-                    HStack(spacing: 10) {
-                        if isPDF, hasMarkdown, let head = headVersion {
-                            extractionProvenanceChip(head: head)
-                        }
-                        if needsExtraction {
-                            // No derivation yet → Extract is the call-to-action:
-                            // prominent and leftmost, with Ingest stepped down to
-                            // secondary until there's markdown worth ingesting.
-                            Button(isExtracting ? "Extracting…" : "Extract",
-                                   systemImage: "doc.plaintext") {
-                                DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue)")
-                                Task {
-                                    await runExtraction()
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isExtracting
-                                      || isThisFileExtracting
-                                      // Another file currently holds the extraction
-                                      // slot — this extract would await it, so show
-                                      // it as busy rather than letting the tap hang.
-                                      || tracker.isSlotBusyForOtherSource(file.id))
-                        }
-                        ingestButton
-                        // The source's content affordance is one-per-source: an
-                        // unextracted PDF shows Extract (above) to gain a readable
-                        // derivation, so Refresh is suppressed until it has one.
-                        // Every other refreshable (live) source offers Refresh to
-                        // re-fetch and append a new version.
-                        if isRefreshable, !needsExtraction {
-                            Button("Refresh", systemImage: "arrow.clockwise") {
-                                DebugLog.extraction("SourceDetailView: Refresh tapped — id=\(file.id.rawValue)")
-                                Task { await runRefresh() }
-                            }
-                            .disabled(isRefreshing)
-                            .help("Re-fetch this source and append a new version")
+
+                    if isRefreshing {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Refreshing…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    // Row 2 — secondary / utility actions: Edit, Show in List,
-                    // Share, Reveal in Finder, Outline.
-                    HStack(spacing: 10) {
-                        if isMarkdownEditable {
-                            Button("Edit", systemImage: "pencil") {
-                                DebugLog.tabs("SourceDetailView: Edit tapped — id=\(file.id.rawValue)")
-                                // Source the buffer from the resolved content so
-                                // a native `.mmd` (no processed-markdown head)
-                                // edits its raw diagram source, not an empty
-                                // buffer. `currentMarkdownContent` falls back to
-                                // the raw bytes for native text sources.
-                                editBuffer = currentMarkdownContent ?? ""
-                                isEditing = true
-                                // #211: focus the editor even if the user had
-                                // switched to the PDF, HTML, Media, or Rendered
-                                // tab, where the markdown editor isn't rendered.
-                                // Leave Split alone — the editor is already
-                                // visible there.
-                                if selectedTab == .pdf || selectedTab == .html || selectedTab == .media || selectedTab == .rendered {
-                                    selectedTab = .reader
-                                }
-                            }
-                            .keyboardShortcut("e", modifiers: .command)
-                            .disabled(isRunning)
-                        }
-                        // Share — resolves the canonical URL from the daemon
-                        // (like openSource) so the filename is human-readable
-                        // and the URL is guaranteed to resolve.
-                        Button("Show in List", systemImage: "sidebar.left") {
-                            DebugLog.tabs("SourceDetailView: Show in List tapped — id=\(file.id.rawValue)")
-                            store.requestSidebarReveal(.source(file.id))
-                        }
-                        .help("Reveal this source in the sidebar")
-                        if fileProvider.path != nil {
-                            Button("Share", systemImage: "square.and.arrow.up") {
-                                DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
-                                Task {
-                                    guard let url = await fileProvider.resolveSourceByNameURL(id: file.id, wikiID: wikiID) else {
-                                        DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID)")
-                                        return
-                                    }
-                                    DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
-                                    let picker = NSSharingServicePicker(items: [url])
-                                    let mouseScreen = NSEvent.mouseLocation
-                                    guard let window = NSApplication.shared.keyWindow,
-                                          let contentView = window.contentView else { return }
-                                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                                    let viewPoint = contentView.convert(windowPoint, from: nil)
-                                    picker.show(
-                                        relativeTo: NSRect(origin: viewPoint,
-                                                           size: NSSize(width: 1, height: 1)),
-                                        of: contentView, preferredEdge: .minY)
-                                }
-                            }
-                            .help("Share this source file")
-                            Button("Reveal in Finder", systemImage: "folder") {
-                                DebugLog.fileprovider("SourceDetailView: Reveal in Finder tapped — id=\(file.id.rawValue)")
-                                Task { await fileProvider.revealSourceInFinder(id: file.id, wikiID: wikiID) }
-                            }
-                            .help("Reveal this source file in Finder")
-                        }
-                        if isOutlineApplicable {
-                            // Pin action buttons at the leading edge and the
-                            // outline toggle at the trailing edge (see the
-                            // matching comment in the editing branch above).
-                            Spacer()
-                            Button {
-                                DebugLog.tabs("SourceDetailView: Toggle Outline tapped")
-                                isOutlineExpanded.toggle()
-                            } label: {
-                                Image(systemName: "sidebar.right")
-                            }
-                            .help("Toggle Outline")
-                        }
+
+                    if let refreshError {
+                        Text(refreshError)
+                            .font(.callout)
+                            .foregroundStyle(.red)
                     }
                 }
             }
 
-            if isThisFileExtracting {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Extracting…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if isRefreshing {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Refreshing…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let refreshError {
-                Text(refreshError)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-            }
-
+            if isHeaderExpanded {
+                sourceActionBar
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
             }
         }
         .padding(PageEditorMetrics.contentInset)
     }
+
+    // MARK: - Header action bar (full-width toolbar row)
+
+    /// The source detail action toolbar row. Rendered as a sibling of
+    /// `CollapsibleDetailHeader` — NOT inside its expanded content — so
+    /// the trailing `Spacer` + outline toggle reach the view's right edge
+    /// instead of the readable-column edge (mirrors
+    /// `ChatView.chatActionBar` and `PageDetailView.pageActionBar`).
+    @ViewBuilder
+    private var sourceActionBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                HStack(spacing: 10) {
+                    Button("Save Changes", systemImage: "checkmark.circle") {
+                        DebugLog.tabs("SourceDetailView: Save Changes tapped")
+                        commitEdit()
+                    }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || (headVersion?.content == editBuffer))
+
+                    Button("Cancel", systemImage: "xmark.circle") {
+                        DebugLog.tabs("SourceDetailView: Cancel tapped")
+                        isEditing = false
+                    }
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    if isOutlineApplicable {
+                        // Pin save/cancel at the leading edge and the
+                        // outline toggle at the trailing edge so the row's
+                        // layout is independent of the parent's proposed
+                        // width (which changes when the outline pane or
+                        // the header expands/collapses).
+                        Spacer()
+                        Button {
+                            DebugLog.tabs("SourceDetailView: Toggle Outline tapped (editing)")
+                            isOutlineExpanded.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("Toggle Outline")
+                    }
+                }
+            } else {
+                // Row 1 — primary source actions: the extraction chip leads
+                // ("this is the derivation, and here's what you do with it"),
+                // then Ingest, then Extract Markdown when no derivation exists
+                // yet. Above the utility row so the wiki goal reads first.
+                HStack(spacing: 10) {
+                    if isPDF, hasMarkdown, let head = headVersion {
+                        extractionProvenanceChip(head: head)
+                    }
+                    if needsExtraction {
+                        // No derivation yet → Extract is the call-to-action:
+                        // prominent and leftmost, with Ingest stepped down to
+                        // secondary until there's markdown worth ingesting.
+                        Button(isExtracting ? "Extracting…" : "Extract",
+                               systemImage: "doc.plaintext") {
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue)")
+                            Task {
+                                await runExtraction()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isExtracting
+                                  || isThisFileExtracting
+                                  // Another file currently holds the extraction
+                                  // slot — this extract would await it, so show
+                                  // it as busy rather than letting the tap hang.
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                    ingestButton
+                    // The source's content affordance is one-per-source: an
+                    // unextracted PDF shows Extract (above) to gain a readable
+                    // derivation, so Refresh is suppressed until it has one.
+                    // Every other refreshable (live) source offers Refresh to
+                    // re-fetch and append a new version.
+                    if isRefreshable, !needsExtraction {
+                        Button("Refresh", systemImage: "arrow.clockwise") {
+                            DebugLog.extraction("SourceDetailView: Refresh tapped — id=\(file.id.rawValue)")
+                            Task { await runRefresh() }
+                        }
+                        .disabled(isRefreshing)
+                        .help("Re-fetch this source and append a new version")
+                    }
+                }
+                // Row 2 — secondary / utility actions: Edit, Show in List,
+                // Share, Reveal in Finder, Outline.
+                HStack(spacing: 10) {
+                    if isMarkdownEditable {
+                        Button("Edit", systemImage: "pencil") {
+                            DebugLog.tabs("SourceDetailView: Edit tapped — id=\(file.id.rawValue)")
+                            // Source the buffer from the resolved content so
+                            // a native `.mmd` (no processed-markdown head)
+                            // edits its raw diagram source, not an empty
+                            // buffer. `currentMarkdownContent` falls back to
+                            // the raw bytes for native text sources.
+                            editBuffer = currentMarkdownContent ?? ""
+                            isEditing = true
+                            // #211: focus the editor even if the user had
+                            // switched to the PDF, HTML, Media, or Rendered
+                            // tab, where the markdown editor isn't rendered.
+                            // Leave Split alone — the editor is already
+                            // visible there.
+                            if selectedTab == .pdf || selectedTab == .html || selectedTab == .media || selectedTab == .rendered {
+                                selectedTab = .reader
+                            }
+                        }
+                        .keyboardShortcut("e", modifiers: .command)
+                        .disabled(isRunning)
+                    }
+                    // Share — resolves the canonical URL from the daemon
+                    // (like openSource) so the filename is human-readable
+                    // and the URL is guaranteed to resolve.
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        DebugLog.tabs("SourceDetailView: Show in List tapped — id=\(file.id.rawValue)")
+                        store.requestSidebarReveal(.source(file.id))
+                    }
+                    .help("Reveal this source in the sidebar")
+                    if fileProvider.path != nil {
+                        Button("Share", systemImage: "square.and.arrow.up") {
+                            DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
+                            Task {
+                                guard let url = await fileProvider.resolveSourceByNameURL(id: file.id, wikiID: wikiID) else {
+                                    DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID)")
+                                    return
+                                }
+                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
+                                let picker = NSSharingServicePicker(items: [url])
+                                let mouseScreen = NSEvent.mouseLocation
+                                guard let window = NSApplication.shared.keyWindow,
+                                      let contentView = window.contentView else { return }
+                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                let viewPoint = contentView.convert(windowPoint, from: nil)
+                                picker.show(
+                                    relativeTo: NSRect(origin: viewPoint,
+                                                       size: NSSize(width: 1, height: 1)),
+                                    of: contentView, preferredEdge: .minY)
+                            }
+                        }
+                        .help("Share this source file")
+                        Button("Reveal in Finder", systemImage: "folder") {
+                            DebugLog.fileprovider("SourceDetailView: Reveal in Finder tapped — id=\(file.id.rawValue)")
+                            Task { await fileProvider.revealSourceInFinder(id: file.id, wikiID: wikiID) }
+                        }
+                        .help("Reveal this source file in Finder")
+                    }
+                    if isOutlineApplicable {
+                        // Pin action buttons at the leading edge and the
+                        // outline toggle at the trailing edge (see the
+                        // matching comment in the editing branch above).
+                        Spacer()
+                        Button {
+                            DebugLog.tabs("SourceDetailView: Toggle Outline tapped")
+                            isOutlineExpanded.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("Toggle Outline")
+                    }
+                }
+            }
+        }
+    }
+
 
     // MARK: - Refresh (Phase 3b)
 
