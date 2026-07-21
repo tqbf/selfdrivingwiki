@@ -77,5 +77,18 @@ public enum DebugLog {
     public static func debug(_ message: @autoclosure () -> String) {
         emit("store", message())
     }
+
+    /// No-op signposter for Linux (OSSignposter is macOS-only). Returns a
+    /// dummy state so call sites compile without #if guards.
+    public static let signposter = NoOpSignposter()
+
+    /// A no-op replacement for OSSignposter on platforms without the `os`
+    /// module. `beginInterval`/`endInterval` are no-ops — the state type is
+    /// a singleton `()`, matching the "near-free when no recorder is attached"
+    /// semantics of the real OSSignposter.
+    public struct NoOpSignposter: Sendable {
+        public func beginInterval(_ name: String) -> Void { }
+        public func endInterval(_ name: String, _ state: Void) { }
+    }
     #endif
 }
