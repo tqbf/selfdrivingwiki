@@ -5,6 +5,8 @@ import WikiFSCore
 /// launchd plist and the `WikiDaemonConnection.serviceName` in the client.
 let WikiDaemonMachServiceName = "com.selfdrivingwiki.wikid"
 
+#if os(macOS)
+
 // MARK: - XPC listener delegate
 
 final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
@@ -114,3 +116,108 @@ DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
 
 // Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
 RunLoop.current.run()
+
+#else // Linux
+
+// MARK: - Linux stdio JSON-RPC transport
+
+// On Linux there is no XPC / launchd. The daemon reads line-delimited JSON-RPC
+// requests from stdin and writes line-delimited JSON-RPC responses to stdout.
+// This is the MVP transport for issue #754: "starts, opens a DB, serves — even
+// if feature-incomplete." A richer transport (Unix domain socket, gRPC) is a
+// follow-up.
+
+// Resolve the container directory: (1) --container arg, (2) WIKI_CONTAINER_DIR
+// env var, (3) ~/.local/share/selfdrivingwiki as a last-resort default.
+let containerDirectory: URL
+if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }),
+   FileManager.default.fileExists(atPath: argPath) {
+    containerDirectory = URL(fileURLWithPath: argPath, isDirectory: true)
+} else if let envPath = ProcessInfo.processInfo.environment["WIKI_CONTAINER_DIR"],
+          FileManager.default.fileExists(atPath: envPath) {
+    containerDirectory = URL(fileURLWithPath: envPath, isDirectory: true)
+} else {
+    // Linux default — a conventional XDG-style data directory.
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let defaultDir = home.appendingPathComponent(".local/share/selfdrivingwiki", isDirectory: true)
+    try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+    containerDirectory = defaultDir
+}
+
+let daemon = WikiDaemon(containerDirectory: containerDirectory)
+
+DebugLog.store("wikid: daemon started (Linux stdio transport), container=\(containerDirectory.path)")
+
+// Simple line-delimited JSON-RPC loop.
+// Request:  {"method": "listWikis", "id": 1, "params": {}}
+// Response: {"id": 1, "result": <data>}   or   {"id": 1, "error": "..."}
+while let line = readLine() {
+    guard !line.isEmpty,
+          let lineData = line.data(using: .utf8),
+          let req = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+          let method = req["method"] as? String,
+          let id = req["id"]
+    else {
+        let resp = ["id": req["id"] ?? -1, "error": "invalid request"] as [String: Any]
+        if let data = try? JSONSerialization.data(withJSONObject: resp),
+           let str = String(data: data, encoding: .utf8) { print(str); fflush(stdout) }
+        continue
+    }
+
+    let params = req["params"] as? [String: Any] ?? [:]
+    var result: Any? = nil
+    var error: String? = nil
+
+    switch method {
+    case "listWikis":
+        result = String(data: daemon.listWikis(), encoding: .utf8) ?? "[]"
+    case "createWiki":
+        let name = params["name"] as? String ?? ""
+        if let data = daemon.createWiki(name: name) {
+            result = String(data: data, encoding: .utf8)
+        } else {
+            error = "createWiki failed"
+        }
+    case "deleteWiki":
+        let idStr = params["id"] as? String ?? ""
+        result = daemon.deleteWiki(id: idStr)
+    case "renameWiki":
+        let idStr = params["id"] as? String ?? ""
+        let name = params["name"] as? String ?? ""
+        result = daemon.renameWiki(id: idStr, name: name)
+    case "resolveWiki":
+        let selector = params["selector"] as? String ?? ""
+        if let data = daemon.resolveWiki(selector: selector) {
+            result = String(data: data, encoding: .utf8)
+        } else {
+            result = nil
+        }
+    case "openStore":
+        let wikiID = params["wikiID"] as? String ?? ""
+        result = daemon.openStore(wikiID: wikiID)
+    case "closeStore":
+        let wikiID = params["wikiID"] as? String ?? ""
+        daemon.closeStore(wikiID: wikiID)
+        result = nil
+    case "changeToken":
+        let wikiID = params["wikiID"] as? String ?? ""
+        result = daemon.changeToken(wikiID: wikiID)
+    default:
+        error = "unknown method: \(method)"
+    }
+
+    var resp: [String: Any] = ["id": id]
+    if let error {
+        resp["error"] = error
+    } else {
+        resp["result"] = result
+    }
+
+    if let data = try? JSONSerialization.data(withJSONObject: resp),
+       let str = String(data: data, encoding: .utf8) {
+        print(str)
+        fflush(stdout)
+    }
+}
+
+#endif
