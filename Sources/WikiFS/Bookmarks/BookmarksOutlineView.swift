@@ -401,6 +401,43 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         return list
     }
 
+    /// The private `com.selfdrivingwiki.bookmark-node-id` pasteboard type that
+    /// identifies a drag as originating from THIS bookmarks outline (intra-tree
+    /// reorder / move). Only `SidebarDragPasteboardItem` for a bookmark row
+    /// carries it; external sidebar drags (omnibox icon, SwiftUI `.draggable`
+    /// rows) and wiki-link drags do not.
+    private static let bookmarkNodeType =
+        NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+
+    /// True when the drag originated from this outline — i.e. the pasteboard
+    /// carries the private `bookmark-node-id` type. This is the signal that
+    /// distinguishes an intra-outline folder move (issue #743) from an external
+    /// `SidebarDragPayloadList` drop that should create bookmarks (the #150
+    /// welcome-screen feature). A folder's pasteboard writer always carries
+    /// BOTH representations, so we must check this BEFORE
+    /// `firstSidebarPayload` — otherwise a folder dragged within the outline
+    /// is misread as a sidebar-payload drop and copy-by-contents the leaves.
+    private static func isOutlineInternalDrag(_ pb: NSPasteboard) -> Bool {
+        (pb.pasteboardItems ?? []).contains { $0.string(forType: bookmarkNodeType) != nil }
+    }
+
+    /// Reads the bookmark node ids off an intra-outline drag's pasteboard
+    /// (one per dragged row — multi-selection is allowed). Empty for external
+    /// / wiki-link drags.
+    private static func draggedBookmarkNodeIDs(from pb: NSPasteboard) -> [String] {
+        (pb.pasteboardItems ?? [])
+            .compactMap { $0.string(forType: bookmarkNodeType) }
+    }
+
+    /// True when `ancestorID` is `id` or lies anywhere on `id`'s descendant
+    /// chain — used to refuse moving a folder into itself or one of its own
+    /// descendants (would create a cycle). Walks the in-memory children map
+    /// (already built for the outline), so it reflects the visible tree.
+    private func isDescendant(_ ancestorID: String, of id: String) -> Bool {
+        if ancestorID == id { return true }
+        return children(of: id).contains { isDescendant(ancestorID, of: $0.id) }
+    }
+
     /// Resolve a dropped sidebar-item payload and insert a bookmark node for
     /// each target (page/source/chat) at the drop position. Mirrors the
     /// wiki-link drop's parent/position resolution.
@@ -518,6 +555,35 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             if item is BookmarkNode { return .copy }              // leaf → sibling
             return []
         }
+        // Intra-outline move/reorder: the drag originated from THIS outline
+        // (pasteboard carries the private `bookmark-node-id` type). This MUST
+        // be checked BEFORE the sidebar-payload branch: a folder's writer
+        // carries BOTH the node id and a `SidebarDragPayloadList` (the latter
+        // for the #150 welcome-screen drop), so checking the payload first
+        // misreads an intra-outline folder drag as a "create bookmarks for the
+        // leaves" copy — issue #743. Only external sidebar drags (omnibox
+        // icon, SwiftUI `.draggable` rows, which have no bookmark-node-id type)
+        // fall through to the sidebar-payload branch.
+        if Self.isOutlineInternalDrag(info.draggingPasteboard) {
+            guard info.draggingSourceOperationMask.contains(.move) else { return [] }
+            // Refuse to move a folder into itself or one of its own
+            // descendants (cycle). The store guards this too, but advertising
+            // [] here gives the right no-drop cursor affordance.
+            if let folder = item as? BookmarkNode, folder.kind == .folder {
+                for id in Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard) {
+                    if isDescendant(folder.id, of: id) { return [] }
+                }
+                return .move
+            }
+            if item == nil {
+                return .move
+            }
+            // Allow reorder between siblings.
+            if item is BookmarkNode {
+                return .move
+            }
+            return []
+        }
         // Sidebar-item drop: a page/source/chat dragged from the omnibox icon
         // or a sidebar row via SwiftUI .draggable. Accept as `.copy` so
         // `acceptDrop` creates a bookmark node for the payload's target.
@@ -526,18 +592,6 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             if (item as? BookmarkNode)?.kind == .folder { return .copy }
             if item is BookmarkNode { return .copy }              // leaf → sibling
             return []
-        }
-        guard info.draggingSourceOperationMask.contains(.move) else { return [] }
-        // Allow drop onto folders or between rows.
-        if let folder = item as? BookmarkNode, folder.kind == .folder {
-            return .move
-        }
-        if item == nil {
-            return .move
-        }
-        // Allow reorder between siblings.
-        if item is BookmarkNode {
-            return .move
         }
         return []
     }
@@ -556,40 +610,57 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             return acceptWikiLinkDrop(url: url, onto: item, atIndex: index, store: store)
         }
 
+        // Intra-outline move/reorder (issue #743): when the drag originated
+        // from THIS outline — pasteboard carries the private `bookmark-node-id`
+        // type — take the move path BEFORE the sidebar-payload branch. A
+        // folder's writer carries BOTH the node id and a
+        // `SidebarDragPayloadList` (the latter for the #150 welcome-screen
+        // drop); checking the payload first would misread an intra-outline
+        // folder drag as a "create bookmarks for every leaf" copy. Only
+        // external sidebar drags (no bookmark-node-id type) fall through to
+        // the sidebar-payload branch below.
+        if Self.isOutlineInternalDrag(info.draggingPasteboard) {
+            let draggedIDs = Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard)
+            guard !draggedIDs.isEmpty else { return false }
+
+            func moveAll(toParentID parentID: String?, startingAt position: Int) -> Bool {
+                var position = position
+                var succeeded = true
+                for id in draggedIDs {
+                    succeeded = store.moveBookmarkNode(id: id, toParentID: parentID, position: position) && succeeded
+                    position += 1
+                }
+                return succeeded
+            }
+
+            if let folder = item as? BookmarkNode, folder.kind == .folder {
+                // Refuse moving a folder into itself or one of its own
+                // descendants (cycle). validateDrop advertises [] for this,
+                // but guard here too in case acceptDrop is reached anyway.
+                for id in draggedIDs where isDescendant(folder.id, of: id) {
+                    DebugLog.tabs("[drop] bookmark move refused: \(id) → \(folder.id) (descendant)")
+                    return false
+                }
+                return moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count)
+            }
+
+            if let leaf = item as? BookmarkNode {
+                // Reorder within the same parent.
+                return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
+            }
+
+            // Root append
+            return moveAll(toParentID: nil, startingAt: children(of: nil).count)
+        }
+
         // Sidebar-item drop → create a bookmark for each page/source/chat in
-        // the payload (omnibox icon drag, or a SwiftUI .draggable sidebar row).
+        // the payload (omnibox icon drag, or a SwiftUI .draggable sidebar row,
+        // or a bookmark folder dragged onto the welcome screen — #150).
         if let payloadList = Self.firstSidebarPayload(from: info.draggingPasteboard) {
             return acceptSidebarPayloadDrop(payloadList, onto: item, atIndex: index, store: store)
         }
 
-        // Multi-selection is allowed, so a reorder drag can carry more than one
-        // node id — one pasteboard item per dragged row.
-        let bookmarkNodeType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
-        let draggedIDs = (info.draggingPasteboard.pasteboardItems ?? [])
-            .compactMap { $0.string(forType: bookmarkNodeType) }
-        guard !draggedIDs.isEmpty else { return false }
-
-        func moveAll(toParentID parentID: String?, startingAt position: Int) -> Bool {
-            var position = position
-            var succeeded = true
-            for id in draggedIDs {
-                succeeded = store.moveBookmarkNode(id: id, toParentID: parentID, position: position) && succeeded
-                position += 1
-            }
-            return succeeded
-        }
-
-        if let folder = item as? BookmarkNode, folder.kind == .folder {
-            return moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count)
-        }
-
-        if let leaf = item as? BookmarkNode {
-            // Reorder within the same parent.
-            return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
-        }
-
-        // Root append
-        return moveAll(toParentID: nil, startingAt: children(of: nil).count)
+        return false
     }
 }
 
