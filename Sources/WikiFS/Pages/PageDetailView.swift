@@ -57,112 +57,41 @@ struct PageDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header — title always visible; date + action buttons expandable.
-            CollapsibleDetailHeader(
-                systemImage: ResourceKind.page.systemImageName,
-                title: store.draftTitle,
-                isExpanded: $isHeaderExpanded,
-                onTitleCommit: renameCurrentPage
-            ) {
-                VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-                    HStack(spacing: 12) {
-                    if let date = pageUpdatedAt {
-                        Text(date, style: .date)
+            // Header — title always visible; date + provenance expandable.
+            //
+            // The action toolbar (Save/Cancel/Edit/Lint/Show in List/Share/
+            // Reveal in Finder + outline toggle) is rendered as a SIBLING of
+            // CollapsibleDetailHeader — NOT inside its content closure (which
+            // constrains expanded content to readableContentWidth). The
+            // sibling row spans the full view width so the trailing
+            // Spacer/outline toggle reach the view's right edge instead of
+            // the readable-column edge. This mirrors the ChatView reference
+            // pattern (Sources/WikiFS/Chats/ChatView.swift:670-710); both
+            // rows are gated on `isHeaderExpanded` for collapse behavior.
+            VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                CollapsibleDetailHeader(
+                    systemImage: ResourceKind.page.systemImageName,
+                    title: store.draftTitle,
+                    isExpanded: $isHeaderExpanded,
+                    onTitleCommit: renameCurrentPage
+                ) {
+                    VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                        HStack(spacing: 12) {
+                            if let date = pageUpdatedAt {
+                                Text(date, style: .date)
+                            }
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                        provenanceSection
                     }
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
 
-                provenanceSection
-
-                HStack(spacing: 10) {
-                    if isEditing {
-                        Button("Save Changes", systemImage: "checkmark.circle") {
-                            DebugLog.tabs("PageDetailView: Save Changes tapped")
-                            commitEdit()
-                        }
-                        .keyboardShortcut("s", modifiers: .command)
-                        .disabled(store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                        Button("Cancel", systemImage: "xmark.circle") {
-                            DebugLog.tabs("PageDetailView: Cancel tapped")
-                            cancelEdit()
-                        }
-                        .keyboardShortcut(.escape, modifiers: [])
-
-                        // Pin action buttons at the leading edge and the
-                        // outline toggle at the trailing edge so the row's
-                        // layout is independent of the parent's proposed width
-                        // (which changes when the outline pane or the header
-                        // expands/collapses — keeps "Show in List" and friends
-                        // in a fixed position).
-                        Spacer()
-                        Button {
-                            DebugLog.tabs("PageDetailView: Toggle Outline tapped (editing)")
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
-                        }
-                        .help("Toggle Outline")
-                    } else {
-                        Button("Edit",
-                               systemImage: "pencil") {
-                            DebugLog.tabs("PageDetailView: Edit tapped")
-                            isEditing = true
-                        }
-                            .help("Edit this page manually")
-                        if case .page = store.selection {
-                            lintButton
-                        }
-                        if case .page(let pageID) = store.selection {
-                            Button("Show in List", systemImage: "sidebar.left") {
-                                DebugLog.tabs("PageDetailView: Show in List tapped — id=\(pageID.rawValue)")
-                                store.requestSidebarReveal(.page(pageID))
-                            }
-                            .help("Reveal this page in the sidebar")
-                        }
-                        if fileProvider.path != nil, case .page(let pageID) = store.selection {
-                            Button("Share", systemImage: "square.and.arrow.up") {
-                                DebugLog.fileprovider("PageDetailView: Share tapped — id=\(pageID.rawValue)")
-                                Task {
-                                    guard let url = await fileProvider.resolvePageByTitleURL(id: pageID, wikiID: session.wikiID) else {
-                                        DebugLog.fileprovider("Share page detail: resolvePageByTitleURL returned nil — id=\(pageID.rawValue) wikiID=\(session.wikiID)")
-                                        return
-                                    }
-                                    DebugLog.fileprovider("Share page detail: \(url.lastPathComponent)")
-                                    let picker = NSSharingServicePicker(items: [url])
-                                    let mouseScreen = NSEvent.mouseLocation
-                                    guard let window = NSApplication.shared.keyWindow,
-                                          let contentView = window.contentView else { return }
-                                    let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                                    let viewPoint = contentView.convert(windowPoint, from: nil)
-                                    picker.show(
-                                        relativeTo: NSRect(origin: viewPoint,
-                                                           size: NSSize(width: 1, height: 1)),
-                                        of: contentView, preferredEdge: .minY)
-                                }
-                            }
-                            .help("Share this page")
-                            Button("Reveal in Finder", systemImage: "folder") {
-                                DebugLog.fileprovider("PageDetailView: Reveal in Finder tapped — id=\(pageID.rawValue)")
-                                Task { await fileProvider.revealPageInFinder(id: pageID, wikiID: session.wikiID) }
-                            }
-                            .help("Reveal this page file in Finder")
-                        }
-                        // Pin action buttons at the leading edge and the outline
-                        // toggle at the trailing edge (see the matching comment
-                        // in the editing branch above).
-                        Spacer()
-                        Button {
-                            DebugLog.tabs("PageDetailView: Toggle Outline tapped")
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
-                        }
-                        .help("Toggle Outline")
-                    }
-                    }
-                    .frame(maxWidth: .infinity)
+                if isHeaderExpanded {
+                    pageActionBar
+                        .frame(maxWidth: .infinity)
+                        .transition(.opacity)
                 }
             }
             .padding(.horizontal, PageEditorMetrics.contentInset)
@@ -256,6 +185,105 @@ struct PageDetailView: View {
                 Text("A page with the title “\(title)” already exists. Please choose a different name.")
             }
         }
+    }
+
+    // MARK: - Header action bar (full-width toolbar row)
+
+    /// The page detail action toolbar row. Rendered as a sibling of
+    /// `CollapsibleDetailHeader` — NOT inside its expanded content — so this
+    /// HStack spans the FULL view width. The trailing
+    /// `Spacer(minLength: 0)`/`Spacer` therefore pushes the outline toggle
+    /// all the way to the view's right edge (mirrors `ChatView.chatActionBar`).
+    @ViewBuilder
+    private var pageActionBar: some View {
+        HStack(spacing: 10) {
+            if isEditing {
+                Button("Save Changes", systemImage: "checkmark.circle") {
+                    DebugLog.tabs("PageDetailView: Save Changes tapped")
+                    commitEdit()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button("Cancel", systemImage: "xmark.circle") {
+                    DebugLog.tabs("PageDetailView: Cancel tapped")
+                    cancelEdit()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+
+                // Pin action buttons at the leading edge and the
+                // outline toggle at the trailing edge so the row's
+                // layout is independent of the parent's proposed width
+                // (which changes when the outline pane or the header
+                // expands/collapses — keeps "Show in List" and friends
+                // in a fixed position).
+                Spacer()
+                Button {
+                    DebugLog.tabs("PageDetailView: Toggle Outline tapped (editing)")
+                    isOutlineExpanded.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .help("Toggle Outline")
+            } else {
+                Button("Edit",
+                       systemImage: "pencil") {
+                    DebugLog.tabs("PageDetailView: Edit tapped")
+                    isEditing = true
+                }
+                    .help("Edit this page manually")
+                if case .page = store.selection {
+                    lintButton
+                }
+                if case .page(let pageID) = store.selection {
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        DebugLog.tabs("PageDetailView: Show in List tapped — id=\(pageID.rawValue)")
+                        store.requestSidebarReveal(.page(pageID))
+                    }
+                    .help("Reveal this page in the sidebar")
+                }
+                if fileProvider.path != nil, case .page(let pageID) = store.selection {
+                    Button("Share", systemImage: "square.and.arrow.up") {
+                        DebugLog.fileprovider("PageDetailView: Share tapped — id=\(pageID.rawValue)")
+                        Task {
+                            guard let url = await fileProvider.resolvePageByTitleURL(id: pageID, wikiID: session.wikiID) else {
+                                DebugLog.fileprovider("Share page detail: resolvePageByTitleURL returned nil — id=\(pageID.rawValue) wikiID=\(session.wikiID)")
+                                return
+                            }
+                            DebugLog.fileprovider("Share page detail: \(url.lastPathComponent)")
+                            let picker = NSSharingServicePicker(items: [url])
+                            let mouseScreen = NSEvent.mouseLocation
+                            guard let window = NSApplication.shared.keyWindow,
+                                  let contentView = window.contentView else { return }
+                            let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                            let viewPoint = contentView.convert(windowPoint, from: nil)
+                            picker.show(
+                                relativeTo: NSRect(origin: viewPoint,
+                                                   size: NSSize(width: 1, height: 1)),
+                                of: contentView, preferredEdge: .minY)
+                        }
+                    }
+                    .help("Share this page")
+                    Button("Reveal in Finder", systemImage: "folder") {
+                        DebugLog.fileprovider("PageDetailView: Reveal in Finder tapped — id=\(pageID.rawValue)")
+                        Task { await fileProvider.revealPageInFinder(id: pageID, wikiID: session.wikiID) }
+                    }
+                    .help("Reveal this page file in Finder")
+                }
+                // Pin action buttons at the leading edge and the outline
+                // toggle at the trailing edge (see the matching comment
+                // in the editing branch above).
+                Spacer()
+                Button {
+                    DebugLog.tabs("PageDetailView: Toggle Outline tapped")
+                    isOutlineExpanded.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .help("Toggle Outline")
+            }
+            }
+            .frame(maxWidth: .infinity)
     }
 
     // MARK: - Lint button
