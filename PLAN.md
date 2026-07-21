@@ -44,6 +44,7 @@ load-bearing for the app to function.
 | [`plans/query-conversation.md`](plans/query-conversation.md) | **Current Query direction:** a dedicated sidebar page with an interactive Claude session; output-first chat by default, hidden tool/internal rows behind a checkbox, and writes via `wikictl` only when the user asks to persist changes. |
 | [`plans/BRINGUP.md`](plans/BRINGUP.md) | The 4-phase bring-up plan from skeleton to v0 (groups INITIAL.md's M0–M6). Source of truth for *the order we build in*. |
 | [`plans/build-environment.md`](plans/build-environment.md) | How the app is built: SwiftPM + `build.sh` + `Makefile`, signing, icon generation, app-bundle layout. Source of truth for *how we build and run*. |
+| [`plans/bundle-uv.md`](plans/bundle-uv.md) | Bundle the `uv` runtime (single static binary, like `bun`) into `Contents/Helpers` so the `pdf2md` PEP 723 script is self-contained — no system uv needed. (#766) |
 | [`plans/file-provider.md`](plans/file-provider.md) | File Provider extension build + the 5 hard-won gotchas (entry-point recursion, entitlements⊆profile, user-enable toggle, /Applications, keychain). Proven by the 2026-06-15 spike. Read before Phase 2. |
 | [`plans/signing.md`](plans/signing.md) | The Apple cert / App Group / File Provider provisioning checklist (manual portal). Do this before Phase 2. Source of truth for *the Apple incantations*. |
 | [`plans/zotero-integration.md`](plans/zotero-integration.md) | browse a Zotero library from inside the app, ingest PDF/Markdown attachments through the existing ingest pipeline. |
