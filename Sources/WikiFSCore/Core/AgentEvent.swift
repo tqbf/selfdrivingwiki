@@ -12,6 +12,13 @@ public enum TurnFailureReason: Sendable, Equatable, Codable {
     case ceilingExceeded(totalSeconds: TimeInterval)
     /// The ACP subprocess returned an error (prompt failure, auth, etc.).
     case agentError(String)
+    /// #727: the provider hit a quota limit. Carries the provider id and the
+    /// reset time (when known) so the UI can show "Provider X exhausted until
+    /// <time> — falling back to Provider Y". `resetTime` is nil when the
+    /// error did not carry a timestamp (the coordinator applies a default).
+    /// Codable (forward-compatible: old persisted chats never carried this
+    /// case; new chats encode the associated values).
+    case quotaExhausted(provider: String, resetTime: Date?)
 
     /// A plain-English description for the UI banner and `plainText` rendering.
     public var description: String {
@@ -22,6 +29,17 @@ public enum TurnFailureReason: Sendable, Equatable, Codable {
             return "The agent exceeded the maximum turn duration (\(Int(total))s) and was cancelled."
         case .agentError(let message):
             return message
+        case .quotaExhausted(let provider, let resetTime):
+            let resetStr: String
+            if let resetTime {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .none
+                fmt.timeStyle = .short
+                resetStr = " until \(fmt.string(from: resetTime))"
+            } else {
+                resetStr = ""
+            }
+            return "Provider \(provider) quota exhausted\(resetStr)."
         }
     }
 
@@ -34,6 +52,8 @@ public enum TurnFailureReason: Sendable, Equatable, Codable {
             return "Turn ceiling exceeded."
         case .agentError:
             return "Agent error."
+        case .quotaExhausted:
+            return "Provider quota exhausted."
         }
     }
 }

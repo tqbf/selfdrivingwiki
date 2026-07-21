@@ -11,6 +11,11 @@ public enum HintKey: String, Sendable {
     case acpAgentApiKey
     /// The user's per-provider model selection (threads into `session/set_model`).
     case acpSelectedModelId
+    /// #727: the provider id this backend was spawned for (so the send catch
+    /// block can pass it to `ProviderQuotaDetector` for family disambiguation
+    /// and the launcher can tag the dead-provider map). Threaded by
+    /// `AgentBackendFactory.providerHints`.
+    case acpProviderId
 
     /// Prefix for environment-variable hints expanded into the child process
     /// environment by `ACPBackend.resolveSpawnConfig`.
