@@ -836,7 +836,26 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
 
     @objc private func deleteAction(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
-        callbacks?.onDelete(payload.effectiveNodes.map(\.id))
+        deleteNodes(payload.effectiveNodes.map(\.id))
+    }
+
+    /// Keyboard-delete entry point (Backspace / forward-Delete on selected
+    /// rows). Builds the effective node list from the outline's current
+    /// selection and routes through the same `onDelete` callback the
+    /// context-menu "Delete" item uses — no separate deletion path (#744).
+    @objc func deleteSelection() {
+        let nodes = outlineView.selectedRowIndexes.compactMap {
+            outlineView.item(atRow: $0) as? BookmarkNode
+        }
+        guard !nodes.isEmpty else { return }
+        deleteNodes(nodes.map(\.id))
+    }
+
+    /// Shared deletion seam for both the context-menu "Delete" action and the
+    /// keyboard Delete/Backspace path (`deleteSelection`).
+    private func deleteNodes(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        callbacks?.onDelete(ids)
     }
 }
 
@@ -849,5 +868,28 @@ final class BookmarksNSOutlineView: NSOutlineView {
         guard row >= 0 else { return nil }
         let item = self.item(atRow: row)
         return (self.delegate as? BookmarksOutlineViewController)?.outlineView(self, menuFor: item ?? "")
+    }
+
+    // Keyboard-delete (#744): when the outline view is first responder (no
+    // text field editing) and at least one row is selected, forward Delete /
+    // Backspace to the controller's deletion seam — the same `onDelete`
+    // callback the context-menu "Delete" item uses. A text field that is
+    // editing is the first responder and consumes `deleteBackward` /
+    // `deleteForward` itself, so this override only fires when no editor is
+    // active — renames/edit fields keep Backspace for text editing.
+    override func deleteBackward(_ sender: Any?) {
+        guard selectedRow != -1 else {
+            super.deleteBackward(sender)
+            return
+        }
+        (delegate as? BookmarksOutlineViewController)?.deleteSelection()
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        guard selectedRow != -1 else {
+            super.deleteForward(sender)
+            return
+        }
+        (delegate as? BookmarksOutlineViewController)?.deleteSelection()
     }
 }
