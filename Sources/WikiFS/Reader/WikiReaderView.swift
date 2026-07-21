@@ -331,7 +331,7 @@ enum WikiLinkRoute: Equatable, Sendable {
     /// Resolved chat link — navigate to a persisted chat. `id` is the
     /// canonical ULID when the URL carried `?id=`; nil for legacy `?title=`-only
     /// links, which resolve by `title` as the transition fallback. `fragment`
-    /// carries a `#"quote"` passage (issue #281): the destination `ChatView`
+    /// carries a `#"quote"` passage (issue #281): the destination `ChatDetailView`
     /// resolves it to a message and highlights the passage.
     case chat(title: String, id: PageID?, fragment: String?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.

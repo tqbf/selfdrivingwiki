@@ -193,7 +193,7 @@ import WikiFSCore
     /// Contract pin: the recovery events MUST include `.messageStop` so the
     /// downstream launcher's `AgentEvent.endsGeneration(_:)` branch fires →
     /// `setGenerating(false)` (AgentLauncher.swift, inside the `endsGeneration`
-    /// branch). Without `.messageStop`, ChatView stays stuck "generating" —
+    /// branch). Without `.messageStop`, ChatDetailView stays stuck "generating" —
     /// the second half of the #615 symptom. This is a contract pin (the
     /// `turnEndEvents` synthesis), NOT a behavioral test that
     /// `setGenerating(false)` fires in `AgentLauncher` — that is launcher-tier

@@ -5,7 +5,7 @@ import WikiFSEngine
 import WikiFSCore
 
 /// The unified chat surface (D2, pillar 2). One view replaces the split
-/// between the live `ChatView` and the read-only
+/// between the live `ChatDetailView` and the read-only
 /// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
 /// transcript depends on the **source-of-truth rule**: if this chat is the
 /// launcher's active live session (`activeChatID == chatID`), render
@@ -16,7 +16,7 @@ import WikiFSCore
 /// showing the empty-composer state until the first send retargets the tab to
 /// `.chat(id)` (the draft-state morph, handled by `AgentOperationRunner`).
 /// Chats are always write-capable (the read-only Ask mode was removed).
-struct ChatView: View {
+struct ChatDetailView: View {
     /// The persisted chat id, or `nil` for the draft state (.newChat). When
     /// non-nil AND equal to `launcher.activeChatID`, the view renders live.
     let chatID: PageID?
@@ -725,14 +725,14 @@ struct ChatView: View {
         HStack(spacing: 10) {
             if let chatID {
                 Button("Show in List", systemImage: "sidebar.left") {
-                    DebugLog.tabs("ChatView: Show in List tapped — id=\(chatID.rawValue)")
+                    DebugLog.tabs("ChatDetailView: Show in List tapped — id=\(chatID.rawValue)")
                     store.requestSidebarReveal(.chat(chatID))
                 }
                 .help("Reveal this chat in the sidebar")
             }
             if fileProvider.path != nil, let chatID {
                 Button("Share", systemImage: "square.and.arrow.up") {
-                    DebugLog.fileprovider("ChatView: Share tapped — id=\(chatID.rawValue)")
+                    DebugLog.fileprovider("ChatDetailView: Share tapped — id=\(chatID.rawValue)")
                     Task {
                         guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
                             DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
@@ -753,7 +753,7 @@ struct ChatView: View {
                 }
                 .help("Share this chat")
                 Button("Reveal in Finder", systemImage: "folder") {
-                    DebugLog.fileprovider("ChatView: Reveal in Finder tapped — id=\(chatID.rawValue)")
+                    DebugLog.fileprovider("ChatDetailView: Reveal in Finder tapped — id=\(chatID.rawValue)")
                     Task { await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID) }
                 }
                 .help("Reveal this chat file in Finder")
@@ -765,7 +765,7 @@ struct ChatView: View {
             // frame — Bug 1 fix).
             Spacer(minLength: 0)
             Button {
-                DebugLog.tabs("ChatView: Toggle Outline tapped")
+                DebugLog.tabs("ChatDetailView: Toggle Outline tapped")
                 chatOutlineExpanded.toggle()
             } label: {
                 Image(systemName: "sidebar.right")
@@ -811,7 +811,7 @@ struct ChatView: View {
     @ViewBuilder
     private func revealDebugFolderButton(chatID: PageID, debugURL: URL?) -> some View {
         Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-            DebugLog.agent("ChatView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
+            DebugLog.agent("ChatDetailView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
             if let debugURL {
                 NSWorkspace.shared.activateFileViewerSelecting([debugURL])
             } else {
@@ -822,7 +822,7 @@ struct ChatView: View {
                 // brief; the disabled state should already prevent this).
                 // Log so the click is visible in Console.app (belt-and-
                 // suspenders).
-                DebugLog.agent("ChatView: no debug folder available for chat — id=\(chatID.rawValue) (no runs on disk)")
+                DebugLog.agent("ChatDetailView: no debug folder available for chat — id=\(chatID.rawValue) (no runs on disk)")
             }
         }
         .disabled(debugURL == nil)
@@ -1387,7 +1387,7 @@ struct ChatView: View {
     }
 
     private var canType: Bool {
-        // A session is always alive when ChatView is rendered inside
+        // A session is always alive when ChatDetailView is rendered inside
         // ContentView, so the old `activeWikiID != nil` check is
         // always true here.
         // #740: typing (drafting) is allowed during generation so the user can
@@ -1502,7 +1502,7 @@ private struct ChatAttachment: Identifiable, Hashable {
     }
 }
 
-/// `Hashable` key for the `ChatView` quote-anchor consume task (issue #281).
+/// `Hashable` key for the `ChatDetailView` quote-anchor consume task (issue #281).
 /// Re-fires the task when the chat changes, a new anchor is pending, or the
 /// transcript's message count changes (so the anchor is consumed only once the
 /// persisted messages have loaded).

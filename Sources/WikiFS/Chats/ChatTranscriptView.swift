@@ -5,7 +5,7 @@ import WikiFSCore
 /// persisted (read-only) chat surfaces. Rendered from a caller-supplied `events`
 /// array (already `transcriptVisible`-filtered), so the live path feeds
 /// `launcher.events` and the persisted path feeds `store.chatMessages` through
-/// the same view — collapsing the old dual render sites in `ChatView`.
+/// the same view — collapsing the old dual render sites in `ChatDetailView`.
 struct ChatTranscriptView: View {
     /// The transcript-visible events to render (caller pre-filters via
     /// `[AgentEvent].transcriptVisible`).
@@ -22,11 +22,11 @@ struct ChatTranscriptView: View {
     /// persisted surface passes `false` (it is never the active stream).
     var isRunning: Bool = false
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
-    /// where the store lives (the parent `ChatView`) and forwarded unchanged to
+    /// where the store lives (the parent `ChatDetailView`) and forwarded unchanged to
     /// the transcript web view.
     var onWikiLink: ((URL, Bool) -> Void)? = nil
     /// Provider of the current `WikiRenderContext` (Phase A.2) — bound to
-    /// `store.renderContext()` by `ChatView`, so chat rows render source
+    /// `store.renderContext()` by `ChatDetailView`, so chat rows render source
     /// references exactly as the reader does. Forwarded unchanged to the
     /// transcript web view.
     var renderContext: (() -> WikiRenderContext?)? = nil

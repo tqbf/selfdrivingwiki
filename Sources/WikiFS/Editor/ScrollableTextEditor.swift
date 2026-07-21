@@ -72,7 +72,7 @@ struct ScrollableTextEditor: NSViewRepresentable {
     /// are decoupled from `WikiFSCore` / `DroppedLinkFormatter` so the AppKit
     /// controller stays dependency-light. Built by `PageDetailView` and
     /// `SourceDetailView` from `store.tantivySearch` (same pattern as
-    /// `ChatView.chatAutocompleteHooks`).
+    /// `ChatDetailView.chatAutocompleteHooks`).
     var autocomplete: WikiLinkAutocompleteHooks? = nil
 
     /// Preferred dropdown placement relative to the caret. The chat composer

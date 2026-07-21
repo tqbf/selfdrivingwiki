@@ -65,7 +65,7 @@ struct AgentToolsView: View {
     /// edge — mirrors `BookmarksContainerView`'s `bookmarksHeader` (native
     /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
     /// opens the draft state for a new chat by retargeting/opening a tab to
-    /// `.newChat` — the same draft state `ChatView` renders with `chatID ==
+    /// `.newChat` — the same draft state `ChatDetailView` renders with `chatID ==
     /// nil`. This reuses the existing `store.openTab` path rather than
     /// duplicating tab logic. (D4)
     private var chatsHeader: some View {

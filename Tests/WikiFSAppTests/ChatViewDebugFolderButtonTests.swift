@@ -6,7 +6,7 @@ import WikiFSCore
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Tests for `ChatView.debugFolderButtonHelpText` (#671 / Bug 2) — the
+/// Tests for `ChatDetailView.debugFolderButtonHelpText` (#671 / Bug 2) — the
 /// "Reveal Debug Folder" button's help-text predicate.
 ///
 /// Bug 2 context: the button was gated on (and therefore only visible when)
@@ -40,7 +40,7 @@ import WikiFSCore
     /// creation) hits the disabled state with an explanatory tooltip so the
     /// operator knows why AND that the feature exists at all (Bug 2).
     @Test func helpText_whenNoDebugURL_explainsNoRunsOnDisk() {
-        #expect(ChatView.debugFolderButtonHelpText(debugURL: nil) ==
+        #expect(ChatDetailView.debugFolderButtonHelpText(debugURL: nil) ==
             "No debug folder on disk for this chat")
     }
 
@@ -51,7 +51,7 @@ import WikiFSCore
     /// before Bug 2's fix, so enabled-state UX is unchanged.
     @Test func helpText_whenDebugURLPresent_describesTrace() {
         let url = URL(fileURLWithPath: "/tmp/some-chat/debug")
-        #expect(ChatView.debugFolderButtonHelpText(debugURL: url) ==
+        #expect(ChatDetailView.debugFolderButtonHelpText(debugURL: url) ==
             "Open the complete debug trace folder (ACP messages, permissions, usage)")
     }
 
@@ -63,8 +63,8 @@ import WikiFSCore
     @Test func helpText_isIdentical_forAnyNonNilURL() {
         let urlA = URL(fileURLWithPath: "/var/folders/xyz/01JAAA/debug")
         let urlB = URL(fileURLWithPath: "/Users/dev/Library/Group Containers/.../chat-id/debug")
-        #expect(ChatView.debugFolderButtonHelpText(debugURL: urlA) ==
-            ChatView.debugFolderButtonHelpText(debugURL: urlB))
+        #expect(ChatDetailView.debugFolderButtonHelpText(debugURL: urlA) ==
+            ChatDetailView.debugFolderButtonHelpText(debugURL: urlB))
     }
 
     /// Help-text contract: the two states return distinct copy (the disabled
@@ -73,8 +73,8 @@ import WikiFSCore
     /// surface here.
     @Test func helpText_disabledAndEnabledStates_areDifferent() {
         let url = URL(fileURLWithPath: "/tmp/debug")
-        let disabled = ChatView.debugFolderButtonHelpText(debugURL: nil)
-        let enabled = ChatView.debugFolderButtonHelpText(debugURL: url)
+        let disabled = ChatDetailView.debugFolderButtonHelpText(debugURL: nil)
+        let enabled = ChatDetailView.debugFolderButtonHelpText(debugURL: url)
         #expect(disabled != enabled)
         #expect(!disabled.isEmpty)
         #expect(!enabled.isEmpty)

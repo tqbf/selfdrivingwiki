@@ -123,7 +123,7 @@ import WikiFSEngine
 
     /// #10 — Fresh install defaults: every kind resolves to `.bypass` when no
     /// keys are set. The §5.2 read-time `?? fallback` is the second line of
-    /// defense; `@AppStorage`'s default (in Settings + ChatView) is the first.
+    /// defense; `@AppStorage`'s default (in Settings + ChatDetailView) is the first.
     @Test func defaultsWhenUnset() {
         let defaults = makeDefaults()
         let launcher = makeLauncher(defaults: defaults)

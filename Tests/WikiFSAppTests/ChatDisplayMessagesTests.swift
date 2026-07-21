@@ -5,7 +5,7 @@ import WikiFSCore
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Unit tests for `ChatView.displayMessages` (AC.6) — the pure source-of-truth
+/// Unit tests for `ChatDetailView.displayMessages` (AC.6) — the pure source-of-truth
 /// selector that collapses the live/persisted transcript render path into one
 /// `ChatTranscriptView(events:)` call site. Covers source selection (live →
 /// launcher events, non-live → persisted) and the `transcriptVisible` filter,
@@ -15,7 +15,7 @@ struct ChatDisplayMessagesTests {
     @Test func selectsLauncherEventsWhenLive() {
         let live: [AgentEvent] = [.userText("hello"), .assistantText("streaming")]
         let persisted: [AgentEvent] = [.userText("old"), .assistantText("old answer")]
-        let result = ChatView.displayMessages(
+        let result = ChatDetailView.displayMessages(
             isLiveChat: true, launcherEvents: live, persistedEvents: persisted)
         #expect(result == [.userText("hello"), .assistantText("streaming")])
     }
@@ -23,7 +23,7 @@ struct ChatDisplayMessagesTests {
     @Test func selectsPersistedEventsWhenNotLive() {
         let live: [AgentEvent] = [.userText("hello")]
         let persisted: [AgentEvent] = [.userText("old"), .assistantText("old answer")]
-        let result = ChatView.displayMessages(
+        let result = ChatDetailView.displayMessages(
             isLiveChat: false, launcherEvents: live, persistedEvents: persisted)
         #expect(result == [.userText("old"), .assistantText("old answer")])
     }
@@ -36,13 +36,13 @@ struct ChatDisplayMessagesTests {
             .toolResult(isError: false, summary: "ok"),
             .assistantText("a"),
         ]
-        let result = ChatView.displayMessages(
+        let result = ChatDetailView.displayMessages(
             isLiveChat: true, launcherEvents: events, persistedEvents: [])
         #expect(result == [.userText("q"), .assistantText("a")])
     }
 
     @Test func emptyWhenNoSourceEvents() {
-        let result = ChatView.displayMessages(
+        let result = ChatDetailView.displayMessages(
             isLiveChat: false, launcherEvents: [.userText("x")], persistedEvents: [])
         #expect(result.isEmpty)
     }

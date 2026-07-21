@@ -65,7 +65,7 @@ struct Issue235IngestExtractionLockTests {
     @Test func captionVisibleWhenAwaitingSlot() {
         // The core #235 UI fix: waiting for the generation gate shows VISIBLE
         // text (was previously only a hidden .help() tooltip).
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
             hasChatID: true, isLiveChat: true, isGenerating: false)
         #expect(caption == "Waiting for the other session to finish before sending…")
@@ -73,14 +73,14 @@ struct Issue235IngestExtractionLockTests {
 
     @Test func captionVisibleWhenAwaitingSlotDraftState() {
         // Even in draft state (chatID == nil), the waiting caption shows.
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
             hasChatID: false, isLiveChat: false, isGenerating: false)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 
     @Test func captionNilWhenIdle() {
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
             hasChatID: true, isLiveChat: true, isGenerating: false)
         #expect(caption == nil)
@@ -89,7 +89,7 @@ struct Issue235IngestExtractionLockTests {
     @Test func captionForPersistedChatBusy() {
         // A persisted (non-live) chat whose launcher is generating a different
         // chat shows the "Another chat is responding" caption.
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
             hasChatID: true, isLiveChat: false, isGenerating: true)
         #expect(caption == "Another chat is responding — wait or stop it.")
@@ -98,7 +98,7 @@ struct Issue235IngestExtractionLockTests {
     @Test func captionForLiveChatGenerating() {
         // A live chat that is actively generating shows a subtle "Agent is
         // responding…" caption (replaces the old orange banner).
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
             hasChatID: true, isLiveChat: true, isGenerating: true)
         #expect(caption == "Agent is responding…")
@@ -107,7 +107,7 @@ struct Issue235IngestExtractionLockTests {
     @Test func awaitingSlotOverridesPersistedBusy() {
         // When both isAwaitingGenerationSlot and isGenerating are true, the gate
         // wait message takes priority (it's the more actionable state).
-        let caption = ChatView.composerCaptionText(
+        let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
             hasChatID: true, isLiveChat: false, isGenerating: true)
         #expect(caption == "Waiting for the other session to finish before sending…")

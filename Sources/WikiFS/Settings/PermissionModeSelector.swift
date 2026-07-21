@@ -9,7 +9,7 @@ import WikiFSEngine
 /// on the active mode); this is the native translation.
 ///
 /// Backed by a `Binding<String>` (the persisted `PermissionPolicy.rawValue`
-/// from `ChatView`'s `@AppStorage`) rather than owning storage, so the composer
+/// from `ChatDetailView`'s `@AppStorage`) rather than owning storage, so the composer
 /// stays the single source of truth for the app-wide default.
 struct PermissionModeSelector: View {
     @Binding var rawValue: String

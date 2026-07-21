@@ -163,7 +163,7 @@ public final class WikiStoreModel {
     /// on `wikiSidebarItem`: while editing, the destination is removed so a
     /// sidebar drag inserts a `[[wikilink]]` at the editor's drop point (issue #616)
     /// instead of opening a new tab. Other surfaces (`SystemPromptDetailView`,
-    /// `ChatView`, welcome screen, reader mode) never set `isEditing`, so they
+    /// `ChatDetailView`, welcome screen, reader mode) never set `isEditing`, so they
     /// keep the tab-opening drop behavior — matching the original semantics.
     public var isActiveTabEditing: Bool {
         activeTab?.isEditing ?? false
@@ -190,7 +190,7 @@ public final class WikiStoreModel {
     public private(set) var chats: [ChatSummary] = []
 
     /// A pending question to pre-fill the chat composer, set by the omnibox
-    /// "Ask" action (#288). Consumed by `ChatView` on first appearance, then
+    /// "Ask" action (#288). Consumed by `ChatDetailView` on first appearance, then
     /// cleared. `nil` means no pre-fill is waiting.
     public var pendingChatQuestion: String?
 
@@ -229,7 +229,7 @@ public final class WikiStoreModel {
     /// Live chat composer buffer — the single source of in-flight chat text.
     /// Stashed per-tab via `EditorTab.pendingChatDraft` (like draftTitle/draftBody
     /// for pages) so switching tabs and back preserves unsent composer text
-    /// (issue #430). ChatView binds ComposerTextView to `$store.draftChatMessage`
+    /// (issue #430). ChatDetailView binds ComposerTextView to `$store.draftChatMessage`
     /// instead of local @State, which would be lost on view recreation.
     public var draftChatMessage: String = ""
 
@@ -765,7 +765,7 @@ public final class WikiStoreModel {
 
     /// Clears the active chat tab's composer draft — both the live
     /// `draftChatMessage` buffer and the stashed `pendingChatDraft`. Called by
-    /// `ChatView.sendMessage` after a message is sent so the text doesn't
+    /// `ChatDetailView.sendMessage` after a message is sent so the text doesn't
     /// reappear on tab switch-back (issue #430).
     public func clearActiveChatDraft() {
         draftChatMessage = ""
@@ -781,7 +781,7 @@ public final class WikiStoreModel {
     /// title-based selection.
     ///
     /// - Parameter anchor: optional `#"quote"` fragment from a
-    ///   `[[chat:Title#"quote"]]` link (issue #281); the destination `ChatView`
+    ///   `[[chat:Title#"quote"]]` link (issue #281); the destination `ChatDetailView`
     ///   resolves it to a message, scrolls it into view, and highlights the
     ///   passage — the chat analogue of `selectSource(anchor:)`. Mirrors the
     ///   page/source anchor seam: tagged with `.chat(id)` + versioned.

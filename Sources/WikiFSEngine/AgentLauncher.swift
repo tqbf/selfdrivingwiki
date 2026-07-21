@@ -74,7 +74,7 @@ public final class AgentLauncher {
     /// from `refreshPendingPermissions()` whenever the snapshot actually
     /// changes — the existing `pendingPollTask` already polls at 150ms while a
     /// request is pending (300ms idle), so this just adds the Activity window
-    /// as a second consumer of the same poll (the first is `ChatView`).
+    /// as a second consumer of the same poll (the first is `ChatDetailView`).
     @ObservationIgnored public var onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
 
     /// Receives the per-turn token/cost delta for an interactive (Ask/Edit)
@@ -541,7 +541,7 @@ public final class AgentLauncher {
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how
     /// streamed `AgentEvent`s flow: `ACPBackend` → launcher refresh → `@Observable`
-    /// state → `ChatView`. Refreshed by `pendingPollTask` while a turn generates.
+    /// state → `ChatDetailView`. Refreshed by `pendingPollTask` while a turn generates.
     /// Empty for the CLI backend (no permission channel) and while idle.
     public var pendingPermissions: [PendingPermission] = []
 
@@ -565,7 +565,7 @@ public final class AgentLauncher {
     /// lint from one store — a user who chose `alwaysAsk` for chat got the same
     /// gating applied to an unattended ingest/lint, guaranteeing a stall on the
     /// first prompt needing a permission. These are UserDefaults string keys; the
-    /// `@AppStorage(PermissionModeKey.<x>)` bindings in Settings + ChatView + the
+    /// `@AppStorage(PermissionModeKey.<x>)` bindings in Settings + ChatDetailView + the
     /// `resolvePermissionMode(for:)` closure here all read/write them.
     ///
     /// Extraction is intentionally NOT a kind in this PR — see `plans/acp-permissions.md`
@@ -684,7 +684,7 @@ public final class AgentLauncher {
     public private(set) var isInteractiveSession = false
     /// The chat row the current live interactive session is writing to (D2).
     /// Set by the runner when it installs the transcript sink — this is the chat
-    /// whose `.chat(id)` tab is live-streaming. `ChatView` uses it as the
+    /// whose `.chat(id)` tab is live-streaming. `ChatDetailView` uses it as the
     /// source-of-truth switch: when `activeChatID == chatID`, render
     /// `launcher.events` (in-memory, streaming); otherwise render the persisted
     /// `store.chatMessages(chatID:)`. Cleared in `startNewChat()` (retarget
@@ -794,7 +794,7 @@ public final class AgentLauncher {
             // callback (installed in `run(...)` for ingestion/lint). ACP agents
             // gate one write at a time, so we forward the first pending
             // request (or `nil` to clear the row once the continuation
-            // resolves). `ChatView` continues to read `pendingPermissions`
+            // resolves). `ChatDetailView` continues to read `pendingPermissions`
             // directly via `@Observable` for its inline Approve/Reject chip —
             // this callback is the parallel channel for the Activity window's
             // per-item yellow row. No-op when the caller didn't install one
@@ -2817,7 +2817,7 @@ public final class AgentLauncher {
         summarySink = onSummary
         messageSummarySink = onMessageSummary
         // D2: record the chat row this live session is writing to. This is the
-        // source-of-truth switch for ChatView — when it matches a tab's
+        // source-of-truth switch for ChatDetailView — when it matches a tab's
         // chatID, that tab renders `launcher.events` (streaming) instead of the
         // persisted store. Set here (after resetRunArtifacts cleared any prior
         // value) so the flip is live from the first streamed token.
@@ -3010,7 +3010,7 @@ public final class AgentLauncher {
                 self.persistedEventCount = self.events.count
                 self.firstMessagePrePersisted = false
             }
-            self.setGenerating(true)    // UI flag: ChatView banner + send guard
+            self.setGenerating(true)    // UI flag: ChatDetailView banner + send guard
             DebugLog.agent("sendInteractiveMessage: turn start (setGenerating=true)")
             self.lastActivityAt = Date()
             // Send the turn and consume the per-turn stream. The backend writes
@@ -3130,7 +3130,7 @@ public final class AgentLauncher {
         preflightError = nil
         transcriptSink = nil
         persistedEventCount = 0
-        // state (.newChat draft → .chat(id)) is handled by the caller (ChatView)
+        // state (.newChat draft → .chat(id)) is handled by the caller (ChatDetailView)
         // via store.retargetTab, since the launcher does not
         // know which tab it lives in.
         activeChatID = nil

@@ -99,13 +99,13 @@ enum SidebarDropBuilder {
     /// added.
     ///
     /// Reuses the same Tantivy fuzzy `search.autocomplete(partial:kinds:...)`
-    /// path the chat composer uses (`ChatView.chatAutocompleteHooks` at
-    /// `Sources/WikiFS/Chats/ChatView.swift:736`), and the same canonical-form
+    /// path the chat composer uses (`ChatDetailView.chatAutocompleteHooks` at
+    /// `Sources/WikiFS/Chats/ChatDetailView.swift:736`), and the same canonical-form
     /// `DroppedLinkFormatter.link(...)` builder the sidebar-drop insertion
     /// uses (#616). The two pure kind-mapping helpers
     /// (`WikiLinkAutocompleteController.tantivyKind(for:)` /
     /// `.parsedLinkType(from:)`) live on the controller so they're next to
-    /// their only non-ChatView caller — kept as `nonisolated static` to be
+    /// their only non-ChatDetailView caller — kept as `nonisolated static` to be
     /// test-reachable.
     static func wikiLinkAutocompleteHooks(
         store: WikiStoreModel
