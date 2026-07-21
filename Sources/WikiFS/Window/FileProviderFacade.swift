@@ -258,36 +258,60 @@ final class FileProviderFacade: ChangeSignaler {
         isResolvingPath = true
         defer { isResolvingPath = false }
 
+        // Gate: only ask the daemon for a visible URL if the domain is already
+        // registered. At launch `registerAllDomains` (WikiFSApp) and
+        // `activate`→here race with no ordering; `NSFileProviderManager(for:)`
+        // returns a manager for any identifier whether registered or not, so
+        // without this gate we can reach `getUserVisibleURL(for: .rootContainer)`
+        // against a domain the daemon hasn't mounted yet → nil URL. The
+        // completion-handler overload in `userVisibleURL` already makes that nil
+        // a recoverable error instead of a trap; this gate additionally skips the
+        // doomed 5s call on an unregistered domain and goes straight to
+        // (re)registration so the wiki self-heals instead of stalling. See #756.
+        let alreadyRegistered = await isDomainRegistered(id: id)
+
         let domain = domain(id: id, displayName: displayName)
         guard let manager = NSFileProviderManager(for: domain) else {
             status = "No manager for domain"
             return
         }
-        do {
-            let url = try await userVisibleURL(
-                manager: manager,
-                itemIdentifier: .rootContainer,
-                timeout: .seconds(5))
-            path = url.path
-            status = "Mounted"
-        } catch {
-            status = "Resolving mount timed out; retrying domain registration…"
-            if await registerDomain(id: id, displayName: displayName) {
-                await nudgeInitialEnumeration(forWikiID: id)
-                do {
-                    let url = try await userVisibleURL(
-                        manager: manager,
-                        itemIdentifier: .rootContainer,
-                        timeout: .seconds(5))
-                    path = url.path
-                    status = "Mounted"
-                    return
-                } catch {
-                    status = "Mount unavailable: \(error.localizedDescription)"
-                }
-            } else {
+
+        if alreadyRegistered {
+            do {
+                let url = try await userVisibleURL(
+                    manager: manager,
+                    itemIdentifier: .rootContainer,
+                    timeout: .seconds(5))
+                path = url.path
+                status = "Mounted"
+                return
+            } catch {
+                DebugLog.reader("resolvePath: first userVisibleURL failed for \(id); error=\(error.localizedDescription)")
+            }
+        } else {
+            DebugLog.reader("resolvePath: domain \(id) not registered yet (still mounting); registering before resolving mount path")
+        }
+
+        // (Re)register and retry — covers BOTH the not-registered launch race and a
+        // transient first-attempt failure. `registerDomain` is idempotent (adds
+        // only if absent), safe while `registerAllDomains` is racing.
+        status = alreadyRegistered
+            ? "Resolving mount timed out; retrying domain registration…"
+            : "Wiki is still mounting; registering domain…"
+        if await registerDomain(id: id, displayName: displayName) {
+            await nudgeInitialEnumeration(forWikiID: id)
+            do {
+                let url = try await userVisibleURL(
+                    manager: manager,
+                    itemIdentifier: .rootContainer,
+                    timeout: .seconds(5))
+                path = url.path
+                status = "Mounted"
+            } catch {
                 status = "Mount unavailable: \(error.localizedDescription)"
             }
+        } else {
+            status = "Mount unavailable: domain not registered"
         }
     }
 
@@ -618,12 +642,26 @@ final class FileProviderFacade: ChangeSignaler {
     ) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let resolution = MountURLResolution(continuation: continuation)
-            Task { @MainActor in
-                do {
-                    let url = try await manager.getUserVisibleURL(for: itemIdentifier)
-                    resolution.succeed(url)
-                } catch {
-                    resolution.fail(error)
+            // Use the completion-handler overload rather than
+            // `try await manager.getUserVisibleURL(for:)`. The async overload is
+            // imported as `async throws -> URL` (non-optional), bridged from the
+            // Obj-C completion handler `(NSURL?, NSError?)`. Apple documents the URL
+            // as "or nil if an error occurs" — nil is a valid return — but the async
+            // bridging runs `URL._unconditionallyBridgeFromObjectiveC(_:)`, which
+            // traps (`brk 1`, EXC_BREAKPOINT/SIGTRAP) on a nil NSURL. That trap fires
+            // BEFORE the `throws`/`try` machinery can intervene; the 5s timeout and
+            // CheckedContinuation give no protection. Using the completion-handler form
+            // hands us the raw `URL?` so nil becomes a recoverable error (via
+            // `DebugLog.reader` + `MountURLResolution.fail`) instead of an uncatchable
+            // runtime trap. This is the only `getUserVisibleURL` call site (#756).
+            manager.getUserVisibleURL(for: itemIdentifier) { url, error in
+                Task { @MainActor in
+                    if let url {
+                        resolution.succeed(url)
+                    } else {
+                        DebugLog.reader("getUserVisibleURL returned nil URL for itemIdentifier=\(itemIdentifier.rawValue); error=\(error?.localizedDescription ?? "none")")
+                        resolution.fail(error ?? MountResolutionError.urlNil)
+                    }
                 }
             }
             Task {
@@ -637,11 +675,14 @@ final class FileProviderFacade: ChangeSignaler {
 
     private enum MountResolutionError: LocalizedError {
         case timedOut
+        case urlNil
 
         var errorDescription: String? {
             switch self {
             case .timedOut:
                 "File Provider did not return a mount URL in time"
+            case .urlNil:
+                "File Provider returned no URL for this item — the domain may not be fully mounted yet"
             }
         }
     }
