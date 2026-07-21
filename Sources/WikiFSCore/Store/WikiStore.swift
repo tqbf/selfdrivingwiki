@@ -444,9 +444,12 @@ public protocol WikiStore: Sendable {
     /// `page_versions` row + UPSERT the `workspace_refs` row (recording
     /// `base_version_id` = main head at first touch). Does NOT touch the
     /// `pages` mirror or main `refs` — main is untouched until merge.
-    /// Returns the new version's id.
+    /// Returns the new version's id. `author` threads the provenance identity
+    /// (#763: `agent:ingest` / `chat:<id>` / `user`) into the workspace
+    /// version's activity — nil degrades to the shared `legacy-import` agent.
     func workspaceWritePage(
-        workspaceID: String, pageID: PageID, title: String, body: String
+        workspaceID: String, pageID: PageID, title: String, body: String,
+        author: String?
     ) throws -> String
 
     /// Resolve the workspace's current version id for a page (overlay read).

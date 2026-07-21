@@ -420,6 +420,80 @@ struct PageVersionTests {
         #expect(origin?.activityKind == "import")
     }
 
+    /// #763 — `PageUpsert.upsert` with `author: "agent:ingest"` (the exact
+    /// path wikictl's `page add` takes during non-workspace ingestion) must
+    /// stamp `agent:ingest`, NOT degrade to `legacy-import`. `PageUpsert` does
+    /// create+update back-to-back with the same author, so the amend coalescing
+    /// path fires — the root activity's agent must survive the amend.
+    @Test func pageOriginReflectsAgentIngestAfterUpsertAmend() throws {
+        let store = try tempStore()
+        let outcome = try PageUpsert.upsert(
+            in: store, id: nil, title: "Ingested Page",
+            body: "# Ingested Page\n\nSome content from ingestion.",
+            author: "agent:ingest")
+
+        #expect(outcome.didCreate, "should be a new page")
+        let origin = try store.pageOrigin(pageID: outcome.id)
+        #expect(origin != nil, "pageOrigin should resolve")
+        #expect(origin?.agentName == "agent:ingest",
+                "ingestion agent should be 'agent:ingest', not 'legacy-import' (got \(origin?.agentName ?? "nil"))")
+        #expect(origin?.agentKind == "agent",
+                "agent kind should be 'agent' (got \(origin?.agentKind ?? "nil"))")
+    }
+
+    /// #763 — re-ingesting an existing page (created by the user) with
+    /// `agent:ingest` must stamp `agent:ingest` on the new version, NOT
+    /// preserve the old `legacy-import`/`user` agent via amend coalescing.
+    /// The amend fires when same-actor, but here the actor CHANGES (user →
+    /// agent:ingest), so a new version + activity is appended.
+    @Test func reIngestExistingPageStampsAgentIngest() throws {
+        let store = try tempStore()
+        // Create with "user" first (simulates a pre-existing page).
+        let page = try store.createPage(title: "Re-ingest", createdBy: "user")
+        _ = page
+
+        // Now the agent re-ingests: title resolves to existing → updatePage.
+        let outcome = try PageUpsert.upsert(
+            in: store, id: nil, title: "Re-ingest",
+            body: "# Re-ingest\n\nUpdated by ingestion.",
+            author: "agent:ingest")
+
+        #expect(!outcome.didCreate, "should update the existing page")
+        let origin = try store.pageOrigin(pageID: outcome.id)
+        #expect(origin?.agentName == "agent:ingest",
+                "re-ingest agent should be 'agent:ingest' (got \(origin?.agentName ?? "nil"))")
+    }
+
+    /// #763 — re-ingesting an existing page with IDENTICAL content (a no-op
+    /// write, the `wikictl` idempotent re-write case). The no-op guard in
+    /// `appendPageVersionLocked` bumps only `pages.last_edited_by` without
+    /// creating a new version/activity — so the page-content ref still points
+    /// at the OLD version whose activity may have `legacy-import` (pre-#713).
+    @Test func reIngestIdenticalContentPreservesOldAgent() throws {
+        let store = try tempStore()
+        // Simulate a pre-#713 page: created with no author → legacy-import.
+        let page = try store.createPage(title: "Same Content", createdBy: nil)
+        try store.updatePage(id: page.id, title: "Same Content",
+                             body: "identical body", lastEditedBy: nil)
+        let beforeOrigin = try store.pageOrigin(pageID: page.id)
+        #expect(beforeOrigin?.agentName == "legacy-import",
+                "pre-fix page should have legacy-import (got \(beforeOrigin?.agentName ?? "nil"))")
+
+        // Now re-ingest the SAME content with agent:ingest.
+        _ = try PageUpsert.upsert(
+            in: store, id: nil, title: "Same Content",
+            body: "identical body", author: "agent:ingest")
+
+        // #763: the no-op guard now checks if the author changed. Since the
+        // old page had `last_edited_by = nil` (→ legacy-import activity), and
+        // the new save has `author = "agent:ingest"`, a new version + activity
+        // IS created (the author changed). The ref now points to the new
+        // version with agent:ingest.
+        let afterOrigin = try store.pageOrigin(pageID: page.id)
+        #expect(afterOrigin?.agentName == "agent:ingest",
+                "no-op re-ingest with different author should stamp new agent — got \(afterOrigin?.agentName ?? "nil")")
+    }
+
     /// AC.1 (degraded path) — a `createPage` with no author (nil) falls back
     /// to the shared `legacy-import` agent. `pageOrigin` reports `agentName
     /// == "legacy-import"` and `agentKind == "software"`. No crash, no data

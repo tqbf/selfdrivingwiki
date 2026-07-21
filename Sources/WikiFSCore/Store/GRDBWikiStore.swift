@@ -4288,21 +4288,33 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // version after this save".
         if let head,
            let headRow = try Row.fetchOne(db, sql: """
-                SELECT pv.blob_hash, pv.title
-                FROM page_versions pv WHERE pv.id = ?;
+                SELECT pv.blob_hash, pv.title, p.last_edited_by
+                FROM page_versions pv
+                JOIN pages p ON p.id = pv.page_id
+                WHERE pv.id = ?;
                 """, arguments: [head])
         {
             let headHash: String? = headRow["blob_hash"]
             let headTitle: String? = headRow["title"]
+            let existingActor: String? = headRow["last_edited_by"]
             if headHash == hash && headTitle == title {
-                // Still bump the mirror's `updated_at` so callers observing
-                // `updated_at` see refreshed activity without polluting the
-                // version chain (a `wikictl` re-write is a real "save attempt"
-                // — just a content-no-op). No `version` bump.
-                try db.execute(sql: """
-                UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
-                """, arguments: [nowTS, lastEditedBy, pageID.rawValue])
-                return head
+                // #763: If the author changed (e.g. a pre-v39 page with
+                // `legacy-import` being re-ingested by `agent:ingest`), DON'T
+                // short-circuit — fall through to create a new version +
+                // activity so the provenance reflects the new author. Same
+                // author → the no-op path is genuinely a no-op (bump
+                // `updated_at` only, no version chain pollution).
+                if existingActor == lastEditedBy || (existingActor == nil && lastEditedBy == nil) {
+                    try db.execute(sql: """
+                    UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
+                    """, arguments: [nowTS, lastEditedBy, pageID.rawValue])
+                    return head
+                }
+                // Author changed — fall through to append a new version with
+                // the new author's activity. This is the fix for #763: a re-
+                // ingestion of identical content by a different agent no
+                // longer preserves the old `legacy-import` activity on the
+                // page-content ref.
             }
         }
 
@@ -4626,7 +4638,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func workspaceWritePage(
-        workspaceID: String, pageID: PageID, title: String, body: String
+        workspaceID: String, pageID: PageID, title: String, body: String,
+        author: String? = nil
     ) throws -> String {
         try mutate(event: { _ in nil }) { db in
             let title = WikiNameRules.sanitized(title)
@@ -4679,7 +4692,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
             """, arguments: [hash, Int64(bodyData.count), bodyData])
 
-            let agentID = try self.legacyImportAgentID(on: db)
+            // #763: thread the author identity through ensurePageAuthorAgent
+            // so workspace version activities carry the real agent (e.g.
+            // `agent:ingest`), not the shared `legacy-import`.
+            let agentID = try self.ensurePageAuthorAgent(author, on: db)
             let activityID = ULID.generate()
             try db.execute(sql: """
             INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
@@ -5004,7 +5020,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
                     """, arguments: [hash, Int64(mergedData.count), mergedData])
 
-                    let agentID = try self.legacyImportAgentID(on: db)
+                    // #763: use the workspace version's agent.
+                    let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
                     let activityID = ULID.generate()
                     try db.execute(sql: """
                     INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
@@ -5097,7 +5114,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [hash, Int64(bodyData.count), bodyData])
 
             // 2. Activity.
-            let agentID = try self.legacyImportAgentID(on: db)
+            // #763: use the workspace version's agent.
+            let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
             let activityID = ULID.generate()
             try db.execute(sql: """
             INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
@@ -6885,6 +6903,29 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return head
     }
 
+    /// #763: resolve the agent identity from a workspace-staged page version's
+    /// activity (created by `workspaceWritePage` with the real author). Falls
+    /// back to `legacyImportAgentID` when no workspace version or agent is
+    /// found (genuinely degraded path — same as pre-#763).
+    private func workspaceVersionAgentID(
+        db: Database, pageID: PageID
+    ) throws -> String {
+        if let row = try Row.fetchOne(
+            db, sql: """
+            SELECT a.id, a.name, a.kind FROM workspace_refs wr
+            LEFT JOIN page_versions pv ON pv.id = wr.version_id
+            LEFT JOIN activities act ON act.id = pv.activity_id
+            LEFT JOIN agents a ON a.id = act.agent_id
+            WHERE wr.kind = 'page-content' AND wr.owner_id = ?
+            ORDER BY wr.updated_at DESC LIMIT 1;
+            """, arguments: [pageID.rawValue]
+        ), let name = row["name"] as String?,
+           let kind = row["kind"] as String? {
+            return try ensureAgent(name: name, kind: kind, on: db)
+        }
+        return try legacyImportAgentID(on: db)
+    }
+
     /// Fast-forward an existing page: repoint the main page-content ref to the
     /// workspace's version + update the pages mirror from the version's blob.
 
@@ -6959,7 +7000,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """, arguments: [pageID.rawValue, title, slug, body, now, now])
 
         // 2. Activity + agent.
-        let agentID = try self.legacyImportAgentID(on: db)
+        // #763: resolve the author from the workspace version's activity.
+        let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
         let activityID = ULID.generate()
         try db.execute(sql: """
         INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
@@ -7027,7 +7069,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """, arguments: [hash, Int64(mergedData.count), mergedData])
 
         // Merge PROV activity.
-        let agentID = try self.legacyImportAgentID(on: db)
+        // #763: use the workspace version's agent.
+        let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
         let activityID = ULID.generate()
         try db.execute(sql: """
         INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
