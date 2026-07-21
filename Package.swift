@@ -331,6 +331,14 @@ let package = Package(
     ].filter {
         // Drop the private-API podcast helper for App Store builds (WIKIFS_APP_STORE=1);
         // the feature is also #if'd out of the Swift sources, so nothing references it.
-        podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
+        // Also drop it on Linux: it's an Objective-C executable that #includes
+        // Foundation/Foundation.h and links AppleMediaServices (a macOS private
+        // framework), neither available on Linux. `swift test` builds every target
+        // in the package on Linux too (regardless of test deps), which fails on
+        // this macOS-only binary. Filtering it out unblocks the Linux CI (#754).
+        #if os(Linux)
+        if $0.name == "podcast-token-helper" { return false }
+        #endif
+        return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
     }
 )

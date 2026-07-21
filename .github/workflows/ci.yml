@@ -107,19 +107,10 @@ jobs:
         # so only WikiFSCoreTests tests are discovered. The skip list
         # excludes suites that block the cooperative thread pool on CI's
         # limited vCPUs (DispatchSemaphore, Process.waitUntilExit, etc.).
-        #
-        # --skip-build: the previous step already built WikiFSCoreTests
-        # (and its deps). Bare `swift test` would otherwise build all
-        # unrelated executable targets in the package too — including
-        # `podcast-token-helper` (an Objective-C executable that
-        # #includes Foundation/Foundation.h and links AppleMediaServices
-        # private framework — neither available on Linux). Skipping the
-        # build phase avoids that macOS-only-target build failure on
-        # Linux (#754, #780).
         timeout-minutes: 15
         env:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
-        run: swift test --parallel --skip-build --skip "$SKIP"
+        run: swift test --parallel --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest
