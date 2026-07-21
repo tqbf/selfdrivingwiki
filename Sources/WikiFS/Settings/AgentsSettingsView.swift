@@ -206,6 +206,13 @@ struct AgentsSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.top, 6)
+                .padding(.bottom, 2)
+
+            Text("Providers are stored in agent-providers.json in the app's container. Edit manually to set CLAUDE_CODE_EXECUTABLE or CODEX_PATH in a provider's env.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
                 .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
