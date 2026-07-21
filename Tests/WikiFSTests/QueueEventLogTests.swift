@@ -429,11 +429,16 @@ struct QueueEventLogTests {
         await log.start(events: engine.events)
 
         await engine.start()
-        _ = try await engine.enqueue(
+        let itemID = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
 
-        // Wait for the item to complete.
-        try await Task.sleep(nanoseconds: 300_000_000)
+        // Wait for the item to complete (deterministic, avoids timing flakes on CI).
+        _ = try await engine.waitForCompletion(of: itemID).get()
+
+        // Give the log's async stream consumer a chance to drain the
+        // .completed event before we stop — without this, stop() can cancel
+        // the stream task before .completed is written.
+        try await Task.sleep(nanoseconds: 200_000_000)
 
         await log.stop()
 

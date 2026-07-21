@@ -307,6 +307,10 @@ public final class WikiStoreModel {
     // Linux: Tantivy is unavailable — the search path uses nil bm25Leg (FTS5 fallback).
     @ObservationIgnored public var tantivySearch: Any?
     #endif
+    /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
+    /// `WikiSession` → `SessionManager` → `WikiFSApp`. `nil` means fall back to
+    /// the tag-based `HTMLToMarkdown` path (CI, clean dev before `make build`).
+    @ObservationIgnored public var htmlMarkdownExtractor: (any HtmlMarkdownExtractor)?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
 
@@ -1953,7 +1957,7 @@ public final class WikiStoreModel {
             try store.appendProcessedMarkdown(
                 sourceID: summary.id, content: markdown,
                 origin: .extraction, note: nil,
-                technique: Self.htmlToMarkdownTechnique)
+                technique: m.extractionTechnique ?? Self.htmlToMarkdownTechnique)
         } catch {
             DebugLog.store("WikiStoreModel.appendExtractedMarkdown failed (source=\(summary.id.rawValue)): \(error)")
         }
@@ -1964,6 +1968,36 @@ public final class WikiStoreModel {
     /// technique tags (e.g. `"pdf2md"`) so the "Converted" provenance row
     /// surfaces the producer in the alternatives UI.
     private static let htmlToMarkdownTechnique = "html-to-markdown"
+
+    /// Best-effort: if the materialized source is HTML (has an extracted-markdown
+    /// sidecar from `FormatMaterializer.dispatch`), run the defuddle extractor to
+    /// obtain site-specific markdown + metadata. On any failure, keep the
+    /// tag-based markdown. Sets `extractionTechnique` on the returned source so
+    /// `appendExtractedMarkdown` stamps the right technique column.
+    ///
+    /// Does NOT run for website snapshots (those use `WebsiteSnapshotExtractor`
+    /// which does image-aware extraction — defuddle can't replace that without
+    /// losing image src rewriting). Called by `addFiles` and `ingestFromZotero`.
+    private func enrichWithDefuddle(_ m: MaterializedSource) async -> MaterializedSource {
+        // Only HTML sources have a non-nil extractedMarkdown sidecar (issue #599
+        // two-layer model). Non-HTML sources skip enrichment entirely.
+        guard m.extractedMarkdown != nil else { return m }
+        // Reconstruct a FormatPlan to reuse the shared enrich helper.
+        let plan = FormatPlan(
+            filename: m.filename, data: m.data, format: .html,
+            extractedMarkdown: m.extractedMarkdown)
+        let (enriched, technique) = await FormatMaterializer.enrich(
+            plan, using: htmlMarkdownExtractor)
+        return MaterializedSource(
+            filename: enriched.filename,
+            data: enriched.data,
+            mimeType: m.mimeType,
+            zoteroItemKey: m.zoteroItemKey,
+            zoteroItemTitle: m.zoteroItemTitle,
+            provenance: m.provenance,
+            extractedMarkdown: enriched.extractedMarkdown,
+            extractionTechnique: technique)
+    }
 
     /// Ingest dropped files. For each URL: reject directories (a recursive
     /// directory ingest is out of scope), read the bytes OFF the main thread
@@ -1997,13 +2031,16 @@ public final class WikiStoreModel {
                 continue
             }
 
+            // Best-effort defuddle enrichment for HTML sources (issue #761).
+            let materializedEnriched = await enrichWithDefuddle(materialized)
+
             // Pre-resolve display name off-main for PDFs (issue #229).
             let resolvedDisplayName = await preResolveDisplayName(
-                filename: materialized.filename, data: materialized.data,
-                mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+                filename: materializedEnriched.filename, data: materializedEnriched.data,
+                mimeType: materializedEnriched.mimeType, zoteroItemTitle: materializedEnriched.zoteroItemTitle)
 
             do {
-                let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
+                let summary = try storeMaterialized(materializedEnriched, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
                 lastSourceName = summary.effectiveName
             } catch WikiStoreError.duplicateContent(let existing) {
@@ -2399,17 +2436,27 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
         let snapshot = try await provider.materializeSnapshot()
+        // For HTML pages without snapshot images (no-download or image-less),
+        // enrich the extracted markdown via defuddle (issue #761). The snapshot
+        // path (images present) keeps its image-aware extraction — defuddle
+        // can't replace the src rewriting without losing image references.
+        let pageEnriched: MaterializedSource
+        if snapshot.plan.format == .html && snapshot.images.isEmpty {
+            pageEnriched = await enrichWithDefuddle(snapshot.page)
+        } else {
+            pageEnriched = snapshot.page
+        }
         // Pre-resolve the page's display name off the main actor so a PDF
         // source's PDFKit parse doesn't block the UI or delay the store write
         // (issue #229). Non-PDFs are unaffected (helper returns nil → inline).
         let resolvedDisplayName = await preResolveDisplayName(
-            filename: snapshot.page.filename, data: snapshot.page.data,
-            mimeType: snapshot.page.mimeType, zoteroItemTitle: snapshot.page.zoteroItemTitle)
+            filename: pageEnriched.filename, data: pageEnriched.data,
+            mimeType: pageEnriched.mimeType, zoteroItemTitle: pageEnriched.zoteroItemTitle)
         var summary: SourceSummary
         if snapshot.plan.format == .html && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
-            summary = try storeMaterialized(snapshot.page, resolvedDisplayName: resolvedDisplayName)
+            summary = try storeMaterialized(pageEnriched, resolvedDisplayName: resolvedDisplayName)
         }
         // HTML sources have ".html" appended to the storage filename (issue #599:
         // the original HTML bytes are now the source blob, not the converted
@@ -2577,12 +2624,14 @@ public final class WikiStoreModel {
         // Resolve + read off the main actor (the provider materializes, throwing
         // ZoteroFetchError.unavailable when the attachment isn't local).
         let materialized = try await provider.materialize()
+        // Best-effort defuddle enrichment for HTML sources (issue #761).
+        let materializedEnriched = await enrichWithDefuddle(materialized)
         // Pre-resolve display name off-main for PDFs (issue #229).
         let resolvedDisplayName = await preResolveDisplayName(
-            filename: materialized.filename, data: materialized.data,
-            mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+            filename: materializedEnriched.filename, data: materializedEnriched.data,
+            mimeType: materializedEnriched.mimeType, zoteroItemTitle: materializedEnriched.zoteroItemTitle)
         do {
-            let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
+            let summary = try storeMaterialized(materializedEnriched, resolvedDisplayName: resolvedDisplayName)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write. The tab title is passed explicitly so tabTitle (which
             // reads `sources`) needs no synchronous freshness.

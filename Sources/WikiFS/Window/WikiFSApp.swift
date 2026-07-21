@@ -217,6 +217,7 @@ struct WikiFSApp: App {
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
+            htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 // Interactive chat (Ask/Edit) usage delta → daily total so the
                 // menu bar "Today: X tokens" includes chat, not just queue runs.

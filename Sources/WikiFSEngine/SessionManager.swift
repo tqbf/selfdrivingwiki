@@ -60,12 +60,19 @@ public final class SessionManager {
     /// headless/daemon callers (which have no UI tracker) are unaffected.
     public let interactiveUsageRecorder: @MainActor (SessionUsage) -> Void
 
+    /// Factory for the HTML→Markdown extractor (defuddle). Called once per
+    /// session at creation. The app passes a closure returning
+    /// `LocalDefuddleExtractor()` (WikiFS target); defaults to nil (tag-based
+    /// fallback) for headless/daemon/test callers. Issue #761.
+    public let htmlMarkdownExtractorFactory: @MainActor () -> (any HtmlMarkdownExtractor)?
+
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: QueueEngine,
         extractionProvider: any QueueExtractionProvider,
         pdf2mdScriptPathResolver: @escaping () -> String?,
+        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.containerDirectory = containerDirectory
@@ -73,6 +80,7 @@ public final class SessionManager {
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
         self.interactiveUsageRecorder = interactiveUsageRecorder
     }
 
@@ -96,6 +104,7 @@ public final class SessionManager {
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
+            htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
             interactiveUsageRecorder: interactiveUsageRecorder
         )
         // Transfer any deferred wiki-link click (registered by
