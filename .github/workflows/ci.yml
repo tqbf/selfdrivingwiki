@@ -107,10 +107,24 @@ jobs:
         # so only WikiFSCoreTests tests are discovered. The skip list
         # excludes suites that block the cooperative thread pool on CI's
         # limited vCPUs (DispatchSemaphore, Process.waitUntilExit, etc.).
+        #
+        # --filter WikiFSCoreTests (matches the macOS job): without this,
+        # `swift test` builds every target in the package, including Cmlx
+        # (transitive via mlx-swift-lm → mlx-swift), which fails on the
+        # CUDA-less ubuntu-latest runner:
+        #
+        #   mlx/backend/cuda/cuda_utils.h:5:10: fatal error:
+        #     'cublasLt.h' file not found
+        #
+        # Scoping with --filter causes SwiftPM to build only the targets in
+        # WikiFSCoreTests's transitive build graph — none of which require
+        # Metal/GPU/CUDA (WikiFSMLX is conditionally excluded via
+        # .when(platforms: [.macOS]) in Package.swift; ACP-backed source is
+        # guarded with #if os(macOS)).
         timeout-minutes: 15
         env:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
-        run: swift test --parallel --skip "$SKIP"
+        run: swift test --parallel --filter WikiFSCoreTests --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest
