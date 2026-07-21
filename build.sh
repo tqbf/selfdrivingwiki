@@ -46,6 +46,8 @@ DAEMON_NAME="wikid"
 PODCAST_HELPER_NAME="podcast-token-helper"
 PDF2MD_NAME="pdf2md"
 PDF2MD_SRC="tools/pdf2md/pdf2md"
+DEFUDDLE_NAME="defuddle"
+DEFUDDLE_SRC="tools/defuddle/defuddle"
 BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
@@ -200,6 +202,14 @@ if [ -f "${PDF2MD_SRC}" ]; then
   cp "${PDF2MD_SRC}" "${BUILD_DIR}/${PDF2MD_NAME}"
 else
   echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
+fi
+# Bundle the defuddle readability extractor (Node script run via the bundled
+# bun). Used by DefuddleExtractionService for HTML article markdown+metadata.
+if [ -f "${DEFUDDLE_SRC}" ]; then
+  cp "${DEFUDDLE_SRC}" "${HELPERS_DIR}/${DEFUDDLE_NAME}"
+  cp "${DEFUDDLE_SRC}" "${BUILD_DIR}/${DEFUDDLE_NAME}"
+else
+  echo "  (defuddle not found at ${DEFUDDLE_SRC} — skipping; HTML extraction will fall back to tag-based)"
 fi
 # Semantic vector search is now pure Swift (`VectorCosine` in WikiFSSearch —
 # issue #628): no C extension to copy, no per-connection registration.
@@ -434,6 +444,13 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi
+  # defuddle is a plain script bundled in Helpers/ — must also be signed, or the
+  # outer app's seal fails ("code object is not signed at all"). bun reads the
+  # file; signing is for the seal (same reason as pdf2md above).
+  if [ -f "${HELPERS_DIR}/${DEFUDDLE_NAME}" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/${DEFUDDLE_NAME}"
+  fi
   # podcast-token-helper is a nested Mach-O — sign it before the outer app (same
   # inside-out discipline as wikictl). Only present in a feature-on build.
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
@@ -464,6 +481,9 @@ else
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/${DEFUDDLE_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${DEFUDDLE_NAME}"
   fi
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
