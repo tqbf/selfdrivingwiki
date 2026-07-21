@@ -1,5 +1,5 @@
 {
-  "originHash" : "b1811bcc9ca4a9c9267c4fec89bc48b9760e71c6ab52b05458b45b2241ffd86e",
+  "originHash" : "1476f2eed61bbc4d173e1aeed7120fe243e84c22c7168157e2544dda7a5a900a",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -175,10 +175,10 @@
     {
       "identity" : "tantivy.swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/botisan-ai/tantivy.swift.git",
+      "location" : "https://github.com/wsargent/tantivy.swift.git",
       "state" : {
-        "revision" : "dae1d224ef5ea5f1fa5e68c0f363585a2876e7b3",
-        "version" : "0.3.4"
+        "revision" : "612655af1dd22b5cc3d709d359516bbbd8c840d5",
+        "version" : "0.3.5"
       }
     },
     {

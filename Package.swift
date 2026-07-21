@@ -52,7 +52,7 @@ let package = Package(
         // bare `swift build` (no Xcode) and links for aarch64-apple-darwin. Ships a
         // macOS arm64 slice; no x86_64 (acceptable — MLX already requires Apple Silicon).
         // NOT wired into the search pipeline yet — spike only.
-        .package(url: "https://github.com/botisan-ai/tantivy.swift.git", from: "0.3.4"),
+        .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
