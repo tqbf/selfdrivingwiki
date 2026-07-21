@@ -2,6 +2,29 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-20 — Move bun prerequisite check up front (#762, branch `bun-prereq-check`)
+
+**Problem.** `build.sh` checked for bun at line 132 — *after* `swift build`
+had already compiled the whole project. A developer without bun installed
+waited through the full Swift compile before discovering the missing
+prerequisite.
+
+**Changes.** Two-part fix:
+1. **`build.sh`**: added an up-front bun gate before the `swift build` call.
+   Resolution chain: `${BUN_INSTALL}/bin/bun` → `~/.bun/bin/bun` →
+   `command -v bun` (PATH). If none found, prints the existing install hint
+   and exits 1 before any compilation. The bundling section at ~L147 now
+   reuses the already-resolved `BUN_SRC` (no re-derivation).
+2. **`Makefile`**: added a dedicated `bun-check` target (same resolution
+   chain + error message) wired as a prereq of `build` and `release` only.
+   `check`/`test`/`test-fast`/`check-release` do NOT depend on it — they
+   don't bundle, so they don't need bun.
+
+**Verification.** With bun present: `make build` succeeds, `make test`
+passes (3257 tests). Without bun: `bun-check` target and the `build.sh` gate
+both fail immediately with the install hint before reaching `swift build`.
+See `plans/bun-prereq-check.md`.
+
 ## 2026-07-20 — Provenance panel run names + clickable entries (#745, branch `provenance-panel`)
 
 **Problem.** The Provenance panel showed the raw chat ULID (`chat:<ULID>`)
