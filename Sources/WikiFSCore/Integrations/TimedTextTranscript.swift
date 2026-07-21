@@ -1,4 +1,11 @@
 import Foundation
+// On Linux, `XMLParser` and `XMLParserDelegate` live in the `FoundationXML`
+// module (split out from Foundation in Swift CoreLibs). On macOS, Foundation
+// re-exports them directly. `canImport` lets us conditionally pull in
+// FoundationXML on Linux without affecting the macOS build (#754, #780).
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// A format-agnostic timed-text parser that converts YouTube's timedtext XML,
 /// YouTube's JSON3 caption format, WebVTT (`.vtt`), and SRT (`.srt`) subtitles
