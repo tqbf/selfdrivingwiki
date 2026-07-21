@@ -957,6 +957,13 @@ struct ChatView: View {
 
     private func composer(enabled: Bool) -> some View {
         let sendActive = canSend && enabled
+        // #740: wire the Arrow ↑ recall only when a message is actually queued.
+        // Built as an explicit closure so the type checker doesn't struggle with
+        // a method-reference ternary.
+        let recallAction: (() -> Void)? = {
+            guard pendingMessage != nil else { return nil }
+            return { recallQueuedMessage() }
+        }()
         // Paseo-style: ONE rounded box wrapping the text (top) and a toolbar row
         // (bottom) — model chip · permission chip · send button. Replaces the old
         // capsule-with-inline-send + separate selector bar below.
@@ -971,7 +978,8 @@ struct ChatView: View {
                 onSubmit: sendMessage,
                 measuredHeight: $composerHeight,
                 autoFocus: chatID == nil,
-                autocomplete: chatAutocompleteHooks
+                autocomplete: chatAutocompleteHooks,
+                onRecallQueued: recallAction
             )
                 .frame(height: composerHeight)
                 .frame(maxWidth: .infinity)
@@ -1138,13 +1146,20 @@ struct ChatView: View {
     }
 
     private func sendMessage() {
+        // #740: during generation, plain Return (via onSubmit) queues instead of
+        // being a silent no-op — the user types + hits Enter, the message is
+        // queued for delivery when the turn completes. The guard below still
+        // protects the non-generating send path (issue #380).
+        if launcher.isGenerating {
+            queueMessage()
+            return
+        }
         // Guard: don't clear the draft or attempt to send when the agent is
         // generating or waiting for a slot. The Send button is already gated
         // by `canSend`, but the Return key in ComposerTextView calls this
         // unconditionally — so the same guard here prevents the message from
         // being silently dropped (issue #380). The draft is preserved so the
-        // user can send it once the agent finishes. (#740: to queue instead,
-        // the user presses the Queue button — see `queueMessage`.)
+        // user can send it once the agent finishes.
         guard canSend else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
@@ -1171,6 +1186,18 @@ struct ChatView: View {
             preview: message)
         store.clearActiveChatDraft()
         attachments = []
+    }
+
+    /// #740: recall the queued message back into the composer draft for editing.
+    /// Triggered by Arrow ↑ on an empty composer (see `ComposerTextView`'s
+    /// `onRecallQueued`). Clears `pendingMessage` so it won't auto-fire — the
+    /// user must explicitly re-queue (via Queue button or Return) after editing.
+    /// The draft is restored as-is (user text only, not the `[[kind:…]]`` wire
+    /// refs — those are rebuilt from current attachments on the next queue/send).
+    private func recallQueuedMessage() {
+        guard let pending = pendingMessage else { return }
+        pendingMessage = nil
+        store.draftChatMessage = pending.preview
     }
 
     /// Delivers the queued message as the next turn's input when the current
@@ -1332,8 +1359,13 @@ struct ChatView: View {
         if launcher.isAwaitingGenerationSlot {
             return "Waiting for the other session to finish before sending…"
         }
+        // #740: the send button (Queue) is now actionable during generation —
+        // it queues the draft for delivery when the turn completes. The tooltip
+        // reflects that rather than telling the user to wait.
         if launcher.isGenerating {
-            return "Wait for the response before sending the next message"
+            return pendingMessage != nil
+                ? "Queued — will send when the response finishes"
+                : "Queue for when the response finishes"
         }
         return launcher.isInteractiveSession ? "Send" : "Start Query"
     }
