@@ -83,12 +83,13 @@ public enum DebugLog {
     public static let signposter = NoOpSignposter()
 
     /// A no-op replacement for OSSignposter on platforms without the `os`
-    /// module. `beginInterval`/`endInterval` are no-ops — the state type is
-    /// a singleton `()`, matching the "near-free when no recorder is attached"
+    /// module. `beginInterval`/`endInterval` are no-ops. The state type is
+    /// a singleton — matching the "near-free when no recorder is attached"
     /// semantics of the real OSSignposter.
     public struct NoOpSignposter: Sendable {
-        public func beginInterval(_ name: String) -> Void { }
-        public func endInterval(_ name: String, _ state: Void) { }
+        public struct State: Sendable {}
+        public func beginInterval(_ name: String) -> State { State() }
+        public func endInterval(_ name: String, _ state: State) { }
     }
     #endif
 }
