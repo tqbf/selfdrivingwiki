@@ -48,13 +48,14 @@ struct ChatView: View {
     @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
-    /// #740: a message the user queued while the agent was generating a
-    /// response. It auto-fires as the next turn's input once the current turn
-    /// completes (observing `launcher.isRunning` going false). `nil` when
-    /// nothing is queued. Separate from the D3 generation-gate queue
+    /// #740: messages the user queued while the agent was generating a
+    /// response. **Playlist semantics:** on turn completion, only the FIRST
+    /// queued message fires as the next turn's input; the rest stay queued
+    /// and each fires in order as subsequent turns complete (one per turn).
+    /// Separate from the D3 generation-gate queue
     /// (`isAwaitingGenerationSlot`, which gates *another* chat's send) because
     /// this is the *same* chat's "type the next message now" path.
-    @State private var pendingMessage: PendingQueuedMessage? = nil
+    @State private var queuedMessages: [PendingQueuedMessage] = []
     /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
     /// v1 app-wide, default off (yolo). Applies to the next conversation.
     ///
@@ -160,13 +161,15 @@ struct ChatView: View {
             // later ingest/lint run doesn't inherit it and strand the view on
             // `AgentQueueView`. (AC.1)
             if !isRunning { showsInternals = false }
-            // #740: when a turn completes, deliver the queued message as the next
-            // turn's input. Only fires what was explicitly queued via the Queue
-            // button — a half-typed draft stays in the composer untouched (it isn't
-            // part of `pendingMessage`). The dispatch goes through the same
-            // `submitMessage` path used by a normal Send, so it reuses the
-            // interactive/continue/start routing without disturbing the draft.
-            if !isRunning, pendingMessage != nil {
+            // #740: when a turn completes, deliver the FIRST queued message as
+            // the next turn's input (playlist: one per turn). The rest stay queued
+            // and each fires in order as subsequent turns complete. Only fires what
+            // was explicitly queued via the Queue button — a half-typed draft stays
+            // in the composer untouched (it isn't part of `queuedMessages`). The
+            // dispatch goes through the same `submitMessage` path used by a normal
+            // Send, so it reuses the interactive/continue/start routing without
+            // disturbing the draft.
+            if !isRunning, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
         }
@@ -433,8 +436,8 @@ struct ChatView: View {
     private var chatComposer: some View {
         VStack(spacing: 4) {
             composer(enabled: isComposerEnabled)
-            if let pending = pendingMessage {
-                queuedMessageAffordance(pending)
+            if !queuedMessages.isEmpty {
+                queuedMessagesList
             }
             if let caption = composerCaption {
                 Text(caption)
@@ -442,25 +445,43 @@ struct ChatView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        // #740: animate the queued affordance in/out (macos-design: every
-        // state change gets a transition). `PendingQueuedMessage` is Equatable.
-        .animation(.snappy, value: pendingMessage)
+        // #740: animate the queued list in/out (macos-design: every state
+        // change gets a transition). `[PendingQueuedMessage]` is Equatable.
+        .animation(.snappy, value: queuedMessages)
     }
 
-    /// #740: the muted "Queued" affordance shown under the composer while a
-    /// message is stashed for delivery when the current turn ends. Unobtrusive
-    /// by design (macos-design discipline): a secondary-tinted capsule with a
-    /// clock glyph, the (truncated) queued text, and a cancel (✕) that clears
-    /// `pendingMessage` so it won't auto-fire.
+    /// #740: the per-item "Queued" affordance shown under the composer while
+    /// one or more messages are stashed for delivery. Playlist semantics: the
+    /// first item fires when the current turn completes; subsequent items fire
+    /// one per turn. Each row is its own muted capsule with a clock glyph,
+    /// truncated preview, and per-item cancel (✕). The first row gets a badge
+    /// "Next" so the user knows which one fires next. Unobtrusive by design
+    /// (macos-design discipline: muted, `.secondary`, capsule).
     @ViewBuilder
-    private func queuedMessageAffordance(_ pending: PendingQueuedMessage) -> some View {
+    private var queuedMessagesList: some View {
+        VStack(spacing: 3) {
+            ForEach(Array(queuedMessages.enumerated()), id: \.element.id) { (index: Int, pending: PendingQueuedMessage) in
+                queuedMessageRow(pending, isFirst: index == 0, index: index)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func queuedMessageRow(_ pending: PendingQueuedMessage, isFirst: Bool, index: Int) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text("Queued:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if isFirst {
+                Text("Next:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fontWeight(.medium)
+            } else {
+                Text("#\(index + 1):")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             Text(pending.preview)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -468,14 +489,14 @@ struct ChatView: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             Button {
-                pendingMessage = nil
+                queuedMessages.remove(at: index)
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
-            .help("Cancel the queued message")
+            .help("Cancel this queued message")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -961,7 +982,7 @@ struct ChatView: View {
         // Built as an explicit closure so the type checker doesn't struggle with
         // a method-reference ternary.
         let recallAction: (() -> Void)? = {
-            guard pendingMessage != nil else { return nil }
+            guard !queuedMessages.isEmpty else { return nil }
             return { recallQueuedMessage() }
         }()
         // Paseo-style: ONE rounded box wrapping the text (top) and a toolbar row
@@ -1057,7 +1078,7 @@ struct ChatView: View {
     private var showsQueueButton: Bool {
         launcher.isGenerating
             && launcher.runningKind == .query
-            && pendingMessage == nil
+            && queuedMessages.isEmpty
     }
 
     /// #740: the "Queue" button — sits just before the stop button during a
@@ -1180,34 +1201,36 @@ struct ChatView: View {
         guard launcher.isGenerating else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        // Replacing an existing queued message is allowed — the new draft wins.
-        pendingMessage = PendingQueuedMessage(
+        // Append to the playlist — the first item fires when the current turn
+        // completes; subsequent items fire one per turn.
+        queuedMessages.append(PendingQueuedMessage(
             wireMessage: buildWireMessage(from: message),
-            preview: message)
+            preview: message))
         store.clearActiveChatDraft()
         attachments = []
     }
 
-    /// #740: recall the queued message back into the composer draft for editing.
-    /// Triggered by Arrow ↑ on an empty composer (see `ComposerTextView`'s
-    /// `onRecallQueued`). Clears `pendingMessage` so it won't auto-fire — the
-    /// user must explicitly re-queue (via Queue button or Return) after editing.
-    /// The draft is restored as-is (user text only, not the `[[kind:…]]`` wire
-    /// refs — those are rebuilt from current attachments on the next queue/send).
+    /// #740: recall the most-recently queued message back into the composer
+    /// draft for editing. Triggered by Arrow ↑ on an empty composer (see
+    /// `ComposerTextView`'s `onRecallQueued`). Pops the last item so the user
+    /// edits the one they just typed; the queue shrinks by one. The draft is
+    /// restored as-is (user text only, not the `[[kind:…]]`` wire refs — those
+    /// are rebuilt from current attachments on the next queue/send).
     private func recallQueuedMessage() {
-        guard let pending = pendingMessage else { return }
-        pendingMessage = nil
+        guard let pending = queuedMessages.popLast() else { return }
         store.draftChatMessage = pending.preview
     }
 
-    /// Delivers the queued message as the next turn's input when the current
-    /// turn completes. Routes through `submitMessage` (so it reuses the
+    /// Delivers the FIRST queued message as the next turn's input when the
+    /// current turn completes (playlist: one per turn). Pops from the front;
+    /// the remaining items stay queued and the next turn completion fires the
+    /// next one. Routes through `submitMessage` (so it reuses the
     /// interactive/continue/start routing) WITHOUT touching the composer's
     /// draft — a half-typed follow-up the user may be mid-edit on is preserved
     /// (#740 guardrail).
     private func firePendingQueuedMessage() {
-        guard let pending = pendingMessage else { return }
-        pendingMessage = nil
+        guard let pending = queuedMessages.first else { return }
+        queuedMessages.removeFirst()
         submitMessage(pending.wireMessage)
     }
 
@@ -1363,9 +1386,9 @@ struct ChatView: View {
         // it queues the draft for delivery when the turn completes. The tooltip
         // reflects that rather than telling the user to wait.
         if launcher.isGenerating {
-            return pendingMessage != nil
-                ? "Queued — will send when the response finishes"
-                : "Queue for when the response finishes"
+            return queuedMessages.isEmpty
+                ? "Queue for when the response finishes"
+                : "Queued — will send when the response finishes"
         }
         return launcher.isInteractiveSession ? "Send" : "Start Query"
     }
@@ -1377,7 +1400,8 @@ struct ChatView: View {
 /// the trimmed user text shown in the muted "Queued" affordance (without the
 /// prepended `[[kind:…]]` refs). Auto-fires via `submitMessage` when the turn
 /// completes; the user may cancel it before it fires.
-private struct PendingQueuedMessage: Equatable {
+private struct PendingQueuedMessage: Identifiable, Equatable {
+    let id = UUID()
     let wireMessage: String
     let preview: String
 }
