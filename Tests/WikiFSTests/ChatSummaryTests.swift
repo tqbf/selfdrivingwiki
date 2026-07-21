@@ -122,14 +122,15 @@ struct ChatSummaryTests {
     }
 
     @Test
-    func summaryBumpsUpdatedAt() throws {
+    func summaryBumpsUpdatedAt() async throws {
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Timestamp Chat")
         let before = try store.listChats().first { $0.id == chat.id }
         let originalUpdatedAt = before?.updatedAt
 
         // Small delay to ensure timestamps differ.
-        Thread.sleep(forTimeInterval: 0.01)
+        // Use Task.sleep to avoid blocking the cooperative thread pool (#732).
+        try await Task.sleep(for: .milliseconds(10))
         try store.updateChatSummary(chatID: chat.id, summary: "Updated.")
 
         let after = try store.listChats().first { $0.id == chat.id }

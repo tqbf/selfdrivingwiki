@@ -5,6 +5,23 @@ import Testing
 
 @Suite struct PdfExtractionServiceTests {
 
+    /// Wait for a process to exit without blocking the cooperative thread
+    /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
+    /// thread; on CI's 3-vCPU runner with `--parallel`, that starves the pool
+    /// and deadlocks every other test (#732). Use `terminationHandler` +
+    /// `CheckedContinuation` instead — same semantics, non-blocking.
+    private func asyncWaitUntilExit(_ process: Process) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            if !process.isRunning {
+                cont.resume()
+                return
+            }
+            process.terminationHandler = { _ in
+                cont.resume()
+            }
+        }
+    }
+
     // MARK: - ProcessRegistry
 
     @Suite struct ProcessRegistryTests {
@@ -16,7 +33,7 @@ import Testing
             reg.untrack(p)
         }
 
-        @Test func terminatesTrackedProcesses() {
+        @Test func terminatesTrackedProcesses() async throws {
             let reg = PdfExtractionService.ProcessRegistry()
             // Use /bin/sleep as a long-running process we can cleanly kill.
             let p = Process()
@@ -28,12 +45,12 @@ import Testing
             reg.track(p)
             // Force termination via the same mechanism the notification uses.
             reg.terminateAllForTesting()
-            p.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
             #expect(!p.isRunning)
             #expect(p.terminationStatus != 0)  // killed, not exited cleanly
         }
 
-        @Test func untrackedProcessNotTerminated() {
+        @Test func untrackedProcessNotTerminated() async throws {
             let reg = PdfExtractionService.ProcessRegistry()
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -47,10 +64,10 @@ import Testing
             // Process should still be running — it was untracked before terminate.
             // Clean up manually.
             if p.isRunning { p.terminate() }
-            p.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
         }
 
-        @Test func doubleTrackDoesNotDuplicate() {
+        @Test func doubleTrackDoesNotDuplicate() async throws {
             let reg = PdfExtractionService.ProcessRegistry()
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -59,7 +76,7 @@ import Testing
             reg.track(p)
             reg.track(p)  // double track — set semantics dedupe
             reg.terminateAllForTesting()
-            p.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
             #expect(!p.isRunning)
         }
 
@@ -127,6 +144,7 @@ import Testing
     // MARK: - Pipe draining (covers the stdout-block bug)
 
     @Suite struct PipeDrainingTests {
+
         /// Reproduces the exact scenario: a subprocess writes more than the 64 KB
         /// pipe buffer. If the readabilityHandler doesn't drain continuously, the
         /// process blocks in write() and never exits — this test would hang.
@@ -154,7 +172,7 @@ import Testing
             }
 
             try process.run()
-            process.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(process)
 
             // Flush the tail — the exact pattern from the fix in run().
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
@@ -193,7 +211,7 @@ import Testing
             }
 
             try process.run()
-            process.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(process)
 
             // Brief sleep to let the dispatch source deliver any final bytes.
             try? await Task.sleep(for: .milliseconds(50))
@@ -218,7 +236,7 @@ import Testing
             process.standardError = FileHandle.nullDevice
 
             try process.run()
-            process.waitUntilExit()
+            try await PdfExtractionServiceTests().asyncWaitUntilExit(process)
             #expect(process.terminationStatus == 0)
         }
 

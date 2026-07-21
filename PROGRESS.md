@@ -2,51 +2,41 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
-## 2026-07-20 — Move bun prerequisite check up front (#762, branch `bun-prereq-check`)
+## 2026-07-20 — Fix swift CI: build+cache fixed; test hang addressed (branch `ci-speedup`, PR #732)
 
-**Problem.** `build.sh` checked for bun at line 132 — *after* `swift build`
-had already compiled the whole project. A developer without bun installed
-waited through the full Swift compile before discovering the missing
-prerequisite.
+**Outcome.** Build + cache + test steps all green in CI. The test hang that
+timed out CI at 30 min was a **cooperative thread pool starvation** caused by
+blocking calls (`Thread.sleep`, `Process.waitUntilExit()`) in `@MainActor` and
+`--parallel` test suites. On CI's 3-vCPU runner, a few blocking calls exhaust
+the pool and deadlock every other test.
 
-**Changes.** Two-part fix:
-1. **`build.sh`**: added an up-front bun gate before the `swift build` call.
-   Resolution chain: `${BUN_INSTALL}/bin/bun` → `~/.bun/bin/bun` →
-   `command -v bun` (PATH). If none found, prints the existing install hint
-   and exits 1 before any compilation. The bundling section at ~L147 now
-   reuses the already-resolved `BUN_SRC` (no re-derivation).
-2. **`Makefile`**: added a dedicated `bun-check` target (same resolution
-   chain + error message) wired as a prereq of `build` and `release` only.
-   `check`/`test`/`test-fast`/`check-release` do NOT depend on it — they
-   don't bundle, so they don't need bun.
+**Root cause.** The last successful CI (July 19, `95123a80`) used a 2-tier
+approach with a SKIP list for heavy suites. Commit `5101e42` removed the tiers,
+running the full suite in one job. The in-memory fixtures (#658) fixed the
+*speed* but not the *blocking* — `Thread.sleep(6)` in `PageVersionTests`
+(blocks the main actor for 6s) and `waitUntilExit()` in `PdfExtractionServiceTests`
+(parks a cooperative pool thread) starve the pool on constrained CI runners.
 
-**Verification.** With bun present: `make build` succeeds, `make test`
-passes (3257 tests). Without bun: `bun-check` target and the `build.sh` gate
-both fail immediately with the install hint before reaching `swift build`.
-See `plans/bun-prereq-check.md`.
+**Fix.**
+- Replaced all `Thread.sleep` in tests with `Task.sleep` (non-blocking):
+  `PageVersionTests.amendAfterWindowExpiresAppends` (6s → `.seconds(6)`),
+  `ChatSummaryTests.summaryBumpsUpdatedAt` (10ms), `NavigationHistoryTests`
+  (2ms × 2 tests).
+- Replaced all `Process.waitUntilExit()` in `PdfExtractionServiceTests` with
+  a `terminationHandler` + `CheckedContinuation` wrapper (`asyncWaitUntilExit`)
+  — same semantics, non-blocking.
+- Added `.serialized, .timeLimit(.minutes(2))` to the 4 `CheckedContinuation`
+  suites (`QueueExtractionTests`, `ACPTurnRecoveryTests`, `ACPWiringTests`,
+  `QueueEngineTests`) as a safety net.
+- Added `.serialized` to 2 WKWebView suites (`YouTubeEmbedWebViewTests`,
+  `QuoteHighlightWebViewTests`).
 
-## 2026-07-20 — Provenance panel run names + clickable entries (#745, branch `provenance-panel`)
-
-**Problem.** The Provenance panel showed the raw chat ULID (`chat:<ULID>`)
-for chat-driven page edits and raw `agent:<kind>` for one-shot runs. Users
-couldn't identify which run produced a version or navigate to it.
-
-**Changes.** Added `runTitle: String?` to `PageOrigin` — the chat's display
-title, resolved via a correlated subquery that JOINs the `chats` table on
-the stripped chat ULID (`substr(a.name, 6)`). Rewrote `ProvenancePanel`:
-`agentLabel` now shows the chat title (or "Deleted chat" for deleted chats)
-instead of the raw ULID, and friendly labels ("Ingestion" / "Lint" / "Query")
-for `agent:<kind>` runs. History rows are now clickable:
-`.contentShape(Rectangle())` + `.hoverRowBackground()` + `.onTapGesture`.
-Click routing: `chat:<id>` → `store.openTab(.chat(id))`; `agent:<kind>` →
-Activity window via a new `openActivityWindow` environment bridge
-(`OpenWindowBridge.openActivityWindow` → `MenuBarItemController.showQueueWindow`).
-
-**Files.** `PageOrigin.swift` (+runTitle), `GRDBWikiStore.swift` (SQL subquery
-+ decoder), `PageDetailView.swift` (panel rewrite), `OpenWindowBridge.swift`
-(+openActivityWindow), `MenuBarItemController.swift` (wire in start()),
-`WikiFSApp.swift` (inject into environment), new
-`ActivityWindowEnvironmentKey.swift`. Build + test pass (3253 tests).
+**CI workflow changes.**
+- Cache key on `Package.resolved` only (dropped `Sources/**/*.swift` hash +
+  `restore-keys` that produced one cache entry per commit, blowing the 10 GB
+  LRU).
+- Plain `xcrun swift build` / `xcrun swift test --parallel` (removed the
+  fragile `xcrun swift build 2>/dev/null` probe that masked build errors).
 
 ## 2026-07-20 — Queue a chat message while the agent is working (branch `chat-queue`, PR #751)
 

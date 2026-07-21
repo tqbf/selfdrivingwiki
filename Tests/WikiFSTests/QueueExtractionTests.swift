@@ -11,7 +11,7 @@ import os
 /// These tests use fake providers/workers (no real extraction runs). The
 /// app-layer migration (AgentOperationRunner, SourceDetailView, AgentLauncher
 /// retirement) is tested via source-scan for AC.1.
-@Suite
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct QueueExtractionTests {
 
     // MARK: - Helpers

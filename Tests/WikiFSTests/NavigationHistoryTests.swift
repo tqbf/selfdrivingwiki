@@ -147,10 +147,11 @@ struct NavigationHistoryTests {
 
     // MARK: - Sort order integration
 
-    @Test func changingSortOrderReloadsSummaries() throws {
+    @Test func changingSortOrderReloadsSummaries() async throws {
         let (model, store) = try tempModel()
         _ = try store.createPage(title: "Banana")
-        Thread.sleep(forTimeInterval: 0.002)
+        // Use Task.sleep to avoid blocking the cooperative thread pool (#732).
+        try await Task.sleep(for: .milliseconds(2))
         _ = try store.createPage(title: "apple")
         model.reloadFromStore()
 
@@ -167,10 +168,11 @@ struct NavigationHistoryTests {
         #expect(model.summaries.count == 2)
     }
 
-    @Test func snapshotIgnoresSortPreference() throws {
+    @Test func snapshotIgnoresSortPreference() async throws {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
-        Thread.sleep(forTimeInterval: 0.002)
+        // Use Task.sleep to avoid blocking the cooperative thread pool (#732).
+        try await Task.sleep(for: .milliseconds(2))
         _ = try store.createPage(title: "B")
         // Touch A so it becomes most-recently-edited under lastUpdated.
         try store.updatePage(id: a.id, title: "A", body: "edited")

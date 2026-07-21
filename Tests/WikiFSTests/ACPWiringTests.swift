@@ -12,7 +12,7 @@ import ACPModel
 /// synthesis extraction. Pure logic only — NO live agent subprocess (the slice
 /// forbids end-to-end testing). The translator + delegate-policy behavior are
 /// already covered by `ACPBackendTests`; this suite covers the NEW wiring.
-@Suite struct ACPWiringTests {
+@Suite(.serialized, .timeLimit(.minutes(2))) struct ACPWiringTests {
 
     // MARK: - Backend selection (AgentBackendFactory)
 

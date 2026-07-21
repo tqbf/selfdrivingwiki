@@ -352,7 +352,7 @@ struct PageVersionTests {
         #expect(historyAfterApply.count == historyAfterDry.count, "applied vacuum should not change count when 0 orphans")
     }
 
-    @Test func amendAfterWindowExpiresAppends() throws {
+    @Test func amendAfterWindowExpiresAppends() async throws {
         let store = try tempStore()
         let page = try store.createPage(title: "Window Page")
 
@@ -362,7 +362,10 @@ struct PageVersionTests {
             expectedHeadVersionID: nil, lastEditedBy: "agent-A")
 
         // Wait for the coalescing window (5s) to expire.
-        Thread.sleep(forTimeInterval: 6)
+        // Use Task.sleep (not Thread.sleep) so we don't block the cooperative
+        // thread pool / main actor — Thread.sleep on a @MainActor test stalls
+        // every other @MainActor test on CI's constrained runner (#732).
+        try await Task.sleep(for: .seconds(6))
 
         // Second save by same actor — but window expired, so should append.
         let v2 = try store.appendPageVersion(
