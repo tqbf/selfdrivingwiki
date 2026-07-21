@@ -158,6 +158,27 @@ else
   echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2
   exit 1
 fi
+
+# uv runtime — bundled so pdf2md (a PEP 723 inline script whose shebang is
+# `env -S uv run --script`) works without a system-wide uv install. Same
+# shape as bun: a single static binary (astral-sh/uv). PdfExtractionService
+# prepends this Helpers dir to the subprocess PATH so the bundled uv is found
+# first; the system-uv PATH fallbacks in uvSearchPATH remain as a safety net.
+# REQUIRED: if absent the build fails rather than shipping a broken app that
+# silently degrades PDF extraction to the agent Read tool. See #766.
+UV_SRC="${UV_INSTALL:-$HOME/.local/bin}/uv"
+if [ ! -x "${UV_SRC}" ]; then
+  UV_SRC="$(command -v uv 2>/dev/null || true)"
+fi
+if [ -x "${UV_SRC}" ]; then
+  cp "${UV_SRC}" "${HELPERS_DIR}/uv"
+  echo "  ✓ bundled uv ($(file -b "${UV_SRC}" | cut -d, -f1))"
+else
+  echo "  ✗ FATAL: uv not found" >&2
+  echo "    Install it:  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "    Or set UV_INSTALL to point at your uv binary's directory." >&2
+  exit 1
+fi
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must
 # NOT live in Contents/Helpers (a code location — codesign rejects unsigned
@@ -424,6 +445,11 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/bun"
   fi
+  # uv runtime (nested Mach-O) — same inside-out signing as bun.
+  if [ -f "${HELPERS_DIR}/uv" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/uv"
+  fi
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     --entitlements "${EXT_ENTITLEMENTS}" \
@@ -441,6 +467,9 @@ else
   fi
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/uv" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/uv"
   fi
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"

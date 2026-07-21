@@ -58,15 +58,22 @@ enum PdfExtractionService {
     private static nonisolated let processRegistry = ProcessRegistry()
 
     /// Directories prepended to a subprocess PATH so the `pdf2md` shebang
-    /// (`env -S uv run --script`) can find `uv`. A Finder-launched app inherits
-    /// the bare system PATH (`/usr/bin:/bin:…`), so cover every place uv
-    /// actually lands: `~/.local/bin` (the official installer),
-    /// `/opt/homebrew/bin` (Homebrew on Apple silicon), and `/usr/local/bin`
-    /// (Homebrew on Intel).
+    /// (`env -S uv run --script`) can find `uv`. The bundled uv binary lives
+    /// in the app's `Contents/Helpers` directory (placed there by build.sh,
+    /// same location as wikictl/bun) and is resolved at runtime via
+    /// `HelpersLocation.wikictlDirectory`, which finds the signed bundle's
+    /// Helpers dir in production and `build/` in a `swift run` dev launch.
+    /// It goes FIRST so the bundled uv wins over any system uv. The remaining
+    /// entries are a fallback if the bundled uv isn't there for some reason:
+    /// `~/.local/bin` (the official uv installer), `/opt/homebrew/bin`
+    /// (Homebrew on Apple silicon), and `/usr/local/bin` (Homebrew on Intel).
+    /// A Finder-launched app inherits the bare system PATH
+    /// (`/usr/bin:/bin:…`), so these cover every place uv actually lands.
     static nonisolated var uvSearchPATH: String {
+        let helpersDir = HelpersLocation.wikictlDirectory
         let localBin = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/bin", isDirectory: true).path
-        return "\(localBin):/opt/homebrew/bin:/usr/local/bin"
+        return "\(helpersDir):\(localBin):/opt/homebrew/bin:/usr/local/bin"
     }
 
     /// Thread-safe byte accumulator for a pipe drained on a background queue.
