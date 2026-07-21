@@ -53,6 +53,8 @@ private final class SwipeNavigationMonitor: ObservableObject {
     var canGoForward: (() -> Bool)?
 
     private var token: Any?
+    /// Token for the `.otherMouseDown` monitor (mouse back/forward side buttons).
+    private var mouseButtonToken: Any?
     /// Accumulated horizontal delta (in scroll-wheel points). Positive =
     /// rightward swipe (navigate back), negative = leftward (navigate forward).
     private var accumulated: CGFloat = 0
@@ -66,11 +68,21 @@ private final class SwipeNavigationMonitor: ObservableObject {
     /// swipe, not incidental horizontal drift during vertical scrolling.
     private let threshold: CGFloat = 25
 
+    /// AppKit `buttonNumber` for the conventional mouse back/forward side
+    /// buttons. AppKit `buttonNumber` is 0-indexed; the mouse-vendor
+    /// "button 4/5" map to AppKit `buttonNumber` 3 / 4.
+    private static let backButtonNumber = 3
+    private static let forwardButtonNumber = 4
+
     func start() {
         guard token == nil else { return }
         token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self else { return event }
             return self.handle(event)
+        }
+        mouseButtonToken = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] event in
+            guard let self else { return event }
+            return self.handleMouseButton(event)
         }
     }
 
@@ -79,12 +91,44 @@ private final class SwipeNavigationMonitor: ObservableObject {
             NSEvent.removeMonitor(token)
             self.token = nil
         }
+        if let mouseButtonToken {
+            NSEvent.removeMonitor(mouseButtonToken)
+            self.mouseButtonToken = nil
+        }
         reset()
     }
 
     private func reset() {
         accumulated = 0
         inGesture = false
+    }
+
+    /// Handles `.otherMouseDown` events for the conventional back (3) and
+    /// forward (4) mouse side buttons. Returns `nil` to consume the event so
+    /// it doesn't propagate (e.g. to a responder chain that might interpret
+    /// it), or the event unchanged to pass it along. Uses the SAME
+    /// `navigateBack` / `navigateForward` callbacks as the swipe path so there
+    /// is a single navigation seam — does not call the store directly.
+    private func handleMouseButton(_ event: NSEvent) -> NSEvent? {
+        // Unlike the scroll-wheel swipe path, side buttons fire regardless of
+        // hover — they're explicitly a navigation input. Match the swipe
+        // path's canGo* guard so a no-op press is swallowed silently.
+        switch event.buttonNumber {
+        case Self.backButtonNumber:
+            if canGoBack?() ?? false {
+                navigateBack?()
+                return nil
+            }
+            return event
+        case Self.forwardButtonNumber:
+            if canGoForward?() ?? false {
+                navigateForward?()
+                return nil
+            }
+            return event
+        default:
+            return event
+        }
     }
 
     /// Returns `nil` to swallow a handled swipe (prevents the underlying
