@@ -309,6 +309,17 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func contextMenu(for item: QueueItem) -> some View {
+        // #598: extraction jobs carry sourceIDs — offer a "Reveal Source"
+        // action that navigates to the source in the wiki's Sources outline,
+        // mirroring #583's "Open Page" for lint jobs. Only shown for
+        // extraction jobs with at least one source ID in the payload.
+        if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
+            Divider()
+            Button("Reveal Source", systemImage: "arrow.up.forward.app") {
+                revealSource(sourceID, in: item.wikiID)
+            }
+            .help("Reveal this source in the wiki's Sources outline")
+        }
         let debugURL = activityTracker.debugURL(for: item.id)
         if let debugURL {
             Divider()
@@ -511,6 +522,18 @@ struct ActivityWindowView: View {
                 }
             }
             Spacer()
+            // #598: extraction jobs — "Reveal Source" action in the detail
+            // header, navigating to the source in the Sources outline.
+            // Mirrors #583's lint "Open" button; uses the same
+            // `requestSidebarReveal(.source)` + `openWiki` mechanism.
+            if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
+                Button("Reveal Source", systemImage: "arrow.up.forward.app") {
+                    revealSource(sourceID, in: item.wikiID)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Reveal this source in the wiki's Sources outline")
+            }
             revealMenu(for: item)
             switch item.state {
             case .running, .queued:
@@ -675,6 +698,22 @@ struct ActivityWindowView: View {
         store.openTab(.page(pageID))
         openWindowBridge?.openWiki?(wikiID)
         DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.prefix(8))")
+    }
+
+    /// Reveal an extraction job's source in the wiki's Sources outline (#598).
+    /// Uses the same `requestSidebarReveal` + `openWiki` mechanism as the
+    /// bookmark "Go to Original" (#570) and SourceDetailView's "Show in List"
+    /// — revealing the source in the sidebar (not opening it as a tab, since
+    /// sources are file-backed toms, not tabable documents). Mirrors how #583
+    /// `openPage` lets lint jobs navigate back to a page.
+    private func revealSource(_ sourceID: PageID, in wikiID: String) {
+        guard let store = sessionManager?.sessions[wikiID]?.store else {
+            DebugLog.tabs("Extraction Reveal Source: no live session for wiki \(wikiID.prefix(8)); cannot reveal source")
+            return
+        }
+        store.requestSidebarReveal(.source(sourceID))
+        openWindowBridge?.openWiki?(wikiID)
+        DebugLog.tabs("Extraction Reveal Source: revealed source \(sourceID) in wiki \(wikiID.prefix(8))")
     }
 
     /// Whole-wiki lint "Browse Pages": reveal the wiki's home page (switches the
