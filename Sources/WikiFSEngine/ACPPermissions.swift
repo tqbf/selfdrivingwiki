@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import ACP
 import ACPModel
@@ -200,100 +201,6 @@ struct ACPEventTranslator: Sendable {
         return content.compactMap { $0.displayText }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-// MARK: - Permission policy (the always-ask/yolo lever)
-
-/// How the app (the ACP *client*) responds to a `session/request_permission`
-/// from the agent. This is the structural enforcement of #287: a write cannot
-/// land until the policy resolves.
-///
-/// - `yolo`: auto-approve — resolve immediately with the request's allow option.
-///   Today's "writes apply with no review" behavior. Safe default (see caveat).
-/// - `alwaysAsk`: defer — record the request as *pending* and block until the
-///   future UI resolves it via `ACPBackend.resolvePermission`. Mirrors paseo's
-///   `pendingPermissions` map + `permission_requested` event pattern
-///   (acp-agent.ts:2050).
-///
-/// **Caveat (design doc):** always-ask enforcement *depends on the agent
-/// emitting `request_permission` for writes*. Most do (Claude via the wrapper,
-/// Copilot, …), but not all — so yolo is the safe default.
-public enum PermissionPolicy: String, Sendable, CaseIterable {
-    /// Skip all permission prompts — writes apply automatically.
-    case bypass
-    /// Pause for user approval before each tool that needs permission.
-    case alwaysAsk
-    /// Auto-approve edit/write tools; ask for everything else.
-    case acceptEdits
-    /// Deny all writes — read-only analysis mode.
-    case plan
-
-    public var label: String {
-        switch self {
-        case .bypass: "Bypass"
-        case .alwaysAsk: "Always Ask"
-        case .acceptEdits: "Accept Edits"
-        case .plan: "Plan"
-        }
-    }
-
-    public var help: String {
-        switch self {
-        case .bypass: "Skip all permission prompts (use with caution)"
-        case .alwaysAsk: "Pause for your approval before each write"
-        case .acceptEdits: "Auto-approve file edits; ask for other tools"
-        case .plan: "Read-only: deny all writes and edits"
-        }
-    }
-
-    /// SF Symbol for the mode's composer chip + dropdown row. A shield motif
-    /// echoing paseo's permission menu (bolt = skip/fast, checkmark = safe/ask,
-    /// exclamation = auto-apply edits, half-shield = read-only plan).
-    public var glyph: String {
-        switch self {
-        case .bypass: "bolt.shield"
-        case .alwaysAsk: "checkmark.shield"
-        case .acceptEdits: "exclamationmark.shield"
-        case .plan: "shield.lefthalf.filled"
-        }
-    }
-}
-
-/// A snapshot of a pending permission request (always-ask). The future chat UI
-/// surfaces these as Approve/Reject affordances; `options` are the agent's
-/// offered choices (typically an `allow_*` and a `reject_*`).
-///
-/// `Equatable` by `toolCallId`: a pending request is identified by its tool-call
-/// id (the ACP permission gate keys on it), and the offered options don't change
-/// while a request is pending. This identity-based equality is what the
-/// launcher's snapshot diff (`snapshot != pendingPermissions`) relies on to
-/// avoid redundant view updates. (`PermissionOption` is not `Equatable`, so
-/// `==` cannot be synthesized — implemented explicitly instead.)
-public struct PendingPermission: Sendable, Equatable {
-    public let toolCallId: String
-    public let title: String?
-    /// A human-readable tool name (e.g. "Edit file", "Create directory").
-    /// Derived from the permission request's `ToolCallUpdate.title`/`.kind`.
-    public let toolName: String?
-    /// A one-liner summary of what the tool will do (e.g. the file path being
-    /// edited). Derived from `ToolCallUpdate.locations`.
-    public let inputSummary: String?
-    public let options: [PermissionOption]
-
-    public init(
-        toolCallId: String, title: String?, toolName: String?,
-        inputSummary: String?, options: [PermissionOption]
-    ) {
-        self.toolCallId = toolCallId
-        self.title = title
-        self.toolName = toolName
-        self.inputSummary = inputSummary
-        self.options = options
-    }
-
-    public static func == (lhs: PendingPermission, rhs: PendingPermission) -> Bool {
-        lhs.toolCallId == rhs.toolCallId
     }
 }
 
@@ -671,3 +578,4 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
         return options.first(where: { $0.kind.hasPrefix("allow") })
     }
 }
+#endif

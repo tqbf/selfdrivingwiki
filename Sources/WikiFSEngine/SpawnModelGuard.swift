@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -40,3 +41,4 @@ enum SpawnModelGuard {
              + "Open Settings → Agents and pick a model before running."
     }
 }
+#endif

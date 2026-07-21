@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -101,3 +102,4 @@ public final class ExtractionCoordinator {
         }
     }
 }
+#endif

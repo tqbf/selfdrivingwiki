@@ -165,7 +165,12 @@ let package = Package(
             dependencies: [
                 "WikiFSCore",
                 // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
-                .product(name: "ACP", package: "swift-acp"),
+                // The `ACP` product is macOS-only: it uses ACPProcessManager and os.log.
+                // Guarded with #if os(macOS) in source so the portable logic in
+                // WikiFSEngine (queue engine, protocols, ACPModel-only files) compiles
+                // on Linux (#754, #780). `ACPModel` (pure model types) is portable.
+                .product(name: "ACP", package: "swift-acp",
+                         condition: .when(platforms: [.macOS])),
                 .product(name: "ACPModel", package: "swift-acp"),
             ],
             path: "Sources/WikiFSEngine",
@@ -175,7 +180,8 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
-                "WikiFSEngine",
+                // WikiFS (the app) is macOS-only — links WebKit, MLX, etc.
+                .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 "WikiFSMLX",
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
@@ -255,7 +261,13 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+            dependencies: ["WikiFSCore", "WikiCtlCore",
+                           // WikiFSEngine is macOS-only at build time because it
+                           // depends on the `ACP` product (macOS-only). On Linux
+                           // the test target still builds — the ACP-backed tests
+                           // are #if os(macOS)-guarded (#754, #780).
+                           .target(name: "WikiFSEngine",
+                                   condition: .when(platforms: [.macOS])),
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
             swiftSettings: strictSwiftSettings
@@ -267,7 +279,8 @@ let package = Package(
         .testTarget(
             name: "WikiFSAppTests",
             dependencies: [
-                "WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+                "WikiFSCore", "WikiCtlCore",
+                .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSFileProvider", condition: .when(platforms: [.macOS])),
