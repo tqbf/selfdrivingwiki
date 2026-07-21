@@ -192,6 +192,33 @@ public actor QueueEngine {
 
     // MARK: - Cancel / Retry
 
+    /// Cancel ALL in-flight (`.running`) items across every queue kind. Used
+    /// by the quit path to ensure running items are marked `.cancelled` in the
+    /// store BEFORE the app terminates — so crash recovery on restart skips
+    /// them (``resetRunningToQueued`` only touches `.running` items; a
+    /// `.cancelled` item stays cancelled). Genuine crashes (no clean cancel)
+    /// leave items `.running` and are still re-queued — this is correct.
+    ///
+    /// Returns the count of items cancelled. Safe to call when nothing is
+    /// running (returns 0). Calling `cancelItem` per-item ensures worker
+    /// `Task`s are cancelled AND the DB state is `.cancelled` in one
+    /// atomic actor operation.
+    @discardableResult
+    public func cancelAllInFlight() async -> Int {
+        var count = 0
+        for queue in [QueueKind.extraction, QueueKind.ingestion] {
+            let active = (try? store.loadActive(for: queue)) ?? []
+            for item in active where item.state == .running {
+                await cancelItem(item.id)
+                count += 1
+            }
+        }
+        if count > 0 {
+            DebugLog.store("QueueEngine.cancelAllInFlight: cancelled \(count) running item(s) for quit")
+        }
+        return count
+    }
+
     /// Cancel a specific queued or running item. Running items have their
     /// worker `Task` cancelled, then transition to `.cancelled` (preserving
     /// `orderingKey`).
