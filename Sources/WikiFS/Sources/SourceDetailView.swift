@@ -833,7 +833,24 @@ struct SourceDetailView: View {
                 Label("Website", systemImage: "globe")
             }
         case "markdown-folder":
-            Label("Folder", systemImage: "folder")
+            // Two-dimensional label (#644): "Folder / Markdown" when the content
+            // type is derivable, or just "Folder" when it's implied/unknown.
+            let folderLabel = SourceProvenanceLabel.combine(
+                provider: "Folder", agentName: origin.agentName,
+                ext: file.ext, mimeType: file.mimeType)
+            let folderPath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !folderPath.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: folderPath)])
+                } label: {
+                    Label(folderLabel, systemImage: "folder")
+                }
+                .buttonStyle(.link)
+                .help("Reveal original folder: \(folderPath)")
+            } else {
+                Label(folderLabel, systemImage: "folder")
+            }
         case "apple-podcast":
             // Byteless source (a transcript) — link to the episode page, like the
             // website tag. Never "File": a podcast source carries no file bytes.
@@ -875,7 +892,19 @@ struct SourceDetailView: View {
             let fileLabel = SourceProvenanceLabel.combine(
                 provider: "File", agentName: origin.agentName,
                 ext: file.ext, mimeType: file.mimeType)
-            Label(fileLabel, systemImage: "doc")
+            let filePath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !filePath.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: filePath)])
+                } label: {
+                    Label(fileLabel, systemImage: "doc")
+                }
+                .buttonStyle(.link)
+                .help("Reveal original file: \(filePath)")
+            } else {
+                Label(fileLabel, systemImage: "doc")
+            }
         }
     }
 
