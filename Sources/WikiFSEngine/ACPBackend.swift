@@ -382,23 +382,68 @@ public actor ACPBackend: AgentBackend {
             env = ProcessInfo.processInfo.environment.merging(spawn.environment) { _, new in new }
         }
 
-        try await client.launch(
-            agentPath: spawn.executablePath,
-            arguments: spawn.arguments,
-            workingDirectory: spawn.workingDirectory,
-            environment: env
-        )
+        // Capture the CLI profile's log callbacks so ACP stderr and notifications
+        // flow into run.stderr.log / run.jsonl (same hooks the old CLI backend used
+        // via onStdoutChunk/onStderrChunk). Without this the log files stay empty
+        // and "Reveal Log" opens a blank file.
+        let onStdoutChunk = profile.cli?.onStdoutChunk
+        let onStderrChunk = profile.cli?.onStderrChunk
 
-        DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize")
-        // Slice 3: initialize, then authenticate if the agent advertises
-        // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
-        // so it's unit-tested directly; here we just execute it. A key is never
-        // logged.
-        let initResponse = try await client.initialize(
-            protocolVersion: 1,
-            capabilities: capabilities,
-            clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: GeneratedVersion.appVersion)
-        )
+        // #733 + #737: capture stderr during the launch/initialize window.
+        // The stderr stream is single-consumer (`AsyncStream` — two iterators
+        // split elements), so we start ONE stderr task here that both buffers
+        // (for launch-failure diagnostics) AND forwards (for the regular log
+        // path). On success the buffer is simply discarded; on failure it
+        // feeds `launchFailed`. This replaces the post-handshake `stderrTask`.
+        let earlyStderrBuffer = EarlyStderrBuffer()
+        let stderrTask = Task { [client, onStderrChunk, debugLogger, earlyStderrBuffer] in
+            guard let stderrStream = await client.stderrLines() else { return }
+            for await line in stderrStream {
+                if Task.isCancelled { break }
+                earlyStderrBuffer.append(line)
+                DebugLog.agent("ACP stderr: \(line)")
+                onStderrChunk?(line + "\n")
+                debugLogger?.logStderr(line + "\n")
+            }
+        }
+
+        let initResponse: InitializeResponse
+        do {
+            try await client.launch(
+                agentPath: spawn.executablePath,
+                arguments: spawn.arguments,
+                workingDirectory: spawn.workingDirectory,
+                environment: env
+            )
+
+            DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize")
+            // Slice 3: initialize, then authenticate if the agent advertises
+            // authMethods. The DECISION is a pure helper (`ACPAuthResolver.resolve`)
+            // so it's unit-tested directly; here we just execute it. A key is never
+            // logged.
+            let resp = try await client.initialize(
+                protocolVersion: 1,
+                capabilities: capabilities,
+                clientInfo: ClientInfo(name: "SelfDrivingWiki", title: "Self Driving Wiki", version: GeneratedVersion.appVersion)
+            )
+            // The early buffer is no longer needed — stderr is flowing to the
+            // log callbacks. Discard any buffered lines.
+            _ = earlyStderrBuffer.flush()
+            initResponse = resp
+        } catch {
+            // The process either failed to start or died before the ACP
+            // handshake completed. Drain the buffered stderr and surface an
+            // actionable error (#733 + #737).
+            stderrTask.cancel()
+            let stderr = earlyStderrBuffer.flush()
+            let hint = Self.launchHint(for: spawn)
+            DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(error.localizedDescription)\nstderr: \(stderr ?? "<nil>")")
+            throw ACPBackendError.launchFailed(
+                executable: spawn.executablePath,
+                stderr: stderr,
+                hint: hint)
+        }
+
         DebugLog.agent("ACPBackend.startProcess: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)")
 
         switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
@@ -424,13 +469,6 @@ public actor ACPBackend: AgentBackend {
             DebugLog.agent("ACPBackend.startProcess: no API key configured — skipping client auth (agent may self-authenticate)")
         }
 
-        // Capture the CLI profile's log callbacks so ACP stderr and notifications
-        // flow into run.stderr.log / run.jsonl (same hooks the old CLI backend used
-        // via onStdoutChunk/onStderrChunk). Without this the log files stay empty
-        // and "Reveal Log" opens a blank file.
-        let onStdoutChunk = profile.cli?.onStdoutChunk
-        let onStderrChunk = profile.cli?.onStderrChunk
-
         // Process-lifetime notification drain (cause 6 fix,
         // `plans/acp-stall-recovery.md` §1b + Phase 1 warm-subprocess change).
         // Acquire `client.notifications` ONCE here and fan events into a
@@ -455,18 +493,8 @@ public actor ACPBackend: AgentBackend {
         }
         DebugLog.agent("ACPBackend.startProcess: process-lifetime notification drain started")
 
-        // Forward agent stderr to DebugLog.agent + run.stderr.log (via the CLI
-        // profile's onStderrChunk callback). Best-effort: the stream finishes
-        // on terminate, so this task exits naturally.
-        let stderrTask = Task { [client, onStderrChunk, debugLogger] in
-            guard let stderrStream = await client.stderrLines() else { return }
-            for await line in stderrStream {
-                if Task.isCancelled { break }
-                DebugLog.agent("ACP stderr: \(line)")
-                onStderrChunk?(line + "\n")
-                debugLogger?.logStderr(line + "\n")
-            }
-        }
+        // stderr forwarding + buffering is handled by `stderrTask` above
+        // (started before launch so it captures launch-failure stderr).
 
         // Check capabilities for session/close support (Phase 1). If the agent
         // doesn't advertise sessionCapabilities.close, closeSession() degrades
@@ -1661,6 +1689,37 @@ public actor ACPBackend: AgentBackend {
             environment: environment)
     }
 
+    // MARK: - Launch failure diagnostics (#733 + #737)
+
+    /// Determines the env-var hint for a launch failure based on the spawn
+    /// config's command tokens. The hint is driven by what's in the command
+    /// array (checking for "claude" or "codex" substrings), NOT hardcoded to
+    /// provider IDs — a user could rename a provider id without changing the
+    /// command. Returns nil for generic failures (no known provider match).
+    ///
+    /// - `claude-agent-acp` in the command → `CLAUDE_CODE_EXECUTABLE` (#733)
+    /// - `codex` as a command token → `CODEX_PATH` (#737)
+    static func launchHint(for spawn: AgentSpawnConfig) -> ProviderEnvHint? {
+        // Check the full command — the executable path AND arguments — because
+        // `bun x @agentclientprotocol/claude-agent-acp` puts the identifier in
+        // the args, not the executable.
+        let fullCommand = ([spawn.executablePath] + spawn.arguments)
+            .joined(separator: " ")
+            .lowercased()
+
+        if fullCommand.contains("claude-agent-acp") || fullCommand.contains("claude") {
+            return ProviderEnvHint(
+                envVar: "CLAUDE_CODE_EXECUTABLE",
+                description: "Claude Code (claude)")
+        }
+        if fullCommand.contains("codex") {
+            return ProviderEnvHint(
+                envVar: "CODEX_PATH",
+                description: "Codex CLI (codex)")
+        }
+        return nil
+    }
+
     /// Named constants for the environment-variable keys and values that
     /// `buildAgentEnv` exports into the agent subprocess. Centralizes the raw
     /// string literals so typos are caught at compile time — same pattern as
@@ -2249,6 +2308,15 @@ enum ACPBackendError: Error, LocalizedError {
     /// timestamp — the coordinator applies a conservative default.
     case quotaExhausted(provider: String, resetTime: Date?)
 
+    /// #733 + #737: the agent subprocess failed to launch or died before the
+    /// ACP handshake completed (e.g. `bun` started but `claude` / `codex` was
+    /// not on PATH). `executable` is the resolved binary path; `stderr`
+    /// captures whatever the subprocess wrote before dying (may be nil if the
+    /// process never started); `hint` carries the env-var workaround
+    /// (`CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH`) when the command matches a
+    /// known provider, or nil for generic failures.
+    case launchFailed(executable: String, stderr: String?, hint: ProviderEnvHint?)
+
     var errorDescription: String? {
         switch self {
         case .noAgentConfigured:
@@ -2283,6 +2351,57 @@ enum ACPBackendError: Error, LocalizedError {
         case .quotaExhausted(let provider, let resetTime):
             let resetStr = resetTime.map { " until \($0)" } ?? ""
             return "Provider \(provider) quota exhausted\(resetStr)."
+        case .launchFailed(let executable, let stderr, let hint):
+            var msg = "Failed to launch \(executable)."
+            if let stderr, !stderr.isEmpty {
+                msg += "\n\n\(stderr)"
+            }
+            if let hint {
+                msg += "\n\nHint: set \(hint.envVar) to the full path of your \(hint.description) binary, or edit the provider's command/env in agent-providers.json."
+            }
+            return msg
         }
+    }
+}
+
+/// #733 + #737: an actionable env-var hint surfaced when a provider's
+/// subprocess can't find its underlying CLI binary (e.g. `bun` starts but
+/// `claude` isn't on PATH). The hint tells the user which env var to set to
+/// point at the correct binary path.
+public struct ProviderEnvHint: Sendable {
+    public let envVar: String
+    public let description: String
+
+    public init(envVar: String, description: String) {
+        self.envVar = envVar
+        self.description = description
+    }
+}
+
+/// #733 + #737: a thread-safe buffer for early stderr lines captured BEFORE
+/// the regular `stderrTask` (which only starts after a successful ACP
+/// handshake). The early stderr Task writes lines into this buffer; on launch
+/// failure, `flush()` drains them into an error message. On success, the
+/// buffer is discarded. Uses `NSObject` + `NSLock` for cheap thread safety
+/// — the buffer is a transient, throwaway object, not worth an actor hop.
+final class EarlyStderrBuffer: @unchecked Sendable {
+    private var lines: [String] = []
+    private let lock = NSLock()
+
+    func append(_ line: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        lines.append(line)
+    }
+
+    /// Drains and returns all buffered lines joined with newlines, or nil
+    /// if the buffer was empty. The buffer is cleared after this call.
+    func flush() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !lines.isEmpty else { return nil }
+        let joined = lines.joined(separator: "\n")
+        lines.removeAll()
+        return joined
     }
 }

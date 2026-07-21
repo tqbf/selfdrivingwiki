@@ -301,7 +301,7 @@ struct ACPProviderModelProbeTests {
             .timedOut,
             .authenticationFailed(nil),
             .authenticationFailed("expired"),
-            .launchFailed("ENOENT"),
+            .launchFailed("ENOENT", stderr: nil, hint: nil),
             .noModelsAdvertised,
             .underlying(NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])),
         ]

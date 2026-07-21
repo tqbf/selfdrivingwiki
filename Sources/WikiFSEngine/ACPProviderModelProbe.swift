@@ -105,7 +105,7 @@ public struct ACPProviderModelProbe: Sendable {
             try FileManager.default.createDirectory(at: probeCWD, withIntermediateDirectories: true)
         } catch {
             DebugLog.agent("ACPProviderModelProbe: FAIL could not create probe CWD: \(error.localizedDescription)")
-            throw ACPProviderModelProbeError.launchFailed(error.localizedDescription)
+            throw ACPProviderModelProbeError.launchFailed(error.localizedDescription, stderr: nil, hint: nil)
         }
         // Sweep the probe CWD on every exit path (success / failure / cancel).
         // `defer` is fine here — synchronous file I/O.
@@ -185,19 +185,30 @@ public struct ACPProviderModelProbe: Sendable {
         await client.setDelegate(delegate)
 
         DebugLog.agent("ACPProviderModelProbe.runProbe: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
+
+        // #733 + #737: buffer stderr during launch/initialize so that a
+        // launch-failure (bun starts but claude/codex not on PATH) surfaces
+        // the subprocess's stderr + an env-var hint. The stderr stream is
+        // single-consumer, so this ONE task both buffers and discards on
+        // success.
+        let earlyStderrBuffer = EarlyStderrBuffer()
+        let initResponse: InitializeResponse
         do {
             try await client.launch(
                 agentPath: spawn.executablePath,
                 arguments: spawn.arguments,
                 workingDirectory: probeCWD,
                 environment: env)
-        } catch {
-            throw ACPProviderModelProbeError.launchFailed(error.localizedDescription)
-        }
 
-        DebugLog.agent("ACPProviderModelProbe.runProbe: process launched, sending initialize")
-        let initResponse: InitializeResponse
-        do {
+            // Start buffering stderr (stream exists post-launch, pre-init).
+            let stderrTask = Task { [client] in
+                guard let stream = await client.stderrLines() else { return }
+                for await line in stream {
+                    earlyStderrBuffer.append(line)
+                }
+            }
+
+            DebugLog.agent("ACPProviderModelProbe.runProbe: process launched, sending initialize")
             initResponse = try await client.initialize(
                 protocolVersion: 1,
                 capabilities: ACPBackend.defaultCapabilities,
@@ -205,9 +216,18 @@ public struct ACPProviderModelProbe: Sendable {
                     name: "SelfDrivingWikiProbe",
                     title: "Self Driving Wiki (model probe)",
                     version: GeneratedVersion.appVersion))
+            // Success — discard buffered stderr; the process will be
+            // terminated by the caller.
+            stderrTask.cancel()
+            _ = earlyStderrBuffer.flush()
         } catch {
-            DebugLog.agent("ACPProviderModelProbe.runProbe: initialize failed: \(error.localizedDescription)")
-            throw ACPProviderModelProbeError.underlying(error)
+            DebugLog.agent("ACPProviderModelProbe.runProbe: launch/initialize failed: \(error.localizedDescription)")
+            let stderr = earlyStderrBuffer.flush()
+            let hint = ACPBackend.launchHint(for: spawn)
+            throw ACPProviderModelProbeError.launchFailed(
+                error.localizedDescription,
+                stderr: stderr,
+                hint: hint)
         }
         DebugLog.agent("ACPProviderModelProbe.runProbe: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)")
 
@@ -388,11 +408,14 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
     /// authenticate surfaces this — a missing API key is NOT an error (many
     /// agents self-auth).
     case authenticationFailed(String?)
-    /// `Client.launch` threw — the binary is missing / not executable / spawn
-    /// failed for some OS reason. (The PATH preflight gate usually catches
-    /// "binary not on PATH" before this; this fires when launch itself fails
-    /// after a positive preflight.)
-    case launchFailed(String)
+    /// `Client.launch` or `Client.initialize` threw — the binary is missing /
+    /// not executable / spawn failed for some OS reason, OR the process started
+    /// but died before the ACP handshake completed (e.g. `bun` started but
+    /// `claude`/`codex` wasn't on PATH). `detail` is the error's
+    /// `localizedDescription`; `stderr` carries any subprocess stderr captured
+    /// before death; `hint` carries the env-var workaround when the command
+    /// matches a known provider (#733 + #737).
+    case launchFailed(String, stderr: String?, hint: ProviderEnvHint?)
     /// `availableModels` is empty/nil but the probe completed successfully —
     /// older agents that predate the models capability. The probe throws this
     /// so the Settings row shows a specific message rather than an empty list.
@@ -410,8 +433,15 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
         case .authenticationFailed(let detail):
             let suffix = detail.map { " (\($0))" } ?? ""
             return "Authentication failed.\(suffix)"
-        case .launchFailed(let detail):
-            return "Could not launch the agent process: \(detail)"
+        case .launchFailed(let detail, let stderr, let hint):
+            var msg = "Could not launch the agent process: \(detail)"
+            if let stderr, !stderr.isEmpty {
+                msg += "\n\n\(stderr)"
+            }
+            if let hint {
+                msg += "\n\nHint: set \(hint.envVar) to the full path of your \(hint.description) binary, or edit the provider's command/env in agent-providers.json."
+            }
+            return msg
         case .noModelsAdvertised:
             return "The provider advertised no models."
         case .underlying(let error):
@@ -430,7 +460,7 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
             return true
         case (.authenticationFailed(let l), .authenticationFailed(let r)):
             return l == r
-        case (.launchFailed(let l), .launchFailed(let r)):
+        case (.launchFailed(let l, _, _), .launchFailed(let r, _, _)):
             return l == r
         case (.underlying(let l), .underlying(let r)):
             return String(describing: l) == String(describing: r)
