@@ -271,7 +271,8 @@ public enum PageCommand {
                 }
             }
             let resultID = try store.workspaceWritePage(
-                workspaceID: workspace, pageID: pageID, title: title, body: fixed)
+                workspaceID: workspace, pageID: pageID, title: title, body: fixed,
+                author: author)
             return Result(output: resultID, didCommit: true)
         }
 
