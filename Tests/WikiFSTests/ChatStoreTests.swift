@@ -1,6 +1,10 @@
 import Testing
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 @testable import WikiFSCore
 
 /// Store-level tests for persisted chat history (issue #119 phase 1): the
