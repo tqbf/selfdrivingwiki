@@ -18,9 +18,9 @@ import os
 /// test purposes.
 public struct PortableLock<State: Sendable>: Sendable {
     #if canImport(os)
-    @usableFromInline var storage: OSAllocatedUnfairLock<State>
+    private let storage: OSAllocatedUnfairLock<State>
     #else
-    @usableFromInline var storage: NSLockBox<State>
+    private let storage: NSLockBox<State>
     #endif
 
     public init(initialState: State) {
@@ -35,7 +35,7 @@ public struct PortableLock<State: Sendable>: Sendable {
         #if canImport(os)
         return try storage.withLockUnchecked(body)
         #else
-        return storage.withLock(body)
+        return try storage.withLock(body)
         #endif
     }
 }
