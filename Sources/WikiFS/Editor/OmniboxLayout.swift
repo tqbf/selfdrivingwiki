@@ -12,9 +12,9 @@ import CoreGraphics
 /// `fieldWidth(detailWidth:sidebarVisible:switcherExtra:)`.
 enum OmniboxLayout {
     struct Metrics: Equatable {
-        /// Space reserved to the field's right for the trailing Change Log
-        /// toggle (the only toolbar item after the omnibox now that the wiki
-        /// switcher has moved into the sidebar header).
+        /// Space reserved to the field's right for trailing toolbar items. Zero
+        /// now — the wiki switcher moved into the sidebar header and the Change
+        /// Log toggle was removed, so the omnibox owns the full toolbar width.
         var trailingWithSwitcher: CGFloat
         /// Space reserved when the toggle has spilled into the `»` overflow —
         /// only the small overflow button remains, so the field fills nearly to
@@ -53,7 +53,7 @@ enum OmniboxLayout {
         var homeButtonExtra: CGFloat
 
         static let `default` = Metrics(
-            trailingWithSwitcher: 110,
+            trailingWithSwitcher: 0,
             trailingOverflow: 60,
             minWidth: 120,
             maxWidth: 1200,

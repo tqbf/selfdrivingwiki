@@ -270,17 +270,6 @@ struct ContentView: View {
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
 
-            // Change-log sidebar toggle, trailing the omnibox — the standard
-            // inspector-toggle position (rightmost, like Notes/Freeform).
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    store.isChangeLogSidebarVisible.toggle()
-                } label: {
-                    Label("Change Log", systemImage: "sidebar.trailing")
-                }
-                .help(store.isChangeLogSidebarVisible
-                    ? "Hide Change Log" : "Show Change Log")
-            }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
         // alone only empties the *text* — the toolbar still reserves ~160pt for the
