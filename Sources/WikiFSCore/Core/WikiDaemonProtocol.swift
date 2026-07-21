@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// The XPC contract between the `wikid` daemon and its clients (`wikictl`, the app
@@ -45,3 +46,4 @@ import Foundation
     /// Returns an empty string if the store is not open or the token is unavailable.
     func changeToken(wikiID: String, reply: @escaping (String) -> Void)
 }
+#endif
