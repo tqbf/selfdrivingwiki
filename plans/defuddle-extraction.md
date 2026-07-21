@@ -15,14 +15,32 @@
 ## 0. Key Empirical Findings (verified this session)
 
 1. **What defuddle is:** `~/.local/bin/defuddle` is a `#!/usr/bin/env node` script,
-   7416 bytes, a self-contained CommonJS bundle (`Object.defineProperty(exports,…)`,
-   no external `require`s). **bun runs it standalone** — verified:
+   7416 bytes — the published `dist/cli.js` CommonJS entry point (it starts with
+   `"use strict"; Object.defineProperty(exports, "__esModule", …)`). It is **NOT**
+   self-contained: it `require`s `commander`, `./node`, `fs/promises`, `path`,
+   `./utils/linkedom-compat`, `./utils`, `./frontmatter`, `./fetch`. bun runs
+   the npm-installed script fine because it resolves those `require`s relative
+   to the real path (`~/.local/lib/node_modules/defuddle/dist/cli.js`), where
+   the sibling `.js` files + `node_modules/` exist:
 
    ```sh
    $ echo '<html>…<article><p>Hi <strong>there</strong>.</p></article>…' \
        | bun ~/.local/bin/defuddle parse -j -
    { "contentMarkdown": "Hi **there**.", "title": "T", "author": "", … }
    ```
+
+   **⚠️ The `cp` trap (the bug behind the original DefuddleExtractionServiceTests
+   failures):** a verbatim `cp` of `dist/cli.js` into `tools/defuddle/defuddle`
+   does NOT work — bun then resolves `./node` relative to `tools/defuddle/` (no
+   siblings, no `node_modules/`) and dies with `Cannot find module './node'`,
+   making `extract()` return nil. The fix: `tools/defuddle/defuddle` is a
+   **`bun build` bundle** of `dist/cli.js` (~2.45 MB, 351 modules inlined,
+   INCLUDING commander/linkedom/all extractors) — genuinely self-contained, runs
+   standalone under bun, no `node_modules`. See `tools/defuddle/README.md`'s
+   update procedure. A future agent changing this back to a plain `cp` will
+   re-introduce the silent fallback-to-tag-based regression (the broken bundle
+   still ships in `Contents/Helpers/defuddle` and the test still "resolves" —
+   it just returns nil at runtime).
 
 2. **JSON field behavior — CRITICAL GOTCHA (verified):**
 
@@ -105,10 +123,10 @@ Defuddle only changes *what produces the markdown*, not the storage model.
 `Helpers/` must be signed or the outer app's seal fails ("code object is not
 signed at all"). bun reads the file; signing is for the seal.
 
-**Repo vendoring:** the 7416-byte self-contained script lives at
+**Repo vendoring:** the ~2.45 MB self-contained `bun build` bundle lives at
 `tools/defuddle/defuddle` (parallel to `tools/pdf2md/pdf2md`). Single bundle — no
 `node_modules`, no install step. `tools/defuddle/README.md` notes the source
-version (0.19.1) and update procedure.
+version (0.19.1) and the `bun build` update procedure.
 
 ### 2.2 New file: `Sources/WikiFS/Sources/DefuddleExtractionService.swift`
 
