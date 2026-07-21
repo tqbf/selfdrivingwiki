@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WikiFS
@@ -140,3 +141,4 @@ import Testing
         #expect(p.terminationStatus != 0)
     }
 }
+#endif
