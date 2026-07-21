@@ -48,12 +48,17 @@ struct SourceDetailView: View {
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
+    @AppStorage("isSourceOutlineExpanded") private var isOutlineExpanded = false
+    @AppStorage("sourceInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("sourceOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
     @State private var origin: SourceOrigin?
+    /// Provenance edit history for the inspector's History tab. Loaded via
+    /// `.task(id:)` keyed on `file.id`.
+    @State private var editHistory: [SourceOrigin] = []
     @State private var isEditing = false
     @State private var editBuffer = ""
     /// Pending scroll-to-heading for the editor (outline click while editing).
@@ -321,7 +326,7 @@ struct SourceDetailView: View {
     /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
     /// outline pane and its toggle button so a `.mmd` source never shows a
     /// useless empty outline (and never gets stuck with the pane open and no
-    /// way to close it — `isOutlineExpanded` is global `@AppStorage`, so
+    /// way to close it — `isOutlineExpanded` is persisted `@AppStorage`, so
     /// without this guard it leaks from a previous markdown source).
     /// Issue #642.
     private var isOutlineApplicable: Bool {
@@ -397,6 +402,7 @@ struct SourceDetailView: View {
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
@@ -416,6 +422,7 @@ struct SourceDetailView: View {
             showReingestConfirmation = false
             headVersion = nil
             origin = nil
+            editHistory = []
             isRefreshable = false
             selectedTab = .reader
             pdfQuote = nil
@@ -427,6 +434,7 @@ struct SourceDetailView: View {
         .task(id: file.id) {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
+            editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
@@ -890,6 +898,11 @@ struct SourceDetailView: View {
     /// The content area plus the optional outline sidebar. Extracted from
     /// `body` so the type-checker can resolve each subtree independently.
     ///
+    /// Uses the shared `DetailInspectorView` (same as `PageDetailView`) so
+    /// sources get the same tabbed inspector (Outline / History). The outline
+    /// tab renders the source's `PageOutlineView`; the History tab renders
+    /// the shared `ProvenancePanel` with the source's provenance.
+    ///
     /// The explicit `.frame(maxWidth: .infinity, maxHeight: .infinity,
     /// alignment: .topLeading)` on `contentArea` is load-bearing and mirrors
     /// `PageDetailView`'s `contentAndOutline` shape. Without it, the inner
@@ -910,9 +923,16 @@ struct SourceDetailView: View {
             // `text/mermaid`) — the outline parses markdown headings, which a
             // diagram source has none of. Without this guard the pane leaks
             // open from a previous markdown source via the global
-            // `@AppStorage("isOutlineExpanded")` flag (issue #642).
+            // `@AppStorage("isSourceOutlineExpanded")` flag (issue #642).
             if isOutlineExpanded, isOutlineApplicable, let markdown = currentMarkdownContent {
-                outlineView(markdown: markdown)
+                DetailInspectorView(
+                    inspectorTab: $inspectorTab,
+                    outlineWidth: $outlineWidth,
+                    origin: origin?.provenanceEntry,
+                    history: editHistory.map(\.provenanceEntry),
+                    store: store) {
+                    outlineView(markdown: markdown)
+                }
             }
         }
     }

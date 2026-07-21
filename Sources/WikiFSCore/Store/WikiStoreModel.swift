@@ -2780,6 +2780,15 @@ public final class WikiStoreModel {
         try? store.sourceOrigin(sourceID: id)
     }
 
+    /// The full edit history for a source — every `source_versions` row joined
+    /// to its activity + agent, newest-first. `nil`/empty when the read fails
+    /// or the source has no versions. Drives the History tab in
+    /// `SourceDetailView`'s inspector (the source-side mirror of
+    /// `pageEditHistory`).
+    public func sourceEditHistory(for id: PageID) -> [SourceOrigin] {
+        (try? store.sourceEditHistory(sourceID: id)) ?? []
+    }
+
     /// The origin provenance of a page's HEAD — the agent + activity that last
     /// created/edited it (page provenance, #page-provenance). `nil` when the
     /// read fails (unknown id, no version rows). Drives the "Provenance" row

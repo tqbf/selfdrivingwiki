@@ -239,6 +239,11 @@ public protocol WikiStore: Sendable {
     /// from the **agent** row.
     func sourceOrigin(sourceID: PageID) throws -> SourceOrigin?
 
+    /// The full edit history for a source — every `source_versions` row joined
+    /// to its `activities` → `agents` (the source-side mirror of
+    /// `pageEditHistory`). Ordered NEWEST-FIRST. Read-only: emits nothing.
+    func sourceEditHistory(sourceID: PageID) throws -> [SourceOrigin]
+
     /// The active content version for a source, resolved exactly like
     /// `sourceContent` (ref → version, else default-active `MAX(id)`). Returns
     /// nil when the source has no version rows at all. On the protocol (not only
