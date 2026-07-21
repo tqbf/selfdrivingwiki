@@ -7601,4 +7601,11 @@ more. Verify UI fixes under xcodebuild.
 `swift test` (3358 tests / 279 suites) also 0. Bisected by stubbing
 `PageDetailView`'s body; `PageDetailView.swift` itself is unchanged.
 
+**Codified:** the invariant (never write SwiftUI state synchronously from a
+representable's `makeNSView`/`updateNSView`, plus the defer/suppress fix
+patterns) is now a rule in AGENTS.md; the detection + bisect procedure is a new
+"SwiftUI runtime issues" section in
+`docs/skills/reproducing-live-ui-bugs/SKILL.md`, whose `description` now also
+advertises the runtime-issue case so it gets discovered.
+
 **Build:** `swift build && swift test`.
