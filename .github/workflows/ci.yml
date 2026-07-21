@@ -83,7 +83,7 @@ jobs:
           # resolves ALL package deps even if unused on this platform,
           # so we need Swift 6.3+ to parse the manifest. macOS CI uses
           # Xcode (Swift 6.3+); Linux needs to match.
-          swift-version: "6.3"
+          swift-version: "6.3.0"
       - name: Swift version
         run: swift --version
       - name: Generate codegen files (version + prompts)
