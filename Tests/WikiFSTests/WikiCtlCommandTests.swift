@@ -867,6 +867,7 @@ struct WikiCtlCommandTests {
     // MARK: - Markdown auto-fix (wikictl page add)
 
     /// Resolve the committed bundles relative to this test file for injection.
+    #if os(macOS)
     private func repoMarkdownLinter() throws -> MarkdownLinter {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -966,6 +967,7 @@ struct WikiCtlCommandTests {
         // No page was written.
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
     }
+    #endif // os(macOS)
 
     // MARK: - Empty-body refusal at the CLI boundary
 

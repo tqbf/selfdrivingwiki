@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSEngine
 import Testing
@@ -138,3 +139,4 @@ actor FakeAgentBackend: AgentBackend {
         cancelledSessionIDs.append(session.id)
     }
 }
+#endif
