@@ -184,6 +184,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
 
 // MARK: - TantivyShadowSync
 
+#if os(macOS)
 /// Wires the `WikiEventBus` to the `TantivySearchService`'s indexer. Subscribes
 /// to all resource-change events and forwards kind-specific create/update/
 /// delete to the indexer; coarse `.external` events (kind == nil) trigger a
@@ -259,3 +260,4 @@ final public class TantivyShadowSync {
         }
     }
 }
+#endif // os(macOS)

@@ -301,7 +301,12 @@ public final class WikiStoreModel {
     /// set rather than a constructor param — same lifecycle as `readPool`).
     /// `nil` when Tantivy construction failed (the session never breaks over a
     /// derived index) — search silently falls back to FTS5 in that case.
+    #if os(macOS)
     @ObservationIgnored public var tantivySearch: TantivySearchService?
+    #else
+    // Linux: Tantivy is unavailable — the search path uses nil bm25Leg (FTS5 fallback).
+    @ObservationIgnored public var tantivySearch: Any?
+    #endif
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
 
@@ -3138,6 +3143,7 @@ public final class WikiStoreModel {
     //
     // FTS5 is kept fully intact for Phase 2 fallback; Phase 3 retires it.
 
+    #if os(macOS)
     /// Resolve Tantivy BM25 hits into full typed summaries from a cached
     /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
     /// Tantivy is unavailable, the index returned nothing, or every hit was
@@ -3222,6 +3228,24 @@ public final class WikiStoreModel {
             set { lock.lock(); defer { lock.unlock() }; _result = newValue }
         }
     }
+
+    #else
+    // Linux: Tantivy is unavailable — the BM25 leg is always nil (FTS5 fallback).
+    private func resolveTantivyLeg<T: Identifiable & Sendable>(
+        query: String,
+        kind: TantivyDocumentKind,
+        limit: Int,
+        catalog: [T]
+    ) async -> [T]? where T.ID == PageID { nil }
+
+    @MainActor
+    private func resolveTantivyLegSync<T: Identifiable & Sendable>(
+        query: String,
+        kind: TantivyDocumentKind,
+        limit: Int,
+        catalog: [T]
+    ) -> [T]? where T.ID == PageID { nil }
+    #endif
 
     /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
     /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of

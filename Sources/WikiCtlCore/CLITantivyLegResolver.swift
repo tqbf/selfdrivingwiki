@@ -1,6 +1,7 @@
 import Foundation
 import WikiFSCore
 
+#if os(macOS)
 /// Bridges the wikictl CLI's three search commands (`page search`,
 /// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
 /// sidebar / omnibox use (#637).
@@ -206,3 +207,23 @@ private final class SearchBox: @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; _result = newValue }
     }
 }
+
+#else
+/// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
+public enum CLITantivyLegResolver {
+    public static func resolvePageLeg(
+        wikiID: String, containerDirectory: URL, store: WikiStore,
+        query: String, limit: Int
+    ) -> [WikiPageSummary]? { nil }
+
+    public static func resolveSourceLeg(
+        wikiID: String, containerDirectory: URL, store: WikiStore,
+        query: String, limit: Int
+    ) -> [SourceSummary]? { nil }
+
+    public static func resolveChatLeg(
+        wikiID: String, containerDirectory: URL, store: WikiStore,
+        query: String, limit: Int
+    ) -> [ChatSummary]? { nil }
+}
+#endif

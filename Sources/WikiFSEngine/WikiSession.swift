@@ -97,7 +97,12 @@ public final class WikiSession {
     /// the SOLE BM25 leg (FTS5 was dropped). `nil` if construction failed
     /// (session never breaks over a derived index). Retained for the lifetime
     /// of the session so the `TantivyShadowSync` bus subscription stays alive.
+    #if os(macOS)
     public let tantivyShadowSearch: TantivySearchService?
+    #else
+    // Linux: Tantivy is unavailable.
+    public let tantivyShadowSearch: Any?
+    #endif
 
     /// Cross-window deferred `wiki://` navigation. Set by
     /// ``SessionManager`` when a `wiki://` link is clicked in a window
@@ -111,7 +116,11 @@ public final class WikiSession {
     /// layer never references the app-layer `WikiLinkRoute`). Same
     /// "set once / consume once" discipline as `pendingBlobVacuum`.
     public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
+    #if os(macOS)
     @ObservationIgnored private var tantivyShadowSync: TantivyShadowSync?
+    #else
+    @ObservationIgnored private var tantivyShadowSync: Any?
+    #endif
 
     // MARK: - Init
 
@@ -223,6 +232,7 @@ public final class WikiSession {
         // answers when NLEmbedding/MLX is available). Reads happen off-main on
         // the indexer actor; the content source reads committed SQLite state
         // through its own recursive lock (no statement handle crosses a boundary).
+        #if os(macOS)
         var shadowSearch: TantivySearchService?
         var shadowSync: TantivyShadowSync?
         if let shadowStore, let bus = shadowStore.eventBus {
@@ -245,6 +255,10 @@ public final class WikiSession {
         }
         self.tantivyShadowSearch = shadowSearch
         self.tantivyShadowSync = shadowSync
+        #else
+        self.tantivyShadowSearch = nil
+        self.tantivyShadowSync = nil
+        #endif
 
         // Per-session gate: lane limits match the app-wide gate the launchers
         // previously shared. Each session gets its own so cross-wiki
@@ -336,6 +350,7 @@ public final class WikiSession {
     /// `WikiStoreModel.resolveTantivyLeg(...)` — this public accessor is for
     /// direct/CLI/check queries that want the raw Tantivy hits without the
     /// semantic-cosine + RRF fusion the model applies.
+    #if os(macOS)
     public func searchTantivy(
         query: String,
         kinds: [TantivyDocumentKind] = [],
@@ -344,4 +359,12 @@ public final class WikiSession {
         guard let svc = tantivyShadowSearch else { return nil }
         return await svc.search(query: query, kinds: kinds, limit: limit)
     }
+    #else
+    // Linux: Tantivy is unavailable — search returns nil (store uses FTS5 fallback).
+    public func searchTantivy(
+        query: String,
+        kinds: [TantivyDocumentKind] = [],
+        limit: Int = 20
+    ) async -> [TantivyShadowSearchResult]? { nil }
+    #endif
 }
