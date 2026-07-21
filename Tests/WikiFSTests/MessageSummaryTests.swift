@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 import WikiFSEngine
@@ -334,3 +335,4 @@ struct MessageSummaryTests {
         #expect(pending.isEmpty, "already-summarized message should be filtered out")
     }
 }
+#endif // os(macOS)

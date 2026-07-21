@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WikiFSEngine
@@ -260,3 +261,4 @@ struct QuotaFallbackIntegrationTests {
         #expect(profiles[0].providerHints[HintKey.acpProviderId.rawValue] == "test-recording")
     }
 }
+#endif // os(macOS)

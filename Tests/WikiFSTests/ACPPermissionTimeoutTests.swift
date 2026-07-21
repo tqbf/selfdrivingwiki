@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 import ACPModel
@@ -193,3 +194,4 @@ struct ACPPermissionTimeoutTests {
         #expect(delegate.pendingSnapshot().isEmpty)
     }
 }
+#endif // os(macOS)

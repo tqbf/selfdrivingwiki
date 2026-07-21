@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 @testable import WikiFSCore
 @testable import WikiFSEngine
@@ -138,3 +139,4 @@ struct ChatSummaryTests {
         #expect(after?.updatedAt ?? Date.distantPast > originalUpdatedAt ?? Date.distantPast)
     }
 }
+#endif // os(macOS)

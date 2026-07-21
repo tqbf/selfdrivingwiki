@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import ACPModel
@@ -318,3 +319,4 @@ struct ProviderQuotaDetectorTests {
         }
     }
 }
+#endif // os(macOS)

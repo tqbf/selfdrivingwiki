@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSEngine
 import Testing
@@ -83,3 +84,4 @@ struct ExternalWriteDraftRefreshTests {
         #expect(model.draftBody == "")
     }
 }
+#endif // os(macOS)
