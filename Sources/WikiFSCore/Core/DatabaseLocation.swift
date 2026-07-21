@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 
 /// Single source of truth for where the SQLite database lives on disk.
 ///

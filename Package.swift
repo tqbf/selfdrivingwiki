@@ -55,6 +55,16 @@ let package = Package(
         .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
+        // System SQLite3 module for Linux. On macOS, `import SQLite3` resolves
+        // to the SDK's built-in module. On Linux, this system module wraps
+        // libsqlite3-dev's <sqlite3.h> so `import SQLite3` works identically.
+        // WikiFSCore depends on it conditionally (macOS-only — on macOS the
+        // SDK module is used directly).
+        .systemLibrary(
+            name: "CSQLite",
+            path: "Sources/CSQLite",
+            pkgConfig: "sqlite3"
+        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -124,6 +134,9 @@ let package = Package(
                 "WikiFSMarkdown",
                 "WikiFSSearch",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // On Linux, `import SQLite3` needs this system module wrapper.
+                // On macOS, the SDK provides SQLite3 directly.
+                .target(name: "CSQLite", condition: .when(platforms: [.linux])),
             ],
             path: "Sources/WikiFSCore",
             swiftSettings: strictSwiftSettings,
