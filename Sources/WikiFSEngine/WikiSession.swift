@@ -154,6 +154,7 @@ public final class WikiSession {
         extractionProvider: any QueueExtractionProvider,
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
+        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.wikiID = wikiID
@@ -221,6 +222,12 @@ public final class WikiSession {
         }
         self.store = model
         self.descriptor = sessionDescriptor
+        // Inject the HTML→Markdown extractor (defuddle) into the store model so
+        // the ingest path can enrich HTML sources (issue #761). The factory is
+        // provided by the app layer (WikiFSApp) which has access to the WikiFS
+        // target where the concrete `LocalDefuddleExtractor` lives. `nil` (the
+        // default in tests / CI) means fall back to tag-based HTMLToMarkdown.
+        model.htmlMarkdownExtractor = htmlMarkdownExtractorFactory()
 
         // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
         // Phase 2 CUTOVER (#634): Tantivy is the SOLE BM25 leg of the hybrid

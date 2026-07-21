@@ -82,6 +82,12 @@ public struct MaterializedSource: Sendable {
     public let zoteroItemTitle: String?
     public let provenance: SourceProvenance?
     public let extractedMarkdown: String?
+    /// Which extractor produced `extractedMarkdown` (`"defuddle"` or
+    /// `"html-to-markdown"`). Stamped on the `source_markdown_versions.technique`
+    /// column so the provenance/alternatives UI surfaces the producer. `nil` for
+    /// non-HTML sources (no extracted-markdown sidecar) — defaults to
+    /// `"html-to-markdown"` in the store path.
+    public let extractionTechnique: String?
 
     public init(
         filename: String,
@@ -90,7 +96,8 @@ public struct MaterializedSource: Sendable {
         zoteroItemKey: String? = nil,
         zoteroItemTitle: String? = nil,
         provenance: SourceProvenance? = nil,
-        extractedMarkdown: String? = nil
+        extractedMarkdown: String? = nil,
+        extractionTechnique: String? = nil
     ) {
         self.filename = filename
         self.data = data
@@ -99,6 +106,7 @@ public struct MaterializedSource: Sendable {
         self.zoteroItemTitle = zoteroItemTitle
         self.provenance = provenance
         self.extractedMarkdown = extractedMarkdown
+        self.extractionTechnique = extractionTechnique
     }
 }
 
