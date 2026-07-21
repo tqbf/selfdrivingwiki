@@ -165,7 +165,6 @@ struct PageDetailView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            .frame(maxWidth: PageEditorMetrics.readableContentWidth, alignment: .leading)
             .padding(.horizontal, PageEditorMetrics.contentInset)
             .padding(.top, PageEditorMetrics.contentInset)
             .padding(.bottom, PageEditorMetrics.sectionSpacing)

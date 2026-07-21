@@ -32,6 +32,14 @@ struct CollapsibleDetailHeader<Expanded: View>: View {
             titleRow
             if isExpanded {
                 expandedContent()
+                    // The expanded body (metadata, action buttons, provenance)
+                    // is capped at readableContentWidth so long action rows
+                    // don't sprawl across a wide window. The title row above
+                    // is NOT capped — its `.hoverRowBackground()` pill stretches
+                    // edge-to-edge. Callers provide the horizontal inset via
+                    // `.padding(.horizontal, contentInset)` on the header.
+                    .frame(maxWidth: PageEditorMetrics.readableContentWidth,
+                           alignment: .leading)
                     .transition(.opacity)
             }
         }
