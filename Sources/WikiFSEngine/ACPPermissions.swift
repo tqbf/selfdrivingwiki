@@ -1,5 +1,4 @@
 import Foundation
-import os
 import ACP
 import ACPModel
 import WikiFSCore
@@ -358,7 +357,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
         var pending: [String: Pending] = [:]
         var onExit: (@Sendable (Int) -> Void)?
     }
-    private let lock = OSAllocatedUnfairLock<LockedState>(initialState: LockedState())
+    private let lock = PortableLock<LockedState>(initialState: LockedState())
 
     /// - Parameters:
     ///   - policy: the permission policy (`bypass`/`alwaysAsk`/`acceptEdits`/`plan`).
@@ -446,7 +445,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// compiles cleanly. See `plans/acp-permissions.md` §4.1 note #5.
     private static func deferPermission(
         request: RequestPermissionRequest,
-        lock: OSAllocatedUnfairLock<LockedState>,
+        lock: PortableLock<LockedState>,
         budget: Duration?
     ) async -> RequestPermissionResponse {
         let toolCall = request.toolCall
@@ -495,7 +494,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// here (it's the running task itself — self-cancellation is a no-op).
     private static func timeOut(
         toolCallId: String,
-        lock: OSAllocatedUnfairLock<LockedState>
+        lock: PortableLock<LockedState>
     ) {
         let drained = lock.withLock { state -> (CheckedContinuation<RequestPermissionResponse, Never>, Task<Void, Never>?)? in
             guard let pending = state.pending.removeValue(forKey: toolCallId) else { return nil }

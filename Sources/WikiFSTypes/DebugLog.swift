@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(os)
 import os
+#endif
 
 /// Lightweight structured logging routed to the **unified logging system**
 /// (Console.app / `log show`), visible everywhere the core is linked — both the
@@ -29,6 +31,7 @@ public enum DebugLog {
 
     private static let subsystem = "com.selfdrivingwiki.debug"
 
+    #if canImport(os)
     /// Shared signposter for low-overhead interval timing visible in Instruments
     /// (near-free when no recorder is attached). Prefer this over `.notice` text
     /// logs for per-call perf measurement — it costs nothing in production but
@@ -63,4 +66,16 @@ public enum DebugLog {
     public static func debug(_ message: @autoclosure () -> String) {
         emit("store", message(), level: .debug)
     }
+    #else
+    // Linux fallback: no unified logging system. Route to stderr so diagnostics
+    // are still visible in CI logs. This is a dev/CI-only path — the app itself
+    // runs on macOS and always hits the os.log branch above.
+    private static func emit(_ category: String, _ message: String) {
+        FileHandle.standardError.write(Data("[\(subsystem):\(category)] \(message)\n".utf8))
+    }
+
+    public static func debug(_ message: @autoclosure () -> String) {
+        emit("store", message())
+    }
+    #endif
 }
