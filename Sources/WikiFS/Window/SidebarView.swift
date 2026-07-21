@@ -70,13 +70,21 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // The wiki switcher moved into the window toolbar (Safari-style,
-            // trailing the omnibox); the sidebar now starts at the section
-            // selector.
             sectionSelectorBar
                 .padding(.top, 8)
             Divider()
             bookmarksOrList
+        }
+        // Wiki switcher pinned to the sidebar's bottom bar — like Xcode's
+        // navigator footer or Finder's status bar. It collapses with the
+        // sidebar when the leading panel toggle hides it, leaving the toolbar
+        // to hold only the nav cluster + omnibox.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Divider()
+            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
         }
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,

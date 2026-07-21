@@ -132,26 +132,42 @@ public protocol SourceMaterializer: Sendable {
 /// (per-ingest, so two website sources with different URLs each return their
 /// own); `agentName` from the **agent** row.
 public struct SourceOrigin: Sendable, Equatable {
+    /// The source-version row id (the ULID of the `source_versions` row).
+    public let versionID: String
     public let agentName: String
+    /// The agent's structured kind (`chat` / `agent` / `human` / `model` /
+    /// `software`). Degrades to `"software"` for the legacy-import shared
+    /// agent so the UI can label pre-v39 rows distinctly.
+    public let agentKind: String
     public let activityKind: String
     public let plan: String?
     public let externalRef: String?
     public let externalIdentity: String?
+    /// A human-readable run name resolved from the provenance payload (#745).
+    /// For `chat:<id>` agents this is the chat's display title. `nil` for
+    /// other agent kinds or when the chat has been deleted.
+    public let runTitle: String?
     public let fetchedAt: Date
 
     public init(
+        versionID: String,
         agentName: String,
+        agentKind: String,
         activityKind: String,
         plan: String?,
         externalRef: String?,
         externalIdentity: String?,
+        runTitle: String? = nil,
         fetchedAt: Date
     ) {
+        self.versionID = versionID
         self.agentName = agentName
+        self.agentKind = agentKind
         self.activityKind = activityKind
         self.plan = plan
         self.externalRef = externalRef
         self.externalIdentity = externalIdentity
+        self.runTitle = runTitle
         self.fetchedAt = fetchedAt
     }
 

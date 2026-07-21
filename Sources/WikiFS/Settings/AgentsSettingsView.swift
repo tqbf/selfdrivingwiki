@@ -45,16 +45,10 @@ struct AgentsSettingsView: View {
     /// yet" warning and the launcher refuses to spawn).
     @State private var isAddingNewProvider = false
 
-    /// The selected operation sub-tab (Chat / Ingestion / Lint) below the
-    /// Providers section. A segmented `Picker` (NOT a nested `TabView`) — a
-    /// nested `TabView` would inherit the Settings toolbar-tab style and
-    /// render a double bar. The segmented control is the cleaner inline
-    /// macOS idiom and satisfies the "tabs per operation" requirement
-    /// (`plans/agent-settings-tabs.md` §2.1 LOW #9).
-    @State private var selectedOperationTab: OperationTab = .chat
-
     /// The operation panes, each owning its stages. The Summary tab
     /// (`plans/chat-summary.md` §5.2) is the per-message summarizer stage pin.
+    /// Used by `ProviderDetailPane` (the right detail pane) to drive the
+    /// segmented Picker for Chat/Ingestion/Lint/Summary stage config.
     enum OperationTab: String, CaseIterable, Identifiable {
         case chat, ingestion, lint, summary
         var id: String { rawValue }
@@ -83,26 +77,44 @@ struct AgentsSettingsView: View {
     }
 
     var body: some View {
-        // Plain VStack (NOT a Form) — `Form { ... }.formStyle(.grouped)`
-        // is a scroll container that sizes to content, which let the
-        // providers List grow unbounded and pushed the action bar off-
-        // screen. A plain VStack lets us give the List `.frame(maxHeight:
-        // .infinity)` so it fills available space and scrolls internally,
-        // while the action bar below stays pinned at the bottom.
-        //
-        // The `CollapsibleDetailHeader` wrapper was removed (the inline
-        // Model dropdown + the moved Ingest Stage Models section now live
-        // directly on this view, so a title bar with a chevron was
-        // redundant — see `plans/inline-models-and-remove-permissions-tab-v2.md`).
-        providersSection
-            .frame(minWidth: 560, minHeight: 520, alignment: .top)
-            // #663: the Add Provider sheet. Non-destructive (nothing is written
-            // until an Add button is pressed — AC.2). The handoff to the editor
-            // uses `DispatchQueue.main.async` (see correction §5): letting this
-            // sheet finish dismissing before the editor presents avoids the
-            // SwiftUI hazard where the second sheet silently fails when the
-            // first is mid-dismissal.
-            .sheet(isPresented: $showAddSheet) {
+        // Two-pane layout (macOS System Settings → Accounts idiom):
+        // LEFT: provider list + action bar (~240pt sidebar).
+        // RIGHT: the selected provider's details (ProviderDetailPane) or
+        // an empty-state placeholder when nothing is selected.
+        HStack(spacing: 0) {
+            providersSection
+                .frame(width: 260)
+
+            Divider()
+
+            if let provider = selectedProvider {
+                ProviderDetailPane(
+                    provider: provider,
+                    config: $config,
+                    containerDirectory: containerDirectory,
+                    credentialStore: credentialStore,
+                    onEdit: {
+                        isAddingNewProvider = false
+                        editingProvider = provider
+                    }
+                )
+            } else {
+                ContentUnavailableView(
+                    "Select a provider",
+                    systemImage: "cpu",
+                    description: Text("Choose a provider from the list to view its details.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(minWidth: 780, minHeight: 520, alignment: .top)
+        // #663: the Add Provider sheet. Non-destructive (nothing is written
+        // until an Add button is pressed — AC.2). The handoff to the editor
+        // uses `DispatchQueue.main.async` (see correction §5): letting this
+        // sheet finish dismissing before the editor presents avoids the
+        // SwiftUI hazard where the second sheet silently fails when the
+        // first is mid-dismissal.
+        .sheet(isPresented: $showAddSheet) {
                 AddProviderSheet(
                     existingIDs: Set(config.providers.map(\.id)),
                     onAdd: { provider in appendProvider(provider) },
@@ -170,7 +182,7 @@ struct AgentsSettingsView: View {
             Text("Providers")
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 6)
 
@@ -180,40 +192,17 @@ struct AgentsSettingsView: View {
                 ProvidersEmptyState { showAddSheet = true }
             } else {
                 // List fills available vertical space and scrolls INTERNALLY;
-                // `maxHeight: .infinity` (not `minHeight: 160`) prevents the
-                // unbounded-grow that previously scrolled the action bar out
-                // of view. The action bar below is a SIBLING of the List in
-                // this VStack, so it stays pinned at the bottom and outside
-                // the List's scroll area.
+                // `maxHeight: .infinity` prevents the unbounded-grow that
+                // previously scrolled the action bar out of view. The action
+                // bar below is a SIBLING of the List in this VStack, so it
+                // stays pinned at the bottom and outside the List's scroll area.
                 List(config.providers, selection: $selectedProviderID) { provider in
                     providerRow(provider)
                 }
                 .listStyle(.inset)
-                .frame(maxHeight: .infinity)
 
                 providerActionBar
-
-                // Operation tabs (Chat / Ingestion / Lint): per-stage PROVIDER +
-                // MODEL pickers. Each stage can pin a provider (or "Default" =
-                // the global default) and a model from that provider's catalog.
-                // See `plans/agent-settings-tabs.md`.
-                operationTabsSection
             }
-
-            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. The Chat / Ingestion / Lint tabs below pin the provider + model each operation runs with.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
-
-            Text("Providers are stored in agent-providers.json in the app's container. Edit manually to set CLAUDE_CODE_EXECUTABLE or CODEX_PATH in a provider's env.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -259,7 +248,7 @@ struct AgentsSettingsView: View {
             }
             .disabled(selectedProvider == nil)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 
@@ -286,194 +275,19 @@ struct AgentsSettingsView: View {
             .opacity(provider.enabled ? 1.0 : 0.55)
 
             Spacer()
-
-            // Inline Model dropdown on the right. Disabled providers hide it
-            // (the launcher never selects a disabled provider, so its model
-            // selection is moot until the user enables it).
-            if provider.enabled {
-                providerControls(provider)
-            }
         }
         .padding(.vertical, 4)
         .tag(provider.id)
     }
 
-    /// # inline-model-dropdown: the right-hand cluster on each enabled
-    /// provider row — a `Model ▾` `Picker` bound to the per-provider
-    /// `selectedModelId`, plus a compact caption underneath that keeps the
-    /// pure `modelStatus(for:in:)` classifier in use (the orange "pick one
-    /// before running" guidance when the picker is left on "Agent default"
-    /// while a cache exists).
-    @ViewBuilder
-    private func providerControls(_ provider: AgentProvider) -> some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            modelPicker(provider)
-            // Compact caption — keeps `modelStatus` in use. `.noneCaptured`
-            // is surfaced by the picker itself (its "Chat to discover models"
-            // placeholder when there's no cache); `.selected` needs no
-            // caption (the picker's selection label conveys it).
-            switch Self.modelStatus(for: provider, in: config) {
-            case .noSelectionPickable:
-                Text("pick one before running")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            case .noneCaptured, .selected, .disabled:
-                EmptyView()
-            }
-            // #612: info-tone nudge when the provider's selected model is a
-            // known free-tier model (e.g. opencode/big-pickle). NOT a
-            // prohibition — the user can still select it; this is a gentle
-            // steer toward a stronger model. Uses `.secondary` (muted info
-            // tone), NOT `.orange` (warning) — see macos-design caption idiom.
-            if let modelId = config.selectedModelId(forProvider: provider.id),
-               let nudge = FreeTierModelNudge.message(for: modelId) {
-                Text(nudge)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 180)
-            }
-        }
-    }
+    // NOTE: `providerControls`, `modelPicker`, and `modelBinding` (the inline
+    // model dropdown that was on each provider row) have moved into
+    // `ProviderDetailPane.modelPicker` — the model dropdown is now in the
+    // right detail pane, not the left sidebar rows.
 
-    /// Model dropdown for `provider`. Reads/writes the per-provider
-    /// `selectedModelId`. When the cache is empty, the picker is disabled
-    /// and surfaces a "Chat to discover models" placeholder (mirrors the
-    /// shape `PermissionsSettingsView.ingestStageModelSection` had).
-    @ViewBuilder
-    private func modelPicker(_ provider: AgentProvider) -> some View {
-        let cachedModels = config.cachedModels(forProvider: provider.id)
-        Picker("Model", selection: modelBinding(for: provider)) {
-            if cachedModels.isEmpty {
-                Text("Chat to discover models").tag("")
-            } else {
-                Text("Agent default").tag("")
-                ForEach(cachedModels, id: \.modelId) { model in
-                    Text(model.displayLabel).tag(model.modelId)
-                }
-            }
-        }
-        .labelsHidden()
-        .disabled(cachedModels.isEmpty)
-        .frame(maxWidth: 180)
-    }
-
-    private func modelBinding(for provider: AgentProvider) -> Binding<String> {
-        Binding(
-            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
-            set: { newID in
-                save(config.settingSelectedModel(newID.isEmpty ? nil : newID,
-                                                 forProvider: provider.id))
-            })
-    }
-
-    /// Operation tabs (Chat / Ingestion / Lint): a segmented `Picker` over the
-    /// three operation panes, each rendering one or more
-    /// `StageProviderModelPicker` rows. The segmented control (NOT a nested
-    /// `TabView`) avoids the double-toolbar-bar a nested `TabView` would
-    /// create inside the Settings pane (§2.1 LOW #9). Each pane wraps its
-    /// pickers in a `Form { Section }.formStyle(.grouped)` so the rows keep
-    /// the inset-grouped visual style of the former ingest-stage section.
-    private var operationTabsSection: some View {
-        VStack(spacing: 0) {
-            Picker("Operation", selection: $selectedOperationTab) {
-                ForEach(OperationTab.allCases) { tab in
-                    Text(tab.label).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-
-            operationTabContent
-        }
-    }
-
-    @ViewBuilder
-    private var operationTabContent: some View {
-        switch selectedOperationTab {
-        case .chat:
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "chat",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Chat Model")
-                } header: {
-                    Text("Chat Model")
-                } footer: {
-                    Text("Provider and model for new chat sessions. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .ingestion:
-            Form {
-                Section {
-                    ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
-                        StageProviderModelPicker(
-                            stageKey: stage.rawValue,
-                            config: $config,
-                            containerDirectory: containerDirectory,
-                            label: "\(stage.label) Model")
-                    }
-                } header: {
-                    Text("Ingest Stage Models")
-                } footer: {
-                    Text("Pin a provider + model for each ingest phase (Planner / Executor / Finalizer). “Default” uses the global default provider. A warm subprocess is shared across phases when stages resolve to the same provider.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .lint:
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "lint",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Lint Model")
-                } header: {
-                    Text("Lint Model")
-                } footer: {
-                    Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .summary:
-            // Per-message summarizer stage (plans/chat-summary.md §5.2). This
-            // IS the StageProviderModelPicker for the `"summarizer"` stage — no
-            // separate mode Picker. The sentinel `""` (first option) means
-            // "no model — truncation" for THIS stage (different from the other
-            // stages where `""` means "inherit the global default provider"), so
-            // the option is relabeled to "Default (first few sentences)" to
-            // convey the actual behavior.
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "summarizer",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Summary Model",
-                        defaultOptionLabel: "Default (first few sentences)")
-                } header: {
-                    Text("Message Summary")
-                } footer: {
-                    Text("“Default (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        }
-    }
+    // NOTE: `operationTabsSection` and `operationTabContent` have moved into
+    // `ProviderDetailPane` (right detail pane). The Chat/Ingestion/Lint/Summary
+    // stage pickers are now shown in the context of the selected provider.
 
     /// Returns a warning string when `provider` is enabled, has no selected
     /// model, and the launcher will therefore refuse to spawn it (see
@@ -678,6 +492,336 @@ struct AgentsSettingsView: View {
         }
         config = updated
         DebugLog.store("persistDiscoveredModels: provider=\(id) models=\(models.count) → saved")
+    }
+}
+
+// MARK: - Provider detail pane (right panel)
+
+/// The right-side detail pane in the two-pane Agents settings layout.
+/// Shows the selected provider's configuration, model selection, and the
+/// Chat/Ingestion/Lint/Summary stage pickers (which are GLOBAL config, shown
+/// in the context of the selected provider — the user can see which provider
+/// is pinned for each stage and change the pin from here).
+///
+/// The operation tabs (segmented Picker) and `StageProviderModelPicker` rows
+/// were moved here from the bottom of the old single-column `providersSection`
+/// (see `plans/agents-two-pane.md`).
+private struct ProviderDetailPane: View {
+    let provider: AgentProvider
+    @Binding var config: AgentProvidersConfig
+    let containerDirectory: URL
+    let credentialStore: any ACPCredentialStore
+    /// Open the Edit sheet for this provider.
+    let onEdit: () -> Void
+
+    @State private var selectedOperationTab: AgentsSettingsView.OperationTab = .chat
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                providerHeader
+                providerConfigSection
+                operationTabsSection
+                helperText
+            }
+            .padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Provider header
+
+    /// Provider name, enabled toggle, default badge, and an Edit button.
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            Toggle("", isOn: enabledBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(provider.label)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    ProviderStatusBadges(provider: provider)
+                }
+                Text(provider.command.map(ShellWords.join) ?? "—")
+                    .font(.caption)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .opacity(provider.enabled ? 1.0 : 0.55)
+
+            Spacer()
+
+            if provider.enabled {
+                modelPicker
+            }
+
+            Button("Edit…") { onEdit() }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: - Provider config
+
+    /// Read-only summary of the provider's config: command, env vars, API
+    /// key status. Editing is done through the Edit sheet (via `onEdit`),
+    /// not inline — this pane shows the current state.
+    private var providerConfigSection: some View {
+        Form {
+            Section {
+                LabeledContent("Command") {
+                    Text(provider.command.map(ShellWords.join) ?? "—")
+                        .fontDesign(.monospaced)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Environment") {
+                    if provider.env.isEmpty {
+                        Text("None")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            ForEach(provider.env.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
+                                HStack(spacing: 4) {
+                                    Text(key)
+                                        .fontDesign(.monospaced)
+                                    Text("=\(value)")
+                                        .fontDesign(.monospaced)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                        }
+                    }
+                }
+                LabeledContent("API Key") {
+                    let hasKey = credentialStore.apiKey(forProvider: provider.id) != nil
+                    HStack(spacing: 4) {
+                        Image(systemName: hasKey ? "checkmark.circle.fill" : "xmark.circle")
+                            .foregroundStyle(hasKey ? .green : .secondary)
+                        Text(hasKey ? "Set" : "Not set")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Provider Configuration")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Model picker
+
+    /// Model dropdown for this provider. Reads/writes the per-provider
+    /// `selectedModelId`. When the cache is empty, the picker is disabled
+    /// and surfaces a "Chat to discover models" placeholder.
+    @ViewBuilder
+    private var modelPicker: some View {
+        let cachedModels = config.cachedModels(forProvider: provider.id)
+        VStack(alignment: .trailing, spacing: 4) {
+            Picker("Model", selection: modelBinding) {
+                if cachedModels.isEmpty {
+                    Text("Chat to discover models").tag("")
+                } else {
+                    Text("Agent default").tag("")
+                    ForEach(cachedModels, id: \.modelId) { model in
+                        Text(model.displayLabel).tag(model.modelId)
+                    }
+                }
+            }
+            .labelsHidden()
+            .disabled(cachedModels.isEmpty)
+            .frame(maxWidth: 180)
+
+            // Compact caption — keeps `modelStatus` in use.
+            switch AgentsSettingsView.modelStatus(for: provider, in: config) {
+            case .noSelectionPickable:
+                Text("pick one before running")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            case .noneCaptured, .selected, .disabled:
+                EmptyView()
+            }
+            // #612: info-tone nudge when the provider's selected model is a
+            // known free-tier model. NOT a prohibition — the user can still
+            // select it; this is a gentle steer toward a stronger model.
+            if let modelId = config.selectedModelId(forProvider: provider.id),
+               let nudge = FreeTierModelNudge.message(for: modelId) {
+                Text(nudge)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 180)
+            }
+        }
+    }
+
+    private var modelBinding: Binding<String> {
+        Binding(
+            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
+            set: { newID in
+                let updated = config.settingSelectedModel(
+                    newID.isEmpty ? nil : newID,
+                    forProvider: provider.id)
+                saveConfig(updated)
+            })
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { provider.enabled },
+            set: { newValue in
+                var updated = config
+                if let idx = updated.providers.firstIndex(where: { $0.id == provider.id }) {
+                    updated.providers[idx].enabled = newValue
+                }
+                saveConfig(config.replacingProviders(updated.providers))
+            })
+    }
+
+    // MARK: - Operation tabs (stage pickers)
+
+    /// Operation tabs (Chat / Ingestion / Lint / Summary): a segmented
+    /// `Picker` over the four operation panes, each rendering one or more
+    /// `StageProviderModelPicker` rows. The stage pickers are GLOBAL config —
+    /// they pin which provider + model runs each stage. Shown here in the
+    /// context of the selected provider so the user can see and change the
+    /// pins.
+    private var operationTabsSection: some View {
+        VStack(spacing: 0) {
+            Picker("Operation", selection: $selectedOperationTab) {
+                ForEach(AgentsSettingsView.OperationTab.allCases) { tab in
+                    Text(tab.label).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+
+            operationTabContent
+        }
+    }
+
+    @ViewBuilder
+    private var operationTabContent: some View {
+        switch selectedOperationTab {
+        case .chat:
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "chat",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Chat Model")
+                } header: {
+                    Text("Chat Model")
+                } footer: {
+                    Text("Provider and model for new chat sessions. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .ingestion:
+            Form {
+                Section {
+                    ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
+                        StageProviderModelPicker(
+                            stageKey: stage.rawValue,
+                            config: $config,
+                            containerDirectory: containerDirectory,
+                            label: "\(stage.label) Model")
+                    }
+                } header: {
+                    Text("Ingest Stage Models")
+                } footer: {
+                    Text("Pin a provider + model for each ingest phase (Planner / Executor / Finalizer). “Default” uses the global default provider. A warm subprocess is shared across phases when stages resolve to the same provider.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .lint:
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "lint",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Lint Model")
+                } header: {
+                    Text("Lint Model")
+                } footer: {
+                    Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        case .summary:
+            // Per-message summarizer stage (plans/chat-summary.md §5.2). The
+            // sentinel `""` (first option) means "no model — truncation" for
+            // THIS stage, so the option is relabeled to "Default (first few
+            // sentences)" to convey the actual behavior.
+            Form {
+                Section {
+                    StageProviderModelPicker(
+                        stageKey: "summarizer",
+                        config: $config,
+                        containerDirectory: containerDirectory,
+                        label: "Summary Model",
+                        defaultOptionLabel: "Default (first few sentences)")
+                } header: {
+                    Text("Message Summary")
+                } footer: {
+                    Text("“Default (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    // MARK: - Helper text
+
+    private var helperText: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. The Chat / Ingestion / Lint tabs below pin the provider + model each operation runs with.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Providers are stored in agent-providers.json in the app's container. Edit manually to set CLAUDE_CODE_EXECUTABLE or CODEX_PATH in a provider's env.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+    }
+
+    // MARK: - Persistence
+
+    /// Save the updated config: write back to the parent's `@State` binding
+    /// AND save the sidecar. House rule: never bare `try?`.
+    private func saveConfig(_ updated: AgentProvidersConfig) {
+        config = updated
+        do {
+            try updated.save(to: containerDirectory)
+        } catch {
+            DebugLog.store("ProviderDetailPane save failed (provider=\(provider.id)): \(error.localizedDescription)")
+        }
     }
 }
 

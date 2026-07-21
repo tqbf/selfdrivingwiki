@@ -487,7 +487,8 @@ struct SourceMaterializerTests {
     /// not the `.capitalized` fallback ("Apple-podcast").
     @Test func applePodcastDisplayLabel() {
         let origin = SourceOrigin(
-            agentName: "apple-podcast", activityKind: "fetch",
+            versionID: "test", agentName: "apple-podcast", agentKind: "software",
+            activityKind: "fetch",
             plan: nil, externalRef: nil, externalIdentity: nil, fetchedAt: Date())
         #expect(origin.displayLabel == "Apple Podcast")
     }

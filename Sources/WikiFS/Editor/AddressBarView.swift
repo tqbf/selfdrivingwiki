@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import WikiFSCore
 
-/// A Safari-style omnibox that lives in the window's **toolbar** (a principal
-/// toolbar item), replacing the window title. Serves two roles depending on
+/// A Safari-style omnibox that lives in the window's **toolbar** as a centered
+/// `.principal` item, replacing the window title. Serves two roles depending on
 /// focus state — no explicit mode switch required:
 ///
 /// 1. **Idle (not focused):** shows the active page's wikilink (`[[Page Title]]`)
@@ -15,27 +15,26 @@ import WikiFSCore
 /// The editable field is an AppKit `NSSearchField` (`OmniboxSearchField`) —
 /// SwiftUI `TextField` can't take first responder inside an `NSToolbar` item —
 /// and the suggestions live in a non-activating child panel.
+///
+/// The Back/Forward/Home nav cluster is a *separate* `.navigation` toolbar item
+/// (`OmniboxNavButtons`), flush-left like Safari's; this view is only the
+/// centered field. Its width comes from `OmniboxLayout.fieldWidth(detailWidth:)`
+/// — a fraction of the detail region with margins on each side — and NSToolbar
+/// centers it. Nothing here predicts NSToolbar's insets, so the field can no
+/// longer tip the toolbar into the `»` overflow.
 struct AddressBarView: View {
     @Bindable var store: WikiStoreModel
     @Binding var isFocused: Bool
-    /// The active wiki's display name, shown in the trailing switcher. A longer
-    /// name widens that switcher, so the omnibox reserves extra room for it and
-    /// shrinks — keeping the switcher on-screen instead of overflowing.
-    var wikiName: String
     /// The width of the detail column (the region the toolbar spans), measured by a
     /// `GeometryReader` in `ContentView`. This shrinks when the left sidebar opens
     /// and is unaffected by the right transcript panel — exactly the omnibox's
-    /// usable toolbar span. Measuring the detail region (never in toolbar overflow)
-    /// instead of the field's own leading edge (which overflow strands) is what
-    /// keeps the width from getting stuck. See `OmniboxLayout`.
+    /// usable toolbar span. Drives the centered pill's width (see `OmniboxLayout`).
     var detailWidth: CGFloat
-    /// Whether the left sidebar is shown. Selects the fixed leading chrome ahead of
-    /// the field (`OmniboxLayout.leadingChrome`): with the sidebar hidden the detail
-    /// region spans the whole window and includes the traffic-light + toggle zone.
+    /// Whether the left sidebar is shown. Selects the side margin the centered pill
+    /// keeps: with the sidebar hidden the field centers across the whole window and
+    /// must reserve more room to clear the traffic-light + toggle chrome on its
+    /// left (see `OmniboxLayout.Metrics.sideMarginClosed`).
     var sidebarVisible: Bool
-    /// The active wiki's configured home page (issue #280). `nil` hides the home
-    /// button — there's nowhere to navigate to yet.
-    var homePageID: PageID?
 
     @State private var queryText = ""
     @State private var results: [OmniboxResult] = []
@@ -58,80 +57,26 @@ struct AddressBarView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
-        // Back / Forward (+ Home) + the omnibox are one `.navigation` group,
-        // flush-left in the detail region. The nav cluster sits tightly grouped on
-        // its own (Safari-style), separated from the omnibox pill by a wider gap so
-        // it doesn't read as fused to it. The nav buttons are fixed-width; the field
-        // is given an explicit width (`fieldWidth`) so it stretches from just after
-        // the gap to the trailing wiki switcher, shrinking as the window narrows /
-        // the wiki name grows and expanding once the switcher overflows (see
-        // `OmniboxLayout`). The gap's width is baked into `OmniboxLayout.Metrics`
-        // (`openLeadingChrome`/`closedLeadingChrome`) — changing the spacing here
-        // without updating those constants would reopen the flush-right bug fixed
-        // in issue #114, just at a different threshold.
-        HStack(spacing: AddressBarMetrics.navToOmniboxGap) {
-            navButtonGroup
-            omniboxGroup
-        }
-        // Cmd-L flips `isFocused`; turn that into a focus request for the field.
-        .onChange(of: isFocused) { _, focused in
-            if focused { focusToken &+= 1 }
-        }
-        // Empty state (no content loaded): focus the field so the user can type
-        // a search immediately — at launch and whenever the last tab closes.
-        .onAppear { focusIfEmpty() }
-        .onChange(of: hasContentLoaded) { _, loaded in
-            if !loaded { focusIfEmpty() }
-        }
+        // The omnibox is the toolbar's `.principal` item — NSToolbar centers it in
+        // the detail region. This view is *only* the field; the Back/Forward/Home
+        // cluster is a separate flush-left `.navigation` item (`OmniboxNavButtons`).
+        // The field's width comes from `OmniboxLayout.fieldWidth(detailWidth:)` — a
+        // fraction of the detail region with margins on each side — so it never
+        // fills the region edge-to-edge and can't tip the toolbar into overflow.
+        omniboxField
+            // Cmd-L flips `isFocused`; turn that into a focus request for the field.
+            .onChange(of: isFocused) { _, focused in
+                if focused { focusToken &+= 1 }
+            }
+            // Empty state (no content loaded): focus the field so the user can type
+            // a search immediately — at launch and whenever the last tab closes.
+            .onAppear { focusIfEmpty() }
+            .onChange(of: hasContentLoaded) { _, loaded in
+                if !loaded { focusIfEmpty() }
+            }
     }
 
-    /// Back / Forward (+ Home when the active wiki has one configured), grouped
-    /// tightly on their own so the cluster reads as a single control distinct from
-    /// the omnibox pill — the wider gap to `omniboxGroup` (`AddressBarMetrics.
-    /// navToOmniboxGap`, set on the parent `HStack`) does the actual separating.
-    private var navButtonGroup: some View {
-        HStack(spacing: AddressBarMetrics.navButtonSpacing) {
-            navButton("chevron.left", help: "Go back", enabled: store.canNavigateBack) {
-                store.navigateBack()
-            }
-            .keyboardShortcut("[", modifiers: .command)
-
-            navButton("chevron.right", help: "Go forward", enabled: store.canNavigateForward) {
-                store.navigateForward()
-            }
-            .keyboardShortcut("]", modifiers: .command)
-
-            if let homePageID {
-                navButton("house", help: "Go to home page", enabled: true) {
-                    _ = store.selectPage(byID: homePageID)
-                }
-            }
-        }
-    }
-
-    /// The omnibox field plus, once the field has hit its readability cap
-    /// (`OmniboxLayout.Metrics.maxWidth`), an invisible trailing spacer that
-    /// absorbs the rest of the space the field would otherwise have grown into.
-    /// Without this, the field stalls at `maxWidth` on wide windows while the
-    /// trailing wiki switcher and transcript toggle — separate, later toolbar
-    /// items — stay put, opening a gap between them and the true trailing edge
-    /// (issue #114). The spacer is zero-width below the cap, matching the old
-    /// behavior exactly.
-    private var omniboxGroup: some View {
-        HStack(spacing: 0) {
-            omniboxField
-            if overflowSpacerWidth > 0 {
-                // `Color.clear` is still hit-testable by default — without this it
-                // would swallow clicks/drags over what reads as empty toolbar space
-                // (including the window-drag region past the cap), even though
-                // nothing is drawn there.
-                Color.clear.frame(width: overflowSpacerWidth)
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    /// The search field itself, sized to fill from its leading edge to the switcher.
+    /// The search field itself, sized to a centered pill by `fieldWidth`.
     private var omniboxField: some View {
         OmniboxSearchField(
             text: $queryText,
@@ -179,23 +124,6 @@ struct AddressBarView: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
         }
-    }
-
-    /// A toolbar-styled chevron button for Back / Forward, rendered inside the
-    /// principal group (so it needs its own borderless styling to read as a
-    /// toolbar control rather than a bordered push button).
-    private func navButton(_ symbol: String, help: String, enabled: Bool,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: AddressBarMetrics.navButtonWidth, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.35))
-        .disabled(!enabled)
-        .help(help)
     }
 
     // MARK: - Reader menu (Safari-style page controls)
@@ -287,41 +215,12 @@ struct AddressBarView: View {
         .transition(.opacity)
     }
 
-    /// The omnibox field's width, from the measured detail-region width, the sidebar
-    /// state, and the wiki name. The arithmetic (stretch, shrink, overflow-expand)
-    /// lives in `OmniboxLayout` so it can be unit-tested; here we only supply the
-    /// measurements. `switcherExtra` is how much wider the current wiki name renders
-    /// than the baseline name — the switcher's fixed icon/chevron overhead cancels
-    /// out, so only text width matters.
+    /// The omnibox field's width, from the measured detail-region width. The
+    /// centered-pill arithmetic lives in `OmniboxLayout` so it can be unit-tested;
+    /// here we only supply the measurement. NSToolbar centers the `.principal`
+    /// item, so there's no leading/trailing position math to do.
     private var fieldWidth: CGFloat {
-        let switcherExtra = headlineTextWidth(wikiName)
-            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
-        return OmniboxLayout.fieldWidth(
-            detailWidth: detailWidth,
-            sidebarVisible: sidebarVisible,
-            homeButtonShown: homePageID != nil,
-            switcherExtra: switcherExtra)
-    }
-
-    /// Extra width appended after the field in `omniboxGroup` once `fieldWidth`
-    /// has hit its cap — keeps the trailing switcher/toggle flush against the
-    /// window edge instead of stalling short of it. Zero everywhere below the cap.
-    private var overflowSpacerWidth: CGFloat {
-        let switcherExtra = headlineTextWidth(wikiName)
-            - headlineTextWidth(AddressBarMetrics.baselineSwitcherName)
-        return OmniboxLayout.overflowSpacerWidth(
-            detailWidth: detailWidth,
-            sidebarVisible: sidebarVisible,
-            homeButtonShown: homePageID != nil,
-            switcherExtra: switcherExtra)
-    }
-
-    /// Rendered width of `text` in the switcher's font (`.headline`). Only the
-    /// *difference* from the baseline name is used, so the switcher's fixed
-    /// icon/chevron overhead cancels out and this need only be accurate for the text.
-    private func headlineTextWidth(_ text: String) -> CGFloat {
-        let font = NSFont.preferredFont(forTextStyle: .headline)
-        return (text as NSString).size(withAttributes: [.font: font]).width
+        OmniboxLayout.fieldWidth(detailWidth: detailWidth, sidebarVisible: sidebarVisible)
     }
 
     // MARK: - Actions
@@ -457,6 +356,63 @@ struct AddressBarView: View {
     }
 }
 
+// MARK: - Nav buttons
+
+/// The Back / Forward (+ Home when the active wiki has one configured) cluster,
+/// a *separate* flush-left `.navigation` toolbar item from the centered omnibox
+/// field (`AddressBarView`) — the Safari layout: nav pinned to the leading edge,
+/// URL field centered. Kept its own item (not folded into the field) so NSToolbar
+/// can center the principal field independently of this fixed-width cluster.
+struct OmniboxNavButtons: View {
+    @Bindable var store: WikiStoreModel
+    /// The active wiki's configured home page (issue #280). `nil` hides the Home
+    /// button — there's nowhere to navigate to yet.
+    var homePageID: PageID?
+
+    var body: some View {
+        HStack(spacing: AddressBarMetrics.navButtonSpacing) {
+            navButton("chevron.left", help: "Go back", enabled: store.canNavigateBack) {
+                store.navigateBack()
+            }
+            .keyboardShortcut("[", modifiers: .command)
+
+            navButton("chevron.right", help: "Go forward", enabled: store.canNavigateForward) {
+                store.navigateForward()
+            }
+            .keyboardShortcut("]", modifiers: .command)
+
+            if let homePageID {
+                navButton("house", help: "Go to home page", enabled: true) {
+                    _ = store.selectPage(byID: homePageID)
+                }
+            }
+        }
+        // macOS 26 (Tahoe) auto-wraps this cluster in a rounded "glass" toolbar
+        // bubble that hugs the content. The wide `house` glyph fills its 22pt
+        // frame edge-to-edge, so with no inset it renders jammed against — and
+        // clipped by — the bubble's rounded right edge. This horizontal padding
+        // grows the bubble just enough that every icon (especially Home) keeps a
+        // clear margin from the capsule.
+        .padding(.horizontal, AddressBarMetrics.navBubbleInset)
+    }
+
+    /// A toolbar-styled chevron button for Back / Forward / Home. Borderless so it
+    /// reads as a toolbar control rather than a bordered push button.
+    private func navButton(_ symbol: String, help: String, enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: AddressBarMetrics.navButtonWidth, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.35))
+        .disabled(!enabled)
+        .help(help)
+    }
+}
+
 // MARK: - Suggestions list
 
 /// The ranked results list shown in the omnibox suggestions panel. Rows
@@ -542,25 +498,15 @@ struct AddressResultsList: View {
 // MARK: - Metrics
 
 enum AddressBarMetrics {
-    /// Fixed width of each Back/Forward/Home nav button. Shared with
-    /// `OmniboxLayout.Metrics.homeButtonExtra`'s derivation — when the Home
-    /// button shows, the field's leading edge shifts right by exactly this plus
-    /// one `navButtonSpacing`.
+    /// Fixed width of each Back/Forward/Home nav button in `OmniboxNavButtons`.
     static let navButtonWidth: CGFloat = 22
-    /// Spacing between Back/Forward/Home within `navButtonGroup` — tight, so the
+    /// Spacing between Back/Forward/Home within `OmniboxNavButtons` — tight, so the
     /// cluster reads as one control.
     static let navButtonSpacing: CGFloat = 4
-    /// Gap between `navButtonGroup` and the omnibox pill — wider than
-    /// `navButtonSpacing` so the nav cluster reads as visually distinct from the
-    /// omnibox rather than fused to it. This width is baked into
-    /// `OmniboxLayout.Metrics.openLeadingChrome`/`closedLeadingChrome`; changing it
-    /// here requires updating those constants by the same delta.
-    static let navToOmniboxGap: CGFloat = 14
-    /// The wiki-switcher name the trailing reservation is tuned against. A name
-    /// wider than this reserves the extra width (the omnibox yields it); a narrower
-    /// one lets the omnibox reclaim it. Only the width *difference* is used, so the
-    /// switcher's fixed icon/chevron overhead cancels out. See `OmniboxLayout`.
-    static let baselineSwitcherName = "My Wiki"
+    /// Horizontal inset around the nav cluster so the macOS 26 toolbar "bubble"
+    /// (which hugs the content) leaves a margin around the icons — without it the
+    /// wide `house` glyph sits clipped against the capsule's right edge.
+    static let navBubbleInset: CGFloat = 10
     /// Left padding from the pill's rounded edge to the Page Menu icon, so the
     /// icon sits inside the omnibox rather than hugging the edge.
     static let iconLeadingInset: CGFloat = 8

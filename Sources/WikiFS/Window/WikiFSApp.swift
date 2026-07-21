@@ -59,6 +59,10 @@ struct WikiFSApp: App {
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
+    /// Per-app appearance override (Light / Dark / System). Shared key with
+    /// `AppearanceSettingsView`. Applied via `.preferredColorScheme` on every
+    /// scene + `NSApp.appearance` for AppKit surfaces (NSAlert, menu bar).
+    @AppStorage(AppearanceSettingsView.storageKey) private var appearanceModeRaw = AppearanceMode.system.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
     @State private var changeBridge: WikiChangeBridge?
@@ -411,6 +415,7 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
+            .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
@@ -447,9 +452,13 @@ struct WikiFSApp: App {
             .onChange(of: registry.wikis) { _, _ in
                 changeBridge?.refreshObservations()
             }
+            .onChange(of: appearanceModeRaw) { _, _ in
+                applyAppKitAppearance()
+            }
             .task {
                 bootstrapApp()
                 startStatusItem()
+                applyAppKitAppearance()
             }
         }
         .windowToolbarStyle(.unified)
@@ -480,6 +489,7 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
+            .preferredColorScheme(appearanceColorScheme)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
             }
@@ -501,6 +511,7 @@ struct WikiFSApp: App {
         // shared `SessionManager`.
         WindowGroup("Compare Extractions", for: ExtractionCompareContext.self) { $context in
             ExtractionCompareWindow(sessionManager: sessionManager, context: context)
+                .preferredColorScheme(appearanceColorScheme)
         }
         .defaultSize(width: 1080, height: 740)
         .windowResizability(.contentMinSize)
@@ -516,8 +527,12 @@ struct WikiFSApp: App {
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.agents)
                     .tabItem { Label("Agents", systemImage: "cpu") }
+                AppearanceSettingsView()
+                    .tag(SettingsTab.appearance)
+                    .tabItem { Label("Appearance", systemImage: "paintbrush") }
             }
             .appEnvironment(tracker: activityTracker)
+            .preferredColorScheme(appearanceColorScheme)
             .frame(minWidth: 560, minHeight: 520)
         }
         .windowResizability(.contentMinSize)
@@ -528,6 +543,7 @@ struct WikiFSApp: App {
         case zotero
         case extraction
         case agents
+        case appearance
     }
 
     /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
@@ -540,6 +556,22 @@ struct WikiFSApp: App {
             get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .zotero },
             set: { settingsSelectedTabRaw = $0.rawValue }
         )
+    }
+
+    /// The `ColorScheme?` to apply via `.preferredColorScheme` on every scene.
+    /// `nil` (`.system`) means no override — SwiftUI follows the OS.
+    private var appearanceColorScheme: ColorScheme? {
+        AppearanceMode(rawValue: appearanceModeRaw)?.colorScheme
+    }
+
+    /// Sync `NSApp.appearance` so AppKit-level surfaces (NSAlert, menu bar,
+    /// status item) also honor the override. Called on launch (`.task`) and
+    /// whenever `appearanceModeRaw` changes (`.onChange`). `.system` clears
+    /// `NSApp.appearance` (nil → follows OS).
+    @MainActor
+    private func applyAppKitAppearance() {
+        let mode = AppearanceMode(rawValue: appearanceModeRaw) ?? .system
+        NSApp.appearance = mode.nsAppearanceName.flatMap { NSAppearance(named: $0) }
     }
 }
 

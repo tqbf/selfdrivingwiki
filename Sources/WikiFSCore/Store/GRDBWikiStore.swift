@@ -3453,9 +3453,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func sourceOrigin(sourceID: PageID) throws -> SourceOrigin? {
         try dbWriter.read { db in
+            // Same `runTitle` subquery as `pageOrigin` (#745) — resolves the
+            // chat title for `chat:<id>` agents; NULL for other agent kinds.
             let cols = """
-            a.name, act.kind, act.plan, act.external_ref,
-            sv.external_identity, sv.fetched_at
+            sv.id,
+            a.name, a.kind,
+            act.kind, act.plan, act.external_ref,
+            sv.external_identity, sv.fetched_at,
+            (SELECT c.title FROM chats c WHERE c.id = substr(a.name, 6) AND a.name LIKE 'chat:%')
             """
             // 1. Prefer the active ref.
             if let row = try Row.fetchOne(
@@ -3485,6 +3490,37 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 arguments: [sourceID.rawValue]
             ) else { return nil }
             return Self.originFrom(row: row)
+        }
+    }
+
+    /// The full edit history for a source — every `source_versions` row joined
+    /// to its `activities` → `agents` (the source-side mirror of
+    /// `pageEditHistory`). Ordered NEWEST-FIRST (the provenance panel renders
+    /// newest at top). Read-only: routes through `dbWriter.read` so this is
+    /// safe off-main. READ-ONLY → emits no `ResourceChangeEvent`.
+    public func sourceEditHistory(sourceID: PageID) throws -> [SourceOrigin] {
+        try dbWriter.read { db in
+            // Same `runTitle` subquery as `sourceOrigin` (#745).
+            let cols = """
+            sv.id,
+            a.name, a.kind,
+            act.kind, act.plan, act.external_ref,
+            sv.external_identity, sv.fetched_at,
+            (SELECT c.title FROM chats c WHERE c.id = substr(a.name, 6) AND a.name LIKE 'chat:%')
+            """
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT \(cols)
+                FROM source_versions sv
+                LEFT JOIN activities act ON act.id = sv.activity_id
+                LEFT JOIN agents a ON a.id = act.agent_id
+                WHERE sv.source_id = ?
+                ORDER BY sv.id DESC;
+                """,
+                arguments: [sourceID.rawValue]
+            )
+            return rows.map { Self.originFrom(row: $0) }
         }
     }
 
@@ -4532,7 +4568,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 LEFT JOIN activities act ON act.id = pv.activity_id
                 LEFT JOIN agents a ON a.id = act.agent_id
                 WHERE pv.page_id = ?
-                ORDER BY pv.id ASC;
+                ORDER BY pv.id DESC;
                 """,
                 arguments: [pageID.rawValue]
             )
@@ -6672,20 +6708,31 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    /// Decode an origin row. NULL activity/agent columns degrade gracefully.
+    /// Decode an origin row. NULL activity/agent columns degrade gracefully
+    /// (matches `pageOriginFrom(row:)` for pages). Position 0..7 mirrors the
+    /// SELECT column order in `sourceOrigin`/`sourceEditHistory`. `sv.id` and
+    /// `sv.fetched_at` are NOT NULL per the `source_versions` schema; the
+    /// LEFT-joined columns can be NULL. Position 7 is the `runTitle` subquery
+    /// (#745) — NULL for non-chat agents or when the chat has been deleted.
     private static func originFrom(row: Row) -> SourceOrigin {
-        let agentName: String? = row[0]
-        let activityKind: String? = row[1]
-        let plan: String? = row[2]
-        let externalRef: String? = row[3]
-        let externalIdentity: String? = row[4]
-        let fetchedAt: Double = row[5]
+        let versionID: String = (row[0] as String?) ?? ""
+        let agentName: String? = row[1]
+        let agentKind: String? = row[2]
+        let activityKind: String? = row[3]
+        let plan: String? = row[4]
+        let externalRef: String? = row[5]
+        let externalIdentity: String? = row[6]
+        let fetchedAt: Double = (row[7] as Double?) ?? 0
+        let runTitle: String? = row[8]
         return SourceOrigin(
+            versionID: versionID,
             agentName: agentName ?? "unknown",
+            agentKind: agentKind ?? "software",
             activityKind: activityKind ?? "import",
             plan: plan,
             externalRef: externalRef,
             externalIdentity: externalIdentity,
+            runTitle: runTitle,
             fetchedAt: Date(timeIntervalSince1970: fetchedAt)
         )
     }

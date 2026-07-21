@@ -195,14 +195,6 @@ struct ContentView: View {
             && KeychainZoteroCredentialStore().apiKey() != nil
     }
 
-    /// The active wiki's display name (as shown in the toolbar's `WikiSwitcher`),
-    /// passed to the omnibox so it can reserve room for a long switcher and shrink
-    /// instead of pushing the switcher into overflow. Mirrors `WikiSwitcher`'s
-    /// `activeDescriptor`.
-    private var activeWikiName: String {
-        session.descriptor.displayName
-    }
-
     /// The active wiki's configured home page, if any (issue #280). `nil` hides
     /// the omnibox home button.
     private var activeHomePageID: PageID? {
@@ -262,39 +254,23 @@ struct ContentView: View {
         // whole group into the `»` overflow. Declared here it centers within the
         // detail region, so it survives the sidebar opening.
         .toolbar {
-            // The omnibox group (Back / Forward + search field) is placed
-            // `.navigation` so it flows flush-left from the leading edge of the
-            // detail region (no centering gap). `AddressBarView` sizes the group
-            // to an explicit width that fills up to the trailing wiki switcher —
-            // the empty title space that would otherwise sit between them is
-            // reclaimed by hiding the window title (see `OmniboxSearchField`'s
-            // `viewDidMoveToWindow`). Declared on the detail column so it survives
-            // the sidebar opening.
+            // Safari layout: the Back/Forward/Home cluster is pinned flush-left
+            // (`.navigation`) and the omnibox field is centered (`.principal`).
+            // Splitting them into two items lets NSToolbar center the field
+            // independently of the fixed-width nav cluster. The field is sized to
+            // a fraction of the detail region (`OmniboxLayout.fieldWidth`) with
+            // margins on each side, so it never fills the region edge-to-edge —
+            // the condition that used to tip the whole group into the `»`
+            // overflow. The empty title space is reclaimed by hiding the window
+            // title (`.toolbar(removing: .title)` below).
             ToolbarItem(placement: .navigation) {
+                OmniboxNavButtons(store: store, homePageID: activeHomePageID)
+            }
+            ToolbarItem(placement: .principal) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
-                               wikiName: activeWikiName,
                                detailWidth: detailWidth,
                                sidebarVisible: columnVisibility != .detailOnly,
-                               homePageID: activeHomePageID,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
-            }
-
-            // The wiki switcher moves out of the sidebar header into the toolbar,
-            // trailing the omnibox (like a browser account / profile control).
-            ToolbarItem(placement: .primaryAction) {
-                WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-            }
-
-            // Change-log sidebar toggle, trailing the switcher — the standard
-            // inspector-toggle position (rightmost, like Notes/Freeform).
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    store.isChangeLogSidebarVisible.toggle()
-                } label: {
-                    Label("Change Log", systemImage: "sidebar.trailing")
-                }
-                .help(store.isChangeLogSidebarVisible
-                    ? "Hide Change Log" : "Show Change Log")
             }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`

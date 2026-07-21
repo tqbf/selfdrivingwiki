@@ -528,20 +528,20 @@ struct PageVersionTests {
         let history = try store.pageEditHistory(pageID: page.id)
         #expect(history.count == 2, "fresh create+edit yields 2 origin entries (got \(history.count))")
 
-        // entry[0] = root (the create's empty-root 'import' activity).
-        #expect(history[0].activityKind == "import")
-        #expect(history[0].agentName == createAuthor)
-        #expect(history[0].agentKind == "agent")
-
-        // entry[1] = the edit — pinned to the chat author + the edited body.
-        #expect(history[1].activityKind == "edit")
-        #expect(history[1].agentName == editAuthor)
-        #expect(history[1].agentKind == "chat")
+        // Newest-first (DESC): entry[0] = the edit (most recent),
+        // entry[1] = the root 'import' (oldest).
+        #expect(history[0].activityKind == "edit")
+        #expect(history[0].agentName == editAuthor)
+        #expect(history[0].agentKind == "chat")
         // The title is the version's stored title (which equals what
         // updatePage wrote).
-        #expect(history[1].title == "Edit Chain")
+        #expect(history[0].title == "Edit Chain")
 
-        // pageOrigin(pageID:) reflects the HEAD = entry[1] (the chat edit).
+        #expect(history[1].activityKind == "import")
+        #expect(history[1].agentName == createAuthor)
+        #expect(history[1].agentKind == "agent")
+
+        // pageOrigin(pageID:) reflects the HEAD = entry[0] (the chat edit).
         let head = try store.pageOrigin(pageID: page.id)
         #expect(head?.agentName == editAuthor)
         #expect(head?.agentKind == "chat")
