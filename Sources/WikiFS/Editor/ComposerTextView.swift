@@ -64,6 +64,12 @@ struct ComposerTextView: NSViewRepresentable {
     ///     (the composer's text view). Called each time the dropdown is shown.
     var autocomplete: AutocompleteHooks?
 
+    /// #740: when non-nil, pressing Arrow ↑ while the composer is empty recalls
+    /// the previously queued message back into the draft for editing. The caller
+    /// loads the queued text into the `text` binding and clears its queue state.
+    /// `nil` (default) disables the recall behavior (no queue → no-op).
+    var onRecallQueued: (() -> Void)? = nil
+
     /// `AutocompleteHooks` and `DebounceHandle` are typealias back-compat
     /// shims defined on `ComposerTextView` in
     /// `WikiLinkAutocompleteController.swift` (pointing to the top-level
@@ -315,6 +321,17 @@ struct ComposerTextView: NSViewRepresentable {
             let modifiers = (NSApp.currentEvent?.modifierFlags ?? []).intersection(.deviceIndependentFlagsMask)
             ensureAutocompleteController()
             let open = autocompleteController?.hasResults ?? false
+            // #740: Arrow ↑ on an empty composer recalls the queued message into
+            // the draft for editing (only when the caller wired `onRecallQueued`).
+            // We check `string.isEmpty` so ↑ still navigates within multi-line
+            // text normally — recall fires only when the draft is clear.
+            if (selector == #selector(NSResponder.moveUp(_:))
+                || selector == #selector(NSResponder.moveToBeginningOfParagraph(_:)))
+                && textView.string.isEmpty,
+                let onRecall = parent.onRecallQueued {
+                onRecall()
+                return true
+            }
             switch ComposerTextView.keyAction(for: selector, modifiers: modifiers, autocompleteOpen: open) {
             case .send:
                 parent.onSubmit()
