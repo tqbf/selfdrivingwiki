@@ -44,6 +44,24 @@ struct EnvVarTextTests {
         #expect(env["C"] == "\"mismatched'")
     }
 
+    @Test func doubleQuotedValueWithSpacesIsPreserved() {
+        let env = EnvVarText.parse(#"KEY="foo bar baz""#)
+        #expect(env["KEY"] == "foo bar baz")
+    }
+
+    @Test func dollarVarReferenceIsKeptLiteralNotExpanded() {
+        // We do not run a shell over these values — $VAR / ${VAR} stay literal.
+        let env = EnvVarText.parse("A=$FOO\nB=${BAR}\nC=prefix-$X")
+        #expect(env["A"] == "$FOO")
+        #expect(env["B"] == "${BAR}")
+        #expect(env["C"] == "prefix-$X")
+    }
+
+    @Test func quotedDollarVarStaysLiteralAfterQuoteStripping() {
+        let env = EnvVarText.parse(#"A="$FOO""#)
+        #expect(env["A"] == "$FOO")
+    }
+
     @Test func lastDuplicateKeyWins() {
         let env = EnvVarText.parse("FOO=one\nFOO=two")
         #expect(env == ["FOO": "two"])

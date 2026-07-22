@@ -540,7 +540,7 @@ private struct ProviderDetailPane: View {
             Text("Environment")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("One KEY=value per line — paste a block of variables directly. Lines starting with # are ignored. Non-secret configuration only (stored in plain JSON).")
+                Text("One KEY=value per line — paste a block of variables directly. Lines starting with # are ignored. Values are used literally: surrounding \"quotes\" are removed, but $VAR references are not expanded. Non-secret configuration only (stored in plain JSON).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !malformed.isEmpty {
