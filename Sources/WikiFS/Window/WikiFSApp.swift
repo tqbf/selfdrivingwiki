@@ -228,6 +228,16 @@ struct WikiFSApp: App {
             // default chosen — fresh install or legacy config) means the
             // Extract button prompts the user to pick a backend.
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+            // Issue #799 PR4: resolve the configured podcast transcription
+            // backend from `extraction-config.json` (PR1 added the field +
+            // Settings picker). Mirrors `htmlBackendResolver` one-to-one.
+            // `nil` (the default on a fresh install or a config written before
+            // PR1) means the Transcribe button uses `.appleTranscript` directly
+            // (the only backend today); the "Re-transcribe with" menu lists
+            // `PodcastTranscriptionBackend.allCases` so future backends (Whisper
+            // / Rev.ai / etc.) slot in by adding a case without touching this
+            // wiring.
+            podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 // Interactive chat (Ask/Edit) usage delta → daily total so the
                 // menu bar "Today: X tokens" includes chat, not just queue runs.

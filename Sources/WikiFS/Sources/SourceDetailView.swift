@@ -66,10 +66,22 @@ struct SourceDetailView: View {
     /// Caret position in the editor, for outline cursor tracking (issue #268).
     @State private var caretCharIndex: Int?
     @State private var isExtracting = false
+    /// True while a podcast transcription (re-fetch via the signing-helper
+    /// pipeline) is in flight (issue #799 PR4). Sibling of `isExtracting`
+    /// (PDF/HTML Extract) and `isRefreshing` (Refresh) — the three gates
+    /// stay mutually exclusive in the View-level button rendering (each
+    /// button dispatches to exactly one of `runExtraction` /
+    /// `runHtmlExtraction` / `runRefresh` / `runTranscription`).
+    @State private var isTranscribing = false
     /// True while a source refresh (re-fetch via provider) is in flight.
     @State private var isRefreshing = false
     /// Set when a refresh fails — surfaced inline below the action row.
     @State private var refreshError: String?
+    /// Set when a transcription (Extract ◂ Transcribe) fails — surfaced inline
+    /// below the action row alongside `refreshError` (issue #799 PR4). Both
+    /// stay scoped to the action button that produced them; the row renders
+    /// whichever error is non-nil.
+    @State private var transcribeError: String?
     /// Whether THIS source can actually be refreshed — the authoritative gate
     /// from `store.isSourceRefreshable(for:)` (mirrors the refresh service's real
     /// decision, incl. the snapshot-with-images guard and podcast-helper
@@ -158,6 +170,37 @@ struct SourceDetailView: View {
     }
 
     private var hasMarkdown: Bool { headVersion != nil }
+
+    /// `true` for byteless Apple Podcasts embed sources (issue #799 PR4).
+    /// Detects via the loaded `origin`'s provider — the byteless-source
+    /// synthetic MIME (`audio/apple-podcast`) is also a tell, but
+    /// `origin.provider` is the single source of truth (matches how
+    /// `isSourceRefreshable` gates the existing Refresh button). Returns
+    /// `false` until `origin` loads, so the predicate is re-evaluated when
+    /// `.task(id: file.id)` finishes loading origin — same shape as
+    /// `isRefreshable`.
+    private var isPodcastEmbed: Bool { origin?.provider == .applePodcast }
+
+    /// `true` when this podcast source can be transcribed right now — the
+    /// single source of truth for the Transcribe button's enable state
+    /// (issue #799 PR4 AC.16). Delegates to `store.isSourceRefreshable(for:)`
+    /// so the runtime guard (the bundled signing-helper binary present AND
+    /// this build compiles podcast support via `#if PODCAST_TRANSCRIPTS`) is
+    /// identical to the existing Refresh button's guard for podcasts (the
+    /// predicate already returns `false` for non-`.applePodcast` sources, so
+    /// this is a typed narrowing over it).
+    private var isTranscribable: Bool {
+        isPodcastEmbed && store.isSourceRefreshable(for: file.id)
+    }
+
+    /// A transcribable podcast source with no transcript yet — the gate for
+    /// the prominent "Transcribe" call-to-action (issue #799 PR4). Analog of
+    /// `needsExtraction` for PDF/HTML sources. Exclusivity guarded: a podcast
+    /// source with no transcript shows Transcribe (NOT Refresh — there's
+    /// nothing to refresh yet); once a transcript exists, the provenance chip
+    /// + Re-transcribe menu take over (and Refresh is offered when
+    /// `isRefreshable && !needsExtraction` — the existing gate).
+    private var needsTranscription: Bool { isTranscribable && !hasMarkdown }
 
     /// Whether this source should expose the Mermaid diagram tabs
     /// (Reader / Rendered / Split). Detection is content-aware: a standalone
@@ -298,8 +341,22 @@ struct SourceDetailView: View {
     /// Extract call-to-action. A source is extractable iff it's a PDF (backed
     /// by `ExtractionBackend.allCases`) or HTML (backed by
     /// `HtmlExtractionBackend.allCases`). Text/binary/byteless sources skip
-    /// extraction entirely.
+    /// extraction entirely. Podcast embeds are handled separately (issue
+    /// #799 PR4: `isTranscribable` + `needsTranscription` gate the Transcribe
+    /// button); they're NOT in `isExtractable` because podcast "extraction"
+    /// is a network fetch (not a bytes→markdown transform), so the HTML/PDF
+    /// Extract button doesn't apply.
     private var isExtractable: Bool { isPDF || isHTMLSource }
+
+    /// `true` when this source's content type has a provenance chip — the gate
+    /// for `extractionProvenanceChip(head:)` rendering above the action row
+    /// (issue #799 PR2). Widened in PR4 to include transcribable podcast
+    /// sources (a podcast source WITH a transcript shows the chip so the
+    /// Re-transcribe with menu is reachable). Mirrors `isExtractable` for
+    /// HTML/PDF; adds `isTranscribable` for podcasts.
+    private var hasExtractionChip: Bool {
+        (isExtractable || isTranscribable) && hasMarkdown
+    }
 
     /// An extractable source with no markdown derivation yet — the gate for
     /// the prominent "Extract" call-to-action. Also the exclusivity guard for
@@ -609,6 +666,11 @@ struct SourceDetailView: View {
                             .font(.callout)
                             .foregroundStyle(.red)
                     }
+                    if let transcribeError {
+                        Text(transcribeError)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 
@@ -669,7 +731,7 @@ struct SourceDetailView: View {
                 // then Ingest, then Extract Markdown when no derivation exists
                 // yet. Above the utility row so the wiki goal reads first.
                 HStack(spacing: 10) {
-                    if isExtractable, hasMarkdown, let head = headVersion {
+                    if hasExtractionChip, let head = headVersion {
                         extractionProvenanceChip(head: head)
                     }
                     if needsExtraction {
@@ -699,6 +761,29 @@ struct SourceDetailView: View {
                                   // slot — this extract would await it, so show
                                   // it as busy rather than letting the tap hang.
                                   || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                    if needsTranscription {
+                        // Issue #799 PR4: a transcribable podcast source with
+                        // no transcript yet. The Transcribe button is the
+                        // analog of the Extract button for PDF/HTML, but its
+                        // underlying mechanism is a network fetch (signed bearer →
+                        // AMP → TTML → parse → markdown), NOT a bytes→markdown
+                        // transform — so it dispatches to the inline
+                        // `runTranscription` path (NOT the queue engine, which
+                        // is PDF-coupled via `ExtractionResolution.pdfData`).
+                        // Disabled when the signing helper binary is unavailable
+                        // (`isTranscribable` mirrors
+                        // `isSourceRefreshable`'s `.applePodcast` runtime guard).
+                        Button(isTranscribing ? "Transcribing…" : "Transcribe",
+                               systemImage: "waveform") {
+                            DebugLog.extraction("SourceDetailView: Transcribe tapped — id=\(file.id.rawValue)")
+                            Task { await runTranscription() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isTranscribing
+                                  || isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                        .help("Fetch this episode's transcript via Apple Podcasts")
                     }
                     ingestButton
                     // The source's content affordance is one-per-source: an
@@ -1363,6 +1448,69 @@ struct SourceDetailView: View {
         }
     }
 
+    /// Podcast transcription trigger (issue #799 PR4). Inline — does NOT
+    /// route through the queue engine (the queue is PDF-coupled via
+    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
+    /// `seedPdfMarkdown`; podcast transcription is a NETWORK FETCH with a
+    /// different input shape — signed bearer → AMP → TTML → parse). Mirrors
+    /// `runHtmlExtraction` (PR2) but calls
+    /// `WikiStoreModel.transcribePodcast(sourceID:fetcher:)` (the new
+    /// direct-network trigger in PR4). Uses the configured
+    /// `store.podcastBackend` when set; otherwise falls back to
+    /// `.appleTranscript` (only backend today). On a build without
+    /// `PODCAST_TRANSCRIPTS`, the predicate `needsTranscription` is `false`
+    /// (its underlying `isSourceRefreshable` returns `false` for
+    /// `.applePodcast` outside the flag), so this method is unreachable in
+    /// production; the model stays honest in case a caller bypasses the
+    /// predicate (it throws `.notRefreshable`).
+    private func runTranscription() async {
+        isTranscribing = true
+        transcribeError = nil
+        defer { isTranscribing = false }
+        do {
+            if let head = try await store.transcribePodcast(sourceID: file.id) {
+                headVersion = head
+            }
+        } catch PodcastTranscriptError.signatureUnavailable(let message) {
+            transcribeError = message
+        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
+            transcribeError = "Sources from \"\(agent)\" can't be transcribed."
+        } catch SourceRefreshService.RefreshError.missingPlan {
+            transcribeError = "This source has no recorded episode URL to transcribe."
+        } catch {
+            transcribeError = "Transcribe failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Re-transcription trigger (issue #799 PR4). Called by the
+    /// "Re-transcribe with" menu's podcast branch when the user picks a
+    /// backend from `PodcastTranscriptionBackend.allCases`. Mirrors
+    /// `runHtmlReExtraction(with:)` (PR2) but routes through the inline
+    /// `transcribePodcast(sourceID:)` path. The `backend` parameter is
+    /// currently a placeholder for future backends (Whisper / Rev.ai / etc.);
+    /// `.appleTranscript` is the only backend today, so every re-transcribe
+    /// routes through the same `transcribePodcast` path. The picker is the
+    /// scaffolding for extensibility — adding a `case` to
+    /// `PodcastTranscriptionBackend` and a branch in
+    /// `WikiStoreModel.transcribePodcast` is the future hook.
+    private func runTranscription(with backend: PodcastTranscriptionBackend) async {
+        isTranscribing = true
+        transcribeError = nil
+        defer { isTranscribing = false }
+        // The chosen backend is logged here (the only backend today,
+        // `.appleTranscript`, dispatches through `transcribePodcast(sourceID:)`
+        // unchanged; the log entry preserves the user intent for future
+        // auditability when a new backend lands and the dispatch branches).
+        DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
+        do {
+            if let head = try await store.transcribePodcast(sourceID: file.id) {
+                headVersion = head
+            }
+        } catch {
+            transcribeError = "Transcribe failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Extraction alternatives (Phase 2)
 
     /// The provenance line rendered as the single home for extraction
@@ -1408,13 +1556,18 @@ struct SourceDetailView: View {
             Section("Re-extract with") {
                 // Content-type-aware: HTML sources list `HtmlExtractionBackend`
                 // (defuddle, tag-based), PDF sources list `ExtractionBackend`
-                // (local pdf2md, ACP, Anthropic, Gemini, Docling Serve). A source
-                // is HTML xor PDF — `isHTMLSource` excludes the PDF MIMEs and
-                // vice versa — so the two branches are mutually exclusive. The
-                // HTML branch routes through the inline `extractHtml` path
-                // (issue #799 PR2 — the queue engine is PDF-coupled;
-                // generalizing it is a deferred sub-project per the parent
-                // plan's "Out of scope" section).
+                // (local pdf2md, ACP, Anthropic, Gemini, Docling Serve),
+                // podcast sources list `PodcastTranscriptionBackend`
+                // (currently just `appleTranscript`; issue #799 PR4) and
+                // route to `runTranscription(with:)`. A source is HTML xor
+                // PDF xor podcast — `isHTMLSource` excludes the PDF MIMEs
+                // and vice versa, and `isPodcastEmbed` excludes both — so
+                // the three branches are mutually exclusive. The HTML and
+                // podcast branches route through the inline `extractHtml` /
+                // `transcribePodcast` paths (issues #799 PR2 + PR4 — the
+                // queue engine is PDF-coupled; generalizing it is a
+                // deferred sub-project per the parent plan's "Out of scope"
+                // section).
                 if isHTMLSource {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
@@ -1423,6 +1576,17 @@ struct SourceDetailView: View {
                             }
                         }
                         .disabled(isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                } else if isPodcastEmbed {
+                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runTranscription(with: backend)
+                            }
+                        }
+                        .disabled(isTranscribing
+                                  || isThisFileExtracting
                                   || tracker.isSlotBusyForOtherSource(file.id))
                     }
                 } else {

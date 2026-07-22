@@ -102,11 +102,21 @@ struct SourceRefreshTests {
     // MARK: - AC.5: Podcast refresh (guarded)
 
     #if PODCAST_TRANSCRIPTS
+    /// Issue #799 PR4 — the v1 transcript is now seeded via
+    /// `transcribePodcast(sourceID:)` (NOT via `addURL` — PR4 stopped auto-
+    /// transcription at ingest, so a fresh podcast source has no transcript
+    /// markdown). The v2 refresh comes from `refreshSource(_:)`, which calls
+    /// `SourceRefreshService.materializePodcast(origin:)` → fetches v2 via
+    /// the same fetcher; the v2 markdown lands as a derived-markdown version
+    /// through the same `appendProcessedMarkdown(origin: .transcript)` path.
+    /// `podcastRefreshAppendsDerivedMarkdown` thus exercises refresh of an
+    /// ALREADY-transcribed podcast (mirrors the user flow: ingest → transcribe
+    /// → at some later point the user clicks Refresh for a fresh transcript).
     @Test func podcastRefreshAppendsDerivedMarkdown() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        // Seed a byteless podcast source via addURL.
+        // Seed a fake podcast fetcher (returns the markdown it carries).
         final class FakePodcast: PodcastTranscriptFetching, @unchecked Sendable {
             var markdown: String
             init(_ markdown: String) { self.markdown = markdown }
@@ -118,16 +128,25 @@ struct SourceRefreshTests {
         }
         let podcast = FakePodcast("SPEAKER_1: v1 transcript.")
         let url = "https://podcasts.apple.com/us/podcast/test/id1?i=100"
-        _ = try await model.addURL(url, fetcher: SwapFetcher(htmlResponse("", url: "https://x")), podcastFetcher: podcast)
+        // 1. Ingest — byteless only (PR4 contract: no transcript at ingest).
+        _ = try await model.addURL(
+            url, fetcher: SwapFetcher(htmlResponse("", url: "https://x")),
+            podcastFetcher: podcast)
         let source = try #require(try store.listSources().first)
+        // Sanity: ingest wrote no transcript.
+        #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
-        // v1 markdown head.
+        // 2. Transcribe — the user clicks the Transcribe button.
+        _ = try await model.transcribePodcast(sourceID: source.id, fetcher: podcast)
         let headBefore = try #require(try store.processedMarkdownHead(sourceID: source.id))
         #expect(headBefore.content == "SPEAKER_1: v1 transcript.")
 
-        // Swap transcript and refresh (inject the fake podcast fetcher).
+        // 3. Swap transcript and refresh (the existing Refresh button —
+        // re-fetches via the same fetcher and appends v2).
         podcast.markdown = "SPEAKER_1: v2 transcript."
-        _ = try await model.refreshSource(source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")), podcastFetcher: podcast)
+        _ = try await model.refreshSource(
+            source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")),
+            podcastFetcher: podcast)
 
         // A new derived markdown version was appended.
         let headAfter = try #require(try store.processedMarkdownHead(sourceID: source.id))
