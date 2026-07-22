@@ -290,6 +290,17 @@ swift test --filter PdfExtractionServiceTests  # pdf extraction only
 suite — there is no tier split and no skip list anymore (the slow disk-I/O
 they worked around is gone).
 
+**Mutation testing** (`swift-mutation-testing`, schematized — builds once,
+test-runs every mutant via a runtime switch):
+```
+make mutate                                       # full run (all sources)
+make mutate-scope SOURCES_PATH=Sources/WikiFSTypes   # scoped to a directory
+```
+Config lives in `.swift-mutation-testing.yml`. Install the tool once:
+`brew install ericodx/homebrew-tools/swift-mutation-testing`. Reports
+(`mutation-report.json` etc.) and the cache are gitignored. Not in CI — run
+manually when changing hot logic (relational / boolean / arithmetic mutators).
+
 **Python / pdf2md** (from `tools/pdf2md`):
 ```
 uv run pytest tests/                                     # unit + fast integration (60, never hangs)

@@ -32,3 +32,10 @@ tmp/
 # `make check`/`make build`/`make test`. See tools/versiongen + tools/promptgen.
 Sources/WikiFSCore/GeneratedVersion.swift
 Sources/WikiFSCore/GeneratedPrompts.swift
+
+# swift-mutation-testing (schematized mutation testing — `make mutate`).
+# Result cache + JSON/HTML/Sonar reports; all derived, never committed.
+.swift-mutation-testing-cache/
+mutation-report.json
+mutation-report.html
+sonar-mutation-report.json
