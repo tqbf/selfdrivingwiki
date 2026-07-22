@@ -63,8 +63,8 @@ public enum RSSFeedEpisodeURL {
     /// Nil when the URL has no usable path component.
     static func slug(from url: URL) -> String? {
         let last = url.lastPathComponent
-        guard !last.isEmpty else {
-            // No path component — use the host stem (without www. / TLD).
+        // lastPathComponent can be "/" or "" for root paths — treat both as empty.
+        guard !last.isEmpty, last != "/" else {
             return readableHost(url.host)
         }
         let stem = (last as NSString).deletingPathExtension
