@@ -407,3 +407,82 @@ MarkdownDiff.lineDiff(a,b) → SplitDiff.rows → .elements → SplitDiffView   
   currently nested in the extraction-compare file).
 - `Sources/WikiFS/Reader/WikiReaderView.swift` (rendered preview)
 - All store versioning methods (page + source) and the refs/blobs schema.
+
+---
+
+# Implementation plan (#817)
+
+The sections above (§1–§11) are the **research/investigation** output. This
+section is the **handoff plan** with explicit acceptance criteria, written
+against the plan-review corrections (R1–R9), which supersede any conflicting
+text in §1–§11 or the original directive.
+
+## Plan-review decisions (R1–R9, authoritative)
+
+- **R1 — Restore semantics:** the existing `store.revertPage`
+  (`GRDBWikiStore.swift:4642`) **repoints the `page-content` ref** to the old
+  version and routes through `mutate()` to emit a `ResourceChangeEvent`. It does
+  **NOT** append a new `page_versions` row. That shipped behavior is **correct
+  and preserved** — do NOT change it to append (the "append on revert" model is
+  the *source* side, `revertProcessedMarkdown`; pages use ref-repoint).
+- **R2 — `pageVersionBody` is a READ:** implement with `dbWriter.read`
+  (mirror `processedMarkdownVersion(id:)`), NOT `mutate()`. Reads emit no
+  `ResourceChangeEvent`. No `StoreEmissionExhaustivenessTests` guard exists
+  (verified — only referenced in a comment), so nothing to update.
+- **R3 — Every new path gets named tests** (see test-to-AC map below).
+- **R4 — Pages only.** Sources already have `ExtractionCompareSheet`. Do NOT
+  wire source Compare/View/Restore into the new surface. Noted in the PR body.
+- **R5 — The VersionBrowserView is NEW ~200 LOC**, not thin reuse. Its own
+  version-list sidebar over `PageVersionSummary`, Base/Compare selection,
+  Restore action.
+- **R6 — `ProvenancePanel` is shared (Page + Source).** Restore/Compare are
+  page-specific. Entry to the Versions window is injected as an optional
+  closure from the parent detail view (PageDetailView passes it; SourceDetailView
+  doesn't) so Restore only ever appears for page versions.
+- **R7 — Naming/AppStorage:** do NOT rename `InspectorTab.history` (its rawValue
+  is persisted in `@AppStorage`). Use a **dedicated `WindowGroup`** for the
+  Versions surface (mirrors "Compare Extractions"); the inspector stays as-is
+  plus one optional entry button.
+- **R8 — Historical render:** pass the **LIVE** store to `WikiReaderView`
+  (`WikiReaderView(markdown: body, store: liveStore)`) so wiki/ghost links
+  resolve against current state. The historical version is just the markdown
+  string.
+- **R9 — Plan shape:** this section (ACs + test map) is the handoff plan; §1–§11
+  are cited as research.
+
+## Acceptance criteria + test-to-AC map
+
+| AC | Requirement | Test(s) |
+|----|-------------|---------|
+| **AC.1** | `pageVersionBody(versionID:)` on `GRDBWikiStore` + `WikiStore` protocol: returns the full blob-decoded body for any `page_versions` row by id; `nil` when not found; uses `dbWriter.read` (no mutate, no emit). | `PageVersionTests.pageVersionBodyReadsFullBodyOfHead`, `.pageVersionBodyReturnsNilForUnknownID`, `.pageVersionBodyReadsArbitraryOldVersion` |
+| **AC.2** | `WikiStoreModel.pageVersionBody(for:)` wrapper returns `String?` (swallows errors per the model pattern). | `PageVersionTests.pageVersionBodyModelWrapperReturnsBody` (model-level) |
+| **AC.3** | Restore preserves existing semantics: `WikiStoreModel.revertPage(for:to:)` wraps `store.revertPage` AS-IS — repoints ref, **no new version row** (history length unchanged), body restored, emits `ResourceChangeEvent`. | `PageVersionTests.modelRevertPageRepointsRefAndEmits`, `.modelRevertPageDoesNotAppendVersionRow` |
+| **AC.4** | A dedicated `WindowGroup(for: PageVersionCompareContext.self)` opens a resizable, non-modal window (mirrors `ExtractionCompareContext`). Entry from `PageDetailView`. | `PageVersionCompareContext` Hashable/Codable round-trip; window resolves the correct wiki session (structural, mirrors ExtractionCompareWindow). |
+| **AC.5** | Version list sidebar: page versions newest-first (date + agent badge + current marker), reusing `ProvenancePanel` row styling. Selecting a row loads its body via `pageVersionBody`. | `PageVersionSelectionTests` (pure selection model: default base/compare, current-marker, single-vs-two-pick). |
+| **AC.6** | Rendered pane: `WikiReaderView(markdown: selectedBody, store: liveStore)` shows the historical version read-only (time-travel). Live store passed (R8). | Wiring covered by AC.1 (body read) + AC.5 (selection); structural. |
+| **AC.7** | Diff pane: `SplitDiffView(left: baseBody, right: compareBody)` reuses the existing diff renderer with **zero changes**; base/compare selected via menus. | `PageVersionSelectionTests.diffFeedsPageVersionBodyIntoSplitDiff` (pageVersionBody → SplitDiff rows). |
+| **AC.8** | Restore action: "Restore this version" button + confirmation alert → `WikiStoreModel.revertPage`; list + current marker refresh. | AC.3 covers the model; button wiring structural. |
+| **AC.9** | `ProvenancePanel` gains an optional "Compare Versions…" entry (injected closure); appears for pages only, opens the window. | Closure-injection structural (page passes non-nil, source passes nil → button hidden). |
+| **AC.10** | User-facing label is "Versions" / "Compare Versions"; `InspectorTab.history` enum case unchanged (R7). | Structural (no AppStorage key change). |
+| **AC.11** | `swift build` + full `swift test` green; all store access via `@MainActor WikiStoreModel` + method-atomic `GRDBWikiStore`; no transaction held across I/O. | `swift test` run. |
+
+## Files
+
+**New:**
+- `Sources/WikiFS/Pages/PageVersionCompareSheet.swift` — the `PageVersionCompareContext`,
+  `PageVersionCompareWindow`, `PageVersionCompareSheet` (the ~200-LOC window;
+  mirrors `ExtractionCompareSheet`'s shape, fed by `pageVersionBody`).
+- `Tests/WikiFSTests/PageVersionSelectionTests.swift` — pure selection/diff-wiring logic.
+
+**Edits:**
+- `Sources/WikiFSCore/Store/WikiStore.swift` — add `pageVersionBody(versionID:)` to the protocol.
+- `Sources/WikiFSCore/Store/GRDBWikiStore.swift` — implement `pageVersionBody(versionID:)` (read JOIN).
+- `Sources/WikiFSCore/Store/WikiStoreModel.swift` — add `pageVersionBody(for:)` + `revertPage(for:to:)` wrappers.
+- `Sources/WikiFS/Detail/ProvenancePanel.swift` — optional `onCompareVersions` closure → entry button.
+- `Sources/WikiFS/Detail/DetailInspectorView.swift` — thread the closure through.
+- `Sources/WikiFS/Pages/PageDetailView.swift` — wire the entry button → `openWindow(value:)`.
+- `Sources/WikiFS/Window/WikiFSApp.swift` — register the `WindowGroup`.
+- `Tests/WikiFSTests/PageVersionTests.swift` — extend with AC.1–AC.3 tests.
+
+**Reuse as-is (zero changes):** `MarkdownDiff`/`SplitDiff`/`Diff3`, `SplitDiffView`,
+`WikiReaderView`, all existing store versioning methods, the refs/blobs schema.
