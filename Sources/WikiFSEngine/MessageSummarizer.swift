@@ -125,6 +125,8 @@ public enum MessageSummarizer {
             switch event {
             case .assistantText(let chunk):
                 collected += chunk
+            case .assistantTextDelta(let chunk):
+                collected += chunk
             case .result(let isError, let resultText):
                 if isError {
                     turnError = resultText
