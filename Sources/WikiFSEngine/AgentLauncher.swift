@@ -1951,12 +1951,18 @@ public final class AgentLauncher {
                             // §4.5: apply the executor's stage model with the
                             // planner's RESOLVED model as the baseline.
                             let advertisedIds = await acp.availableModels(for: session).map(\.modelId)
+                            // #834: thread the forked session's config options so
+                            // config-option agents (claude-acp) apply the pinned model
+                            // via session/set_config_option when availableModels is
+                            // empty. forkSession inherits the parent's configOptions.
+                            let forkConfigOptions = await acp.sessionConfigOptions(for: session)
                             await acp.applyModelIfNeeded(
                                 session: session,
                                 selectedModelId: stageExecutorModel,
                                 stage: .executor,
                                 baselineCurrentModelId: stageBaseline,
-                                advertisedModelIds: advertisedIds)
+                                advertisedModelIds: advertisedIds,
+                                configOptions: forkConfigOptions)
                         } else {
                             DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
                             do {
@@ -2301,12 +2307,18 @@ public final class AgentLauncher {
                     // modelsInfo.currentModelId). The advertised model ids come
                     // from the forked session's inherited modelsInfo.
                     let advertisedIds = await acp.availableModels(for: session).map(\.modelId)
+                    // #834: thread the forked session's config options so
+                    // config-option agents (claude-acp) apply the pinned model
+                    // via session/set_config_option when availableModels is empty.
+                    // forkSession inherits the parent's configOptions.
+                    let forkConfigOptions = await acp.sessionConfigOptions(for: session)
                     await acp.applyModelIfNeeded(
                         session: session,
                         selectedModelId: profile.providerHints[HintKey.acpSelectedModelId.rawValue],
                         stage: stage,
                         baselineCurrentModelId: baselineModelId,
-                        advertisedModelIds: advertisedIds)
+                        advertisedModelIds: advertisedIds,
+                        configOptions: forkConfigOptions)
                 } else {
                     DebugLog.agent("runACPIngest[\(phaseName)]: fork unsupported/failed, falling back to fresh start")
                     session = try await backend.start(

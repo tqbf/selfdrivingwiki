@@ -88,6 +88,162 @@ import WikiFSCore
         #expect(decision == .apply(selectedId: "glm-4.7"))
     }
 
+    // MARK: - ACPModelSelectionResolver.resolveConfigOptionModel (#834)
+    //
+    // claude-acp advertises model selection as a "model" config option
+    // (session/set_config_option), NOT via ModelsInfo.availableModels. These
+    // cover the config-option decision path that applyModelIfNeeded tries FIRST
+    // (returning nil → fall through to the setModel resolver above). Pure — no
+    // subprocess. Mirrors the structure of the `resolve` tests above.
+
+    /// Helper: build a "model" select config option with given values + current.
+    private func modelConfigOption(current: String, values: [String]) -> SessionConfigOption {
+        let options = values.map {
+            SessionConfigSelectOption(value: SessionConfigValueId($0), name: $0)
+        }
+        return SessionConfigOption(
+            id: SessionConfigId("model"),
+            name: "Model",
+            kind: .select(SessionConfigSelect(
+                currentValue: SessionConfigValueId(current),
+                options: .ungrouped(options))))
+    }
+
+    /// Helper: a non-model config option (e.g. thought_level) — for the
+    /// "no model option" case.
+    private func thoughtLevelConfigOption() -> SessionConfigOption {
+        let options = ["high", "medium", "low"].map {
+            SessionConfigSelectOption(value: SessionConfigValueId($0), name: $0)
+        }
+        return SessionConfigOption(
+            id: SessionConfigId("thought_level"),
+            name: "Thinking",
+            kind: .select(SessionConfigSelect(
+                currentValue: SessionConfigValueId("medium"),
+                options: .ungrouped(options))))
+    }
+
+    /// Helper: a "model" select identified by CATEGORY (not id) — for the
+    /// forward-compat id-OR-category match heuristic.
+    private func modelConfigOptionByCategory(current: String, values: [String]) -> SessionConfigOption {
+        let options = values.map {
+            SessionConfigSelectOption(value: SessionConfigValueId($0), name: $0)
+        }
+        return SessionConfigOption(
+            id: SessionConfigId("x"),
+            name: "Model",
+            category: "model",
+            kind: .select(SessionConfigSelect(
+                currentValue: SessionConfigValueId(current),
+                options: .ungrouped(options))))
+    }
+
+    @Test func configOptionModel_appliesValidSelection() {
+        // The bug scenario: claude-acp's pinned "haiku" is dropped because
+        // availableModels is empty. The config-option path picks it up.
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "haiku",
+            configOptions: [modelConfigOption(current: "sonnet", values: ["haiku", "sonnet", "opus"])])
+        #expect(decision == .applyViaModelConfigOption(selectedValue: "haiku"))
+    }
+
+    @Test func configOptionModel_alreadyCurrentSkips() {
+        // Selection matches the agent's current model → no-op round-trip.
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "sonnet",
+            configOptions: [modelConfigOption(current: "sonnet", values: ["haiku", "sonnet", "opus"])])
+        #expect(decision == .useAgentDefault)
+    }
+
+    @Test func configOptionModel_staleSelectionFallsBack() {
+        // The user previously selected a model the agent no longer advertises.
+        // Sending it would reproduce the rejection the picker exists to prevent.
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "removed",
+            configOptions: [modelConfigOption(current: "haiku", values: ["haiku", "sonnet"])])
+        #expect(decision == .useAgentDefault)
+    }
+
+    @Test func configOptionModel_noSelectionUsesDefault() {
+        // No user selection → agent default (the select's currentValue).
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: nil,
+            configOptions: [modelConfigOption(current: "sonnet", values: ["haiku", "sonnet"])])
+        #expect(decision == .useAgentDefault)
+    }
+
+    @Test func configOptionModel_emptySelectionUsesDefault() {
+        // Empty selection → agent default (same as nil).
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "",
+            configOptions: [modelConfigOption(current: "sonnet", values: ["haiku", "sonnet"])])
+        #expect(decision == .useAgentDefault)
+    }
+
+    @Test func configOptionModel_noModelOptionReturnsNil() {
+        // The agent advertises config options, but none is "model" → nil (caller
+        // falls through to the setModel path).
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "haiku",
+            configOptions: [thoughtLevelConfigOption()])
+        #expect(decision == nil)
+    }
+
+    @Test func configOptionModel_emptyConfigOptionsReturnsNil() {
+        // No config options at all → nil (older agents → setModel path).
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "haiku",
+            configOptions: [])
+        #expect(decision == nil)
+    }
+
+    @Test func configOptionModel_categoryMatchWorks() {
+        // An agent that identifies the model option by category (not id) — the
+        // id-OR-category heuristic resolves it.
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "haiku",
+            configOptions: [modelConfigOptionByCategory(current: "sonnet", values: ["haiku", "sonnet"])])
+        #expect(decision == .applyViaModelConfigOption(selectedValue: "haiku"))
+    }
+
+    // MARK: - ACPModelSelectionResolver.configOptionValues (helper flatten)
+
+    @Test func configOptionValues_flattensUngrouped() {
+        let options = [
+            SessionConfigSelectOption(value: SessionConfigValueId("haiku"), name: "Haiku"),
+            SessionConfigSelectOption(value: SessionConfigValueId("sonnet"), name: "Sonnet"),
+        ]
+        let values = ACPModelSelectionResolver.configOptionValues(from: .ungrouped(options))
+        #expect(values == ["haiku", "sonnet"])
+    }
+
+    @Test func configOptionValues_flattensGrouped() {
+        let group1 = SessionConfigSelectGroup(
+            group: SessionConfigGroupId("fast"),
+            name: "Fast",
+            options: [SessionConfigSelectOption(value: SessionConfigValueId("haiku"), name: "Haiku")])
+        let group2 = SessionConfigSelectGroup(
+            group: SessionConfigGroupId("smart"),
+            name: "Smart",
+            options: [SessionConfigSelectOption(value: SessionConfigValueId("sonnet"), name: "Sonnet")])
+        let values = ACPModelSelectionResolver.configOptionValues(from: .grouped([group1, group2]))
+        #expect(values == ["haiku", "sonnet"])
+    }
+
+    // MARK: - ACPModelSelectionResolver (setModel path unchanged by #834)
+
+    @Test func setModelPathStillAppliesWhenNoConfigOption() {
+        // Regression guard: when there's no "model" config option, the existing
+        // setModel resolver + decision path is unchanged by #834. A valid
+        // differing selection still resolves to .apply (setModel), NOT to the
+        // new config-option case.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: "glm-4.7",
+            currentModelId: "glm-4-7",
+            advertisedModelIds: ["glm-4-7", "glm-4.7"])
+        #expect(decision == .apply(selectedId: "glm-4.7"))
+    }
+
     // MARK: - CachedModelInfo
 
     @Test func displayLabelUsesFriendlyNameWhenPresent() {
