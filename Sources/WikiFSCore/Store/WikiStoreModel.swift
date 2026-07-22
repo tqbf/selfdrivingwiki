@@ -316,6 +316,18 @@ public final class WikiStoreModel {
     /// `WikiSession` → `SessionManager` → `WikiFSApp`. `nil` means fall back to
     /// the tag-based `HTMLToMarkdown` path (CI, clean dev before `make build`).
     @ObservationIgnored public var htmlMarkdownExtractor: (any HtmlMarkdownExtractor)?
+
+    /// The configured HTML extraction backend (issue #799 PR2). Set at app
+    /// wiring time from `ExtractionConfig.htmlBackend` so the Extract button
+    /// and the "Re-extract with" menu have a default to use when the user
+    /// taps Extract without picking a backend explicitly. `nil` = no default
+    /// chosen (a fresh install, or a config file written before this field
+    /// shipped) — the menu then lists `HtmlExtractionBackend.allCases` so the
+    /// user picks one. Mirrors the injection pattern of
+    /// `htmlMarkdownExtractor` above (the model is deliberately NOT
+    /// config-aware; config is read by `ExtractionCoordinator` in
+    /// `WikiFSEngine`).
+    @ObservationIgnored public var htmlBackend: HtmlExtractionBackend?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
 
@@ -1989,6 +2001,13 @@ public final class WikiStoreModel {
     /// surfaces the producer in the alternatives UI.
     private static let htmlToMarkdownTechnique = "html-to-markdown"
 
+    /// Technique tag stamped on an HTML source's defuddle-extraction version
+    /// (issue #799 PR2: the Extract button / Re-extract menu picks the
+    /// defuddle backend). Mirrors the PDF extraction technique tags so the
+    /// provenance chip surfaces the producer. Matches the technique
+    /// `FormatMaterializer.enrich` returns for a successful defuddle run.
+    private static let defuddleTechnique = "defuddle"
+
     /// Best-effort: if the materialized source is HTML (has an extracted-markdown
     /// sidecar from `FormatMaterializer.dispatch`), run the defuddle extractor to
     /// obtain site-specific markdown + metadata. On any failure, keep the
@@ -3042,6 +3061,97 @@ public final class WikiStoreModel {
             DebugLog.store("WikiStoreModel.reExtractMarkdown recordMarkdownExtraction failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
+    }
+
+    /// Extract markdown from an HTML source's verbatim bytes using the chosen
+    /// backend (issue #799 PR2). Inline — does NOT route through the queue
+    /// engine (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
+    /// `convert(pdfData:)` / `seedPdfMarkdown`; generalizing it is a deferred
+    /// sub-project per the parent plan's "Out of scope" section). Mirrors the
+    /// write path `enrichWithDefuddle` → `appendExtractedMarkdown` uses at
+    /// ingest time: reads source bytes, runs the chosen extractor, writes
+    /// the result through `appendProcessedMarkdown` with the matching
+    /// technique tag.
+    ///
+    /// `appendProcessedMarkdown` always appends a new version — the FIRST
+    /// version becomes HEAD by the default-active rule; subsequent calls
+    /// append coexisting alternatives (no clobber). So the initial Extract
+    /// and a later Re-extract with a different backend both flow through
+    /// this method — provenance is differentiated by the `technique` column
+    /// (`"defuddle"` vs `"html-to-markdown"`) and the version id, surfaced
+    /// in the alternatives UI.
+    ///
+    /// `backend == .defuddle` resolves the injected `htmlMarkdownExtractor`
+    /// (the AppKit-coupled `LocalDefuddleExtractor` in the WikiFS target). On
+    /// any failure (extractor nil, defuddle subprocess missing, empty body),
+    /// the call degrades to `TagBasedHtmlExtractor` (same fallback semantics
+    /// as `FormatMaterializer.enrich` at ingest) rather than silently
+    /// returning nil — so the user always gets a markdown version on Extract.
+    /// `backend == .tagBased` skips the defuddle path entirely.
+    ///
+    /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
+    ///   bytes couldn't be read, the extractor returned empty markdown, or
+    ///   the store write threw.
+    @discardableResult
+    public func extractHtml(
+        for sourceID: PageID,
+        backend: HtmlExtractionBackend
+    ) async -> SourceMarkdownVersion? {
+        guard let data = try? store.sourceContent(id: sourceID) else {
+            DebugLog.store("WikiStoreModel.extractHtml: source bytes unreadable (source=\(sourceID.rawValue))")
+            return nil
+        }
+        let html = String(data: data, encoding: .utf8)
+            ?? String(decoding: data, as: UTF8.self)
+        guard !html.isEmpty else {
+            DebugLog.store("WikiStoreModel.extractHtml: source HTML is empty (source=\(sourceID.rawValue))")
+            return nil
+        }
+        let (markdown, technique) = await Self.extractHtml(
+            html: html, backend: backend, using: htmlMarkdownExtractor)
+        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DebugLog.store("WikiStoreModel.extractHtml: extractor returned empty markdown (source=\(sourceID.rawValue), backend=\(backend.rawValue))")
+            return nil
+        }
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: markdown,
+                origin: .extraction, note: "extract via \(backend.displayName)",
+                technique: technique)
+        } catch {
+            // #475/#492: never silently swallow — extraction output is
+            // user-triggered (a button tap or Re-extract menu click), so a
+            // swallowed throw would silently lose the result with no trace.
+            DebugLog.store("WikiStoreModel.extractHtml appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Pure dispatch from a `HtmlExtractionBackend` value to a concrete
+    /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
+    /// stamp the right technique on the processed-markdown version row
+    /// (the technique is how the alternatives UI surfaces the producer).
+    /// `defuddle` prefers the injected `htmlMarkdownExtractor`; on any
+    /// failure (extractor nil OR returns nil OR returns empty), falls back
+    /// to `TagBasedHtmlExtractor` (mirrors `FormatMaterializer.enrich`'s
+    /// degradation). `tagBased` skips the defuddle path entirely.
+    private static func extractHtml(
+        html: String,
+        backend: HtmlExtractionBackend,
+        using injectedExtractor: (any HtmlMarkdownExtractor)?
+    ) async -> (markdown: String, technique: String) {
+        let tagBased = TagBasedHtmlExtractor()
+        if backend == .defuddle,
+           let injected = injectedExtractor,
+           let result = await injected.extract(html: html),
+           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (result.markdown, Self.defuddleTechnique)
+        }
+        if let result = await tagBased.extract(html: html),
+           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (result.markdown, Self.htmlToMarkdownTechnique)
+        }
+        return ("", Self.htmlToMarkdownTechnique)
     }
 
     /// Nominate an existing processed-markdown row as the active HEAD for a

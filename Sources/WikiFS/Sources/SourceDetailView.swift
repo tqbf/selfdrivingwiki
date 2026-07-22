@@ -292,12 +292,21 @@ struct SourceDetailView: View {
 
     private var showTabs: Bool { !availableTabs.isEmpty }
 
-    /// A PDF with no markdown derivation yet — the gate for the prominent
-    /// "Extract" call-to-action. Also the exclusivity guard for the source's
-    /// single "act on this source's content" affordance: an unextracted PDF
-    /// shows Extract, so Refresh is suppressed until it has a derivation
-    /// (one affordance per source).
-    private var needsExtraction: Bool { isPDF && !hasMarkdown }
+    /// `true` when this source's content type has extraction backends (issue
+    /// #799 PR2) — the gate for the Extract button and the Re-extract menu.
+    /// Generalized from `isPDF` so an un-extracted HTML source also shows the
+    /// Extract call-to-action. A source is extractable iff it's a PDF (backed
+    /// by `ExtractionBackend.allCases`) or HTML (backed by
+    /// `HtmlExtractionBackend.allCases`). Text/binary/byteless sources skip
+    /// extraction entirely.
+    private var isExtractable: Bool { isPDF || isHTMLSource }
+
+    /// An extractable source with no markdown derivation yet — the gate for
+    /// the prominent "Extract" call-to-action. Also the exclusivity guard for
+    /// the source's single "act on this source's content" affordance: an
+    /// unextracted PDF or HTML source shows Extract, so Refresh is suppressed
+    /// until it has a derivation (one affordance per source).
+    private var needsExtraction: Bool { isExtractable && !hasMarkdown }
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
@@ -660,18 +669,27 @@ struct SourceDetailView: View {
                 // then Ingest, then Extract Markdown when no derivation exists
                 // yet. Above the utility row so the wiki goal reads first.
                 HStack(spacing: 10) {
-                    if isPDF, hasMarkdown, let head = headVersion {
+                    if isExtractable, hasMarkdown, let head = headVersion {
                         extractionProvenanceChip(head: head)
                     }
                     if needsExtraction {
                         // No derivation yet → Extract is the call-to-action:
                         // prominent and leftmost, with Ingest stepped down to
                         // secondary until there's markdown worth ingesting.
+                        // Issue #799 PR2: HTML sources dispatch to the inline
+                        // `runHtmlExtraction` path (queue engine is PDF-coupled
+                        // via `ExtractionResolution.pdfData` /
+                        // `convert(pdfData:)` / `seedPdfMarkdown`); PDF sources
+                        // go through the queue as before.
                         Button(isExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue)")
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(isHTMLSource)")
                             Task {
-                                await runExtraction()
+                                if isHTMLSource {
+                                    await runHtmlExtraction()
+                                } else {
+                                    await runExtraction()
+                                }
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -684,10 +702,10 @@ struct SourceDetailView: View {
                     }
                     ingestButton
                     // The source's content affordance is one-per-source: an
-                    // unextracted PDF shows Extract (above) to gain a readable
-                    // derivation, so Refresh is suppressed until it has one.
-                    // Every other refreshable (live) source offers Refresh to
-                    // re-fetch and append a new version.
+                    // unextracted PDF or HTML source shows Extract (above) to
+                    // gain a readable derivation, so Refresh is suppressed
+                    // until it has one. Every other refreshable (live) source
+                    // offers Refresh to re-fetch and append a new version.
                     if isRefreshable, !needsExtraction {
                         Button("Refresh", systemImage: "arrow.clockwise") {
                             DebugLog.extraction("SourceDetailView: Refresh tapped — id=\(file.id.rawValue)")
@@ -1305,6 +1323,46 @@ struct SourceDetailView: View {
         }
     }
 
+    /// HTML extraction trigger (issue #799 PR2). Inline — does NOT route
+    /// through the queue engine (which is PDF-coupled via
+    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
+    /// `seedPdfMarkdown` — generalizing the queue is a deferred sub-project
+    /// per the parent plan's "Out of scope" section). Dispatches to
+    /// `WikiStoreModel.extractHtml(for:backend:)`, which reads the source's
+    /// HTML bytes, runs the chosen extractor (defuddle or
+    /// `TagBasedHtmlExtractor`), and writes the result via
+    /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
+    /// Uses the configured `store.htmlBackend` if set; otherwise defaults to
+    /// `.defuddle` (which degrades to tag-based when the binary is missing).
+    private func runHtmlExtraction() async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+        let backend = store.htmlBackend ?? .defuddle
+        if let head = await store.extractHtml(for: file.id, backend: backend) {
+            headVersion = head
+        }
+    }
+
+    /// HTML re-extraction trigger (issue #799 PR2). Called by the
+    /// "Re-extract with" menu's HTML branch when the user picks a backend
+    /// from `HtmlExtractionBackend.allCases`. Mirrors `runReExtraction(with:)`
+    /// but routes through the inline `extractHtml` path (same module-level
+    /// decision as `runHtmlExtraction`). `appendProcessedMarkdown` always
+    /// appends — first version is HEAD by the default-active rule, later
+    /// versions ride as coexisting alternatives (no clobber), so re-extract
+    /// naturally creates an alternative the provenance chip surfaces.
+    private func runHtmlReExtraction(with backend: HtmlExtractionBackend) async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+        if let head = await store.extractHtml(for: file.id, backend: backend) {
+            headVersion = head
+        }
+    }
+
     // MARK: - Extraction alternatives (Phase 2)
 
     /// The provenance line rendered as the single home for extraction
@@ -1348,14 +1406,35 @@ struct SourceDetailView: View {
                       : "Re-extract with another backend to enable compare")
             }
             Section("Re-extract with") {
-                ForEach(ExtractionBackend.allCases, id: \.self) { backend in
-                    Button(backend.displayName) {
-                        Task {
-                            await runReExtraction(with: backend)
+                // Content-type-aware: HTML sources list `HtmlExtractionBackend`
+                // (defuddle, tag-based), PDF sources list `ExtractionBackend`
+                // (local pdf2md, ACP, Anthropic, Gemini, Docling Serve). A source
+                // is HTML xor PDF — `isHTMLSource` excludes the PDF MIMEs and
+                // vice versa — so the two branches are mutually exclusive. The
+                // HTML branch routes through the inline `extractHtml` path
+                // (issue #799 PR2 — the queue engine is PDF-coupled;
+                // generalizing it is a deferred sub-project per the parent
+                // plan's "Out of scope" section).
+                if isHTMLSource {
+                    ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runHtmlReExtraction(with: backend)
+                            }
                         }
+                        .disabled(isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
                     }
-                    .disabled(isThisFileExtracting
-                              || tracker.isSlotBusyForOtherSource(file.id))
+                } else {
+                    ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runReExtraction(with: backend)
+                            }
+                        }
+                        .disabled(isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
                 }
             }
         } label: {

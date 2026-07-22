@@ -222,6 +222,12 @@ struct WikiFSApp: App {
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
             htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
+            // Issue #799 PR2: resolve the configured HTML extraction backend
+            // from `extraction-config.json` (PR1 added the field + Settings
+            // picker). The resolver is called once per session; `nil` (no
+            // default chosen — fresh install or legacy config) means the
+            // Extract button prompts the user to pick a backend.
+            htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 // Interactive chat (Ask/Edit) usage delta → daily total so the
                 // menu bar "Today: X tokens" includes chat, not just queue runs.

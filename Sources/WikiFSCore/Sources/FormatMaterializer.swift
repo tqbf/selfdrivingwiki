@@ -60,45 +60,13 @@ public struct FormatPlan: Sendable, Equatable {
 
 // MARK: - HTML extraction protocol
 
-/// The markdown + metadata an HTML extractor (defuddle by default) produces.
-/// Carried alongside the original HTML bytes (issue #599 two-layer model) and
-/// written as a `.extraction`-origin processed-markdown version.
-public struct HtmlExtractionResult: Sendable {
-    public let markdown: String
-    public let title: String?
-    public let author: String?
-    public let description: String?
-    public let published: String?
-    public let wordCount: Int?
-
-    public init(
-        markdown: String,
-        title: String? = nil,
-        author: String? = nil,
-        description: String? = nil,
-        published: String? = nil,
-        wordCount: Int? = nil
-    ) {
-        self.markdown = markdown
-        self.title = title
-        self.author = author
-        self.description = description
-        self.published = published
-        self.wordCount = wordCount
-    }
-}
-
-/// Injectable HTML→Markdown extractor (defuddle by default). The protocol lives
-/// in WikiFSCore so `WikiStoreModel` can call it from the ingest path; the concrete
-/// `DefuddleExtractionService` (which needs AppKit for process lifecycle) lives in
-/// the WikiFS target and is injected via a factory closure at app wiring time
-/// — mirroring the `MarkdownExtractor` / `LocalPdf2MarkdownExtractor` pattern.
-public protocol HtmlMarkdownExtractor: Sendable {
-    /// Extract article markdown + metadata from HTML. Best-effort: returns nil
-    /// on any failure (binary missing, SPA/empty body, bad JSON) so the caller
-    /// falls back to tag-based `HTMLToMarkdown`.
-    func extract(html: String) async -> HtmlExtractionResult?
-}
+// `HtmlMarkdownExtractor` protocol + `HtmlExtractionResult` value type moved to
+// `Sources/WikiFSMarkdown/HtmlMarkdownExtractor.swift` (issue #799 PR2) so the
+// always-available `TagBasedHtmlExtractor` conformer in `HTMLToMarkdown.swift`
+// can see the protocol without a circular module dependency. `WikiFSCore`
+// re-exports `WikiFSMarkdown` (`@_exported import` in `ModuleExports.swift`),
+// so all existing callers in this module + downstream continue to see the
+// types unchanged.
 
 // MARK: - Dispatcher
 
