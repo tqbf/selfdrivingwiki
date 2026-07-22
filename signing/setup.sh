@@ -3,10 +3,12 @@
 # signing/setup.sh — provision this machine to build + codesign Self Driving Wiki
 # against YOUR Apple Developer account, then write signing/local.config.
 #
-#   ./signing/setup.sh [--prefix com.yourname] [--app-group group.com.yourname.wiki]
+#   ./signing/setup.sh [--prefix com.yourname] [--app-group group.com.yourname]
 #
 # Automates (via the `asc` CLI + keychain) everything that the App Store Connect
 # API allows: discovering your team + dev cert (minting one if absent),
+# minting a Developer ID Application cert for distribution (best-effort — falls
+# back to printed manual-portal instructions if the account isn't authorized),
 # registering this Mac, creating the two bundle ids + their App Groups
 # capability, and creating + downloading both development provisioning profiles.
 #
@@ -103,6 +105,83 @@ CERT_ID="$(asc certificates list --output json | jget "next((c['id'] for c in d[
 [ -n "${CERT_ID}" ] || die "no DEVELOPMENT certificate found in your account."
 
 # ---------------------------------------------------------------------------
+# 2b. Developer ID Application certificate (for distribution / notarization)
+# ---------------------------------------------------------------------------
+# Separate from the Apple Development cert above. The Development cert is
+# local-debug only — Gatekeeper rejects it on other machines and notarytool
+# rejects non-Developer-ID signatures. `make dist` / `make release` /
+# `make notarize` sign with this cert instead (see plans/fix-signing-cert.md).
+#
+# This is best-effort: minting a Developer ID cert via the App Store Connect
+# API requires the account to be authorized for Developer ID (App Managers /
+# Admins). If the API mint fails, the script prints manual-portal instructions
+# and continues — the dev cert above is enough for `make build` / `make run`,
+# and DIST_IDENTITY can be filled in by hand later (re-run setup.sh after
+# importing the cert, or edit signing/local.config directly).
+DIST_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep 'Developer ID Application:' | head -1 | sed -E 's/^[ ]*[0-9]+\) [0-9A-F]+ "(.*)"$/\1/')" || true
+if [ -n "${DIST_IDENTITY}" ]; then
+  ok "found Developer ID Application identity in keychain: ${DIST_IDENTITY}"
+else
+  say "no Developer ID Application identity in keychain — attempting to mint one via asc"
+  DISTDIR="${HOME}/.apple_dev/wikifs-cert"; mkdir -p "${DISTDIR}"
+  # API cert type for Developer ID Application (direct-download distribution).
+  # NOT "DISTRIBUTION" (that mints an Apple Distribution cert for App Store
+  # submission, which is the wrong cert type and won't satisfy notarytool /
+  # Gatekeeper for direct distribution). See plans/fix-signing-cert.md.
+  if asc certificates create --certificate-type DEVELOPER_ID_APPLICATION --generate-csr \
+      --common-name "Self Driving Wiki" \
+      --key-out "${DISTDIR}/dist.key" --csr-out "${DISTDIR}/dist.csr" \
+      --output json | tee "${DISTDIR}/dist-create.json" >/dev/null 2>&1 \
+      && python3 -c "import json,base64; d=json.load(open('${DISTDIR}/dist-create.json')); open('${DISTDIR}/dist.cer','wb').write(base64.b64decode(d['data']['attributes']['certificateContent']))" 2>/dev/null; then
+    openssl x509 -inform DER -in "${DISTDIR}/dist.cer" -out "${DISTDIR}/dist.pem"
+    # -legacy + a real password: OpenSSL 3.x default p12s fail Apple's MAC
+    # check, and empty-password p12s fail too (same gotcha as the dev cert).
+    openssl pkcs12 -export -legacy -inkey "${DISTDIR}/dist.key" -in "${DISTDIR}/dist.pem" \
+      -out "${DISTDIR}/dist.p12" -passout pass:wikifs -name "Developer ID Application (wikifs)"
+    # Developer ID Application certs chain to the "Developer ID Certification
+    # Authority" (G2, or G1 for older ones). Install both intermediates so
+    # the identity validates in the keychain. (The Makefile `sign` target also
+    # checks for this intermediate and points you here if it's missing.)
+    curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDCA.cer -o "${DISTDIR}/devidca.cer" 2>/dev/null || true
+    curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "${DISTDIR}/devidg2ca.cer" 2>/dev/null || true
+    security import "${DISTDIR}/devidca.cer" -k "${HOME}/Library/Keychains/login.keychain-db" 2>/dev/null || true
+    security import "${DISTDIR}/devidg2ca.cer" -k "${HOME}/Library/Keychains/login.keychain-db" 2>/dev/null || true
+    security import "${DISTDIR}/dist.p12" -k "${HOME}/Library/Keychains/login.keychain-db" \
+      -P wikifs -T /usr/bin/codesign -T /usr/bin/security
+    DIST_IDENTITY="$(security find-identity -v -p codesigning | grep 'Developer ID Application:' | head -1 | sed -E 's/^[ ]*[0-9]+\) [0-9A-F]+ "(.*)"$/\1/')" || true
+    if [ -n "${DIST_IDENTITY}" ]; then
+      ok "minted + imported: ${DIST_IDENTITY}"
+    else
+      warn "cert minted but identity not found in keychain (missing Developer ID intermediate? see Makefile 'sign' target)"
+    fi
+  else
+    warn "could not mint Developer ID Application cert via API (account may not be authorized for Developer ID)."
+    cat <<MANUAL_DIST
+
+  ┌─ MANUAL STEP (Developer ID Application cert) ───────────────────────────┐
+  │ Issue a Developer ID Application certificate in the portal:             │
+  │   https://developer.apple.com/account/resources/certificates/list       │
+  │   1. + → Developer ID Application → upload a CSR (or generate keys      │
+  │      here if you don't have one).                                       │
+  │   2. Download the .cer.                                                │
+  │   3. Import to the login keychain:                                     │
+  │        security import <dist.cer> -k ~/Library/Keychains/login.keychain-db │
+  │      Plus the Developer ID G2 intermediate (so the cert validates):    │
+  │        curl https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o devidg2.cer │
+  │        security import devidg2.cer -k ~/Library/Keychains/login.keychain-db │
+  │   4. Set DIST_IDENTITY in signing/local.config (copy the quoted name   │
+  │      from: security find-identity -v -p codesigning | grep 'Developer  │
+  │      ID Application:'), or re-run this script.                          │
+  │                                                                        │
+  │ Local `make build` / `make run` don't need this — only `make dist` /   │
+  │ `make notarize` do. See plans/fix-signing-cert.md.                     │
+  └────────────────────────────────────────────────────────────────────────┘
+MANUAL_DIST
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Register this Mac (Provisioning UDID — NOT the Hardware UUID)
 # ---------------------------------------------------------------------------
 UDID="$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Provisioning UDID/{print $2}')"
@@ -185,6 +264,7 @@ cat > "${CONFIG_OUT}" <<CFG
 # signing/local.config — generated by signing/setup.sh. Safe to hand-edit.
 TEAM_ID="${TEAM_ID}"
 DEV_IDENTITY="${DEV_IDENTITY}"
+DIST_IDENTITY="${DIST_IDENTITY}"
 BUNDLE_ID="${BUNDLE_ID}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID}"
 APP_GROUP="${APP_GROUP}"

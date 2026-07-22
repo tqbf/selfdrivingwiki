@@ -77,13 +77,26 @@ DIST_DIR      := dist
 NOTARY_ZIP    := $(DIST_DIR)/$(APP_NAME)-$(VERSION)-notary.zip
 RELEASE_ZIP   := $(DIST_DIR)/$(APP_NAME)-$(VERSION)-macos.zip
 
-# Dev signing identity (used by ./build.sh). Falls back to ad-hoc ("-") if
-# the named identity is missing — fine for `make run` on your own machine.
+# Dev signing identity (used by ./build.sh for `make build`/`make run`). Falls
+# back to ad-hoc ("-") if the named identity is missing — fine for `make run`
+# on your own machine.
 DEV_IDENTITY  ?= $(or $(call cfg,DEV_IDENTITY),Apple Development: Thomas Ptacek (7F2QE7P59D))
 
+# Distribution signing identity (Developer ID Application). Used by `make
+# release` / `make dist` / `make notarize` (#746): build.sh signs every nested
+# component (app, appex, helpers) with this inside-out, then `make sign` re-signs
+# the outer app with CERT_NAME + hardened runtime + timestamp. Falls back to
+# ad-hoc ("-") in build.sh if unset/missing — but `make sign` will then fail
+# loudly (CERT_NAME empty or not in keychain), so a notarized release cannot
+# silently ship with the wrong cert. Leave empty until you've issued a Developer
+# ID Application cert (see signing/local.config.example + plans/fix-signing-cert.md).
+DIST_IDENTITY ?= $(or $(call cfg,DIST_IDENTITY),)
+
 # Distribution signing. Developer ID + hardened runtime + notarization.
+# CERT_NAME (used by `make sign`) resolves from DIST_IDENTITY; a hand-set
+# CERT_NAME in local.config still wins (backwards compat).
 TEAM_ID       ?= $(or $(call cfg,TEAM_ID),KK7E9G89GW)
-CERT_NAME     ?= $(or $(call cfg,CERT_NAME),Developer ID Application: Thomas Ptacek ($(TEAM_ID)))
+CERT_NAME     ?= $(or $(call cfg,CERT_NAME),$(DIST_IDENTITY),Developer ID Application: Thomas Ptacek ($(TEAM_ID)))
 
 # Notarization credentials profile name. Populate once with
 # `make notary-setup` (interactive; never puts the password on the cmdline).
@@ -202,8 +215,14 @@ icon: $(APP_ICON)
 build: deps bun-check $(APP_ICON) $(GENERATED_PROMPTS) version
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
+# Release signs with DIST_IDENTITY (Developer ID Application) so every nested
+# component (app, appex, helpers) carries the distribution cert inside-out
+# (#746). `make sign` then re-signs the outer app with the same identity +
+# hardened runtime + timestamp for notarization. The old code passed
+# DEV_IDENTITY here, which signed release builds with the Apple Development
+# cert → notarytool rejected it and Gatekeeper rejected it on other machines.
 release: deps bun-check $(APP_ICON) $(GENERATED_PROMPTS) version
-	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
+	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
 check: deps $(GENERATED_PROMPTS) version
