@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 import ACPModel
@@ -247,3 +248,4 @@ import WikiFSCore
         })
     }
 }
+#endif // os(macOS)

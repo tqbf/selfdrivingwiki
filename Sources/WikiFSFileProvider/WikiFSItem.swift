@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 import UniformTypeIdentifiers
 
@@ -53,3 +54,5 @@ final class WikiFSItem: NSObject, NSFileProviderItem {
                                   metadataVersion: node.metadataVersion)
     }
 }
+#endif  // os(macOS)
+

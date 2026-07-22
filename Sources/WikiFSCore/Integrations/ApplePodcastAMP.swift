@@ -1,5 +1,8 @@
 #if PODCAST_TRANSCRIPTS  // Apple Podcasts transcript feature; off for WIKIFS_APP_STORE=1 builds.
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The AMP transcript-metadata request: episode ID + bearer token → the direct,
 /// access-key'd TTML URL. The HTTP round-trip is behind an injected

@@ -46,15 +46,31 @@ let package = Package(
         // SQLite (same as SQLiteWikiStore) — they coexist on different database
         // files with no conflict.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
+        // swift-crypto — Apple's Swift Crypto package. On macOS, `CryptoKit`
+        // (system framework) provides SHA256 etc. On Linux, this package
+        // provides the identical API under the `Crypto` module. Already a
+        // transitive dependency via GRDB; declared directly so WikiFSCore can
+        // depend on the `Crypto` product on Linux (#754, #780).
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         // tantivy.swift — Rust Tantivy full-text search via UniFFI bindings + an
         // @TantivyDocument macro. Phase 0 build spike (plans/tantivy-search-sidecar.md):
         // verify the pre-built XCFramework (libtantivy-rs.xcframework) resolves under
         // bare `swift build` (no Xcode) and links for aarch64-apple-darwin. Ships a
         // macOS arm64 slice; no x86_64 (acceptable — MLX already requires Apple Silicon).
         // NOT wired into the search pipeline yet — spike only.
-        .package(url: "https://github.com/botisan-ai/tantivy.swift.git", from: "0.3.4"),
+        .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
+        // System SQLite3 module for Linux. On macOS, `import SQLite3` resolves
+        // to the SDK's built-in module. On Linux, this system module wraps
+        // libsqlite3-dev's <sqlite3.h> so `import SQLite3` works identically.
+        // WikiFSCore depends on it conditionally (macOS-only — on macOS the
+        // SDK module is used directly).
+        .systemLibrary(
+            name: "CSQLite",
+            path: "Sources/CSQLite",
+            pkgConfig: "sqlite3"
+        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -124,6 +140,14 @@ let package = Package(
                 "WikiFSMarkdown",
                 "WikiFSSearch",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // On Linux, `import SQLite3` needs this system module wrapper.
+                // On macOS, the SDK provides SQLite3 directly.
+                .target(name: "CSQLite", condition: .when(platforms: [.linux])),
+                // On macOS, `CryptoKit` (system framework) provides SHA256.
+                // On Linux, `swift-crypto` (transitive via GRDB) provides the
+                // identical API under the `Crypto` module (#754, #780).
+                .product(name: "Crypto", package: "swift-crypto",
+                         condition: .when(platforms: [.linux])),
             ],
             path: "Sources/WikiFSCore",
             swiftSettings: strictSwiftSettings,
@@ -152,7 +176,12 @@ let package = Package(
             dependencies: [
                 "WikiFSCore",
                 // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
-                .product(name: "ACP", package: "swift-acp"),
+                // The `ACP` product is macOS-only: it uses ACPProcessManager and os.log.
+                // Guarded with #if os(macOS) in source so the portable logic in
+                // WikiFSEngine (queue engine, protocols, ACPModel-only files) compiles
+                // on Linux (#754, #780). `ACPModel` (pure model types) is portable.
+                .product(name: "ACP", package: "swift-acp",
+                         condition: .when(platforms: [.macOS])),
                 .product(name: "ACPModel", package: "swift-acp"),
             ],
             path: "Sources/WikiFSEngine",
@@ -162,7 +191,8 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
-                "WikiFSEngine",
+                // WikiFS (the app) is macOS-only — links WebKit, MLX, etc.
+                .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 "WikiFSMLX",
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
@@ -242,7 +272,20 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+            dependencies: ["WikiFSCore", "WikiCtlCore",
+                           // WikiFSEngine is macOS-only at build time because it
+                           // depends on the `ACP` product (macOS-only). On Linux
+                           // the test target still builds — the ACP-backed tests
+                           // are #if os(macOS)-guarded (#754, #780).
+                           .target(name: "WikiFSEngine",
+                                   condition: .when(platforms: [.macOS])),
+                           // On Linux, several test files do `import SQLite3`
+                           // to call sqlite3_* directly. The SDK's Swift module
+                           // map isn't auto-available there — link the CSQLite
+                           // system-module wrapper, same as WikiFSCore does
+                           // (#754, #780).
+                           .target(name: "CSQLite",
+                                   condition: .when(platforms: [.linux])),
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
             swiftSettings: strictSwiftSettings
@@ -254,7 +297,8 @@ let package = Package(
         .testTarget(
             name: "WikiFSAppTests",
             dependencies: [
-                "WikiFSCore", "WikiCtlCore", "WikiFSEngine",
+                "WikiFSCore", "WikiCtlCore",
+                .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSFileProvider", condition: .when(platforms: [.macOS])),
@@ -268,6 +312,10 @@ let package = Package(
         ),
         // The File Provider extension binary. build.sh repackages this into a
         // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
+        //
+        // Declared unconditionally in targets[]; the fileProviderTargetExtension
+        // array below holds the macOS-only flag set. The .filter { } clause at
+        // the end drops it from the manifest on Linux.
         .executableTarget(
             name: "WikiFSFileProvider",
             dependencies: ["WikiFSCore"],
@@ -285,8 +333,41 @@ let package = Package(
             ]
         ),
     ].filter {
-        // Drop the private-API podcast helper for App Store builds (WIKIFS_APP_STORE=1);
-        // the feature is also #if'd out of the Swift sources, so nothing references it.
-        podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
+        // Drop macOS-only executables / targets on Linux — SwiftPM builds every
+        // target in the package during `swift test`, not just test-target deps.
+        // These targets either #include Obj-C frameworks, use launchd / NSXPC /
+        // AppKit / SwiftUI APIs unavailable on Linux, or pull in CGraphics-only
+        // C++ deps (Cmlx → cublasLt.h CUDA backend, missing on Linux runners).
+        // macOS is unaffected; the existing WIKIFS_APP_STORE=1 route still
+        // works as before (#754, #780).
+        //
+        // Filtered:
+        // - podcast-token-helper: Obj-C executable, needs Foundation.h +
+        //   AppleMediaServices private framework. Not a dep of WikiFSAppTests,
+        //   so filtering it out of the manifest is safe.
+        // - wikictl: macOS CLI client; calls WikiDaemonConnection (guarded
+        //   #if os(macOS)) and DarwinNotifier.postChange (also guarded).
+        //   Not a dep of WikiFSAppTests, so filtering is safe.
+        // - WikiFS: the app executable. Imports AppKit/SwiftUI unconditionally;
+        //   links WikiFSMLX → mlx-swift-lm → mlx-swift → Cmlx, which tries to
+        //   compile its CUDA backend on Linux (cublasLt.h not found).
+        // - WikiFSMLX: links MLXEmbedders (mlx-swift-lm). Same CUDA build issue.
+        // - WikiFSAppTests: empty on Linux (all source #if os(macOS)-guarded)
+        //   but pulls WikiFSMLX via a conditional dep — SwiftPM still resolves
+        //   the package, and `swift test` builds the Cmlx dep transitively.
+        // - WikiFSFileProvider: handled differently (sources #if os(macOS)-
+        //   guarded; target stays in manifest so WikiFSAppTests' dep name
+        //   resolves). See comment on its declaration above.
+        //
+        // NOTE: wikid is intentionally NOT filtered — it has a Linux
+        // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
+        #if os(Linux)
+        if $0.name == "podcast-token-helper" { return false }
+        if $0.name == "wikictl" { return false }
+        if $0.name == "WikiFS" { return false }
+        if $0.name == "WikiFSMLX" { return false }
+        if $0.name == "WikiFSAppTests" { return false }
+        #endif
+        return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"
     }
 )

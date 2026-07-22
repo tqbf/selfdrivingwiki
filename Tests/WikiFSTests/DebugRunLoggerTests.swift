@@ -1,3 +1,4 @@
+#if os(macOS)
 import XCTest
 import Foundation
 import ACPModel
@@ -155,3 +156,4 @@ final class DebugRunLoggerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url2.path))
     }
 }
+#endif // os(macOS)

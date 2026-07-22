@@ -1,7 +1,10 @@
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 import Testing
-import CryptoKit
 @testable import WikiFSCore
 
 /// Phase 3a tests: provider materialization + real provenance persistence.

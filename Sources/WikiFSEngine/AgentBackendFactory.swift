@@ -32,10 +32,17 @@ public enum AgentBackendFactory {
         budget: Duration? = nil,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout
     ) -> AgentBackend {
+        #if os(macOS)
         ACPBackend(
             permissionPolicy: policy,
             budget: budget,
             turnCeilingTimeout: turnCeilingTimeout)
+        #else
+        // Linux: ACPBackend is unavailable (the `ACP` product is macOS-only).
+        // This factory method is only called from macOS code paths (the app
+        // and its tests). On Linux the queue tests use mock backends.
+        fatalError("AgentBackendFactory.makeBackend requires the ACP product (macOS-only)")
+        #endif
     }
 
     /// Build the `providerHints` for an ACP provider from its PATH-resolved

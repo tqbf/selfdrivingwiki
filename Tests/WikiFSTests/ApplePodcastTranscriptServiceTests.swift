@@ -1,5 +1,8 @@
 #if PODCAST_TRANSCRIPTS  // Feature off for WIKIFS_APP_STORE=1 builds.
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import WikiFSCore
 

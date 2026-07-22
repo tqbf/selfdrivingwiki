@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 import WikiFSEngine
@@ -133,3 +134,4 @@ import WikiFSEngine
         #expect(launcher.resolvePermissionMode(.lint) == .bypass)
     }
 }
+#endif // os(macOS)

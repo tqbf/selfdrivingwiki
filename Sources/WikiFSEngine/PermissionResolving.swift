@@ -37,4 +37,6 @@ protocol PermissionResolving: AgentBackend {
 // `ACPBackend` already implements all three methods; this extension just
 // declares protocol membership. Kept here (not in ACPBackend.swift) so the
 // capability seam is discoverable in one place alongside the protocol.
+#if os(macOS)
 extension ACPBackend: PermissionResolving {}
+#endif

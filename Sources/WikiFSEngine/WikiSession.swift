@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import WikiFSCore
@@ -375,3 +376,4 @@ public final class WikiSession {
     ) async -> [TantivyShadowSearchResult]? { nil }
     #endif
 }
+#endif

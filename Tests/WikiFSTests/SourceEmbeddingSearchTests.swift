@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 import Testing
 @testable import WikiCtlCore
 @testable import WikiFSCore

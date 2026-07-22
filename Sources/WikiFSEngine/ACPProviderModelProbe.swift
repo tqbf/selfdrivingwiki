@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import ACPModel
 import ACP
@@ -469,3 +470,4 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
         }
     }
 }
+#endif

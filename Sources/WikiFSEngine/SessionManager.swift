@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import WikiFSCore
@@ -184,3 +185,4 @@ public final class SessionManager {
         pendingWikiLinks.removeValue(forKey: wikiID)
     }
 }
+#endif

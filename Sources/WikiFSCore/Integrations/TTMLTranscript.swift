@@ -1,5 +1,12 @@
 #if PODCAST_TRANSCRIPTS  // Apple Podcasts transcript feature; off for WIKIFS_APP_STORE=1 builds.
 import Foundation
+// On Linux, `XMLParser` and `XMLParserDelegate` live in the `FoundationXML`
+// module (split out from Foundation in Swift CoreLibs). On macOS, Foundation
+// re-exports them directly. `canImport` lets us conditionally pull in
+// FoundationXML on Linux without affecting the macOS build (#754, #780).
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Parses Apple's podcast transcript TTML (timed-text XML) into cues and renders
 /// plain text — PURE (`XMLParser` over in-memory bytes, no network), so it is

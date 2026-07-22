@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 /// Phase 4 — the pure + async website-snapshot extraction layer.
 ///
@@ -126,10 +131,12 @@ public enum WebsiteSnapshotExtractor {
             return mime
         }
         let urlExt = (url.lastPathComponent as NSString).pathExtension.lowercased()
+        #if canImport(UniformTypeIdentifiers)
         if !urlExt.isEmpty,
            let mime = UTType(filenameExtension: urlExt)?.preferredMIMEType {
             return mime
         }
+        #endif
         return MimeType.octetStream
     }
 

@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 import Foundation
 import WikiFSCore
@@ -1780,3 +1781,5 @@ struct ProjectedNode {
                       ingestedExt: ingestedExt, mimeType: mimeType)
     }
 }
+#endif  // os(macOS)
+

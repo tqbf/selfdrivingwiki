@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Best-effort provider display-title fetcher for **byteless** media-embed
 /// sources (YouTube/Vimeo/Spotify/SoundCloud). Uses each provider's public

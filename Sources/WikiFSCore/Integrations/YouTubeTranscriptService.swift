@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The finished transcript for a YouTube video: video ID, markdown text, and a
 /// suggested source filename. Mirrors `PodcastTranscript`.

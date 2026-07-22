@@ -65,6 +65,67 @@ jobs:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
         run: xcrun swift test --parallel --filter WikiFSCoreTests --skip "$SKIP"
 
+  # Linux Swift CI (#754) — builds and tests the portable target
+  # (WikiFSCoreTests) on ubuntu-latest. Validates the macOS/Linux
+  # portability split: catches unguarded macOS-only imports, missing
+  # `#if os(macOS)` / `#if canImport(...)` guards, and Linux-only build
+  # breaks early. WikiFSAppTests compiles to an empty module on Linux
+  # (every file is `#if os(macOS)`-guarded), so only WikiFSCoreTests runs.
+  linux-swift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+      - name: Install Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          # mlx-swift (a transitive dep of mlx-swift-lm) declares
+          # swift-tools-version: 6.3.0 in its Package.swift. SwiftPM
+          # resolves ALL package deps even if unused on this platform,
+          # so we need Swift 6.3+ to parse the manifest. macOS CI uses
+          # Xcode (Swift 6.3+); Linux needs to match.
+          swift-version: "6.3"
+      - name: Swift version
+        run: swift --version
+      - name: Generate codegen files (version + prompts)
+        run: make version prompts
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/swiftpm
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved', 'Package.swift') }}
+      - name: Build portable targets
+        run: swift build --target WikiFSCoreTests
+      - name: Test portable suite
+        # Same skip list as the macOS `swift` job. On Linux, WikiFSAppTests
+        # compiles to an empty module (all source #if os(macOS)-guarded),
+        # so only WikiFSCoreTests tests are discovered. The skip list
+        # excludes suites that block the cooperative thread pool on CI's
+        # limited vCPUs (DispatchSemaphore, Process.waitUntilExit, etc.).
+        #
+        # --filter WikiFSCoreTests (matches the macOS job): without this,
+        # `swift test` builds every target in the package, including Cmlx
+        # (transitive via mlx-swift-lm → mlx-swift), which fails on the
+        # CUDA-less ubuntu-latest runner:
+        #
+        #   mlx/backend/cuda/cuda_utils.h:5:10: fatal error:
+        #     'cublasLt.h' file not found
+        #
+        # Scoping with --filter causes SwiftPM to build only the targets in
+        # WikiFSCoreTests's transitive build graph — none of which require
+        # Metal/GPU/CUDA (WikiFSMLX is conditionally excluded via
+        # .when(platforms: [.macOS]) in Package.swift; ACP-backed source is
+        # guarded with #if os(macOS)).
+        timeout-minutes: 15
+        env:
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|StoreEmissionTests|StoreEmissionReentrancyTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|FullTextSearchTests|ChatSearchTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests|MermaidValidatorTests|MarkdownLinterTests|MarkdownEditorWarningTests|MermaidEditorWarningTests|WikiStoreModelMarkdownImportTests|SandboxProfileTests|WikiCtlCommandTests|ChatStoreTests'
+        run: swift test --parallel --filter WikiFSCoreTests --skip "$SKIP"
+
   python:
     runs-on: ubuntu-latest
     defaults:

@@ -1,5 +1,7 @@
 import Foundation
-import Security
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Stores the Zotero API key — a secret, unlike `ZoteroConfig`'s library ID and
 /// directory override, which are plain JSON. Behind a protocol so `ZoteroClient`
@@ -10,6 +12,9 @@ public protocol ZoteroCredentialStore: Sendable {
     /// Pass `nil` to delete the stored key.
     func setAPIKey(_ key: String?) throws
 }
+
+#if os(macOS)
+import Security
 
 /// Errors from the Keychain-backed store, with the raw `OSStatus` for debugging.
 public struct ZoteroKeychainError: Error, Equatable {
@@ -39,6 +44,7 @@ public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
             })
     }
 }
+#endif // os(macOS)
 
 /// In-memory test double — mirrors `URLFetchServiceTests.StoreCollector`'s
 /// `@unchecked Sendable` shape. NOT for production use.

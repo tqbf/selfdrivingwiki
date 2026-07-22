@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WikiFSEngine
@@ -143,3 +144,4 @@ struct QuotaFallbackCoordinatorTests {
         #expect(await backend2.cancelCount == 1)
     }
 }
+#endif // os(macOS)

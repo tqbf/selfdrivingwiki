@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 
 /// Single source of truth for where the SQLite database lives on disk.
 ///
@@ -68,8 +72,14 @@ public enum DatabaseLocation {
     /// `appGroupContainerDirectory()`. Returns `nil` if the entitlement/container
     /// is unavailable.
     public static func extensionContainerDirectory() -> URL? {
+        #if os(macOS)
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+        #else
+        // Linux has no app-sandbox / App Group entitlement model; the
+        // extension path is unused on Linux (no File Provider extension).
+        nil
+        #endif
     }
 
     /// The legacy single-wiki App Group DB URL as seen by the **sandboxed

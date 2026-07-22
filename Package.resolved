@@ -1,5 +1,5 @@
 {
-  "originHash" : "3a48c4b0426543780125b80080b43d5577c1ea0fd7a9237770c274cd19418315",
+  "originHash" : "1476f2eed61bbc4d173e1aeed7120fe243e84c22c7168157e2544dda7a5a900a",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wsargent/swift-acp",
       "state" : {
-        "revision" : "3f99b2ccaf9f35966dec4817ebc4fdf72b9049be",
-        "version" : "0.2.0"
+        "revision" : "13d1517b53f163333d7f4f76013715bd74aa1a8b",
+        "version" : "0.2.1"
       }
     },
     {
@@ -175,10 +175,10 @@
     {
       "identity" : "tantivy.swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/botisan-ai/tantivy.swift.git",
+      "location" : "https://github.com/wsargent/tantivy.swift.git",
       "state" : {
-        "revision" : "dae1d224ef5ea5f1fa5e68c0f363585a2876e7b3",
-        "version" : "0.3.4"
+        "revision" : "612655af1dd22b5cc3d709d359516bbbd8c840d5",
+        "version" : "0.3.5"
       }
     },
     {

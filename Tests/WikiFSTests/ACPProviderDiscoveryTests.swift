@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import WikiFSEngine
 import Foundation
@@ -118,3 +119,4 @@ struct ACPProviderDiscoveryTests {
         }
     }
 }
+#endif // os(macOS)

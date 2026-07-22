@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -269,3 +270,4 @@ public struct ACPExtractionClient: MarkdownExtractor {
             containerDirectory: containerDirectory)
     }
 }
+#endif

@@ -1,14 +1,13 @@
-import CoreGraphics
 import Testing
 @testable import WikiFSCore
 
 struct TabBarLayoutTests {
     // Metrics mirror TabBarMetrics in the app layer.
-    private let minW: CGFloat = 110
-    private let maxW: CGFloat = 200
-    private let overflowW: CGFloat = 28
+    private let minW: Double = 110
+    private let maxW: Double = 200
+    private let overflowW: Double = 28
 
-    private func compute(_ count: Int, _ width: CGFloat) -> TabBarLayout {
+    private func compute(_ count: Int, _ width: Double) -> TabBarLayout {
         TabBarLayout.compute(
             tabCount: count, availableWidth: width,
             minTabWidth: minW, maxTabWidth: maxW, overflowWidth: overflowW)

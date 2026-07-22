@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 @testable import WikiFSEngine
@@ -88,3 +89,4 @@ struct AgentLauncherStageKeyDispatchTests {
         #expect(config.provider(forStage: lintKey).id == "linter")
     }
 }
+#endif // os(macOS)

@@ -1,5 +1,7 @@
 import Foundation
-import Security
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Stores extraction secrets — the Anthropic + Gemini API keys and an optional
 /// Docling Serve bearer token — behind a protocol so clients and tests never
@@ -17,6 +19,9 @@ public enum ExtractionSecret: String, Sendable {
     case geminiAPIKey
     case doclingServeToken
 }
+
+#if os(macOS)
+import Security
 
 /// Errors from the Keychain-backed store, with the raw `OSStatus` for debugging.
 public struct ExtractionKeychainError: Error, Equatable {
@@ -54,6 +59,7 @@ public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
             })
     }
 }
+#endif // os(macOS)
 
 /// In-memory test double — mirrors `InMemoryZoteroCredentialStore`'s
 /// `@unchecked Sendable` shape. NOT for production use.

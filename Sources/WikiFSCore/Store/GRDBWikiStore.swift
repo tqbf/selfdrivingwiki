@@ -1,6 +1,7 @@
 import Foundation
-import CryptoKit
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 // `internal import` (SE-0409, Swift 6.0+) keeps GRDB types from leaking into
 // downstream modules — the same discipline as `QueueStore.swift`. Without
@@ -1668,7 +1669,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             for row in rows {
                 let data = Data(row.content.utf8)
-                let hash = SHA256.hash(data: data)
+                let hash = portableSHA256( data)
                     .map { String(format: "%02x", $0) }.joined()
 
                 try db.execute(
@@ -1858,7 +1859,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
 
             for page in pages {
-                let hash = SHA256.hash(data: page.body)
+                let hash = portableSHA256( page.body)
                     .map { String(format: "%02x", $0) }.joined()
 
                 try db.execute(
@@ -1944,7 +1945,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 ) {
                     headVersionID = maxID
                 } else {
-                    let hash = SHA256.hash(data: page.body)
+                    let hash = portableSHA256( page.body)
                         .map { String(format: "%02x", $0) }.joined()
 
                     try db.execute(
@@ -2028,7 +2029,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 SourceRow(id: row["id"], data: row["content"])
             }
         for row in rows {
-            let hash = SHA256.hash(data: row.data)
+            let hash = portableSHA256( row.data)
                 .map { String(format: "%02x", $0) }.joined()
             try db.execute(
                 sql: "UPDATE sources SET content_hash = ? WHERE id = ?;",
@@ -2903,7 +2904,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // ref atomically so the page has a ref from birth. The empty body
             // is the initial blob.
             let bodyData = Data("".utf8)
-            let hash = SHA256.hash(data: bodyData)
+            let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
 
             try db.execute(sql: """
@@ -2971,7 +2972,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let title = WikiNameRules.sanitized(title)
             let slug = try self.uniqueSlug(from: title, id: id, on: db)
             let bodyData = Data(body.utf8)
-            let hash = SHA256.hash(data: bodyData)
+            let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -3132,9 +3133,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // (a CSV-ish PDFKit parse would extend the write transaction past the
         // 5 s busy_timeout — issue #229).
         let ext = (filename as NSString).pathExtension.lowercased()
+        let utiMime: String? = {
+            #if canImport(UniformTypeIdentifiers)
+            return ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            return nil
+            #endif
+        }()
         let mime = mimeType
             ?? ContentSniff.mimeType(of: data)
-            ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+            ?? utiMime
             ?? MimeType.mime(forExtension: ext)  // #620: .mmd → text/mermaid (UTType can't resolve it)
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
@@ -3154,7 +3162,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.unexpected(
                     "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
             }
-            let contentHash = SHA256.hash(data: data)
+            let contentHash = portableSHA256( data)
                 .map { String(format: "%02x", $0) }.joined()
 
             // Dedup against sources.content_hash.
@@ -3292,8 +3300,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             let id = PageID(rawValue: ULID.generate())
             let ext = (filename as NSString).pathExtension.lowercased()
-            let mime = mimeType
-                ?? (ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType)
+            let utiMime: String? = {
+                #if canImport(UniformTypeIdentifiers)
+                return ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+                #else
+                return nil
+                #endif
+            }()
+            let mime = mimeType ?? utiMime
             let now = Date()
             // Display-name resolution mirrors addSource — pass empty Data.
             let displayName: String?
@@ -3601,7 +3615,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.unexpected(
                     "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
             }
-            let contentHash = SHA256.hash(data: data)
+            let contentHash = portableSHA256( data)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -3866,7 +3880,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.unexpected(
                     "source \(data.count) bytes exceeds cap \(Self.ingestByteCap)")
             }
-            let contentHash = SHA256.hash(data: data)
+            let contentHash = portableSHA256( data)
                 .map { String(format: "%02x", $0) }.joined()
             let id = PageID(rawValue: ULID.generate())
             let now = Date()
@@ -4273,7 +4287,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let title = WikiNameRules.sanitized(title)
             let slug = try self.uniqueSlug(from: title, id: pageID, on: db)
             let bodyData = Data(body.utf8)
-            let hash = SHA256.hash(data: bodyData)
+            let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -4704,7 +4718,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in nil }) { db in
             let title = WikiNameRules.sanitized(title)
             let bodyData = Data(body.utf8)
-            let hash = SHA256.hash(data: bodyData)
+            let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -5072,7 +5086,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
                     // Write the merged version as a new workspace version.
                     let mergedData = Data(mergedText.utf8)
-                    let hash = SHA256.hash(data: mergedData)
+                    let hash = portableSHA256( mergedData)
                         .map { String(format: "%02x", $0) }.joined()
                     let nowTS = Date().timeIntervalSince1970
 
@@ -5163,7 +5177,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     ) throws {
         try mutate(event: { _ in nil }) { db in
             let bodyData = Data(body.utf8)
-            let hash = SHA256.hash(data: bodyData)
+            let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -6429,7 +6443,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// return the hex hash. Mirrors `SQLiteWikiStore.storeMarkdownBlob`.
     private func storeMarkdownBlob(_ content: String, on db: Database) throws -> String {
         let data = Data(content.utf8)
-        let hash = SHA256.hash(data: data)
+        let hash = portableSHA256( data)
             .map { String(format: "%02x", $0) }.joined()
         try db.execute(sql: """
         INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
@@ -7129,7 +7143,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
         // Create the merge version.
         let mergedData = Data(mergedText.utf8)
-        let hash = SHA256.hash(data: mergedData)
+        let hash = portableSHA256( mergedData)
             .map { String(format: "%02x", $0) }.joined()
         let now = Date()
         let nowTS = now.timeIntervalSince1970

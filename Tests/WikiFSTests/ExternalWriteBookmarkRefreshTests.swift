@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSEngine
 import Testing
@@ -137,3 +138,4 @@ struct ExternalWriteBookmarkRefreshTests {
         #expect(movedChild.parentID == folderB.id)
     }
 }
+#endif // os(macOS)
