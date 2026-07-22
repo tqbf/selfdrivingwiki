@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -214,3 +215,4 @@ public enum MessageSummarizer {
             isReadOnly: true)
     }
 }
+#endif

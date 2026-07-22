@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Security
 
@@ -70,3 +71,4 @@ enum KeychainSecretStore {
         }
     }
 }
+#endif // os(macOS)

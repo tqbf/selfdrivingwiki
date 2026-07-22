@@ -23,7 +23,11 @@ struct EmbeddingMetaCutoverTests {
         #expect(stored == "\(GRDBWikiStore.schemaVersion)")
         // ensureEmbedderConsistency with the default identifier (nlembedding-512)
         // is a no-op: the seed matches, so nothing is wiped.
-        store.ensureEmbedderConsistency(activeIdentifierOverride: NLEmbedder.identifier)
+        //
+        // Use the literal "nlembedding-512" rather than NLEmbedder.identifier
+        // (which is itself just this literal) so this test is portable —
+        // NLEmbedder is macOS-only (#754, #780).
+        store.ensureEmbedderConsistency(activeIdentifierOverride: "nlembedding-512")
         // Source added after the no-op must still have no chunks (never embedded).
         let summary = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         let missing = store.missingSourceEmbeddingWork()

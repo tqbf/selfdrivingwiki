@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -109,3 +110,4 @@ final class QuotaFallbackCoordinator {
         }
     }
 }
+#endif

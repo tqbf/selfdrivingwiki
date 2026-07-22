@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import WikiFSCore
@@ -211,7 +212,16 @@ public final class AgentLauncher {
     /// selected provider's permission policy, via `AgentBackendFactory`. The app
     /// is ACP-only, so this is always an `ACPBackend`. Injectable so tests can
     /// substitute a stub backend.
-    @ObservationIgnored var backend: AgentBackend = ACPBackend()
+    @ObservationIgnored var backend: AgentBackend = {
+        #if os(macOS)
+        return ACPBackend()
+        #else
+        // Linux: ACPBackend is unavailable (the `ACP` product is macOS-only).
+        // This default is only used before the first spawn; tests inject a
+        // stub. The Linux build never drives a real agent.
+        return LinuxStubBackend()
+        #endif
+    }()
 
     /// Factory closure that constructs the backend for a session. Called at
     /// spawn time in `run()` / `startInteractiveQuery()` so a fresh backend is
@@ -459,6 +469,7 @@ public final class AgentLauncher {
     /// (one actor hop + one secrets-free file write) and non-blocking: runs as
     /// a detached `@MainActor` Task so it never delays the first turn.
     public func captureAndCacheModels(provider: AgentProvider, session: SessionHandle) {
+        #if os(macOS)
         guard let acp = backend as? ACPBackend else {
             DebugLog.agent("captureAndCacheModels: skip (provider=\(provider.id) backend not ACP)")
             return
@@ -477,6 +488,9 @@ public final class AgentLauncher {
             DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))")
             self.cacheDiscoveredModels(cached, forProvider: provider.id)
         }
+        #else
+        // ACPBackend is macOS-only; no-op on Linux.
+        #endif
     }
 
     /// After a successful `backend.start`, if it was an ACP backend, read the
@@ -484,6 +498,7 @@ public final class AgentLauncher {
     /// the watchdog `kill(pgid)` a stuck agent after cancel fails. Non-blocking:
     /// runs as a detached `@MainActor` Task.
     public func captureProcessID(session: SessionHandle) {
+        #if os(macOS)
         guard let acp = backend as? ACPBackend else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -493,6 +508,9 @@ public final class AgentLauncher {
                 DebugLog.agent("captureProcessID: pid=\(pid)")
             }
         }
+        #else
+        // ACPBackend is macOS-only; no-op on Linux.
+        #endif
     }
 
     /// #566: After a successful `backend.start`, mirror the agent-advertised
@@ -502,12 +520,16 @@ public final class AgentLauncher {
     /// `thought_level` select (capability detection → the toolbar hides the
     /// affordance). Mirrors `captureAndCacheModels` / `captureProcessID`.
     public func captureThinkingOption(session: SessionHandle) {
+        #if os(macOS)
         guard let acp = backend as? ACPBackend else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let options = await acp.sessionConfigOptions(for: session)
             self.thinkingOption = ThinkingEffortOption.from(configOptions: options)
         }
+        #else
+        // ACPBackend is macOS-only; no-op on Linux.
+        #endif
     }
 
     /// #566: Set the `thought_level` config option on the live ACP session.
@@ -516,6 +538,7 @@ public final class AgentLauncher {
     /// the dropdown optimistically flips and a `config_option_update` confirms
     /// or reverts; surfacing a modal on every error is heavier than warranted.
     public func setThinkingEffort(_ value: String) {
+        #if os(macOS)
         guard let acp = backend as? ACPBackend,
               let handle = sessionHandle,
               let option = thinkingOption else { return }
@@ -535,6 +558,9 @@ public final class AgentLauncher {
                 self?.thinkingOption = option
             }
         }
+        #else
+        // ACPBackend is macOS-only; no-op on Linux.
+        #endif
     }
 
     /// The currently-pending write-permission requests surfaced from the backend
@@ -3799,3 +3825,4 @@ public enum PermissionModeMigration {
         DebugLog.agent("PermissionModeMigration: copied legacy \(legacyKey)=\(policy.rawValue) -> \(newKey)")
     }
 }
+#endif

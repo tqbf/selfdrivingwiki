@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WikiFSCore
 
@@ -27,20 +28,17 @@ struct ProvenancePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let origin {
-                originRow(origin)
-            } else {
+            if history.isEmpty {
                 Text("No provenance yet")
                     .foregroundStyle(.secondary)
                     .font(.callout)
-            }
-            if !history.isEmpty {
-                Divider().opacity(0.5)
-                Text("Edit history")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            } else {
+                sectionHeader("History")
                 ForEach(history) { entry in
-                    historyRow(entry)
+                    // A single timeline (newest-first). The version the page
+                    // currently points at — `origin` — is tagged "Current"
+                    // inline rather than shown as a separate (duplicate) row.
+                    historyRow(entry, isCurrent: entry.versionID == origin?.versionID)
                 }
             }
         }
@@ -49,49 +47,132 @@ struct ProvenancePanel: View {
         .padding(.vertical, 4)
     }
 
-    @ViewBuilder private func originRow(_ origin: ProvenanceEntry) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Created-by / last-edited-by-row, date-first to match the
-            // history rows below.
-            HStack(spacing: 6) {
-                Text(origin.savedAt,
-                     format: .dateTime.month().day().year().hour().minute())
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                operationBadge(origin.activityKind)
-                Text("by")
-                    .foregroundStyle(.secondary)
-                agentLabel(origin)
-            }
-        }
+    /// Small uppercase caption titling the timeline so the list has a header.
+    @ViewBuilder private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .tracking(0.5)
     }
 
-    @ViewBuilder private func historyRow(_ entry: ProvenanceEntry) -> some View {
+    @ViewBuilder private func historyRow(_ entry: ProvenanceEntry, isCurrent: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            // Date — leading, fixed-width for column alignment.
-            Text(entry.savedAt,
-                 format: .dateTime.month().day().year().hour().minute())
+            // Date fills the row and collapses (truncates) against the
+            // fixed-width badge when the panel narrows — never overflows.
+            Text(ergonomicTimestamp(entry.savedAt))
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 140, alignment: .leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Operation badge — fixed width, so badges form a tidy column
+            // the date collapses against.
             operationBadge(entry.activityKind)
 
-            agentLabel(entry)
-
-            Spacer()
-
-            if entry.runTitle?.isEmpty == false {
-                Text(entry.runTitle!)
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+            // Current-version marker. Its slot is always reserved (tinted
+            // clear when not current) so the badge column stays aligned.
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(isCurrent ? Color.accentColor : .clear)
+                .help(isCurrent ? "Current version" : "")
         }
         .contentShape(Rectangle())
         .hoverRowBackground()
         .onTapGesture { handleProvenanceTap(entry) }
+        .contextMenu { historyRowMenu(entry) }
+    }
+
+    /// Right-click actions for a history row. "Go to Source" navigates to
+    /// whatever wrote the version — the chat conversation or the ingestion/
+    /// agent job (#745) — and only appears when there's somewhere to go.
+    @ViewBuilder private func historyRowMenu(_ entry: ProvenanceEntry) -> some View {
+        if let source = navigableSource(entry) {
+            Button {
+                handleProvenanceTap(entry)
+            } label: {
+                Label(source.title, systemImage: source.icon)
+            }
+            Divider()
+        }
+
+        Button {
+            copyToPasteboard(
+                entry.savedAt.formatted(
+                    .dateTime.month().day().year().hour().minute()))
+        } label: {
+            Label("Copy Date", systemImage: "calendar")
+        }
+
+        Button {
+            copyToPasteboard(entry.versionID)
+        } label: {
+            Label("Copy Version ID", systemImage: "number")
+        }
+    }
+
+    /// The "Go to Source" menu label + icon for a version's writer, or `nil`
+    /// when the writer isn't navigable (a plain user edit, a legacy import).
+    /// Mirrors the navigation targets in ``handleProvenanceTap``.
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the menu and the writer
+    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
+    private func navigableSource(_ entry: ProvenanceEntry) -> (title: String, icon: String)? {
+        switch PageAuthor(rawValue: entry.agentName) {
+        case .chat:
+            return ("Go to Chat", "bubble.left.and.bubble.right")
+        case .agent(let kind):
+            // One-shot runs: ingest is the common case with its own label;
+            // other kinds (lint / query / bootstrap) degrade to "Activity".
+            let title = kind == "ingest" ? "Go to Ingestion Job" : "Go to Activity"
+            return (title, "cpu")
+        case .user, .legacyImport, .other:
+            // No navigation target for non-chat / non-agent authors.
+            return nil
+        }
+    }
+
+    /// Replace the general pasteboard with a single string (macOS clipboard).
+    private func copyToPasteboard(_ string: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+    }
+
+    /// Format a provenance timestamp ergonomically for the history list.
+    /// Recent edits collapse to friendly day labels so the eye isn't taxed
+    /// re-reading "2026" on every row; precise clock time is always kept
+    /// (edits can be seconds apart):
+    /// - today     → "Today at 8:44 PM"
+    /// - yesterday → "Yesterday at 4:14 PM"
+    /// - this week → "Wed at 3:11 PM"
+    /// - this year → "Jul 19 at 3:11 PM"  (year dropped)
+    /// - older     → "Mar 2, 2025 at 9:41 AM"
+    private func ergonomicTimestamp(_ date: Date) -> String {
+        let cal = Calendar.current
+        let now = Date.now
+        let time = date.formatted(.dateTime.hour().minute())
+
+        if cal.isDateInToday(date) {
+            return "Today at \(time)"
+        }
+        if cal.isDateInYesterday(date) {
+            return "Yesterday at \(time)"
+        }
+        let daysAgo = cal.dateComponents(
+            [.day],
+            from: cal.startOfDay(for: date),
+            to: cal.startOfDay(for: now)
+        ).day ?? .max
+        if (2...6).contains(daysAgo) {
+            let weekday = date.formatted(.dateTime.weekday(.abbreviated))
+            return "\(weekday) at \(time)"
+        }
+        let sameYear = cal.component(.year, from: date) == cal.component(.year, from: now)
+        let day = sameYear
+            ? date.formatted(.dateTime.month().day())
+            : date.formatted(.dateTime.month().day().year())
+        return "\(day) at \(time)"
     }
 
     /// A compact colored badge for the provenance activity kind
@@ -106,7 +187,8 @@ struct ProvenancePanel: View {
         }
         Text(kind.capitalized)
             .font(.caption.weight(.medium))
-            .padding(.horizontal, 6)
+            .lineLimit(1)
+            .frame(width: 56)
             .padding(.vertical, 2)
             .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(color)
@@ -136,58 +218,4 @@ struct ProvenancePanel: View {
         }
     }
 
-    /// Render the agent identity (#745). For `chat:<id>` agents, prefer the
-    /// resolved `runTitle` (the chat's display title) over the raw ULID. When
-    /// the chat has been deleted (title is nil), fall back to a muted
-    /// "Deleted chat" label. For `agent:<kind>` one-shot runs, show a
-    /// friendly label derived from the kind (e.g. "Ingest" / "Lint") rather
-    /// than the raw `agent:ingest` string. Other kinds render verbatim.
-    ///
-    /// Routes through `PageAuthor` (#797) — the single source of truth for the
-    /// `agents.name` convention — so the labeler and the writer
-    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
-    @ViewBuilder
-    private func agentLabel(_ entry: ProvenanceEntry) -> some View {
-        switch PageAuthor(rawValue: entry.agentName) {
-        case .chat:
-            if let runTitle = entry.runTitle, !runTitle.isEmpty {
-                Label(runTitle, systemImage: "bubble.left.and.bubble.right")
-                    .help(entry.agentName)
-                    .foregroundStyle(.secondary)
-            } else {
-                // Chat was deleted or the title is unavailable — show a
-                // muted placeholder instead of the raw ULID.
-                Label("Deleted chat", systemImage: "bubble.left.and.bubble.right")
-                    .help(entry.agentName)
-                    .foregroundStyle(.tertiary)
-            }
-        case .agent(let kind):
-            // One-shot run: resolve a friendly label from the kind suffix.
-            let label = friendlyRunLabel(for: kind)
-            Label(label, systemImage: "cpu")
-                .help("\(kind) agent")
-                .foregroundStyle(.secondary)
-        case .user:
-            Label(entry.agentName, systemImage: "person")
-                .foregroundStyle(.secondary)
-        case .legacyImport:
-            Label("Imported (legacy)", systemImage: "tray.and.arrow.down")
-                .foregroundStyle(.secondary)
-        case .other:
-            Text(entry.agentName)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Map an `agent:<kind>` suffix to a human-readable run label (#745).
-    /// `ingest` → "Ingestion", `lint` → "Lint", `query` → "Query".
-    /// Unknown kinds fall back to the capitalized kind.
-    private nonisolated func friendlyRunLabel(for kind: String) -> String {
-        switch kind {
-        case "ingest": return "Ingestion"
-        case "lint": return "Lint"
-        case "query": return "Query"
-        default: return kind.capitalized
-        }
-    }
 }

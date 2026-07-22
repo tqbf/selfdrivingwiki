@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WikiFSCore
@@ -227,3 +228,4 @@ private func makeTestQueueEngine() throws -> QueueEngine {
         provider: provider, emitProgress: { _, _ in })
     return QueueEngine(store: store, workerFactory: factory)
 }
+#endif // os(macOS)

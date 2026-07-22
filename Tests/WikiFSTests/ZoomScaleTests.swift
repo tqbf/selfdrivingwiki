@@ -1,17 +1,16 @@
-import CoreGraphics
 import Testing
 @testable import WikiFSCore
 
 /// Tests for `ZoomScale` (reader-editor-zoom §1).
 ///
-/// All floating-point comparisons use a tolerance; CGFloat arithmetic can
+/// All floating-point comparisons use a tolerance; Double arithmetic can
 /// accumulate rounding error so exact equality is not asserted.
 struct ZoomScaleTests {
 
     // MARK: - Tolerance helper
 
     /// Returns true when `a` and `b` differ by less than `eps`.
-    private func isClose(_ a: CGFloat, _ b: CGFloat, eps: CGFloat = 1e-10) -> Bool {
+    private func isClose(_ a: Double, _ b: Double, eps: Double = 1e-10) -> Bool {
         abs(a - b) < eps
     }
 
@@ -44,7 +43,7 @@ struct ZoomScaleTests {
     }
 
     @Test func clampedWithinRangeIsUnchanged() {
-        let values: [CGFloat] = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
+        let values: [Double] = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
         for v in values {
             #expect(ZoomScale.clamped(v) == v)
         }
@@ -53,7 +52,7 @@ struct ZoomScaleTests {
     @Test func clampedNonFiniteReturnsDefault() {
         // NaN and ±∞ cannot be ordered into the range and must never reach the
         // font math, so they coerce to a finite, in-range default.
-        for value: CGFloat in [.nan, .infinity, -.infinity] {
+        for value: Double in [.nan, .infinity, -.infinity] {
             let result = ZoomScale.clamped(value)
             #expect(result == ZoomScale.defaultScale)
             #expect(result.isFinite)
@@ -64,23 +63,23 @@ struct ZoomScaleTests {
     // MARK: - Stepping direction and magnitude
 
     @Test func zoomedInIncreasesValue() {
-        let interior: CGFloat = 1.0
+        let interior: Double = 1.0
         #expect(ZoomScale.zoomedIn(interior) > interior)
     }
 
     @Test func zoomedOutDecreasesValue() {
-        let interior: CGFloat = 1.0
+        let interior: Double = 1.0
         #expect(ZoomScale.zoomedOut(interior) < interior)
     }
 
     @Test func zoomedInAppliesStepFactor() {
-        let start: CGFloat = 1.0
+        let start: Double = 1.0
         let expected = (start * ZoomScale.stepFactor)
         #expect(isClose(ZoomScale.zoomedIn(start), expected))
     }
 
     @Test func zoomedOutAppliesStepFactor() {
-        let start: CGFloat = 1.0
+        let start: Double = 1.0
         let expected = (start / ZoomScale.stepFactor)
         #expect(isClose(ZoomScale.zoomedOut(start), expected))
     }
@@ -111,7 +110,7 @@ struct ZoomScaleTests {
 
     @Test func zoomedInThenOutReturnsToStart() {
         // For any interior value, out(in(x)) should round-trip back to x.
-        let interiorValues: [CGFloat] = [0.7, 1.0, 1.5, 2.0, 2.5]
+        let interiorValues: [Double] = [0.7, 1.0, 1.5, 2.0, 2.5]
         for start in interiorValues {
             let roundTripped = ZoomScale.zoomedOut(ZoomScale.zoomedIn(start))
             #expect(isClose(roundTripped, start),
@@ -154,16 +153,16 @@ struct ZoomScaleTests {
     /// stream of events neither loses nor double-counts momentum.
     @Test func scrollRemainderReconstructsInput() {
         let t = ZoomScale.scrollStepThreshold
-        let inputs: [CGFloat] = [0, 5, -5, t, -t, 2 * t + 1, -3 * t - 7, 100, -100]
+        let inputs: [Double] = [0, 5, -5, t, -t, 2 * t + 1, -3 * t - 7, 100, -100]
         for input in inputs {
             let (steps, remainder) = ZoomScale.scrollSteps(accumulated: input, threshold: t)
             #expect(abs(remainder) < t)
-            #expect(isClose(CGFloat(steps) * t + remainder, input))
+            #expect(isClose(Double(steps) * t + remainder, input))
         }
     }
 
     @Test func scrollNonFiniteOrNonPositiveThresholdYieldsNoStep() {
-        for bad: CGFloat in [.nan, .infinity, -.infinity] {
+        for bad: Double in [.nan, .infinity, -.infinity] {
             let (steps, remainder) = ZoomScale.scrollSteps(accumulated: bad)
             #expect(steps == 0)
             #expect(remainder == 0)

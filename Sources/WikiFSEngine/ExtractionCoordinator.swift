@@ -1,4 +1,8 @@
+#if os(macOS)
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import WikiFSCore
 
 /// Resolves the user's selected PDF→Markdown backend (`MarkdownExtractor`) from
@@ -101,3 +105,4 @@ public final class ExtractionCoordinator {
         }
     }
 }
+#endif

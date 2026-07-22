@@ -1,6 +1,11 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Observation
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 import WikiFSSearch
 
 /// Progress of the blocking search-index upgrade (see
@@ -2685,7 +2690,11 @@ public final class WikiStoreModel {
         var firstSourceName: String?
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
+            #if canImport(UniformTypeIdentifiers)
             let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            let mimeType: String? = nil
+            #endif
             let provider = MarkdownFolderMaterializer(
                 filename: file.filename, data: file.data, mimeType: mimeType,
                 directoryURL: directory)

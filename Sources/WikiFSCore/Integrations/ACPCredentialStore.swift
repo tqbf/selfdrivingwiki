@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// Stores the ACP agent's auth secret (the API key) behind a protocol so clients
 /// and tests never touch the `Security` framework directly. Mirrors
@@ -32,6 +31,9 @@ extension ACPCredentialStore {
         try setAPIKey(value)
     }
 }
+
+#if os(macOS)
+import Security
 
 /// Errors from the Keychain-backed store, with the raw `OSStatus` for debugging.
 public struct ACPKeychainError: Error, Equatable {
@@ -88,6 +90,7 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
         "acp-provider:\(id)"
     }
 }
+#endif // os(macOS)
 
 /// In-memory test double — mirrors `InMemoryExtractionCredentialStore`'s
 /// `@unchecked Sendable` shape. NOT for production use. Per-provider keys are

@@ -1,4 +1,6 @@
+#if os(macOS)
 import Darwin
+#endif
 import Foundation
 
 /// Pure generator for the macOS seatbelt (`sandbox-exec`) profile that confines the

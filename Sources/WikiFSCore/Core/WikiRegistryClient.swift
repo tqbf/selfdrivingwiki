@@ -1,6 +1,10 @@
 import Foundation
 import Observation
+#if canImport(CSQLite)
+import CSQLite
+#else
 import SQLite3
+#endif
 
 /// App-scoped, observable client for the multi-wiki registry
 /// (`plans/llm-wiki.md` Phase 0; reshaped by the manager dissolution

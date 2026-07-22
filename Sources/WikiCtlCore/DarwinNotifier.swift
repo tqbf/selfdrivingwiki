@@ -10,8 +10,13 @@ import WikiFSCore
 /// of FP signaling, per domain).
 public enum DarwinNotifier {
     public static func postChange(forWikiID id: String) {
+        #if os(macOS)
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id) as CFString)
         CFNotificationCenterPostNotification(center, name, nil, nil, true)
+        #else
+        // Darwin notifications are macOS-only; on Linux the cross-process
+        // change-notification path is unused (wikictl is macOS-only).
+        #endif
     }
 }

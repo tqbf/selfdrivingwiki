@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import os
@@ -541,3 +542,4 @@ private final class CountDownLatch: @unchecked Sendable {
         }
     }
 }
+#endif // os(macOS)

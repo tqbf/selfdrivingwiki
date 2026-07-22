@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Fetches a URL and lands its content as a source file in the active wiki —
 /// exactly like a drag-dropped file, so the existing "Ingest into wiki" agent

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Testing
 import Foundation
 @testable import WikiFSEngine
@@ -119,3 +120,4 @@ struct SpawnModelGuardTests {
             provider: claude, modelId: nil, stageName: "")?.contains("stage") == false)
     }
 }
+#endif // os(macOS)

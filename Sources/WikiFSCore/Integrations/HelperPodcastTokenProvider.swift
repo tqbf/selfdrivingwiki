@@ -1,5 +1,8 @@
 #if PODCAST_TRANSCRIPTS  // Apple Podcasts transcript feature; off for WIKIFS_APP_STORE=1 builds.
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The production `PodcastTokenProviding`: runs the `podcast-token-helper` binary
 /// (which does the private-framework FairPlay signing in an isolated process) and

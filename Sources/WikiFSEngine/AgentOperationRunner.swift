@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WikiFSCore
 
@@ -580,3 +581,4 @@ public enum AgentOperationRunner {
         }
     }
 }
+#endif

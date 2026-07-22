@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import ACPModel
@@ -250,3 +251,4 @@ struct ModelsConfigRecordTests {
         #expect(AgentLauncher.sourceFilesAndIDs(for: chat).sourceFiles.isEmpty)
     }
 }
+#endif // os(macOS)

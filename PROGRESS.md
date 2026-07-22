@@ -64,6 +64,64 @@ pass (both previously-failing tests green).
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-07-21 — Make WikiFSEngine Linux-buildable: conditional ACP dep (branch `linux-ci`, #754, #780)
+
+**Outcome.** Made the `ACP` product from `swift-acp` a macOS-only dependency
+of `WikiFSEngine`, and guarded the source files that import `ACP` (and the
+cascading files that reference ACP-only types) with `#if os(macOS)`. This
+unblocks the `linux-swift` CI job which builds `WikiFSCoreTests` on
+`ubuntu-latest`.
+
+**Root cause.** `swift-acp`'s `ACP` product uses `ACPProcessManager` and
+`os.log` — both macOS-only. `WikiFSEngine` hard-depended on both `ACP` and
+`ACPModel` products. `ACPModel` is portable (pure model types).
+
+**Changes.**
+- `Package.swift`: `ACP` product → `.when(platforms: [.macOS])` for
+  `WikiFSEngine`. `WikiFSEngine` → `.when(platforms: [.macOS])` for
+  `WikiFSCoreTests`, `WikiFSAppTests`, and `WikiFS` executable.
+- `ACPModelValueTypes.swift` (new): extracted `SessionUsage`,
+  `PendingPermission`, `PermissionPolicy` from `ACPBackend.swift` /
+  `ACPPermissions.swift` — pure value types used by the portable queue
+  system.
+- Guarded 3 ACP-importing files with `#if os(macOS)`: `ACPBackend.swift`,
+  `ACPPermissions.swift`, `ACPProviderModelProbe.swift`.
+- Guarded 9 cascading files with `#if os(macOS)`: `AgentLauncher.swift`,
+  `AgentOperationRunner.swift`, `ACPExtractionClient.swift`,
+  `MessageSummarizer.swift`, `QuotaFallbackCoordinator.swift`,
+  `WikiSession.swift`, `SessionManager.swift`, `ExtractionCoordinator.swift`,
+  `SpawnModelGuard.swift`.
+- `PermissionResolving.swift`: guarded the `ACPBackend` conformance extension.
+- `AgentBackendFactory.swift`: guarded `makeBackend`'s `ACPBackend` construction
+  (fatalError on Linux — only called from macOS code paths).
+- `LinuxStubBackend.swift` (new): no-op `AgentBackend` for Linux type
+  resolution.
+
+**Validation.** `swift build` passes on macOS. `swift test --filter
+WikiFSCoreTests`: 2194 tests in 163 suites, all green. Linux path validated
+by CI.
+
+## 2026-07-21 — Add Linux Swift CI job (branch `linux-ci`, #754)
+
+**Outcome.** Added a `linux-swift` CI job to `.github/workflows/ci.yml`
+that builds and tests the portable `WikiFSCoreTests` target on
+`ubuntu-latest` with Swift 6.0. This validates the #754 portability split
+and catches Linux-only build breaks early.
+
+**Changes.**
+- `.github/workflows/ci.yml`: new `linux-swift` job using
+  `swift-actions/setup-swift@v2`, runs `make version prompts` (codegen),
+  caches `.build`, `swift build --target WikiFSCoreTests`, then
+  `swift test --parallel --skip` with the same skip list as macOS.
+- `Tests/WikiFSAppTests/EnvVarHintsTests.swift`: wrapped in
+  `#if os(macOS)` — it `@testable import WikiFS` (macOS-only executable).
+- `Tests/WikiFSAppTests/WikiDaemonTests.swift`: wrapped in
+  `#if os(macOS)` — it `@testable import wikid` (macOS-only executable).
+- `plans/linux-ci-runner.md`: plan document.
+
+**Validation.** `swift build` and `swift test` (3333 tests, all pass) on
+macOS. The Linux build will be validated by the CI job itself once the PR
+is pushed — we cannot test Linux locally on macOS.
 ## 2026-07-21 — Omnibox: Safari-style centered, expandable, no overflow (branch `fix/omnibox-centered-no-overflow`)
 
 **Problem.** The toolbar omnibox rendered full-width flush-left and
@@ -7612,6 +7670,109 @@ No `print`. DebugLog only.
 **Build:** `swift build && swift test`.
 
 
+## 2026-07-21 — Linux CI: portable core-libs + macOS-only API guards (branch `linux-ci`, PR #780)
+
+**Outcome.** Got the `linux-swift` CI run to the test-execution stage — the
+build phase (WikiFSCoreTests + all transitive deps) now passes on Linux.
+Left as a follow-up: confirm the wikid Linux fix via CI (GitHub Actions
+stopped triggering for this branch mid-session — likely free-minute quota
+on the tqbf repo).
+
+**Pattern.** Swift CoreLibs on Linux splits some macOS-`Foundation` modules
+into separate SwiftPM modules. The split modules need conditional imports:
+- `FoundationXML` — XMLParser, XMLParserDelegate (TimedTextTranscript,
+  TTMLTranscript)
+- `FoundationNetworking` — URLSession, URLRequest, HTTPURLResponse
+  (11 WikiFSCore Integrations files + 2 WikiFSTests files)
+- `Crypto` (from swift-crypto) — SHA256 (PortableHash.swift wrapper)
+- `CSQLite` system module — wraps `<sqlite3.h>` for `import SQLite3`
+  (WikiFSCore + both test targets).
+
+The established pattern is `#if canImport(X) import X #endif` so macOS
+(where the symbol is re-exported from Foundation) is unaffected.
+
+**Other macOS-only API guards added.**
+- `WikiDaemonProtocol` — `@objc` XPC protocol (guard whole file with
+  `#if os(macOS)`).
+- `WikiDaemonConnection` — NSXPCConnection/NSXPCInterface (guard whole
+  file).
+- `DarwinNotifier` — CFNotificationCenterGetDarwinNotifyCenter (guard
+  body, leave public enum visible).
+- `DatabaseLocation.extensionContainerDirectory` — containerURL
+  (guard body, return nil).
+- `TabBarLayout` / `ZoomScale` — replaced `CGFloat` with `Double`
+  (CGFloat on Linux resolves to a Duration via the overloaded `rounded`
+  family, causing type-checking failures).
+- `EmbeddingMetaCutoverTests` — replaced `NLEmbedder.identifier` with
+  its literal "nlembedding-512" (NLEmbedder is macOS-only).
+- `SourceMaterializerTests` — removed unused `import CryptoKit`.
+
+**Package.swift changes.**
+- Added `swift-crypto` as a direct dep (was already transitive via GRDB;
+  declared directly so `WikiFSCore` can depend on the `Crypto` product
+  conditionally on Linux).
+- Added `CSQLite` (conditional, Linux-only) to both `WikiFSCore` and
+  `WikiFSCoreTests`.
+- Filtered `podcast-token-helper` out of the target list on Linux
+  (Obj-C executable that `#includes` Foundation/Foundation.h and links
+  AppleMediaServices private framework — neither available on Linux).
+- `WikiFSEngine` target is now a macOS-only dep of `WikiFSCoreTests`
+  (it depends on the macOS-only `ACP` product).
+
+**wikid rewrite.** The `#else // Linux` JSON-RPC-over-stdio branch of
+`wikid/main.swift` had two Swift 6 strict-concurrency issues on the
+Linux toolchain (with `-warnings-as-errors`):
+1. `cannot find 'req' in scope` — the `else` branch referenced `req`
+   which is only bound when its `guard`-pattern let succeeds.
+2. `reference to var 'stdout' is not concurrency-safe` — the C stdio
+   `stdout` global is shared mutable state.
+Restructured: decode into an optional parsed dict first, extract `id`
+(always available), guard on `req` for the success path; wrap stdout
+writes via FileHandle.standardOutput in a `writeResponse` helper.
+
+**Tests verified on macOS.** Full `swift test`: 3359 tests, all green.
+`swift test` after each change.
+
+**Pending.** Confirm the wikid Linux fix on the actual Linux toolchain
+via CI. The GitHub Actions workflow stopped firing for new pushes to
+the `linux-ci` branch around 20:48Z — likely an Actions free-minute
+quota on the tqbf account (no `queued` or `in_progress` runs; the push
+event webhook wasn't creating a new run). Need to either wait for the
+quota to reset (monthly) or have the repo owner re-enable Actions.
+
+## 2026-07-21 — PR #793 rebase + FileProvider/wikictl target filters (branch `linux-ci-acp`)
+
+**Outcome.** Continued closing out Linux-build failures on PR #793. Three
+consecutive target-filter commits; GitHub Actions stopped firing new runs
+on the branch mid-session (likely a quota issue — closing/reopening the
+PR and pushing empty trigger commits all failed to start a new run).
+
+**Rebased.** A maintainer merge of `main` into the branch created commit
+`d0b9c14`. Rebased `b2494e6` (wikictl filter) on top → `6e35180`.
+
+**New filters (each in Package.swift):**
+- `wikictl` (macOS CLI executable) — main.swift references
+  `WikiDaemonConnection` and `DarwinNotifier.postChange`, both guarded
+  `#if os(macOS)` in WikiCtlCore. The library still builds on Linux
+  (symbols become unavailable / no-op), but wikictl/main.swift's
+  unconditional references fail compilation.
+- `WikiFSFileProvider` (File Provider extension binary) — first import
+  is `import FileProvider` (the macOS-only FileProvider framework with
+  `NSFileProviderExtension` / `NSFileProviderManager`).
+
+Same pattern as `podcast-token-helper` (filtered earlier in this session)
+— `swift test` builds every target in the manifest, not just test-target
+deps, so macOS-only executables must be filtered out of the manifest on
+Linux.
+
+**CI status at session end.** The last fired Linux CI run was `29873085214`
+(for SHA `d0b9c14` — the maintainer merge, before my wikictl and
+WikiFSFileProvider filters). It failed at build time on
+`WikiFSFileProvider` (the FileProvider framework import). My fix (commit
+`921cc24`) addresses that, but no new Actions run has fired for the
+branch since then — the Actions quota on `tqbf/selfdrivingwiki` appears
+exhausted for this billing cycle (close+reopen, empty-commits, and
+direct pushes all failed to trigger).
 ## SwiftUI "Modifying state during view update" in the reader (#791 follow-up)
 
 **Why:** Running the test suite in Xcode surfaced repeated runtime issues:
@@ -7716,3 +7877,13 @@ fixes on a real in-memory `GRDBWikiStore`). Full `swift test` suite green
 **Plan:** [`plans/page-author-typing.md`](plans/page-author-typing.md).
 Phase 2 (`SourceProvider` enum — routes `SourceDetailView`'s `legacy-import`
 comparison through a typed enum) and Phase 3 (`SourceContentType`) deferred.
+
+**Re-merge note (PR #798):** rebased onto PR #796's History inspector redesign.
+#796 deleted `ProvenancePanel.agentLabel` + `friendlyRunLabel` (the new
+single-timeline row shows only date + badge + current-checkmark — no agent
+column), so the `agentLabel` → `PageAuthor` routing that was in the original
+plan is no longer a parse site: that surface is gone. The context-menu parse
+site #796 added (`navigableSource`, which builds the "Go to Chat" / "Go to
+Ingestion Job" labels via `hasPrefix`) is now the second `ProvenancePanel`
+parse site routed through `PageAuthor` (alongside `handleProvenanceTap`).
+`swift test` re-green post-merge (3355 tests / 280 suites).

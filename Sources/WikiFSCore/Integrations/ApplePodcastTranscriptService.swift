@@ -1,5 +1,8 @@
 #if PODCAST_TRANSCRIPTS  // Apple Podcasts transcript feature; off for WIKIFS_APP_STORE=1 builds.
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The finished transcript for a recognized episode: episode ID, markdown text,
 /// and a suggested source filename.

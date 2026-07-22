@@ -151,16 +151,31 @@ DebugLog.store("wikid: daemon started (Linux stdio transport), container=\(conta
 // Simple line-delimited JSON-RPC loop.
 // Request:  {"method": "listWikis", "id": 1, "params": {}}
 // Response: {"id": 1, "result": <data>}   or   {"id": 1, "error": "..."}
+//
+// On Linux, FileHandle.standardOutput is the Sendable-accessible way to
+// write to stdout — the raw `stdout` global is shared mutable state,
+// which Swift 6 strict concurrency flags as unsafe (#754).
+let standardOutput = FileHandle.standardOutput
+func writeResponse(_ string: String) {
+    if let data = string.data(using: .utf8) {
+        standardOutput.write(data)
+    }
+}
+
 while let line = readLine() {
-    guard !line.isEmpty,
-          let lineData = line.data(using: .utf8),
-          let req = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-          let method = req["method"] as? String,
-          let id = req["id"]
+    let parsed: [String: Any]? = line.data(using: .utf8).flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    }
+    let id = parsed?["id"]
+    guard let req = parsed,
+          let method = req["method"] as? String
     else {
-        let resp = ["id": req["id"] ?? -1, "error": "invalid request"] as [String: Any]
+        // Reconstruct the response with the id if we have one, else -1.
+        let resp: [String: Any] = ["id": id ?? -1, "error": "invalid request"]
         if let data = try? JSONSerialization.data(withJSONObject: resp),
-           let str = String(data: data, encoding: .utf8) { print(str); fflush(stdout) }
+           let str = String(data: data, encoding: .utf8) {
+            writeResponse(str)
+        }
         continue
     }
 
@@ -206,17 +221,16 @@ while let line = readLine() {
         error = "unknown method: \(method)"
     }
 
-    var resp: [String: Any] = ["id": id]
+    var resp: [String: Any] = ["id": id as Any]
     if let error {
         resp["error"] = error
     } else {
-        resp["result"] = result
+        resp["result"] = result as Any
     }
 
     if let data = try? JSONSerialization.data(withJSONObject: resp),
        let str = String(data: data, encoding: .utf8) {
-        print(str)
-        fflush(stdout)
+        writeResponse(str)
     }
 }
 

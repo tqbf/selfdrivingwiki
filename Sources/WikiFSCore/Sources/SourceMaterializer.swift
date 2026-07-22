@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 /// Phase 3a — the materializer protocol that owns *materialization* (bytes +
 /// filename + mime + PROV provenance) for every ingest entry point. The four
@@ -205,7 +207,11 @@ public struct LocalFileMaterializer: SourceMaterializer {
         // pipeline as website/Zotero sources — content-sniffing + extension
         // inference). Pass the UTType mime explicitly.
         let ext = (url.lastPathComponent as NSString).pathExtension.lowercased()
+        #if canImport(UniformTypeIdentifiers)
         let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+        #else
+        let mimeType: String? = nil
+        #endif
         let (stem, extHint) = URLFetchService.nameHint(for: url)
         let plan = FormatMaterializer.dispatch(
             data: data, contentType: mimeType,

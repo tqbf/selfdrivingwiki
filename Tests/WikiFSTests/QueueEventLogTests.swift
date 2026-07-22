@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import os
@@ -527,3 +528,4 @@ private struct FakeWorker: QueueWorker {
     let body: @Sendable (QueueItem) async throws -> Void
     func execute(_ item: QueueItem) async throws { try await body(item) }
 }
+#endif // os(macOS)
