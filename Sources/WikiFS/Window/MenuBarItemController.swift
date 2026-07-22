@@ -30,6 +30,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private let queueEngine: QueueEngine
     private let activityTracker: QueueActivityTracker
     private weak var sessionManager: SessionManager?
+    private weak var backgroundIngestCoordinator: BackgroundIngestCoordinator?
     /// The wiki registry — drives the "Open Wiki" menu items. Read fresh each
     /// time the menu opens (`menuNeedsUpdate`), so newly-created wikis appear
     /// without a manual refresh.
@@ -64,13 +65,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         activityTracker: QueueActivityTracker,
         sessionManager: SessionManager,
         registry: WikiRegistryClient,
-        openWindowBridge: OpenWindowBridge
+        openWindowBridge: OpenWindowBridge,
+        backgroundIngestCoordinator: BackgroundIngestCoordinator? = nil
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
         self.sessionManager = sessionManager
         self.registry = registry
         self.openWindowBridge = openWindowBridge
+        self.backgroundIngestCoordinator = backgroundIngestCoordinator
     }
 
     // MARK: - Lifecycle
@@ -191,6 +194,16 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             menu.addItem(item)
             menu.addItem(.separator())
         }
+
+        let continuousIngestItem = NSMenuItem(
+            title: "Continuous Ingest",
+            action: #selector(toggleContinuousIngest(_:)),
+            keyEquivalent: "")
+        continuousIngestItem.target = self
+        continuousIngestItem.state = UserDefaults.standard.bool(forKey: "backgroundIngestEnabled") ? .on : .off
+        menu.addItem(continuousIngestItem)
+
+        menu.addItem(.separator())
 
         // Per-queue windows.
         let ingestionItem = NSMenuItem(
@@ -325,6 +338,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openMainWindow(_ sender: NSMenuItem?) {
         NSApplication.shared.activate(ignoringOtherApps: true)
         openWindowBridge.openMain?()
+    }
+
+    @objc private func toggleContinuousIngest(_ sender: NSMenuItem?) {
+        let newValue = !UserDefaults.standard.bool(forKey: "backgroundIngestEnabled")
+        UserDefaults.standard.set(newValue, forKey: "backgroundIngestEnabled")
+        sender?.state = newValue ? .on : .off
+        if newValue {
+            backgroundIngestCoordinator?.start()
+        } else {
+            backgroundIngestCoordinator?.stop()
+        }
     }
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {

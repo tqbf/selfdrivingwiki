@@ -326,7 +326,8 @@ struct WikiFSApp: App {
             activityTracker: activityTracker,
             sessionManager: sessionManager,
             registry: registry,
-            openWindowBridge: openWindowBridge)
+            openWindowBridge: openWindowBridge,
+            backgroundIngestCoordinator: backgroundIngestCoordinator)
         statusController.start()
         windowTracker.start()
         appDelegate.menuBarItemController = statusController

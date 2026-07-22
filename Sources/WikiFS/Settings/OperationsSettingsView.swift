@@ -16,7 +16,6 @@ struct OperationsSettingsView: View {
     let containerDirectory: URL
 
     @State private var selectedOperationTab: AgentsSettingsView.OperationTab = .chat
-    @AppStorage("backgroundIngestEnabled") private var backgroundIngestEnabled = false
 
     init(containerDirectory: URL) {
         self.containerDirectory = containerDirectory
@@ -48,16 +47,6 @@ struct OperationsSettingsView: View {
             }
 
             operationSections
-            
-            Section {
-                Toggle("Background Ingest", isOn: $backgroundIngestEnabled)
-            } header: {
-                Text("Continuous Sync")
-            } footer: {
-                Text("Continuously scan for un-ingested sources and enqueue them automatically.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .onAppear { config = AgentProvidersConfig.loadOrSeed(from: containerDirectory) }
