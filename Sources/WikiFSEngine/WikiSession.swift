@@ -157,6 +157,7 @@ public final class WikiSession {
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
+        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.wikiID = wikiID
@@ -238,6 +239,14 @@ public final class WikiSession {
         // default chosen — e.g. a fresh install) means the menu prompts the
         // user to pick from `HtmlExtractionBackend.allCases`.
         model.htmlBackend = htmlBackendResolver()
+        // Issue #799 PR4: inject the configured podcast transcription backend
+        // so the Transcribe button and the "Re-transcribe with" menu in
+        // `SourceDetailView` have a default when the user taps Transcribe
+        // without picking a backend explicitly. Mirrors the `htmlBackend`
+        // resolver shape one-to-one. `nil` (no default chosen — e.g. a fresh
+        // install) → the View-level `runTranscription` falls back to
+        // `.appleTranscript` directly (the only backend today).
+        model.podcastBackend = podcastBackendResolver()
 
         // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
         // Phase 2 CUTOVER (#634): Tantivy is the SOLE BM25 leg of the hybrid

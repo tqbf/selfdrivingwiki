@@ -328,6 +328,18 @@ public final class WikiStoreModel {
     /// config-aware; config is read by `ExtractionCoordinator` in
     /// `WikiFSEngine`).
     @ObservationIgnored public var htmlBackend: HtmlExtractionBackend?
+
+    /// The configured podcast transcription backend (issue #799 PR4). Set at
+    /// app wiring time from `ExtractionConfig.podcastBackend` so the
+    /// Transcribe button and the "Re-transcribe with" menu have a default
+    /// when the user taps Transcribe without picking a backend explicitly.
+    /// `nil` = no default chosen (a fresh install, or a config file written
+    /// before this field shipped); the View-level `runTranscription` falls
+    /// back to `.appleTranscript` directly (the only backend today). Mirrors
+    /// the `htmlBackend` injection pattern (the model is deliberately NOT
+    /// config-aware; config is read by `ExtractionCoordinator` in
+    /// `WikiFSEngine`).
+    @ObservationIgnored public var podcastBackend: PodcastTranscriptionBackend?
     private var autosaveTask: Task<Void, Never>?
     private var systemPromptAutosaveTask: Task<Void, Never>?
 
@@ -379,6 +391,22 @@ public final class WikiStoreModel {
     /// Technique label for synthetic byteless-source markdown written from oEmbed
     /// metadata + URL + a transcript (e.g. YouTube captions). Issue #646.
     private static let bytelessTranscriptTechnique = "byteless-oembed-transcript"
+    /// Technique label for the Apple Podcasts TTML-derived transcript markdown
+    /// written by `transcribePodcast(sourceID:)` (issue #799 PR4). Stamped on
+    /// the `source_markdown_versions` row so the provenance chip's alternatives
+    /// UI surfaces the producer alongside `byteless-oembed-synthetic` (for the
+    /// byteless-media sources) and `defuddle` / `html-to-markdown` / `pdf2md`
+    /// / etc. (for the PDF/HTML sources).
+    private static let podcastTtmlTechnique = "apple-ttml"
+    /// The synthetic MIME for a byteless Apple Podcasts embed source (issue
+    /// #799 PR4). `ExternalEmbed.target(for:)` dispatches on the provider's
+    /// `agentName == "apple-podcast"` (NOT the MIME — see the dispatch table
+    /// in `ExternalEmbed.swift`), so this label is near-cosmetic: it persists
+    /// the source's content-type taxonomy alongside the byteless-media
+    /// convention (`video/youtube`, `audio/spotify`, …) and keeps
+    /// `isMarkdownNative` from misclassifying a byteless podcast source as
+    /// text-native (which would skip the embed-player render path).
+    private static let podcastEmbedMIME = "audio/apple-podcast"
 
     public init(store: WikiStore) {
         self.store = store
@@ -2167,9 +2195,16 @@ public final class WikiStoreModel {
 
     #if PODCAST_TRANSCRIPTS
     /// The podcast-aware `addURL`: recognizes an Apple Podcasts episode link and
-    /// routes to the transcript pipeline instead of the HTML fetcher. The
+    /// routes to the byteless-embed pipeline instead of the HTML fetcher. The
     /// `podcastFetcher` seam lets CI inject a fake `PodcastTranscriptFetching`
-    /// (the bundled service returns nil without the signing helper).
+    /// for the **transcribe** step (the bundled service returns nil without the
+    /// signing helper). It is intentionally NOT consulted at ingest time in PR4
+    /// — per #799, no auto-transcription at ingest; the user clicks Transcribe
+    /// in `SourceDetailView` to trigger the network fetch explicitly. The
+    /// parameter stays on the signature for back-compat with the existing tests
+    /// that assert the routing contract, and so the same call site can opt a
+    /// fake fetcher back in for the (now-separate) `transcribePodcast(sourceID:)`
+    /// step.
     @discardableResult
     public func addURL(
         _ rawInput: String,
@@ -2179,38 +2214,39 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         // An Apple Podcasts EPISODE link is recognized before the generic web
         // fetch: its HTML is the useless player page, so we route to the
-        // transcript pipeline instead. The pageURL is re-normalized from the raw
-        // input so the Origin row surfaces the canonical `podcasts.apple.com` URL
-        // the user pasted (the episode ID alone isn't a clickable link).
+        // byteless-embed pipeline instead. The pageURL is re-normalized from
+        // the raw input so the Origin row surfaces the canonical
+        // `podcasts.apple.com` URL the user pasted (the episode ID alone
+        // isn't a clickable link).
         if let episode = PodcastEpisodeURL.parse(rawInput) {
-            guard let svc = podcastFetcher else {
-                throw PodcastTranscriptError.signatureUnavailable(
-                    "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
-            }
+            // Issue #799 PR4: stop auto-transcribing at ingest. The episode
+            // URL creates a byteless embed source (like YouTube/Vimeo/Spotify/
+            // SoundCloud/remote-media) with NO transcript. The user clicks
+            // "Transcribe" in `SourceDetailView` to trigger the network fetch
+            // (signed bearer → AMP → TTML → parse → markdown) explicitly via
+            // `transcribePodcast(sourceID:)`. Same provenance shape as before
+            // (agentName = apple-podcast, plan/externalRef = pasted page URL,
+            // externalIdentity = the numeric episode ID) so ExternalEmbed
+            // continues to host-swap planURL → embed.podcasts.apple.com.
             let pageURL = URLFetchService.normalizeURL(rawInput)
                 ?? URL(string: "https://podcasts.apple.com")!
-            let provider = ApplePodcastMaterializer(episode: episode, pageURL: pageURL, fetcher: svc)
-            let transcript = try await provider.materialize()
-            // §11 byteless model: the source is byteless (a pointer to the
-            // external episode), and the transcript markdown is stored as the
-            // derived alternative — NOT as content bytes (Option-A). The
-            // provider is unchanged; only the storage path repoints.
-            guard let prov = transcript.provenance else {
-                throw URLFetchService.FetchError.invalidURL("podcast transcript missing provenance")
-            }
             let summary = try store.addBytelessSource(
-                filename: transcript.filename, mimeType: transcript.mimeType,
-                provenance: prov, role: .primary)
-            let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
-            try store.appendProcessedMarkdown(
-                sourceID: summary.id, content: markdown, origin: .transcript, note: nil, technique: nil)
+                filename: Self.podcastEmbedFilename(for: episode),
+                mimeType: Self.podcastEmbedMIME,
+                provenance: SourceProvenance(
+                    agentName: SourceProvider.applePodcast.rawValue,
+                    activityKind: "fetch",
+                    plan: pageURL.absoluteString,
+                    externalRef: pageURL.absoluteString,
+                    externalIdentity: episode.id),
+                role: .primary)
             // Issue #621: resolve a human-readable display name from the
             // episode slug so the source list shows the episode title instead
-            // of the slugified filename. Mirrors the byteless oEmbed title step
-            // (YouTube/Vimeo/Spotify/SoundCloud) — does NOT block ingest; a nil
-            // title leaves the synthetic filename display name in place. The
-            // slug is the episode title as Apple generates it for an episode
-            // link, so un-sluggifying is offline and dependency-free.
+            // of the slugified filename. Mirrors the byteless oEmbed title
+            // step (YouTube/Vimeo/Spotify/SoundCloud) — does NOT block ingest;
+            // a nil title leaves the synthetic filename display name in place.
+            // The slug is the episode title as Apple generates it for an
+            // episode link, so un-sluggifying is offline and dependency-free.
             let resolvedTitle = PodcastEpisodeURL.displayTitle(from: episode.slug)
                 .map { WikiNameRules.sanitized($0) }
             if let title = resolvedTitle {
@@ -2220,14 +2256,20 @@ public final class WikiStoreModel {
                     DebugLog.store("apple-podcast slug title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
                 }
             }
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // store write. The tab title is passed explicitly so tabTitle (which
-            // reads `sources`) needs no synchronous freshness.
+            // No transcript markdown is written — the source's
+            // `source_markdown_versions` stays empty until the user transcribes.
+            // Mirrors the post-PR3 HTML invariant and the YouTube-without-
+            // captions path BEFORE the #646 synthetic-page work. The reader
+            // shows the embed player (the source has an `embedTarget`); the
+            // Transcribe button is the sole affordance to surface a transcript.
+            // No manual reload — the bus fires reloadFromStore() async after
+            // the store writes. The tab title is passed explicitly so tabTitle
+            // (which reads `sources`) needs no synchronous freshness.
             openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
             return URLFetchService.FetchOutcome(
-                filename: transcript.filename,
-                byteSize: transcript.data.count,
-                kind: .podcastTranscript)
+                filename: summary.filename,
+                byteSize: 0,
+                kind: .audioEmbed)
         }
         // Phase 4b: byteless external-embed media (provider iframes + direct-
         // remote). YouTube is routed to the transcript-extracting path FIRST so
@@ -3147,6 +3189,108 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Podcast transcription trigger (issue #799 PR4). Inline — does NOT
+    /// route through the queue engine (the queue is PDF-coupled via
+    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
+    /// `seedPdfMarkdown`; podcast transcription is a NETWORK FETCH with a
+    /// different input shape — there are no stored bytes to convert, the
+    /// "backend" picks the network pipeline). Generalizing the queue is a
+    /// deferred sub-project per the parent plan's "Out of scope" section.
+    ///
+    /// Reconstructs the episode URL from `origin.plan` (the page URL recorded
+    /// at ingest — `PodcastEpisodeURL.parse(_:)` recovers the numeric episode
+    /// ID + the slug), re-injects `PodcastTranscriptFetching` (default
+    /// `ApplePodcastTranscriptService.bundled()` — mirrors `refreshSource`'s
+    /// injection point), calls `ApplePodcastMaterializer.materialize()`
+    /// (which runs the full token → AMP → TTML → parse → markdown pipeline
+    /// off-main in a detached `Task`), and writes the transcript markdown via
+    /// `appendProcessedMarkdown(origin: .transcript, technique:
+    /// "apple-ttml")`.
+    ///
+    /// Throws `PodcastTranscriptError.signatureUnavailable` when the helper
+    /// binary isn't present (mirroring the same throw at ingest pre-PR4 and
+    /// `SourceRefreshService.materializePodcast`'s shape). Throws
+    /// `SourceRefreshService.RefreshError.notRefreshable` when the source's
+    /// provenance isn't an Apple Podcasts episode URL (a defensive guard —
+    /// the View-level `isTranscribable` predicate should prevent reaching
+    /// this path on a non-podcast source, but the model can't trust the
+    /// predicate), and `.missingPlan` when the origin has no `plan` URL
+    /// (data-integrity edge case — podcast ingests always record the page
+    /// URL at ingest).
+    ///
+    /// `appendProcessedMarkdown` always appends — the FIRST call creates the
+    /// HEAD; subsequent calls (re-transcribe) append coexisting alternatives
+    /// (no clobber). So the initial Transcribe and a later Re-transcribe
+    /// both flow through this method — provenance is differentiated by the
+    /// version id and the technique column. Mirrors the HTML
+    /// `extractHtml(for:backend:)` lifecycle in PR2.
+    ///
+    /// - Parameters:
+    ///   - sourceID: the byteless Apple Podcasts embed source to transcribe.
+    ///   - fetcher: the `PodcastTranscriptFetching` to use; defaults to
+    ///     `ApplePodcastTranscriptService.bundled()` (the bundled signing
+    ///     helper). Tests inject a fake. `nil` on a build without the
+    ///     helper → throws `.signatureUnavailable`.
+    /// - Returns: the new `SourceMarkdownVersion`, or nil on a store write
+    ///   failure (the `appendProcessedMarkdown` throw is logged via
+    ///   `DebugLog`, mirroring `extractHtml`'s discipline).
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func transcribePodcast(
+        sourceID: PageID,
+        fetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
+    ) async throws -> SourceMarkdownVersion? {
+        guard let origin = sourceOrigin(for: sourceID) else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        guard origin.provider == .applePodcast else {
+            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+        }
+        guard let planURLString = origin.plan,
+              let pageURL = URL(string: planURLString),
+              let episode = PodcastEpisodeURL.parse(planURLString) else {
+            throw SourceRefreshService.RefreshError.missingPlan
+        }
+        guard let svc = fetcher else {
+            throw PodcastTranscriptError.signatureUnavailable(
+                "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
+        }
+        // The materializer runs the transcript fetch (helper subprocess + two
+        // HTTP round-trips + TTML parse) off-main in a detached Task; the
+        // model never touches the store inside this `await`.
+        let provider = ApplePodcastMaterializer(
+            episode: episode, pageURL: pageURL, fetcher: svc)
+        let transcript = try await provider.materialize()
+        let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: markdown,
+                origin: .transcript, note: nil, technique: Self.podcastTtmlTechnique)
+        } catch {
+            // #475/#492: never silently swallow — a transcription failure
+            // (after network round-trips) must leave a Console.app trace.
+            DebugLog.store("WikiStoreModel.transcribePodcast appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+    #else
+    @discardableResult
+    public func transcribePodcast(
+        sourceID: PageID,
+        fetcher: Any? = nil
+    ) async throws -> SourceMarkdownVersion? {
+        // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
+        // The View-level `isSourceRefreshable` predicate returns `false` for
+        // `.applePodcast` outside this flag, so the Transcribe button doesn't
+        // render and this path is unreachable in production; the throw keeps
+        // the model honest for callers that bypass the predicate (headless
+        // API, tests). The shape matches `SourceRefreshService.materializePodcast`'s
+        // phase-out arm, which also throws `.notRefreshable` here.
+        let agent = sourceOrigin(for: sourceID)?.agentName ?? "unknown"
+        throw SourceRefreshService.RefreshError.notRefreshable(agent)
+    }
+    #endif
+
     /// Pure dispatch from a `HtmlExtractionBackend` value to a concrete
     /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
     /// stamp the right technique on the processed-markdown version row
@@ -3172,6 +3316,21 @@ public final class WikiStoreModel {
             return (result.markdown, Self.htmlToMarkdownTechnique)
         }
         return ("", Self.htmlToMarkdownTechnique)
+    }
+
+    /// Build the byteless-source filename for an Apple Podcasts episode
+    /// (issue #799 PR4): `<slug>-<id>` when the URL carried a slug, else
+    /// `podcast-<id>`. Mirrors the YouTube/Vimeo `youtube-<id>` /
+    /// `vimeo-<id>` byteless-source filename convention. The `-transcript.md`
+    /// suffix is deliberately NOT used — that's reserved for the transcript
+    /// **markdown version**'s filename (written by the Transcribe trigger
+    /// through `ApplePodcastMaterializer.materialize()`, not by the ingest
+    /// path). The episode ID segment alone wouldn't survive
+    /// `FilenameEscaping.escapeTitle`'s spaces-as-underscores rule applied to
+    /// a slug, so we escape the joined stem.
+    private static func podcastEmbedFilename(for episode: PodcastEpisodeURL.EpisodeRef) -> String {
+        let stem = episode.slug.map { "\($0)-\(episode.id)" } ?? "podcast-\(episode.id)"
+        return FilenameEscaping.escapeTitle(stem)
     }
 
     /// Nominate an existing processed-markdown row as the active HEAD for a

@@ -76,6 +76,14 @@ public final class SessionManager {
     /// backend is injected from the app layer that owns the config file).
     public let htmlBackendResolver: @MainActor () -> HtmlExtractionBackend?
 
+    /// Resolver for the configured podcast transcription backend (issue #799
+    /// PR4). Called once per session at creation. Reads
+    /// `ExtractionConfig.podcastBackend` at the app wiring time and returns
+    /// the chosen `PodcastTranscriptionBackend`, or `nil` if no default is
+    /// set. Mirrors the `htmlBackendResolver` injection shape above (the
+    /// model is deliberately NOT config-aware).
+    public let podcastBackendResolver: @MainActor () -> PodcastTranscriptionBackend?
+
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
@@ -84,6 +92,7 @@ public final class SessionManager {
         pdf2mdScriptPathResolver: @escaping () -> String?,
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
+        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.containerDirectory = containerDirectory
@@ -93,6 +102,7 @@ public final class SessionManager {
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
         self.htmlBackendResolver = htmlBackendResolver
+        self.podcastBackendResolver = podcastBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
     }
 
@@ -117,6 +127,8 @@ public final class SessionManager {
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
             htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
+            htmlBackendResolver: htmlBackendResolver,
+            podcastBackendResolver: podcastBackendResolver,
             interactiveUsageRecorder: interactiveUsageRecorder
         )
         // Transfer any deferred wiki-link click (registered by

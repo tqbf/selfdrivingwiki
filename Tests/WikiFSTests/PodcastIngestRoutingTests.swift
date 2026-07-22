@@ -4,8 +4,12 @@ import Testing
 @testable import WikiFSCore
 
 /// Verifies `WikiStoreModel.addURL` ROUTES an Apple Podcasts episode link to
-/// the transcript pipeline (not the HTML fetcher) and stores the markdown as a
-/// source. Uses a fake `PodcastTranscriptFetching` + a fake HTML fetcher so we can
+/// the byteless-embed pipeline (not the HTML fetcher) and stores the source
+/// WITHOUT a transcript. Issue #799 PR4: ingest is byteless-only — no auto-
+/// transcription. The user clicks "Transcribe" in `SourceDetailView` to
+/// trigger the network fetch explicitly via `transcribePodcast(sourceID:)`.
+///
+/// Uses a fake `PodcastTranscriptFetching` + a fake HTML fetcher so we can
 /// assert which path ran — no network, no private frameworks.
 @MainActor
 struct PodcastIngestRoutingTests {
@@ -20,11 +24,17 @@ struct PodcastIngestRoutingTests {
     /// Records whether it was asked for a transcript, and returns a canned one.
     final class FakePodcastFetcher: PodcastTranscriptFetching, @unchecked Sendable {
         private(set) var requestedEpisodeID: String?
+        /// Marks the per-call markdown so a swap between two transcribe calls
+        /// can simulate "v1" vs "v2" (mirrors `SourceRefreshTests`'s SwapFetcher).
+        var markdown: String
+        init(markdown: String = "SPEAKER_1: Hello from the episode.") {
+            self.markdown = markdown
+        }
         func transcript(for episode: PodcastEpisodeURL.EpisodeRef) async throws -> PodcastTranscript {
             requestedEpisodeID = episode.id
             return PodcastTranscript(
                 episodeID: episode.id,
-                markdown: "SPEAKER_1: Hello from the episode.",
+                markdown: markdown,
                 filename: "\(episode.slug ?? "podcast")-\(episode.id)-transcript.md")
         }
     }
@@ -40,7 +50,15 @@ struct PodcastIngestRoutingTests {
     private static let chinaTalkURL =
         "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453"
 
-    @Test func episodeURLRoutesToTranscriptPipelineAndStoresMarkdown() async throws {
+    // MARK: - AC.14: Ingest stores byteless embed WITHOUT a transcript
+
+    /// Issue #799 PR4 AC.14 — ingesting an Apple Podcasts episode URL stores
+    /// a byteless embed source with NO transcript. The fetcher is NOT
+    /// consulted at ingest (this is the post-PR4 invariant; pre-PR4 ingest
+    /// fetched the transcript AND stored it as the processed-markdown HEAD).
+    /// The Transcribe button (PR4) is what triggers the fetch — see
+    /// `transcribePodcastWritesTranscriptAlternative` (AC.15).
+    @Test func episodeURLStoresBytelessEmbedWithoutTranscript() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let podcast = FakePodcastFetcher()
@@ -48,21 +66,29 @@ struct PodcastIngestRoutingTests {
         let outcome = try await model.addURL(
             Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
 
-        #expect(podcast.requestedEpisodeID == "1000774368453")
-        #expect(outcome.kind == .podcastTranscript)
-        #expect(outcome.filename == "chinatalk-1000774368453-transcript.md")
+        // The fetcher was NOT consulted at ingest — PR4 stopped auto-
+        // transcribing. The transcribe trigger is a separate code path.
+        #expect(podcast.requestedEpisodeID == nil)
+        // Outcome reports the byteless audio-embed (matching Spotify/SoundCloud),
+        // NOT `.podcastTranscript` (which implied a transcript was fetched).
+        #expect(outcome.kind == .audioEmbed)
+        #expect(outcome.byteSize == 0)
+        // Filename is `<slug>-<id>` (mirrors YouTube's `youtube-<id>`); the
+        // `-transcript.md` suffix is reserved for the transcript version row's
+        // filename (written by `transcribePodcast(sourceID:)`), NOT the embed
+        // source's filename.
+        #expect(outcome.filename == "chinatalk-1000774368453")
 
-        // §11 byteless model: the source is byteless (no content bytes); the
-        // transcript lives as the processed-markdown derived alternative.
+        // §11 byteless model: the source is byteless (no content bytes).
         let sources = try store.listSources()
         let stored = try #require(sources.first { $0.filename == outcome.filename })
         #expect(stored.byteSize == 0)
         // sourceContent returns empty Data for a byteless source.
         #expect(try store.sourceContent(id: stored.id).isEmpty)
-        // The transcript is the processed-markdown head.
-        let head = try #require(try store.processedMarkdownHead(sourceID: stored.id))
-        #expect(head.content == "SPEAKER_1: Hello from the episode.")
-        // Origin provenance: apple-podcast agent + the pasted episode URL.
+        // No processed-markdown version was written — the source's
+        // `source_markdown_versions` is empty until the user transcribes.
+        #expect(try store.processedMarkdownHead(sourceID: stored.id) == nil)
+        // Origin provenance: apple-podcast agent + pasted episode URL + numeric ID.
         let origin = try #require(try store.sourceOrigin(sourceID: stored.id))
         #expect(origin.agentName == "apple-podcast")
         #expect(origin.plan == Self.chinaTalkURL)
@@ -88,15 +114,35 @@ struct PodcastIngestRoutingTests {
         #expect(sources.count == 1)
     }
 
-    @Test func missingHelperGivesAClearError() async throws {
+    // MARK: - AC.16: Transcribe throws a clear error when the helper is missing
+
+    /// Issue #799 PR4 AC.16 — the Transcribe trigger throws
+    /// `PodcastTranscriptError.signatureUnavailable` when the signing helper
+    /// is unavailable. Pre-PR4 this check fired AT INGEST (because ingest
+    /// fetched the transcript); post-PR4 ingest succeeds (byteless only) and
+    /// the check fires here, in `transcribePodcast(sourceID:fetcher:)`. The
+    /// View-level predicate (`store.isSourceRefreshable(for:)` returns `false`
+    /// for `.applePodcast` when `ApplePodcastTranscriptService.bundled()` is
+    /// nil) hides the button, so this throw is unreachable in production UI
+    /// — but the model stays honest for callers that bypass the predicate.
+    @Test func transcribePodcastThrowsSignatureUnavailableWithoutHelper() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        // No podcast fetcher available (a build without the signing helper).
+        // Ingest SUCCEEDS without a helper (PR4 contract: byteless only).
+        let outcome = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: nil)
+        #expect(outcome.kind == .audioEmbed)
+
+        // But transcribe MUST throw — there's no helper.
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
         await #expect(throws: PodcastTranscriptError.self) {
-            try await model.addURL(
-                Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: nil)
+            _ = try await model.transcribePodcast(sourceID: stored.id, fetcher: nil)
         }
+        // No transcript was written (the throw happened before
+        // `appendProcessedMarkdown`).
+        #expect(try store.processedMarkdownHead(sourceID: stored.id) == nil)
     }
 
     @Test func nonPodcastURLStillUsesHTMLFetcher() async throws {
@@ -119,8 +165,8 @@ struct PodcastIngestRoutingTests {
     }
 
     /// Phase 4b routing-precedence: an Apple Podcasts episode URL must still
-    /// route to `.podcastTranscript` (apple-podcast stays FIRST) even though the
-    /// new media recognizers are now wired in `addURL`. A `podcasts.apple.com`
+    /// route to `.audioEmbed` (apple-podcast stays FIRST) even though the new
+    /// media recognizers are now wired in `addURL`. A `podcasts.apple.com`
     /// URL is not a recognized media-provider URL, but the order is pinned so a
     /// future recognizer can't accidentally shadow it.
     @Test func podcastURLStaysFirstInRoutingPrecedence() async throws {
@@ -130,14 +176,17 @@ struct PodcastIngestRoutingTests {
 
         let outcome = try await model.addURL(
             Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
-        #expect(outcome.kind == .podcastTranscript)
-        #expect(podcast.requestedEpisodeID == "1000774368453")
+        #expect(outcome.kind == .audioEmbed)
+        // The fetcher is NOT consulted at ingest (PR4 contract); the
+        // `podcastURLStaysFirstInRoutingPrecedence` check is about routing
+        // precedence, not transcript fetch.
+        #expect(podcast.requestedEpisodeID == nil)
     }
 
     /// Issue #621: the source's display name must be the un-slugified episode
     /// title (written via `setSourceDisplayName`, mirroring the oEmbed title
     /// step for YouTube/Vimeo/Spotify/SoundCloud) — NOT the slugified filename
-    /// `chinatalk-1000774368453-transcript.md`.
+    /// `chinatalk-1000774368453`.
     @Test func episodeURLSetsDisplayTitleFromSlug() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
@@ -158,7 +207,7 @@ struct PodcastIngestRoutingTests {
 
     /// Issue #621: an episode URL with a multi-word slug resolves a real
     /// title-cased display name (small words kept lowercase) instead of the
-    /// `-transcript.md` slug filename.
+    /// slug filename.
     @Test func multiWordSlugResolvesTitleCasedDisplayName() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
@@ -198,6 +247,108 @@ struct PodcastIngestRoutingTests {
         #expect(stored.displayName == nil)
         // `effectiveName` falls through to the synthetic filename.
         #expect(stored.effectiveName == stored.filename)
+    }
+
+    // MARK: - AC.15: Transcribe trigger creates the transcript HEAD
+
+    /// Issue #799 PR4 AC.15 — tapping Transcribe on an un-transcribed podcast
+    /// source triggers `PodcastTranscriptFetching.transcript(for:)` and creates
+    /// a transcript processed-markdown version (HEAD, `.transcript` origin,
+    /// `"apple-ttml"` technique). Proves the Transcribe trigger fires on a
+    /// fresh byteless source ingested post-PR4 (no transcript at ingest).
+    @Test func transcribePodcastWritesTranscriptAlternative() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher(markdown: "SPEAKER_1: First transcript.")
+
+        // 1. Ingest — byteless only, no transcript.
+        let outcome = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+        #expect(outcome.kind == .audioEmbed)
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
+        // Sanity: no transcript at ingest (the PR4 invariant).
+        #expect(try store.processedMarkdownHead(sourceID: stored.id) == nil)
+
+        // 2. Transcribe — the user clicks the Transcribe button.
+        let head = try #require(
+            try await model.transcribePodcast(sourceID: stored.id, fetcher: podcast))
+
+        // The fetcher was consulted, with the episode ID reconstructed from
+        // `origin.plan` (the pasted URL stored as provenance).
+        #expect(podcast.requestedEpisodeID == "1000774368453")
+        // The transcript markdown is the new HEAD.
+        #expect(head.origin == .transcript)
+        #expect(head.technique == "apple-ttml")
+        #expect(head.content == "SPEAKER_1: First transcript.")
+        // Re-read from the store to confirm persistence.
+        let persisted = try #require(try store.processedMarkdownHead(sourceID: stored.id))
+        #expect(persisted.content == "SPEAKER_1: First transcript.")
+        #expect(persisted.origin == .transcript)
+        #expect(persisted.technique == "apple-ttml")
+    }
+
+    // MARK: - Defensive guard: non-podcast source
+
+    /// A defensive guard: calling `transcribePodcast(sourceID:)` on a
+    /// non-podcast source (e.g. a local-file source) throws
+    /// `SourceRefreshService.RefreshError.notRefreshable`. The View-level
+    /// predicate `isSourceRefreshable(for:)` already returns `false` for
+    /// non-`.applePodcast` sources, so the button doesn't render — this test
+    /// pins the model-level guard that backstops a caller bypassing the
+    /// predicate (a headless API, a future wikictl verb).
+    @Test func transcribeNonPodcastSourceThrowsNotRefreshable() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        // A local-file source has no apple-podcast provenance.
+        _ = try store.addSource(
+            filename: "notes.txt", data: Data("hello".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            provenance: nil)
+        let source = try #require(try store.listSources().first)
+
+        await #expect(throws: SourceRefreshService.RefreshError.self) {
+            _ = try await model.transcribePodcast(sourceID: source.id, fetcher: FakePodcastFetcher())
+        }
+    }
+
+    // MARK: - Re-transcribe appends coexisting alternative
+
+    /// Issue #799 PR4 — `transcribePodcast(sourceID:)` always appends a new
+    /// processed-markdown version (never clobbers). The first call creates the
+    /// HEAD; subsequent calls append coexisting alternatives. So a re-
+    /// transcribe creates an alternative the provenance chip + Re-transcribe
+    /// with menu surface for the user to pick. Mirrors the HTML
+    /// `reExtractHtmlAppendsCoexistingAlternative` (PR2): same method, same
+    /// write path (`appendProcessedMarkdown`), same append semantic.
+    @Test func reTranscribeAppendsCoexistingAlternative() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let podcast = FakePodcastFetcher(markdown: "SPEAKER_1: v1 transcript.")
+
+        // Ingest + transcribe v1.
+        let outcome = try await model.addURL(
+            Self.chinaTalkURL, fetcher: ExplodingFetcher(), podcastFetcher: podcast)
+        let sources = try store.listSources()
+        let stored = try #require(sources.first { $0.filename == outcome.filename })
+        _ = try await model.transcribePodcast(sourceID: stored.id, fetcher: podcast)
+        let historyAfterV1 = try store.processedMarkdownHistory(sourceID: stored.id)
+        #expect(historyAfterV1.count == 1)
+        let v1 = try #require(try store.processedMarkdownHead(sourceID: stored.id))
+        #expect(v1.content == "SPEAKER_1: v1 transcript.")
+
+        // Swap the canned transcript + transcribe v2.
+        podcast.markdown = "SPEAKER_1: v2 transcript."
+        _ = try await model.transcribePodcast(sourceID: stored.id, fetcher: podcast)
+
+        // A new version was appended (no clobber of v1).
+        let historyAfterV2 = try store.processedMarkdownHistory(sourceID: stored.id)
+        #expect(historyAfterV2.count == 2)
+        let v2 = try #require(try store.processedMarkdownHead(sourceID: stored.id))
+        #expect(v2.content == "SPEAKER_1: v2 transcript.")
+        #expect(v1.id != v2.id)
+        // v1 is still in the history (it's an alternative now).
+        #expect(historyAfterV2.contains(where: { $0.id == v1.id }))
     }
 }
 #endif
