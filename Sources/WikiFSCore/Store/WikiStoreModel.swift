@@ -3069,6 +3069,26 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Append a transcript markdown version (origin `.transcript`) to the
+    /// processed-markdown chain for `sourceID`. Used by the queued transcription
+    /// worker's `persistTranscription` path (#842). Thin pass-through to
+    /// `store.appendProcessedMarkdown` — the store-level `mutate()` emission +
+    /// `ResourceChangeEvent` fire inside the store, so no model-level work is
+    /// needed. Mirrors `seedPdfMarkdown`'s shape for extraction.
+    @discardableResult
+    public func appendTranscriptMarkdown(
+        for sourceID: PageID, content: String, technique: String
+    ) -> SourceMarkdownVersion? {
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: content,
+                origin: .transcript, note: nil, technique: technique)
+        } catch {
+            DebugLog.store("WikiStoreModel.appendTranscriptMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
     /// Re-extract a source's content with a given extractor + backend, appending
     /// a COEXISTING alternative (never clobbers the existing head). Resolves the
     /// source bytes + active content version from the store, runs the extractor,

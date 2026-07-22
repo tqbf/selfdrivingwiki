@@ -72,16 +72,9 @@ struct SourceDetailView: View {
     /// stay mutually exclusive in the View-level button rendering (each
     /// button dispatches to exactly one of `runExtraction` /
     /// `runHtmlExtraction` / `runRefresh` / `runTranscription`).
-    @State private var isTranscribing = false
-    /// True while a source refresh (re-fetch via provider) is in flight.
     @State private var isRefreshing = false
     /// Set when a refresh fails — surfaced inline below the action row.
     @State private var refreshError: String?
-    /// Set when a transcription (Extract ◂ Transcribe) fails — surfaced inline
-    /// below the action row alongside `refreshError` (issue #799 PR4). Both
-    /// stay scoped to the action button that produced them; the row renders
-    /// whichever error is non-nil.
-    @State private var transcribeError: String?
     /// Whether THIS source can actually be refreshed — the authoritative gate
     /// from `store.isSourceRefreshable(for:)` (mirrors the refresh service's real
     /// decision, incl. the snapshot-with-images guard and podcast-helper
@@ -185,6 +178,13 @@ struct SourceDetailView: View {
     /// `isPodcastEmbed` — `origin.provider` is the single source of truth.
     /// Returns `false` until `origin` loads, same shape as `isRefreshable`.
     private var isYouTubeEmbed: Bool { origin?.provider == .youtube }
+
+    /// True while a transcription queue job is running for this source (C5:
+    /// replaces the old `@State isTranscribing` with a computed property
+    /// derived from the activity tracker's `transcribingSourceIDs`). Drives
+    /// the Transcribe button's disabled state + "Transcribing…" label, so
+    /// re-clicks are prevented while a job is in flight (#842).
+    private var isTranscribing: Bool { tracker.isTranscribing(sourceID: file.id) }
 
     /// `true` when this source can be transcribed right now — the single
     /// source of truth for the Transcribe button's enable state (issue #799
@@ -700,11 +700,6 @@ struct SourceDetailView: View {
 
                     if let refreshError {
                         Text(refreshError)
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                    }
-                    if let transcribeError {
-                        Text(transcribeError)
                             .font(.callout)
                             .foregroundStyle(.red)
                     }
@@ -1509,58 +1504,57 @@ struct SourceDetailView: View {
     /// underlying `isTranscribable` returns `false` via
     /// `isSourceRefreshable`'s phase-out arm), so the podcast path is
     /// unreachable in production; the YouTube path stays available.
+    /// Run transcription through the queue engine instead of calling
+    /// `store.transcribe(sourceID:)` inline (#842). Enqueues a durable
+    /// `.transcription` queue job, waits for completion, and refreshes the
+    /// head version on success — mirroring `runExtraction()`. Errors land
+    /// on the queue item's `error` field + Activity window (not inline
+    /// `transcribeError`, which was removed). The de-dupe / reveal-job
+    /// navigation is PR2 (shared with #837).
     private func runTranscription() async {
-        isTranscribing = true
-        transcribeError = nil
-        defer { isTranscribing = false }
         do {
-            if let head = try await store.transcribe(sourceID: file.id) {
-                headVersion = head
+            let request = QueueItemRequest(
+                queue: .transcription, wikiID: store.eventBus?.wikiID ?? "",
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
             }
-        } catch PodcastTranscriptError.signatureUnavailable(let message) {
-            transcribeError = message
-        } catch YouTubeTranscriptError.noCaptions {
-            // YouTube-specific: a video with no captions is a normal case
-            // (some videos don't have them). The error stays surfaced so the
-            // user knows why the transcript button can produce no result.
-            transcribeError = "This video has no captions."
-        } catch YouTubeTranscriptError.playerResponseNotFound {
-            transcribeError = "Couldn't read this video's data (YouTube page changed or the video is restricted)."
-        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
-            transcribeError = "Sources from \"\(agent)\" can't be transcribed."
-        } catch SourceRefreshService.RefreshError.missingPlan {
-            transcribeError = "This source has no recorded URL or video ID to transcribe."
         } catch {
-            transcribeError = "Transcribe failed: \(error.localizedDescription)"
+            DebugLog.extraction("SourceDetailView: transcribe enqueue failed (\(file.id.rawValue)): \(error)")
         }
     }
 
-    /// Re-transcription trigger (issue #799 PR4). Called by the
-    /// "Re-transcribe with" menu's podcast branch when the user picks a
-    /// backend from `PodcastTranscriptionBackend.allCases`. Mirrors
-    /// `runHtmlReExtraction(with:)` (PR2) but routes through the inline
-    /// `transcribe(sourceID:podcastFetcher:)` path (PR5). The `backend`
-    /// parameter is currently a placeholder for future backends
-    /// (Whisper / Rev.ai / etc.); `.appleTranscript` is the only backend
-    /// today, so every re-transcribe routes through the same `transcribe`
-    /// path. The picker is the scaffolding for extensibility — adding a
-    /// `case` to `PodcastTranscriptionBackend` and a branch in
-    /// `WikiStoreModel.transcribe` is the future hook.
+    /// Re-transcription trigger (issue #799 PR4). Now enqueues through the
+    /// queue engine too (#842) — the `backend` parameter rides in
+    /// `payload.stageRouting` (placeholder for future backends; only
+    /// `.appleTranscript` exists today).
     private func runTranscription(with backend: PodcastTranscriptionBackend) async {
-        isTranscribing = true
-        transcribeError = nil
-        defer { isTranscribing = false }
-        // The chosen backend is logged here (the only backend today,
-        // `.appleTranscript`, dispatches through `transcribe(sourceID:)`
-        // unchanged; the log entry preserves the user intent for future
-        // auditability when a new backend lands and the dispatch branches).
         DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
         do {
-            if let head = try await store.transcribe(sourceID: file.id) {
-                headVersion = head
+            let request = QueueItemRequest(
+                queue: .transcription, wikiID: store.eventBus?.wikiID ?? "",
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break
             }
         } catch {
-            transcribeError = "Transcribe failed: \(error.localizedDescription)"
+            DebugLog.extraction("SourceDetailView: re-transcribe enqueue failed (\(file.id.rawValue)): \(error)")
         }
     }
 

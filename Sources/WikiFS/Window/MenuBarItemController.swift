@@ -220,6 +220,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         extractionItem.target = self
         menu.addItem(extractionItem)
 
+        let transcriptionItem = NSMenuItem(
+            title: "Transcription Queue…",
+            action: #selector(openTranscriptionWindow(_:)),
+            keyEquivalent: "")
+        transcriptionItem.target = self
+        menu.addItem(transcriptionItem)
+
         menu.addItem(.separator())
 
         // #528 spike: today's cumulative token/cost usage. The summary line
@@ -357,6 +364,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         showQueueWindow(for: .extraction)
     }
 
+    @objc private func openTranscriptionWindow(_ sender: NSMenuItem?) {
+        showQueueWindow(for: .transcription)
+    }
+
     /// The session menu actions target: the frontmost wiki window's session,
     /// falling back to ANY live session — a status-item menu is reachable
     /// while no wiki window is key, and a silent `return` there reads as a
@@ -477,7 +488,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// `nonisolated` — pure (no AppKit state) so tests can call without a
     /// main-actor hop.
     nonisolated static func queueWindowAutosaveName(for queue: QueueKind) -> String {
-        queue == .extraction ? "ExtractionQueueWindow" : "AgentQueueWindow"
+        switch queue {
+        case .extraction: return "ExtractionQueueWindow"
+        case .ingestion: return "AgentQueueWindow"
+        case .transcription: return "TranscriptionQueueWindow"
+        }
     }
 
     /// #635: validate a previously-saved NSWindow autosave frame string.

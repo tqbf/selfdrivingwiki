@@ -87,6 +87,12 @@ final class QueueActivityTracker {
     /// Ingest button disable. Replaces `launcher.ingestingSourceIDs`.
     private(set) var ingestingSourceIDs: Set<PageID> = []
 
+    /// Source IDs currently being transcribed (any transcription queue item in
+    /// `.running` state). Drives the Transcribe button's per-source disable
+    /// + "Transcribing…" label, mirroring `extractingSourceIDs` for the
+    /// `.transcription` queue kind (#842).
+    private(set) var transcribingSourceIDs: Set<PageID> = []
+
     /// Queue item IDs currently running a lint (`.ingestion` items with
     /// `lintPageIDs != nil`). Lint items have empty `sourceIDs`, so they
     /// don't show up in `ingestingSourceIDs` — this set ensures
@@ -134,6 +140,18 @@ final class QueueActivityTracker {
 
     /// True while any ingestion or lint is running.
     var isIngesting: Bool { !ingestingSourceIDs.isEmpty || !lintingItemIDs.isEmpty }
+
+    /// True while any transcription is running. Drives nothing in the sidebar
+    /// spinner today, but kept for parity with `isExtracting`/`isIngesting`.
+    var isTranscribingAny: Bool { !transcribingSourceIDs.isEmpty }
+
+    /// True if a transcription job is actively processing `sourceID`. Used by
+    /// `SourceDetailView` to disable its Transcribe button and reflect the
+    /// running state (the button reads "Transcribing…"), mirroring how
+    /// `isSlotBusyForOtherSource` gates the Extract button (#842 C3/C5).
+    func isTranscribing(sourceID: PageID) -> Bool {
+        transcribingSourceIDs.contains(sourceID)
+    }
 
     /// True if a lint job (page-level or whole-wiki) is actively processing
     /// `pageID` in `wikiID`. A whole-wiki lint (`lintPageIDs == []`) covers
@@ -320,6 +338,7 @@ final class QueueActivityTracker {
         queueEngine = nil
         extractingSourceIDs = []
         ingestingSourceIDs = []
+        transcribingSourceIDs = []
         lintingItemIDs = []
         lintingPageIDs = []
         wholeWikiLintingWikiIDs = []
@@ -544,6 +563,8 @@ final class QueueActivityTracker {
                 } else {
                     ingestingSourceIDs.formUnion(sourceIDs)
                 }
+            case .transcription:
+                transcribingSourceIDs.formUnion(sourceIDs)
             }
 
         case .transcript(let id, let agentEvent):
@@ -664,6 +685,8 @@ final class QueueActivityTracker {
                 extractingSourceIDs.subtract(sourceIDs)
             case .ingestion:
                 ingestingSourceIDs.subtract(sourceIDs)
+            case .transcription:
+                transcribingSourceIDs.subtract(sourceIDs)
             }
         }
         // Lint items are tracked separately — always remove on terminal state.

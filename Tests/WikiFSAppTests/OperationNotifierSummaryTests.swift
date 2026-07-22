@@ -64,6 +64,12 @@ import WikiFSCore
         #expect(kind == .lint(pageCount: nil))
     }
 
+    @Test func kindTranscription() {
+        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let kind = OperationNotifier.operationKind(for: item)
+        #expect(kind == .transcription(sourceCount: 2))
+    }
+
     // MARK: - Completed summaries
 
     @Test func completedExtraction() {
@@ -112,6 +118,19 @@ import WikiFSCore
         #expect(s?.body == "All pages linted")
     }
 
+    @Test func completedTranscription() {
+        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let s = OperationNotifier.summary(for: item, outcome: .completed)
+        #expect(s?.title == "Transcription Complete")
+        #expect(s?.body == "2 transcripts fetched")
+    }
+
+    @Test func completedTranscriptionSingle() {
+        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1")])
+        let s = OperationNotifier.summary(for: item, outcome: .completed)
+        #expect(s?.body == "1 transcript fetched")
+    }
+
     // MARK: - Failed summaries
 
     @Test func failedExtraction() {
@@ -140,6 +159,13 @@ import WikiFSCore
         let s = OperationNotifier.summary(for: item, outcome: .failed("Agent crashed"))
         #expect(s?.title == "Lint Failed")
         #expect(s?.body == "Wiki-wide lint: Agent crashed")
+    }
+
+    @Test func failedTranscription() {
+        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1")])
+        let s = OperationNotifier.summary(for: item, outcome: .failed("No captions"))
+        #expect(s?.title == "Transcription Failed")
+        #expect(s?.body == "1 transcript: No captions")
     }
 
     @Test func failedEmptyErrorFallsBackToUnknown() {
@@ -180,6 +206,13 @@ import WikiFSCore
         let s = OperationNotifier.summary(for: item, outcome: .cancelled)
         #expect(s?.title == "Lint Cancelled")
         #expect(s?.body == "Wiki-wide lint \u{2014} cancelled")
+    }
+
+    @Test func cancelledTranscription() {
+        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let s = OperationNotifier.summary(for: item, outcome: .cancelled)
+        #expect(s?.title == "Transcription Cancelled")
+        #expect(s?.body == "2 transcripts \u{2014} cancelled")
     }
 
     // MARK: - Outcome identifier
