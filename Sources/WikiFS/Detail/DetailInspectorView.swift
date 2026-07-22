@@ -37,6 +37,21 @@ struct DetailInspectorView<Outline: View>: View {
     @ViewBuilder let outline: () -> Outline
 
     @State private var dragStartWidth: Double? = nil
+    /// Transient width while the divider is being dragged. Kept as local state
+    /// so the live resize re-renders only this inspector subtree (and a cheap
+    /// layout pass on the sibling), instead of invalidating the whole parent
+    /// `PageDetailView` body + writing `@AppStorage` on every frame — which is
+    /// what caused the resize flicker. Committed to `outlineWidth` on release.
+    @State private var liveWidth: Double? = nil
+
+    /// The width to render: the in-flight drag value if dragging, else the
+    /// persisted `outlineWidth`.
+    private var effectiveWidth: Double { liveWidth ?? outlineWidth }
+
+    /// Clamp a proposed inspector width to the allowed range.
+    private func clampedWidth(_ width: Double) -> Double {
+        max(180, min(500, width))
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,15 +73,17 @@ struct DetailInspectorView<Outline: View>: View {
                 .gesture(
                     DragGesture()
                         .onChanged { value in
-                            if dragStartWidth == nil {
-                                dragStartWidth = outlineWidth
-                            }
-                            if let start = dragStartWidth {
-                                let newWidth = start - Double(value.translation.width)
-                                outlineWidth = max(180, min(500, newWidth))
-                            }
+                            let start = dragStartWidth ?? outlineWidth
+                            if dragStartWidth == nil { dragStartWidth = start }
+                            // Update local state only — no AppStorage write,
+                            // no parent body invalidation, per drag frame.
+                            liveWidth = clampedWidth(start - Double(value.translation.width))
                         }
-                        .onEnded { _ in
+                        .onEnded { value in
+                            let start = dragStartWidth ?? outlineWidth
+                            // Commit the final width to the persisted store once.
+                            outlineWidth = clampedWidth(start - Double(value.translation.width))
+                            liveWidth = nil
                             dragStartWidth = nil
                         }
                 )
@@ -98,7 +115,7 @@ struct DetailInspectorView<Outline: View>: View {
                     }
                 }
             }
-            .frame(width: outlineWidth)
+            .frame(width: effectiveWidth)
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
