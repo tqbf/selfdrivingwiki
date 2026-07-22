@@ -398,7 +398,6 @@ private struct ProviderDetailPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 providerHeader
                 configForm
-                helperText
             }
             .padding(.bottom, 20)
         }
@@ -460,16 +459,11 @@ private struct ProviderDetailPane: View {
                 }
 
                 defaultModelRow
-
-                if case .error(let message) = modelRefreshState {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                refreshModelsRow
             } header: {
                 Text("Provider")
             } footer: {
-                Text("A single command line. Quote arguments containing spaces. Default Model is the model this provider runs unless an operation pins a different one; Refresh rediscovers the models it advertises.")
+                Text("A single command line. Quote arguments containing spaces. Default Model is the model this provider runs unless an operation pins a different one; Refresh Models rediscovers the models it advertises.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -479,35 +473,46 @@ private struct ProviderDetailPane: View {
         .formStyle(.grouped)
     }
 
-    /// A single "Default Model" row: the provider's default model + a refresh
-    /// button to (re)discover the advertised model list. Operations can override
-    /// this per-operation; when they don't ("Same as provider"), this is what
-    /// runs.
+    /// The provider's default model — used unless an operation pins a different
+    /// one ("Same as provider").
     @ViewBuilder
     private var defaultModelRow: some View {
         let cachedModels = config.cachedModels(forProvider: provider.id)
-        LabeledContent("Default Model") {
-            HStack(spacing: 8) {
-                Picker("Default Model", selection: modelBinding) {
-                    Text("Agent default").tag("")
-                    ForEach(cachedModels, id: \.modelId) { model in
-                        Text(model.displayLabel).tag(model.modelId)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 220)
+        Picker("Default Model", selection: modelBinding) {
+            Text("Agent default").tag("")
+            ForEach(cachedModels, id: \.modelId) { model in
+                Text(model.displayLabel).tag(model.modelId)
+            }
+        }
+    }
 
-                if modelRefreshState == .loading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        refreshModels()
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Rediscover the models this provider advertises (requires the executable on PATH).")
-                }
+    /// A full-width "Refresh Models" button on its own row + the discovery
+    /// status (spinner / count / error).
+    @ViewBuilder
+    private var refreshModelsRow: some View {
+        HStack {
+            Button("Refresh Models") { refreshModels() }
+                .disabled(modelRefreshState == .loading)
+                .help("Rediscover the models this provider advertises (requires the executable on PATH).")
+            Spacer()
+            switch modelRefreshState {
+            case .idle:
+                EmptyView()
+            case .loading:
+                ProgressView().controlSize(.small)
+                Text("Discovering…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .ready(let models):
+                Text("\(models.count) models")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .error(let message):
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
             }
         }
     }
@@ -545,23 +550,6 @@ private struct ProviderDetailPane: View {
                 }
             }
         }
-    }
-
-    // MARK: - Helper text
-
-    private var helperText: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Command, environment, and model apply when this provider runs. Use the Operations item in the sidebar to pin which provider runs Chat, Ingestion, Lint, and Summary.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Providers are stored in agent-providers.json in the app's container.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
     }
 
     // MARK: - Commit / persistence
@@ -744,7 +732,11 @@ enum EnvVarText {
             lines.append("#")
             lines.append("# Common variables for this provider:")
             for hint in hints {
-                lines.append("# \(hint.key)=   # \(hint.description)")
+                // Description on its own comment line ABOVE the key, so long
+                // descriptions don't wrap onto the KEY= line.
+                lines.append("#")
+                lines.append("# \(hint.description)")
+                lines.append("# \(hint.key)=")
             }
         }
         return lines.joined(separator: "\n")
