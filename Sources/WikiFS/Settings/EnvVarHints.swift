@@ -30,12 +30,12 @@ struct EnvVarHints {
                 .init(key: "CLAUDE_CODE_EXECUTABLE",
                       description: "Path to the `claude` binary when it is not on PATH."),
                 .init(key: "ANTHROPIC_API_KEY",
-                      description: "Anthropic API key (prefer the API Key field below for Keychain storage)."),
+                      description: "Anthropic API key."),
             ]
         case "gemini":
             return [
                 .init(key: "GEMINI_API_KEY",
-                      description: "Google AI API key (prefer the API Key field below for Keychain storage)."),
+                      description: "Google AI API key."),
                 .init(key: "GOOGLE_GENAI_USE_VERTEXAI",
                       description: "Set to \"1\" to use Vertex AI instead of the Gemini API."),
             ]
@@ -44,14 +44,14 @@ struct EnvVarHints {
                 .init(key: "CODEX_PATH",
                       description: "Path to the `codex` binary when it is not on PATH."),
                 .init(key: "OPENAI_API_KEY",
-                      description: "OpenAI API key (prefer the API Key field below for Keychain storage)."),
+                      description: "OpenAI API key."),
             ]
         case "opencode":
             return [
                 .init(key: "OPENAI_API_KEY",
-                      description: "OpenAI API key (prefer the API Key field below for Keychain storage)."),
+                      description: "OpenAI API key."),
                 .init(key: "ANTHROPIC_API_KEY",
-                      description: "Anthropic API key (prefer the API Key field below for Keychain storage)."),
+                      description: "Anthropic API key."),
             ]
         case "goose":
             return [
