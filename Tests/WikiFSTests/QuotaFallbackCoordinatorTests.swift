@@ -14,11 +14,18 @@ struct QuotaFallbackCoordinatorTests {
         AgentProvider(id: id, label: id.capitalized, command: [id], enabled: enabled)
     }
 
+    /// #813: unique temp URL per test so quota-state.json doesn't pollute
+    /// across tests (each coordinator reads/writes its own file).
+    private func makeQuotaURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("quota-test-\(UUID().uuidString).json")
+    }
+
     // MARK: - markExhausted / isExhausted
 
     @Test("markExhausted marks provider as dead")
     func testMarkExhausted() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let reset = Date(timeIntervalSinceNow: 3600)
         coord.markExhausted("claude-acp", resetTime: reset, kind: .claudeSession)
         #expect(coord.isExhausted("claude-acp"))
@@ -26,7 +33,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("isExhausted returns false for unknown provider")
     func testUnknownProviderNotExhausted() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         #expect(!coord.isExhausted("nonexistent"))
     }
 
@@ -34,7 +41,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("Auto-revival after reset time")
     func testAutoRevival() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let pastDate = Date(timeIntervalSince1970: 0)  // already past
         coord.markExhausted("claude-acp", resetTime: pastDate, kind: .claudeSession)
         // Should auto-revive (now >= reset) → not exhausted.
@@ -45,7 +52,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("firstLive returns the first non-exhausted provider")
     func testFirstLive() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let chain = [
             makeProvider("claude-acp"),
             makeProvider("glm-acp"),
@@ -65,7 +72,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("firstLive returns nil when all providers exhausted")
     func testAllExhausted() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let chain = [
             makeProvider("claude-acp"),
             makeProvider("glm-acp")
@@ -77,7 +84,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("firstLive with empty chain returns nil")
     func testEmptyChain() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         #expect(coord.firstLive(in: []) == nil)
     }
 
@@ -85,7 +92,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("Marking exhausted twice keeps the longer window")
     func testLongerWindowWins() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let longReset = Date(timeIntervalSinceNow: 7 * 86400)  // 7 days
         let shortReset = Date(timeIntervalSinceNow: 3600)      // 1 hour
         coord.markExhausted("claude-acp", resetTime: longReset, kind: .claudeWeekly)
@@ -98,7 +105,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("Nil reset time applies conservative default")
     func testNilResetTimeDefault() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         coord.markExhausted("claude-acp", resetTime: nil, kind: .claudeSession)
         // Should be dead with a 5-hour default.
         #expect(coord.isExhausted("claude-acp"))
@@ -108,7 +115,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("recordPlanner sets plannerProviderId")
     func testRecordPlanner() {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let backend = FakeAgentBackend()
         coord.recordPlanner(providerId: "glm-acp", backend: backend)
         #expect(coord.plannerProviderId == "glm-acp")
@@ -118,7 +125,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("finishFallbackBackends cancels non-primary backends")
     func testFinishFallbackBackends() async {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let primary = FakeAgentBackend()
         let fallback = FakeAgentBackend()
         coord.recordBackend(primary, forProvider: "claude-acp")
@@ -133,7 +140,7 @@ struct QuotaFallbackCoordinatorTests {
 
     @Test("finishFallbackBackends with nil primary cancels all")
     func testFinishAllBackends() async {
-        let coord = QuotaFallbackCoordinator()
+        let coord = QuotaFallbackCoordinator(quotaStateURL: makeQuotaURL())
         let backend1 = FakeAgentBackend()
         let backend2 = FakeAgentBackend()
         coord.recordBackend(backend1, forProvider: "claude-acp")

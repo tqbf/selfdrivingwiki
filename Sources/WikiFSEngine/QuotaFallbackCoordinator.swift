@@ -17,19 +17,19 @@ import WikiFSCore
 /// across app restarts. The background ingest coordinator checks this state
 /// before enqueuing work.
 @MainActor
-final class QuotaFallbackCoordinator {
+public final class QuotaFallbackCoordinator {
 
     /// #813: persisted quota state structure (JSON)
-    private struct QuotaState: Codable {
-        var version: Int
-        var providers: [ProviderQuotaEntry]
+    public struct QuotaState: Codable {
+        public var version: Int
+        public var providers: [ProviderQuotaEntry]
     }
 
     /// #813: individual provider quota entry
-    private struct ProviderQuotaEntry: Codable {
-        let providerId: String
-        let deadUntil: Date
-        let kind: QuotaSignal.Kind
+    public struct ProviderQuotaEntry: Codable {
+        public let providerId: String
+        public let deadUntil: Date
+        public let kind: QuotaSignal.Kind
     }
 
     /// #813: providerId → (revival time, kind). A provider is "dead" while
@@ -37,16 +37,9 @@ final class QuotaFallbackCoordinator {
     /// (lazy revival).
     private var deadUntil: [String: (revival: Date, kind: QuotaSignal.Kind)] = [:]
 
-    /// #813: URL to the quota-state.json file in the app group container
-    private var quotaStateURL: URL {
-        do {
-            let containerURL = try DatabaseLocation.appGroupContainerDirectory()
-            return containerURL.appendingPathComponent("quota-state.json")
-        } catch {
-            DebugLog.store("QuotaFallbackCoordinator: failed to resolve app group container: \(error.localizedDescription)")
-            return FileManager.default.temporaryDirectory.appendingPathComponent("quota-state.json")
-        }
-    }
+    /// #813: URL to the quota-state.json file. Defaults to the app group
+    /// container; overridable for tests.
+    private let quotaStateURL: URL
 
     /// providerId → the backend spawned for it (for teardown when it dies or
     /// the run ends). Each fallback provider gets its own `ACPBackend` actor;
@@ -58,8 +51,20 @@ final class QuotaFallbackCoordinator {
     /// until the planner phase completes.
     private(set) var plannerProviderId: String?
 
-    /// #813: initialize the coordinator and load persisted quota state
-    init() {
+    /// #813: initialize the coordinator and load persisted quota state.
+    /// - Parameter quotaStateURL: override the persistence location (for
+    ///   tests). Defaults to the app group container.
+    public init(quotaStateURL: URL? = nil) {
+        if let quotaStateURL {
+            self.quotaStateURL = quotaStateURL
+        } else {
+            if let containerURL = try? DatabaseLocation.appGroupContainerDirectory() {
+                self.quotaStateURL = containerURL.appendingPathComponent("quota-state.json")
+            } else {
+                DebugLog.store("QuotaFallbackCoordinator: failed to resolve app group container, using temp dir")
+                self.quotaStateURL = FileManager.default.temporaryDirectory.appendingPathComponent("quota-state.json")
+            }
+        }
         loadQuotaState()
     }
 
@@ -67,7 +72,7 @@ final class QuotaFallbackCoordinator {
     /// — the detector already applies a default, so this is defensive). If the
     /// provider is already dead with a later reset time, keep the later one
     /// (the longer window wins).
-    func markExhausted(_ providerId: String, resetTime: Date?, kind: QuotaSignal.Kind) {
+    public func markExhausted(_ providerId: String, resetTime: Date?, kind: QuotaSignal.Kind) {
         let revival: Date
         if let resetTime {
             if resetTime > Date() {
@@ -91,11 +96,12 @@ final class QuotaFallbackCoordinator {
         }
         deadUntil[providerId] = (revival, kind)
         DebugLog.agent("QuotaFallback: provider \(providerId) marked dead until \(revival) (kind: \(kind))")
+        saveQuotaState()
     }
 
     /// True if `providerId` is currently dead (now < its revival time). Auto-
     /// revives (prunes the entry) if now >= revival time.
-    func isExhausted(_ providerId: String) -> Bool {
+    public func isExhausted(_ providerId: String) -> Bool {
         guard let entry = deadUntil[providerId] else { return false }
         if Date() >= entry.revival {
             // Auto-revival — the provider's quota window has reset.
@@ -209,9 +215,8 @@ final class QuotaFallbackCoordinator {
             encoder.outputFormatting = .prettyPrinted
             let data = try encoder.encode(state)
 
-            let tempURL = url.appendingPathExtension("tmp")
-            try data.write(to: tempURL, options: .atomic)
-            try FileManager.default.moveItem(at: tempURL, to: url)
+            // Atomic write handles the replace-existing case correctly.
+            try data.write(to: url, options: .atomic)
 
             DebugLog.agent("QuotaFallback: saved \(state.providers.count) quota entries to \(url.path)")
         } catch {
