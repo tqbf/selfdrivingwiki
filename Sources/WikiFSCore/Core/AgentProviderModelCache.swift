@@ -43,18 +43,24 @@ public struct CachedModelInfo: Codable, Hashable, Sendable, Identifiable {
 ///
 /// Extracted as a pure enum-returning helper so the selection logic is unit-
 /// tested WITHOUT a live agent subprocess (the spike forbids end-to-end
-/// testing). `ACPBackend.start` consumes this to drive `client.setModel`.
+/// testing). `ACPBackend.applyModelIfNeeded` consumes this to drive
+/// `client.setModel` (mechanism #1) or `client.setConfigOption` (mechanism #2).
 ///
 /// - `useAgentDefault`: no selection (or the selection matches the agent's
 ///   current model) → do nothing; today's behavior is unchanged (default).
 /// - `apply(selectedId:)`: the user picked a model that differs from the agent's
-///   current one AND is in the advertised list → call `setModel` with it.
-/// - `useAgentDefaultUnadvertised`: the user has a stale selection (the agent
-///   no longer advertises it) → fall back to the agent default rather than
-///   sending an id the agent will 404 on.
+///   current one AND is in the advertised list → call `setModel` with it
+///   (the `ModelsInfo.availableModels` path — unchanged).
+/// - `applyViaModelConfigOption(selectedValue:)`: #834 — the agent advertises
+///   model selection as a `"model"` config option (`session/set_config_option`)
+///   rather than via `availableModels` (e.g. claude-acp). The value is the raw
+///   option value id, validated against the option's advertised `options`.
+///   Driven by `ACPModelSelectionResolver.resolveConfigOptionModel` (in
+///   `WikiFSEngine` — it touches `ACPModel.SessionConfigOption`).
 public enum ACPModelSelectionDecision: Equatable, Sendable {
     case useAgentDefault
     case apply(selectedId: String)
+    case applyViaModelConfigOption(selectedValue: String)
 }
 
 public enum ACPModelSelectionResolver {
