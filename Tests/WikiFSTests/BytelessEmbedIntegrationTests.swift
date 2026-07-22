@@ -358,20 +358,48 @@ struct BytelessEmbedIntegrationTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: YouTubeFixtureFetcher())
         #endif
-        // The outcome reports the transcript (markdown content), not just the embed.
-        #expect(outcome.kind == .videoTranscript)
-        #expect(outcome.filename.hasSuffix("-transcript.md"))
+        // Issue #799 PR5: YouTube ingest is now byteless-only — no transcript
+        // fetched at ingest (mirrors the podcast PR4 contract). The outcome
+        // reports the byteless video embed (NOT `.videoTranscript` — the
+        // pre-PR5 contract reported a transcript because the auto-fetch ran
+        // at ingest; PR5 stopped that, so the outcome reflects just the embed).
+        // The synthetic metadata page is still written so the reader has
+        // readable content (issue #646) — but the synthetic page carries no
+        // transcript cues; the user clicks Transcribe to fetch those.
+        #expect(outcome.kind == .videoEmbed)
+        #expect(outcome.filename == "youtube-dQw4w9WgXcQ")
         let sources = try store.listSources()
-        #expect(sources.count == 1)  // one byteless source, transcript is a derived version
+        #expect(sources.count == 1)  // one byteless source, transcript would be a derived version
         let source = try #require(sources.first)
         #expect(source.byteSize == 0)  // byteless embed
-        // The processed markdown (transcript) is stored as a derived version.
+        // The synthetic metadata-only markdown page exists (the byteless-only
+        // ingest writes it via `writeSyntheticBytelessMarkdown`), but it has
+        // the `byteless-oembed-synthetic` technique (NOT `youtube-captions`),
+        // and no transcript cues.
         let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
-        #expect(md.content.contains("Hello world"))
-        #expect(md.content.contains("Second cue"))
-        #expect(md.content.contains("[Watch on YouTube]"))
-        #expect(md.origin == .transcript)
-        #expect(md.technique == "youtube-captions")
+        #expect(md.technique == "byteless-oembed-synthetic")
+        #expect(!md.content.contains("Hello world"))
+        #expect(!md.content.contains("Second cue"))
+        // The oEmbed title is still surfaced (this fixture serves it).
+        #expect(md.content.contains("Test Talk"))
+
+        // The user clicks Transcribe — `transcribe(sourceID:)` dispatches to
+        // the private `transcribeYouTube` helper, which fetches via
+        // `YouTubeTranscriptService.transcript(forVideoID:)`.
+        let head = try #require(try await model.transcribe(
+            sourceID: source.id,
+            youtubeFetcher: YouTubeTranscriptService(fetcher: YouTubeFixtureFetcher())))
+        #expect(head.origin == .transcript)
+        #expect(head.technique == "youtube-captions")
+        #expect(head.content.contains("Hello world"))
+        #expect(head.content.contains("Second cue"))
+        #expect(head.content.contains("[Watch on YouTube]"))
+        // Persisted to the store as the new HEAD (alternative appended —
+        // the synthetic page is still in history, just no longer the head).
+        let persisted = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        #expect(persisted.content == head.content)
+        #expect(persisted.origin == .transcript)
+        #expect(persisted.technique == "youtube-captions")
     }
 
     @Test func youtubeURLWithNoCaptionsFallsBackToSyntheticMarkdown() async throws {
@@ -390,22 +418,35 @@ struct BytelessEmbedIntegrationTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: emptyFetcher)
         #endif
-        // No captions → embed outcome (kind unchanged), transcript failure swallowed,
-        // BUT #646: a synthetic metadata-only markdown page is written so the reader
-        // still has something to show (the no-oEmbed path — this fixture doesn't
-        // serve the oEmbed endpoint, so the synthesizer renders URL + filename only).
+        // Issue #799 PR5: YouTube ingest is byteless-only — the fetcher is
+        // NOT consulted at ingest (the param is a back-compat no-op now,
+        // mirroring `podcastFetcher`). The outcome is always `.videoEmbed`
+        // (no `.videoTranscript` arm anymore), and the synthetic metadata
+        // page is written so the reader has something to show (issue #646).
+        // The no-oEmbed path (this fixture doesn't serve the oEmbed endpoint)
+        // means the synthesizer renders URL + filename only.
         #expect(outcome.kind == .videoEmbed)
         let sources = try store.listSources()
         #expect(sources.count == 1)
         let source = try #require(sources.first)
         #expect(source.byteSize == 0)  // byteless embed
-        // The synthetic markdown head exists (was nil pre-#646) and carries the URL.
+        // The synthetic markdown head exists and carries the URL — the
+        // byteless-only ingest writes it the same way regardless of whether
+        // a fetcher was injected.
         let md = try #require(try store.processedMarkdownHead(sourceID: source.id))
         #expect(md.origin == .transcript)
         #expect(md.technique == "byteless-oembed-synthetic")
         #expect(md.content.contains("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-        // No transcript cues present (captions weren't available).
+        // No transcript cues present (captions weren't fetched at ingest).
         #expect(!md.content.contains("Hello world"))
+        // The user clicks Transcribe — `transcribe(sourceID:)` now
+        // attempts the caption fetch on-demand. With the no-captions
+        // fixture, the fetch throws `YouTubeTranscriptError.noCaptions`.
+        await #expect(throws: YouTubeTranscriptError.self) {
+            _ = try await model.transcribe(
+                sourceID: source.id,
+                youtubeFetcher: YouTubeTranscriptService(fetcher: emptyFetcher))
+        }
     }
 
     /// Serves a watch page that has no caption tracks → `.noCaptions`.

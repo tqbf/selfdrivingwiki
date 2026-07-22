@@ -103,9 +103,13 @@ struct SourceRefreshTests {
 
     #if PODCAST_TRANSCRIPTS
     /// Issue #799 PR4 — the v1 transcript is now seeded via
-    /// `transcribePodcast(sourceID:)` (NOT via `addURL` — PR4 stopped auto-
+    /// `transcribe(sourceID:)` (NOT via `addURL` — PR4 stopped auto-
     /// transcription at ingest, so a fresh podcast source has no transcript
-    /// markdown). The v2 refresh comes from `refreshSource(_:)`, which calls
+    /// markdown). PR5 renamed the trigger from `transcribePodcast(sourceID:
+    /// fetcher:)` to the unified `transcribe(sourceID:podcastFetcher:)`
+    /// dispatch entry point; the call site injects the fetcher via the
+    /// `podcastFetcher:` parameter on the public entry point. The v2 refresh
+    /// comes from `refreshSource(_:)`, which calls
     /// `SourceRefreshService.materializePodcast(origin:)` → fetches v2 via
     /// the same fetcher; the v2 markdown lands as a derived-markdown version
     /// through the same `appendProcessedMarkdown(origin: .transcript)` path.
@@ -136,8 +140,9 @@ struct SourceRefreshTests {
         // Sanity: ingest wrote no transcript.
         #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
-        // 2. Transcribe — the user clicks the Transcribe button.
-        _ = try await model.transcribePodcast(sourceID: source.id, fetcher: podcast)
+        // 2. Transcribe — the user clicks the Transcribe button. PR5: the
+        // public entry point is now `transcribe(sourceID:podcastFetcher:)`.
+        _ = try await model.transcribe(sourceID: source.id, podcastFetcher: podcast)
         let headBefore = try #require(try store.processedMarkdownHead(sourceID: source.id))
         #expect(headBefore.content == "SPEAKER_1: v1 transcript.")
 
