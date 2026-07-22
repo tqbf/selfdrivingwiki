@@ -46,6 +46,13 @@ public struct SourceEmbedDescriptor: Sendable, Equatable {
         self.agentName = agentName
         self.planURL = planURL
     }
+
+    /// The typed provider parsed from `agentName` (`SourceProvider(rawValue:)`),
+    /// or `nil` when `agentName` is `nil`/empty/unknown. Switch sites consult
+    /// this so the compiler can enforce exhaustiveness.
+    public var provider: SourceProvider? {
+        SourceProvider(rawValue: agentName)
+    }
 }
 
 // MARK: - WikiReaderOrigin
@@ -147,7 +154,7 @@ public enum ExternalEmbed {
         // Keyed on agentName (not a synthetic mime) because the podcast source
         // carries a real-ish mime from the transcript pipeline. Idempotent: a
         // planURL already on embed.podcasts.apple.com resolves unchanged.
-        if d.agentName == "apple-podcast", let embedURL = applePodcastEmbedURL(from: d.planURL) {
+        if d.provider == .applePodcast, let embedURL = applePodcastEmbedURL(from: d.planURL) {
             return EmbedTarget(kind: .iframe, url: embedURL)
         }
 
@@ -186,7 +193,7 @@ public enum ExternalEmbed {
         let mime = d.mimeType ?? ""
         if mime.hasPrefix("audio/") { return "Audio" }
         if mime.hasPrefix("video/") { return "Video" }
-        if d.agentName == "apple-podcast" { return "Audio" }
+        if d.provider == .applePodcast { return "Audio" }
         return "Media"
     }
 

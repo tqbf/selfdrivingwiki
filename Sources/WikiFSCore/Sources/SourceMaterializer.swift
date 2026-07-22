@@ -171,17 +171,21 @@ public struct SourceOrigin: Sendable, Equatable {
         self.fetchedAt = fetchedAt
     }
 
-    /// A short human label for the origin, for UI/CLI display.
+    /// The typed provider parsed from `agentName` (`SourceProvider(rawValue:)`),
+    /// or `nil` for unknown/empty values. Switch sites consult this so the
+    /// compiler can enforce exhaustiveness over the known-provider arm while
+    /// nil/unknown degrades to a default branch. See
+    /// `plans/source-provider-enum.md` §Type changes.
+    public var provider: SourceProvider? {
+        SourceProvider(rawValue: agentName)
+    }
+
+    /// A short human label for the origin, for UI/CLI display. Canonical —
+    /// delegates to `SourceProvider.displayLabel` so every provider has ONE
+    /// label (e.g. `markdown-folder` → "Folder", not "Markdown folder").
+    /// Unknown values fall back to `agentName.capitalized`.
     public var displayLabel: String {
-        switch agentName {
-        case "website": return "Website"
-        case "zotero": return "Zotero"
-        case "markdown-folder": return "Markdown folder"
-        case "local-file": return "File"
-        case "legacy-import": return "Imported"
-        case "apple-podcast": return "Apple Podcast"
-        default: return agentName.capitalized
-        }
+        provider?.displayLabel ?? agentName.capitalized
     }
 }
 
@@ -191,7 +195,7 @@ public struct SourceOrigin: Sendable, Equatable {
 /// the MIME type, and records `agentName = "local-file"` with an `import`
 /// activity (no external identity).
 public struct LocalFileMaterializer: SourceMaterializer {
-    public let agentName = "local-file"
+    public let agentName = SourceProvider.localFile.rawValue
     public let fileURL: URL
 
     public init(fileURL: URL) {
@@ -243,7 +247,7 @@ public struct LocalFileMaterializer: SourceMaterializer {
 /// (kind/size) without a second fetch. A pure struct — `materialize()` is the
 /// protocol-conformant projection that discards the plan.
 public struct WebsiteMaterializer: SourceMaterializer {
-    public let agentName = "website"
+    public let agentName = SourceProvider.website.rawValue
     public let rawInput: String
     public let fetcher: any URLFetchService.URLResourceFetcher
 
@@ -399,7 +403,7 @@ public struct WebsiteSnapshot: Sendable {
 /// the AMP endpoint wants, but the URL is what the user pasted and what the Origin
 /// row should surface.
 public struct ApplePodcastMaterializer: SourceMaterializer {
-    public let agentName = "apple-podcast"
+    public let agentName = SourceProvider.applePodcast.rawValue
     public let episode: PodcastEpisodeURL.EpisodeRef
     public let pageURL: URL
     public let fetcher: any PodcastTranscriptFetching
@@ -446,7 +450,7 @@ public struct ApplePodcastMaterializer: SourceMaterializer {
 /// `externalIdentity` = the parent item key. Also populates the retained legacy
 /// `zoteroItemKey`/`zoteroItemTitle` columns (§4.2).
 public struct ZoteroMaterializer: SourceMaterializer {
-    public let agentName = "zotero"
+    public let agentName = SourceProvider.zotero.rawValue
     public let attachment: ZoteroAttachment
     public let parentItem: ZoteroItem
     public let zoteroDir: URL
@@ -503,7 +507,7 @@ public struct ZoteroMaterializer: SourceMaterializer {
 /// join). Takes the pre-read `(filename, data)` from the walk to avoid a
 /// double-read.
 public struct MarkdownFolderMaterializer: SourceMaterializer {
-    public let agentName = "markdown-folder"
+    public let agentName = SourceProvider.markdownFolder.rawValue
     public let filename: String
     public let data: Data
     public let mimeType: String?

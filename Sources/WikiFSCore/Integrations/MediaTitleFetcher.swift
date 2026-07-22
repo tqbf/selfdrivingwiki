@@ -97,16 +97,22 @@ public enum MediaTitleFetcher {
         allowed.remove(charactersIn: ":/?&=#")
         guard let encoded = match.planURL.addingPercentEncoding(
             withAllowedCharacters: allowed) else { return nil }
-        switch match.agentName {
-        case "youtube":
+        // Switch on `match.provider` (Optional<SourceProvider>) — the arms for
+        // `.youtube` etc. auto-promote to `.some(.youtube)` so the compiler
+        // can flag a missing provider when the enum grows. The `default` arm
+        // covers `nil` (unknown provider) AND `.remoteMedia`/`.applePodcast`
+        // (no oEmbed endpoint) — matching the pre-enum fallthrough.
+        switch match.provider {
+        case .youtube:
             return URL(string: "https://www.youtube.com/oembed?url=\(encoded)&format=json")
-        case "vimeo":
+        case .vimeo:
             return URL(string: "https://vimeo.com/api/oembed.json?url=\(encoded)")
-        case "spotify":
+        case .spotify:
             return URL(string: "https://open.spotify.com/oembed?url=\(encoded)")
-        case "soundcloud":
+        case .soundcloud:
             return URL(string: "https://soundcloud.com/oembed?format=json&url=\(encoded)")
-        default:
+        case .localFile, .website, .zotero, .markdownFolder, .applePodcast,
+             .remoteMedia, .legacyImport, nil:
             return nil
         }
     }
