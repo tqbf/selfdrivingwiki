@@ -300,8 +300,10 @@ public struct RSSPodcastTranscriptService: PodcastTranscriptFetching, RSSFeedTra
     }
 }
 
-private extension String {
+extension String {
     /// Collapse runs of `-` into a single `-` and trim leading/trailing `-`.
+    /// Internal so both `RSSPodcastTranscriptService.filename(forFeedURL:)`
+    /// and `WikiStoreModel.rssPodcastEmbedFilename(for:)` share one impl.
     func repeatingHyphensCollapsed() -> String {
         var out = ""
         var prevDash = false

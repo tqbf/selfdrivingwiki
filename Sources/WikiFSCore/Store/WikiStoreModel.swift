@@ -2245,6 +2245,76 @@ public final class WikiStoreModel {
     }
     #endif
 
+    /// **Generic RSS-feed podcast intake** (podcast-generalize, M3): a dedicated
+    /// entry point for pasting a direct RSS feed URL. Bypasses the generic
+    /// website/byteless-embed fetch chain (the "ambiguity problem" — a feed URL
+    /// can't be distinguished from a webpage by URL sniffing alone). The caller
+    /// invokes this explicitly from an "Add podcast feed" affordance, declaring
+    /// intent, so routing is by caller intent, not content sniffing.
+    ///
+    /// Creates a byteless `.podcast` source (no bytes fetched) with
+    /// `agentName = "podcast"`, `plan` = feed URL. No transcript is written at
+    /// ingest — the user clicks Transcribe in `SourceDetailView` to trigger the
+    /// `podcast-transcript` script fetch (mirrors the Apple PR4 + YouTube PR5
+    /// contract). Always compiled (no `#if PODCAST_TRANSCRIPTS` guard) — the
+    /// generic `.podcast` path needs no FairPlay signing helper.
+    ///
+    /// - Parameter rawInput: the raw RSS feed URL (e.g.
+    ///   `https://feeds.example.com/show.xml`).
+    /// - Returns: the `FetchOutcome` for the created byteless source.
+    /// - Throws: `WikiStoreError` on a store failure (e.g. `.duplicateContent`
+    ///   for a re-paste of the same feed URL).
+    @discardableResult
+    public func addPodcastFeedURL(_ rawInput: String) async throws -> URLFetchService.FetchOutcome {
+        guard let ref = RSSFeedEpisodeURL.parse(rawInput) else {
+            throw WikiStoreError.unexpected("Not a valid podcast feed URL: \(rawInput)")
+        }
+        let feedURLString = ref.feedURL.absoluteString
+        let summary = try store.addBytelessSource(
+            filename: Self.rssPodcastEmbedFilename(for: ref),
+            mimeType: Self.rssPodcastEmbedMIME,
+            provenance: SourceProvenance(
+                agentName: SourceProvider.podcast.rawValue,
+                activityKind: "fetch",
+                plan: feedURLString,
+                externalRef: feedURLString,
+                externalIdentity: ref.episodeGUID ?? feedURLString),
+            role: .primary)
+        // No transcript markdown is written — the source's
+        // `source_markdown_versions` stays empty until the user transcribes.
+        // Mirrors the Apple PR4 + YouTube PR5 byteless-only ingest contract.
+        openTab(.source(summary.id), title: summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: summary.filename,
+            byteSize: 0,
+            kind: .audioEmbed)
+    }
+
+    /// Build the byteless-source filename for a generic RSS podcast feed
+    /// (podcast-generalize). Derives a readable stem from the feed URL's host +
+    /// last path component, prefixed with `podcast-`. Mirrors the YouTube/Vimeo
+    /// `youtube-<id>` / `vimeo-<id>` byteless-source filename convention.
+    private static func rssPodcastEmbedFilename(for ref: RSSFeedEpisodeRef) -> String {
+        let host = (ref.feedURL.host ?? "feed").replacingOccurrences(of: "www.", with: "")
+        let last = ref.feedURL.lastPathComponent.isEmpty
+            ? "feed"
+            : (ref.feedURL.lastPathComponent as NSString).deletingPathExtension
+        let stem = "\(host)-\(last)"
+            .lowercased()
+            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
+            .joined()
+            .repeatingHyphensCollapsed()
+        return FilenameEscaping.escapeTitle("podcast-\(stem)")
+    }
+
+    /// The synthetic MIME for a byteless generic RSS podcast feed source
+    /// (podcast-generalize). `ExternalEmbed.target(for:)` dispatches on
+    /// `agentName == "podcast"` is NOT wired (there's no universal podcast web
+    /// player), so this source is byteless with no embed target — the Transcribe
+    /// button is the sole affordance. The `audio/*` prefix keeps the MIME
+    /// taxonomy consistent with the other byteless audio providers.
+    private static let rssPodcastEmbedMIME = "audio/podcast"
+
     /// Phase 4b: try the byteless external-embed recognizers in fixed precedence
     /// order — provider iframes (YouTube → Vimeo → Spotify → SoundCloud) then
     /// direct-remote media. On a match, create a **byteless** source (no bytes
