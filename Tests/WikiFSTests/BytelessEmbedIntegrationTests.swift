@@ -352,7 +352,7 @@ struct BytelessEmbedIntegrationTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: YouTubeFixtureFetcher(),
             podcastFetcher: nil,
-            youtubeFetcher: YouTubeTranscriptService(fetcher: YouTubeFixtureFetcher()))
+            youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
         #else
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -385,10 +385,10 @@ struct BytelessEmbedIntegrationTests {
 
         // The user clicks Transcribe — `transcribe(sourceID:)` dispatches to
         // the private `transcribeYouTube` helper, which fetches via
-        // `YouTubeTranscriptService.transcript(forVideoID:)`.
+        // `YouTubeTranscriptFetching.transcript(forVideoID:)`.
         let head = try #require(try await model.transcribe(
             sourceID: source.id,
-            youtubeFetcher: YouTubeTranscriptService(fetcher: YouTubeFixtureFetcher())))
+            youtubeFetcher: CannedYouTubeFetcher()))
         #expect(head.origin == .transcript)
         #expect(head.technique == "youtube-captions")
         #expect(head.content.contains("Hello world"))
@@ -412,7 +412,7 @@ struct BytelessEmbedIntegrationTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: emptyFetcher,
             podcastFetcher: nil,
-            youtubeFetcher: YouTubeTranscriptService(fetcher: emptyFetcher))
+            youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
         #else
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -445,7 +445,7 @@ struct BytelessEmbedIntegrationTests {
         await #expect(throws: YouTubeTranscriptError.self) {
             _ = try await model.transcribe(
                 sourceID: source.id,
-                youtubeFetcher: YouTubeTranscriptService(fetcher: emptyFetcher))
+                youtubeFetcher: ThrowingYouTubeFetcher())
         }
     }
 
@@ -491,5 +491,26 @@ struct BytelessEmbedIntegrationTests {
             }
         }
         _ = model  // suppress unused warning
+    }
+
+    // MARK: - YouTube transcript fakes
+
+    /// Returns a canned transcript for any video ID (for the Transcribe button
+    /// test path — the real `YouTubeTranscriptService` now spawns a subprocess).
+    struct CannedYouTubeFetcher: YouTubeTranscriptFetching {
+        func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
+            return YouTubeTranscript(
+                videoID: videoID,
+                title: "Test Talk",
+                markdown: "# Test Talk\n\n[Watch on YouTube](https://www.youtube.com/watch?v=\(videoID))\n\nHello world. Second cue.",
+                filename: "Test-Talk-\(videoID)-transcript.md")
+        }
+    }
+
+    /// Always throws `.noCaptions` (for the no-captions Transcribe test path).
+    struct ThrowingYouTubeFetcher: YouTubeTranscriptFetching {
+        func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
+            throw YouTubeTranscriptError.noCaptions
+        }
     }
 }

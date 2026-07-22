@@ -114,4 +114,124 @@ public struct ApplePodcastTranscriptService: PodcastTranscriptFetching {
         return "\(FilenameEscaping.escapeTitle(stem))-transcript.md"
     }
 }
+
+// MARK: - RSSPodcastTranscriptService
+
+/// Fetches a podcast transcript by spawning the `podcast-transcript` PEP 723
+/// script (`tools/podcast-transcript/podcast-transcript`), which fetches the
+/// RSS feed and looks for `<podcast:transcript>` tags — no FairPlay signing
+/// helper, no private frameworks. Mirrors `YouTubeTranscriptService` (subprocess
+/// pattern) and is a second `PodcastTranscriptFetching` conformer alongside
+/// `ApplePodcastTranscriptService` (the FairPlay path).
+///
+/// The script takes an Apple Podcasts episode URL as argv[1] and emits
+/// structured JSON with `--json`: `{show_id, episode_id, language, format, markdown}`.
+///
+/// Exit codes are mapped to `PodcastTranscriptError`:
+///   0 → success, 3 → podcast not found, 4 → episode not found,
+///   1/other → `.noTranscriptAvailable` (no RSS transcript / network error).
+///
+/// Issue #812.
+public struct RSSPodcastTranscriptService: PodcastTranscriptFetching {
+
+    /// The decoded JSON the `podcast-transcript --json` script emits.
+    struct ScriptOutput: Decodable {
+        let show_id: String?
+        let episode_id: String?
+        let language: String?
+        let format: String?
+        let markdown: String?
+    }
+
+    /// The full Apple Podcasts episode URL (e.g.
+    /// `https://podcasts.apple.com/us/podcast/slug/id123?i=456`). Stored at init
+    /// because `PodcastEpisodeURL.EpisodeRef` carries only the episode ID and
+    /// slug — not the show ID needed for the URL. The dispatch in
+    /// `WikiStoreModel.transcribePodcast` has `origin.plan` (the page URL).
+    private let episodeURL: URL
+
+    public init(episodeURL: URL) {
+        self.episodeURL = episodeURL
+    }
+
+    public func transcript(
+        for episode: PodcastEpisodeURL.EpisodeRef
+    ) async throws -> PodcastTranscript {
+        guard let script = Self.resolveScript() else {
+            DebugLog.extraction("[podcast-rss] transcript: script not found")
+            throw PodcastTranscriptError.signatureUnavailable(
+                "The podcast-transcript script isn't available in this build.")
+        }
+
+        DebugLog.extraction("[podcast-rss] transcript: spawning \(script.path) for \(episodeURL.absoluteString)")
+
+        do {
+            let result = try await TranscriptSubprocess.run(
+                script: script,
+                arguments: [episodeURL.absoluteString, "--json"]
+            )
+
+            return try Self.mapResult(result, episode: episode)
+        } catch let error as TranscriptSubprocessError {
+            DebugLog.extraction("[podcast-rss] transcript: subprocess error: \(error.localizedDescription)")
+            throw PodcastTranscriptError.signatureUnavailable(error.localizedDescription)
+        }
+    }
+
+    /// Map the subprocess result to a `PodcastTranscript` or throw the
+    /// appropriate `PodcastTranscriptError`. Pure — extracted for testability.
+    static func mapResult(
+        _ result: (stdout: String, stderr: String, status: Int32),
+        episode: PodcastEpisodeURL.EpisodeRef
+    ) throws -> PodcastTranscript {
+        switch result.status {
+        case 0:
+            break
+        case 3:
+            throw PodcastTranscriptError.noTranscriptAvailable
+        case 4:
+            throw PodcastTranscriptError.noTranscriptAvailable
+        default:
+            let msg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            DebugLog.extraction("[podcast-rss] transcript: exit \(result.status): \(msg)")
+            throw PodcastTranscriptError.noTranscriptAvailable
+        }
+
+        let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw PodcastTranscriptError.ttmlParseFailed
+        }
+
+        let output: ScriptOutput
+        do {
+            output = try JSONDecoder().decode(ScriptOutput.self, from: Data(trimmed.utf8))
+        } catch {
+            DebugLog.extraction("[podcast-rss] transcript: JSON decode failed: \(error)")
+            throw PodcastTranscriptError.ttmlParseFailed
+        }
+
+        let episodeID = output.episode_id ?? episode.id
+        let markdown = output.markdown ?? ""
+
+        return PodcastTranscript(
+            episodeID: episodeID,
+            markdown: markdown,
+            filename: Self.filename(for: episode))
+    }
+
+    /// Resolve the `podcast-transcript` script. Mirrors
+    /// `PdfExtractionService.resolveScript()`.
+    static func resolveScript() -> URL? {
+        TranscriptSubprocess.resolveScript(
+            named: "podcast-transcript",
+            repoSubdir: "tools/podcast-transcript")
+    }
+
+    /// Reuses `ApplePodcastTranscriptService.filename(for:)` so both backends
+    /// produce the same stored-source filename for the same episode.
+    static func filename(for episode: PodcastEpisodeURL.EpisodeRef) -> String {
+        let stem = episode.slug.map { "\($0)-\(episode.id)" } ?? "podcast-\(episode.id)"
+        return "\(FilenameEscaping.escapeTitle(stem))-transcript.md"
+    }
+}
 #endif
