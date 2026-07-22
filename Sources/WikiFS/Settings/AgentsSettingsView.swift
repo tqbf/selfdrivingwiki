@@ -56,6 +56,21 @@ struct AgentsSettingsView: View {
             case .summary:   return "Summary"
             }
         }
+
+        /// A one-line description of what the operation actually does — shown
+        /// under the Operations segmented control so the pins have context.
+        var summary: String {
+            switch self {
+            case .chat:
+                return "Interactive chat sessions you start in the wiki."
+            case .ingestion:
+                return "Importing a source into the wiki — the Planner, Executor, and Finalizer phases that turn a document into pages."
+            case .lint:
+                return "Automated lint passes that review wiki pages and propose fixes."
+            case .summary:
+                return "The short per-message summaries shown for each assistant reply in chat."
+            }
+        }
     }
 
     let containerDirectory: URL

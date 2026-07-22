@@ -41,7 +41,7 @@ struct OperationsSettingsView: View {
                     Spacer(minLength: 0)
                 }
             } footer: {
-                Text("Pin which provider and model runs each operation. Applies across all providers.")
+                Text(selectedOperationTab.summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
