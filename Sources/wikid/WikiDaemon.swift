@@ -28,7 +28,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
     /// the app exports its `WikiDaemonEventSink` conformer on the connection.
     /// Phase 0: captured but not yet pushed to (no real workload dispatch).
+    /// macOS-only — `WikiDaemonEventSink` is an `@objc` XPC protocol.
+    #if os(macOS)
     private var eventSinks: [WikiDaemonEventSink] = []
+    #endif
 
     // MARK: - Workload host scaffold (Phase 0)
 
@@ -239,6 +242,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// Register an event-sink proxy for a connection. The daemon holds it weakly
     /// (the proxy is retained by the `NSXPCConnection`). Called from
     /// `WikiDaemonExporter.registerEventSink`.
+    #if os(macOS)
     func registerEventSink(_ sink: WikiDaemonEventSink) {
         queue.sync {
             eventSinks.append(sink)
@@ -250,6 +254,7 @@ final class WikiDaemon: @unchecked Sendable {
     var registeredEventSinks: [WikiDaemonEventSink] {
         queue.sync { eventSinks }
     }
+    #endif
 
     // MARK: - Workload host (Phase 0 — scaffold)
 
