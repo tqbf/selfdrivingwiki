@@ -1491,7 +1491,14 @@ public final class WikiStoreModel {
         let didFix = fixedBody != original
         if didFix {
             do {
-                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody)
+                // #797: pre-fix this passed no `author:`, defaulting to nil,
+                // which mapped to the shared `legacy-import` agent and erased
+                // the prior `chat:<id>` / `agent:<kind>` provenance on the
+                // HEAD row. The lint auto-fix is an explicit action by the
+                // "lint" one-shot executor, NOT an unknown editor — stamp
+                // `agent:lint` so the activity carries the real identity.
+                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody,
+                                      author: PageAuthor.agent("lint").rawValue)
                 // No manual reload — the bus fires reloadFromStore() async after the upsert.
                 if loadedPage == pageID {
                     draftBody = fixedBody
@@ -1777,7 +1784,15 @@ public final class WikiStoreModel {
             }
             let page = try store.getPage(id: id)
             let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
-            try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody, lastEditedBy: nil)
+            // #797: route through `PageAuthor.user` instead of `nil`. The
+            // pre-fix nil passed into `ensurePageAuthorAgent` mapped to the
+            // shared `legacy-import` agent, which silently erased the prior
+            // `chat:<id>` / `agent:<kind>` provenance on the HEAD row (a page
+            // a chat wrote, once renamed in-app, would have flipped its author
+            // identity to `legacy-import`). A rename is an explicit user
+            // action — stamp `user`.
+            try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody,
+                                 lastEditedBy: PageAuthor.user.rawValue)
             // No manual reload — the bus fires reloadFromStore() async after the update.
             if selection == .page(id) { draftTitle = sanitizedTitle }
             // Update any tab showing this renamed page.

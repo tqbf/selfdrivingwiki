@@ -2630,12 +2630,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// (`AgentLauncher.startInteractiveQuery` / `WIKI_AUTHOR` env), so they
     /// cannot collide with a stray page titled `chat:…` on `ensureAgent`'s
     /// `(name, kind)` dedup.
+    ///
+    /// Implementation note (#797): this is a thin shim over the single source
+    /// of truth — `PageAuthor(rawValue: author).agentKind.rawValue`. The
+    /// mapping is defined ONCE in `WikiFSTypes` and shared by every
+    /// construction/parse site (`AgentLauncher.authorForRun`, `ProvenancePanel`,
+    /// the tests). Signature kept (`String? -> String`) so
+    /// `appendPageVersionLocked` and other callers are untouched.
     private func authorKind(_ author: String?) -> String {
-        guard let author, !author.isEmpty else { return "software" }
-        if author.hasPrefix("chat:")  { return "chat" }
-        if author.hasPrefix("agent:") { return "agent" }
-        if author == "user"           { return "human" }
-        return "model"
+        PageAuthor(rawValue: author).agentKind.rawValue
     }
 
     /// Resolve the agent for a page mutation's activity: if `author` carries a
@@ -3441,6 +3444,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try dbWriter.read { db in
             // Same `runTitle` subquery as `pageOrigin` (#745) — resolves the
             // chat title for `chat:<id>` agents; NULL for other agent kinds.
+            //
+            // Raw 'chat:' prefix stripping — format owned by
+            // `PageAuthor.chat(_:).rawValue`. Do not change the SQL prefix
+            // without updating PageAuthor too (#797).
             let cols = """
             sv.id,
             a.name, a.kind,
@@ -3487,6 +3494,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func sourceEditHistory(sourceID: PageID) throws -> [SourceOrigin] {
         try dbWriter.read { db in
             // Same `runTitle` subquery as `sourceOrigin` (#745).
+            //
+            // Raw 'chat:' prefix stripping — format owned by
+            // `PageAuthor.chat(_:).rawValue`. Do not change the SQL prefix
+            // without updating PageAuthor too (#797).
             let cols = """
             sv.id,
             a.name, a.kind,
@@ -4487,6 +4498,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // title. `substr(a.name, 6)` strips the `chat:` prefix (5 chars + 1).
             // Non-chat agents (agent:*, user, legacy-import) produce NULL →
             // `runTitle` degrades to nil.
+            //
+            // Raw 'chat:' prefix stripping — format owned by
+            // `PageAuthor.chat(_:).rawValue`. The prefix is sourced from
+            // `ResourceKind.chat.linkPrefix`. Do not change the SQL prefix
+            // without updating PageAuthor too (#797).
             let cols = """
             pv.id, pv.title, pv.blob_hash,
             a.name, a.kind,
@@ -4539,6 +4555,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try dbWriter.read { db in
             // Same `runTitle` subquery as `pageOrigin` (#745) — resolves the chat
             // title for `chat:<id>` agents; NULL for other agent kinds.
+            //
+            // Raw 'chat:' prefix stripping — format owned by
+            // `PageAuthor.chat(_:).rawValue`. Do not change the SQL prefix
+            // without updating PageAuthor too (#797).
             let cols = """
             pv.id, pv.title, pv.blob_hash,
             a.name, a.kind,

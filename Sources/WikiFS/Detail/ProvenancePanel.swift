@@ -116,16 +116,23 @@ struct ProvenancePanel: View {
     /// - `chat:<id>` → open the chat tab in the wiki's tab bar.
     /// - `agent:<kind>` → open the Activity (queue) window.
     /// - Otherwise → no-op (don't break).
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the navigation handler and the writer
+    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
     private func handleProvenanceTap(_ entry: ProvenanceEntry) {
-        if entry.agentName.hasPrefix("chat:") {
-            let chatID = String(entry.agentName.dropFirst("chat:".count))
+        switch PageAuthor(rawValue: entry.agentName) {
+        case .chat(let chatID):
             guard !chatID.isEmpty else { return }
             let id = PageID(rawValue: chatID)
             DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
             store?.openTab(.chat(id))
-        } else if entry.agentName.hasPrefix("agent:") {
+        case .agent:
             DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
             openActivityWindow?()
+        case .user, .legacyImport, .other:
+            // No navigation target for non-chat / non-agent authors.
+            break
         }
     }
 
@@ -135,36 +142,39 @@ struct ProvenancePanel: View {
     /// "Deleted chat" label. For `agent:<kind>` one-shot runs, show a
     /// friendly label derived from the kind (e.g. "Ingest" / "Lint") rather
     /// than the raw `agent:ingest` string. Other kinds render verbatim.
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the labeler and the writer
+    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
     @ViewBuilder
     private func agentLabel(_ entry: ProvenanceEntry) -> some View {
-        let name = entry.agentName
-        if name.hasPrefix("chat:") {
+        switch PageAuthor(rawValue: entry.agentName) {
+        case .chat:
             if let runTitle = entry.runTitle, !runTitle.isEmpty {
                 Label(runTitle, systemImage: "bubble.left.and.bubble.right")
-                    .help(name)
+                    .help(entry.agentName)
                     .foregroundStyle(.secondary)
             } else {
                 // Chat was deleted or the title is unavailable — show a
                 // muted placeholder instead of the raw ULID.
                 Label("Deleted chat", systemImage: "bubble.left.and.bubble.right")
-                    .help(name)
+                    .help(entry.agentName)
                     .foregroundStyle(.tertiary)
             }
-        } else if name.hasPrefix("agent:") {
+        case .agent(let kind):
             // One-shot run: resolve a friendly label from the kind suffix.
-            let kind = String(name.dropFirst("agent:".count))
             let label = friendlyRunLabel(for: kind)
             Label(label, systemImage: "cpu")
                 .help("\(kind) agent")
                 .foregroundStyle(.secondary)
-        } else if name == "user" {
-            Label(name, systemImage: "person")
+        case .user:
+            Label(entry.agentName, systemImage: "person")
                 .foregroundStyle(.secondary)
-        } else if name == "legacy-import" {
+        case .legacyImport:
             Label("Imported (legacy)", systemImage: "tray.and.arrow.down")
                 .foregroundStyle(.secondary)
-        } else {
-            Text(name)
+        case .other:
+            Text(entry.agentName)
                 .foregroundStyle(.secondary)
         }
     }
