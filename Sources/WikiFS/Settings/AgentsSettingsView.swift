@@ -20,35 +20,31 @@ enum ModelStatus: Equatable {
     case noSelectionPickable
 }
 
-/// Settings → **Agents** tab (Phase 3 of `plans/acp-multi-provider.md`):
-/// replaces the old "Agent" + "Providers" tabs with one view over
-/// `AgentProvidersConfig` — the editable multi-provider list and the permission
-/// mode picker (moved here from the old Agent tab).
+/// Settings → **Agents** tab. A two-pane source-list layout over
+/// `AgentProvidersConfig`:
+///
+/// - **Sidebar**: the editable provider list.
+/// - **Detail**: an INLINE editor (command, environment, model) for the
+///   selected provider — the old modal "Edit…" sheet is gone.
+///
+/// The global Chat / Ingestion / Lint / Summary role pins live in their OWN
+/// top-level Settings tab (`OperationsSettingsView`) — they pick *any* provider
+/// per operation, so they don't belong inside a single provider's detail pane.
 ///
 /// Persists via `AgentProvidersConfig.save(to:)` on every edit — no explicit
-/// save step, mirroring `ZoteroSettingsView`/`AgentProvidersSettingsView`.
-/// Secrets (API keys) go through `ACPCredentialStore` (Keychain), never into
-/// the JSON file.
+/// save step, mirroring `ZoteroSettingsView`.
 struct AgentsSettingsView: View {
     @State private var config: AgentProvidersConfig
     @State private var selectedProviderID: String?
     @State private var providerPendingDeletion: AgentProvider?
-    /// #663: drives the `AddProviderSheet`. Replaces the old `Menu` of
-    /// hardcoded seed buttons (Add Claude / Add Hermes / Add OpenCode) with
-    /// a non-destructive, catalog-driven sheet. Cancel = no change (AC.2).
+    /// #663: drives the `AddProviderSheet` — a non-destructive, catalog-driven
+    /// add flow. Cancel = no change (AC.2).
     @State private var showAddSheet = false
-    /// #663: tracks whether the editor was opened from the Add flow (true)
-    /// or from Edit…/double-click on an EXISTING provider (false). When true,
-    /// the editor's Cancel button removes the freshly-added provider from
-    /// `config.providers` — a newly-added provider with no model MUST NOT
-    /// persist in the list (otherwise the row sits with a "No model captured
-    /// yet" warning and the launcher refuses to spawn).
-    @State private var isAddingNewProvider = false
 
-    /// The operation panes, each owning its stages. The Summary tab
-    /// (`plans/chat-summary.md` §5.2) is the per-message summarizer stage pin.
-    /// Used by `ProviderDetailPane` (the right detail pane) to drive the
-    /// segmented Picker for Chat/Ingestion/Lint/Summary stage config.
+    /// The operation panes shown in `OperationsSettingsView`, each owning its
+    /// stages. The Summary tab (`plans/chat-summary.md` §5.2) is the per-message
+    /// summarizer stage pin. Declared here (rather than in `OperationsSettingsView`)
+    /// so both views share one source of truth for the operation set.
     enum OperationTab: String, CaseIterable, Identifiable {
         case chat, ingestion, lint, summary
         var id: String { rawValue }
@@ -63,143 +59,100 @@ struct AgentsSettingsView: View {
     }
 
     let containerDirectory: URL
-    private let credentialStore: any ACPCredentialStore
 
-    init(
-        containerDirectory: URL,
-        credentialStore: any ACPCredentialStore = KeychainACPCredentialStore()
-    ) {
+    init(containerDirectory: URL) {
         self.containerDirectory = containerDirectory
-        self.credentialStore = credentialStore
         let loaded = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
         _config = State(initialValue: loaded)
         _selectedProviderID = State(initialValue: loaded.providers.first?.id)
     }
 
     var body: some View {
-        // Two-pane layout (macOS System Settings → Accounts idiom):
-        // LEFT: provider list + action bar (~240pt sidebar).
-        // RIGHT: the selected provider's details (ProviderDetailPane) or
-        // an empty-state placeholder when nothing is selected.
         HStack(spacing: 0) {
             providersSection
                 .frame(width: 260)
 
             Divider()
 
-            if let provider = selectedProvider {
-                ProviderDetailPane(
-                    provider: provider,
-                    config: $config,
-                    containerDirectory: containerDirectory,
-                    credentialStore: credentialStore,
-                    onEdit: {
-                        isAddingNewProvider = false
-                        editingProvider = provider
-                    }
-                )
-            } else {
-                ContentUnavailableView(
-                    "Select a provider",
-                    systemImage: "cpu",
-                    description: Text("Choose a provider from the list to view its details.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            detailPane
         }
         .frame(minWidth: 780, minHeight: 520, alignment: .top)
+        // Pick up provider/model changes made while this tab was hidden (the
+        // Settings TabView keeps every tab alive, so `init` runs only once).
+        .onAppear { config = AgentProvidersConfig.loadOrSeed(from: containerDirectory) }
         // #663: the Add Provider sheet. Non-destructive (nothing is written
-        // until an Add button is pressed — AC.2). The handoff to the editor
-        // uses `DispatchQueue.main.async` (see correction §5): letting this
-        // sheet finish dismissing before the editor presents avoids the
-        // SwiftUI hazard where the second sheet silently fails when the
-        // first is mid-dismissal.
+        // until an Add button is pressed — AC.2). On add, the provider is
+        // appended and selected so its inline detail pane opens for the user
+        // to pick a model / Refresh Models.
         .sheet(isPresented: $showAddSheet) {
-                AddProviderSheet(
-                    existingIDs: Set(config.providers.map(\.id)),
-                    onAdd: { provider in appendProvider(provider) },
-                    onAddNeedsEditor: { provider in
-                        showAddSheet = false
-                        // #663: this provider was just appended by `onAdd`
-                        // above with no selected model. Mark it as a fresh add
-                        // so the editor's Cancel button removes it (see
-                        // `ProviderEditorView` Cancel handler).
-                        DispatchQueue.main.async {
-                            isAddingNewProvider = true
-                            editingProvider = provider
-                        }
-                    })
-            }
-            .sheet(item: $editingProvider) { provider in
-                ProviderEditorView(
-                    provider: provider,
-                    cachedModels: config.cachedModels(forProvider: provider.id),
-                    selectedModelId: config.selectedModelId(forProvider: provider.id) ?? "",
-                    isAddingNew: isAddingNewProvider,
-                    credentialStore: credentialStore,
-                    onSave: { updated, selectedModelId in
-                        applyEdit(updated, selectedModelId: selectedModelId)
-                        isAddingNewProvider = false
-                    },
-                    onDelete: {
-                        // Cancel on a freshly-added provider: remove it from
-                        // `config.providers` (no confirmation needed — it has
-                        // no model and was just appended; its API key, if any,
-                        // is left in the Keychain for a future add).
-                        if let pending = editingProvider {
-                            removeProvider(pending)
-                        }
-                        isAddingNewProvider = false
-                    },
-                    onRefreshModels: { provider, models in
-                        // #640: durable-persist path for probe-discovered models.
-                        // Runs on the parent (which owns `containerDirectory` +
-                        // `@State config`). Uses `settingCachedModels` directly so
-                        // ALL existing fields carry over (maxConcurrent in
-                        // particular — the parent's `save(_:)` helper drops it,
-                        // pre-existing bug at AgentsSettingsView.swift:250-255,
-                        // :360-362). `@Sendable` so the sheet's `Task` can call
-                        // it across actors.
-                        await persistDiscoveredModels(models, forProvider: provider.id)
-                    })
-            }
-            .confirmationDialog(
-                "Delete \(providerPendingDeletion?.label ?? "provider")?",
-                isPresented: isShowingDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) { confirmDelete() }
-                Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
-            } message: {
-                Text("This removes the provider from the app. You can add it again later.")
-            }
+            AddProviderSheet(
+                existingIDs: Set(config.providers.map(\.id)),
+                onAdd: { provider in appendProvider(provider) },
+                // The provider is already appended + selected by `onAdd`; the
+                // inline detail pane is where the user picks a model now (no
+                // modal editor). This callback stays for the sheet's contract.
+                onAddNeedsEditor: { provider in
+                    showAddSheet = false
+                    selectedProviderID = provider.id
+                })
+        }
+        .confirmationDialog(
+            "Delete \(providerPendingDeletion?.label ?? "provider")?",
+            isPresented: isShowingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) { confirmDelete() }
+            Button("Cancel", role: .cancel) { providerPendingDeletion = nil }
+        } message: {
+            Text("This removes the provider from the app. You can add it again later.")
+        }
     }
 
-    // MARK: - Providers section
+    // MARK: - Detail routing
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let provider = selectedProvider {
+            ProviderDetailPane(
+                provider: provider,
+                config: $config,
+                containerDirectory: containerDirectory)
+                // Re-seed the pane's local edit state when the SELECTED provider
+                // changes, but not when the same provider's config mutates (so
+                // inline edits survive a save round-trip).
+                .id(provider.id)
+        } else {
+            detailPlaceholder
+        }
+    }
+
+    private var detailPlaceholder: some View {
+        ContentUnavailableView(
+            "Select a provider",
+            systemImage: "cpu",
+            description: Text("Choose a provider from the list to view its details.")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Providers section (sidebar)
 
     private var providersSection: some View {
         VStack(spacing: 0) {
-            Text("Providers")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 6)
-
             if config.providers.isEmpty {
                 // Defensive — `loadOrSeed` guarantees at least one provider,
                 // but a hand-edited/corrupt file could empty the list.
                 ProvidersEmptyState { showAddSheet = true }
             } else {
-                // List fills available vertical space and scrolls INTERNALLY;
-                // `maxHeight: .infinity` prevents the unbounded-grow that
-                // previously scrolled the action bar out of view. The action
-                // bar below is a SIBLING of the List in this VStack, so it
-                // stays pinned at the bottom and outside the List's scroll area.
-                List(config.providers, selection: $selectedProviderID) { provider in
-                    providerRow(provider)
+                List(selection: $selectedProviderID) {
+                    Section("Providers") {
+                        ForEach(config.providers) { provider in
+                            providerRow(provider)
+                                .tag(provider.id)
+                        }
+                    }
                 }
-                .listStyle(.inset)
+                .listStyle(.sidebar)
 
                 providerActionBar
             }
@@ -207,17 +160,22 @@ struct AgentsSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    /// The Add / Remove / Make Default / Edit button row. Kept OUTSIDE the
-    /// List (a sibling in `providersSection`'s VStack) so it stays pinned at
-    /// the bottom of the pane and never scrolls off-screen.
+    /// The source-list footer gutter: a compact `+` / `−` pair, pinned below
+    /// the List (a sibling in the VStack) so it never scrolls off. "Make
+    /// Default" moved into the provider detail pane (it's contextual to the
+    /// selected provider); editing is inline, so there's no Edit button here.
     private var providerActionBar: some View {
-        HStack {
+        HStack(spacing: 0) {
             Button {
                 showAddSheet = true
             } label: {
-                Label("Add Provider", systemImage: "plus")
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 20)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.borderless)
+            .help("Add a provider")
+
+            Divider().frame(height: 14)
 
             Button {
                 if let provider = selectedProvider {
@@ -225,31 +183,17 @@ struct AgentsSettingsView: View {
                 }
             } label: {
                 Image(systemName: "minus")
+                    .frame(width: 24, height: 20)
             }
+            .buttonStyle(.borderless)
             .disabled(selectedProvider == nil || config.providers.count <= 1)
-
-            Button("Make Default") {
-                if let id = selectedProviderID {
-                    save(config.settingDefault(id: id))
-                }
-            }
-            .disabled(selectedProvider?.isDefault ?? true)
+            .help("Remove the selected provider")
 
             Spacer()
-
-            Button("Edit…") {
-                if let provider = selectedProvider {
-                    // Editing an existing (not freshly-added) provider: clear
-                    // the new-add flag so the editor's Cancel button doesn't
-                    // delete it (see `ProviderEditorView` Cancel handler).
-                    isAddingNewProvider = false
-                    editingProvider = provider
-                }
-            }
-            .disabled(selectedProvider == nil)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .overlay(Divider(), alignment: .top)
     }
 
     private func providerRow(_ provider: AgentProvider) -> some View {
@@ -277,43 +221,15 @@ struct AgentsSettingsView: View {
             Spacer()
         }
         .padding(.vertical, 4)
-        .tag(provider.id)
     }
 
-    // NOTE: `providerControls`, `modelPicker`, and `modelBinding` (the inline
-    // model dropdown that was on each provider row) have moved into
-    // `ProviderDetailPane.modelPicker` — the model dropdown is now in the
-    // right detail pane, not the left sidebar rows.
-
-    // NOTE: `operationTabsSection` and `operationTabContent` have moved into
-    // `ProviderDetailPane` (right detail pane). The Chat/Ingestion/Lint/Summary
-    // stage pickers are now shown in the context of the selected provider.
+    // MARK: - Model status (pure classifiers, unit-tested)
 
     /// Returns a warning string when `provider` is enabled, has no selected
     /// model, and the launcher will therefore refuse to spawn it (see
-    /// `SpawnModelGuard`). Returns `nil` for disabled providers (they can't
-    /// spawn anyway) and providers with a selected model.
-    ///
-    /// Two warning shapes:
-    /// - When the provider has cached models to pick from → the user must
-    ///   pick one before running ("No model selected — pick one before running.").
-    /// - When the provider has no cached models yet → the editor's
-    ///   "No models captured yet" caption and the launcher need a first
-    ///   successful spawn to capture them; surface a gentle guidance line
-    ///   ("No model captured yet — chat with this provider once to discover
-    ///   models."). The launcher will still refuse spawn in this state — that
-    ///   is an accepted UX wrinkle tracked in `PROGRESS.md` (a future
-    ///   dry-run `session/new` on Save would close it).
-    ///
-    /// PURE + STATIC so it can be unit-tested without rendering. The row reads
-    /// the same `config` source the view stores in its `@State`, so passing it
-    /// in as a parameter captures the identical value the row would render.
-    ///
-    /// `nonisolated`: a SwiftUI `View` is implicitly `@MainActor`, but this
-    /// helper touches no view state — only the pure `AgentProvidersConfig`
-    /// argument. Marking it `nonisolated` lets the test suite call it
-    /// synchronously (without `@MainActor`) while the row's call site
-    /// (`Self.modelWarning(for:in:)`) continues to work identically.
+    /// `SpawnModelGuard`). Returns `nil` for disabled providers and providers
+    /// with a selected model. PURE + STATIC so it can be unit-tested without
+    /// rendering.
     nonisolated static func modelWarning(for provider: AgentProvider, in config: AgentProvidersConfig) -> String? {
         guard provider.enabled else { return nil }
         let modelId = config.selectedModelId(forProvider: provider.id)
@@ -326,24 +242,13 @@ struct AgentsSettingsView: View {
     }
 
     /// #663: the structured classifier the restructured `ProviderRow` reads.
-    /// Sibling to `modelWarning(for:in:)` — both coexist (correction §6) so
-    /// the existing `AgentsSettingsViewWarningTests` (which pin the warning
-    /// STRING) stay load-bearing while the new row can branch on the
+    /// Sibling to `modelWarning(for:in:)` — both coexist so the existing
+    /// warning-string tests stay load-bearing while callers can branch on the
     /// structured enum.
-    ///
-    /// Same contract + same `nonisolated static` shape so the new tests
-    /// (`AgentsSettingsViewModelStatusTests`) can call it without rendering.
-    /// - `.disabled` is returned for a disabled provider (the row shows no
-    ///   status line — the leading `○` switch glyph already conveys it).
-    /// - `.selected(name)` when the provider has a `selectedModelId`.
-    /// - `.noneCaptured` when no model cache exists yet (first-spawn state).
-    /// - `.noSelectionPickable` when a cache exists but no selection was made.
     nonisolated static func modelStatus(for provider: AgentProvider, in config: AgentProvidersConfig) -> ModelStatus {
         guard provider.enabled else { return .disabled }
         if let modelId = config.selectedModelId(forProvider: provider.id),
            !modelId.isEmpty {
-            // Resolve a friendly name if the model is in the cache; fall back
-            // to the raw id so the dot+label still renders definitively.
             let name = config.cachedModels(forProvider: provider.id)
                 .first(where: { $0.modelId == modelId })?.name ?? modelId
             return .selected(name: name)
@@ -352,6 +257,8 @@ struct AgentsSettingsView: View {
         if models.isEmpty { return .noneCaptured }
         return .noSelectionPickable
     }
+
+    // MARK: - Bindings / helpers
 
     private func enabledBinding(for provider: AgentProvider) -> Binding<Bool> {
         Binding(
@@ -363,8 +270,7 @@ struct AgentsSettingsView: View {
                 }
                 // §4f: route through `replacingProviders` so `maxConcurrent`
                 // AND `ingestStageModelIds` survive — the memberwise init's
-                // defaulted fields silently wiped them on every enable toggle
-                // (pre-existing bug made worse by #711 adding `ingestStageModelIds`).
+                // defaulted fields silently wiped them on every enable toggle.
                 save(config.replacingProviders(updated.providers))
             })
     }
@@ -374,43 +280,11 @@ struct AgentsSettingsView: View {
         return config.provider(id: id)
     }
 
-    /// Drives the editor sheet (`sheet(item: $editingProvider)`): set on
-    /// double-click, "Edit…", or right after adding a custom provider.
-    @State private var editingProvider: AgentProvider?
-
-    /// Merge the editor's saved provider back into `config.providers` (by id)
-    /// and persist the model selection alongside it.
-    private func applyEdit(_ updated: AgentProvider, selectedModelId: String?) {
-        var providers = config.providers
-        if let idx = providers.firstIndex(where: { $0.id == updated.id }) {
-            // Preserve enabled/isDefault — the editor doesn't own those (the
-            // list row's toggle / "Make Default" do).
-            var merged = updated
-            merged.enabled = providers[idx].enabled
-            merged.isDefault = providers[idx].isDefault
-            providers[idx] = merged
-        } else {
-            providers.append(updated)
-        }
-        // §4f: route through `replacingProviders` so `maxConcurrent` +
-        // `ingestStageModelIds` survive the edit.
-        save(config.replacingProviders(providers)
-            .settingSelectedModel(selectedModelId, forProvider: updated.id))
-    }
-
     // MARK: - Add / delete
 
-    /// #663: non-destructive append — replaces `addSeed(_:)` and the
-    /// pre-persist tail of `addCustom()`. Called by `AddProviderSheet`'s
-    /// `onAdd`. Persists the provider immediately (the row appears in the
-    /// list as soon as the sheet dismisses); the editor ALWAYS opens
-    /// separately via the `onAddNeedsEditor` callback so the user is forced
-    /// to pick a model before the provider is usable.
-    ///
-    /// Dedup: a provider with the same id is NOT replaced — the call is a
-    /// no-op (the `AddProviderSheet` already hides already-added agents
-    /// behind a "✓ Added" chip, so this is a defensive guard against a
-    /// race between the sheet snapshot and a fast double-click).
+    /// #663: non-destructive append — called by `AddProviderSheet`'s `onAdd`.
+    /// Persists immediately (the row appears as soon as the sheet dismisses)
+    /// and selects the new provider so its inline detail pane opens.
     private func appendProvider(_ provider: AgentProvider) {
         guard !config.providers.contains(where: { $0.id == provider.id }) else {
             selectedProviderID = provider.id
@@ -418,8 +292,6 @@ struct AgentsSettingsView: View {
         }
         var updated = config
         updated.providers.append(provider)
-        // §4f: route through `replacingProviders` so `maxConcurrent` +
-        // `ingestStageModelIds` survive the append.
         save(config.replacingProviders(updated.providers))
         selectedProviderID = provider.id
     }
@@ -430,18 +302,12 @@ struct AgentsSettingsView: View {
             set: { if !$0 { providerPendingDeletion = nil } })
     }
 
-    /// #663: removes a provider from `config.providers` and re-normalizes
-    /// (promotes a new default if the deleted one was default). Shared by
-    /// the delete-confirmation flow (`confirmDelete`) and the editor's
-    /// Cancel-on-new-provider path. No confirmation dialog — callers decide
-    /// whether to gate behind a confirmation (`providerPendingDeletion`).
+    /// #663: removes a provider and re-normalizes (promotes a new default if
+    /// the deleted one was default).
     private func removeProvider(_ provider: AgentProvider) {
         guard config.providers.contains(where: { $0.id == provider.id }) else { return }
         var updated = config
         updated.providers.removeAll { $0.id == provider.id }
-        // Re-running init() (via `replacingProviders`) re-normalizes: promotes
-        // a new default if the deleted one was default. §4f: the same helper
-        // also carries `maxConcurrent` + `ingestStageModelIds` through.
         save(config.replacingProviders(updated.providers))
         if selectedProviderID == provider.id {
             selectedProviderID = config.providers.first?.id
@@ -461,432 +327,41 @@ struct AgentsSettingsView: View {
         do {
             try updated.save(to: containerDirectory)
         } catch {
-            // House rule: never bare `try?`. The write may fail (read-only
-            // mount, permission) — log so it's visible in Console.app.
+            // House rule: never bare `try?`. Log so failures are visible.
             DebugLog.store("Failed to save agent-providers config: \(error.localizedDescription)")
         }
     }
-
-    /// #640: persist probe-discovered models durably. Uses
-    /// `settingCachedModels` DIRECTLY (NOT the parent's `save(_:)` helper) —
-    /// the helper reconstructs the config from a hand-rolled subset of fields
-    /// and DROPS `maxConcurrent` (pre-existing bug, see
-    /// `AgentsSettingsView.swift:250-255` / `:360-362`). `settingCachedModels`
-    /// is the PURE value-returning mutator the launcher's
-    /// `cacheDiscoveredModels` already uses (`AgentLauncher.swift:297-309`) —
-    /// it carries every field forward. The probe is the Settings-driven
-    /// equivalent of that launcher path.
-    ///
-    /// `@MainActor`: mutates `@State config` and writes the sidecar. Called
-    /// from the editor sheet's refresh Task via `await MainActor.run { … }`
-    /// (the probe itself runs off-main; only the persist is on-main).
-    @MainActor
-    private func persistDiscoveredModels(_ models: [CachedModelInfo], forProvider id: String) async {
-        let updated = config.settingCachedModels(models, forProvider: id)
-        do {
-            try updated.save(to: containerDirectory)
-        } catch {
-            // House rule: never bare `try?`. The write may fail (read-only
-            // mount, permission) — log so it's visible in Console.app.
-            DebugLog.store("persistDiscoveredModels save failed (provider=\(id)): \(error.localizedDescription)")
-        }
-        config = updated
-        DebugLog.store("persistDiscoveredModels: provider=\(id) models=\(models.count) → saved")
-    }
 }
 
-// MARK: - Provider detail pane (right panel)
+// MARK: - Provider detail pane (right panel, inline editor)
 
-/// The right-side detail pane in the two-pane Agents settings layout.
-/// Shows the selected provider's configuration, model selection, and the
-/// Chat/Ingestion/Lint/Summary stage pickers (which are GLOBAL config, shown
-/// in the context of the selected provider — the user can see which provider
-/// is pinned for each stage and change the pin from here).
+/// The right-side detail pane for a selected provider. Everything is edited
+/// INLINE here (no modal sheet): the enable toggle, "Make Default", the command
+/// (with a PATH-availability chip), the model picker + Refresh Models, and the
+/// environment variables. API keys were removed from this surface entirely.
 ///
-/// The operation tabs (segmented Picker) and `StageProviderModelPicker` rows
-/// were moved here from the bottom of the old single-column `providersSection`
-/// (see `plans/agents-two-pane.md`).
+/// Local edit state (`label`, `commandText`, `envRows`) is seeded once from the
+/// provider at `init`; the parent tears this view down with `.id(provider.id)`
+/// when the SELECTED provider changes, so switching providers re-seeds while an
+/// in-place config save does not. Edits are committed back to the parent's
+/// `config` binding (and persisted to the sidecar) on change.
 private struct ProviderDetailPane: View {
     let provider: AgentProvider
     @Binding var config: AgentProvidersConfig
     let containerDirectory: URL
-    let credentialStore: any ACPCredentialStore
-    /// Open the Edit sheet for this provider.
-    let onEdit: () -> Void
 
-    @State private var selectedOperationTab: AgentsSettingsView.OperationTab = .chat
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                providerHeader
-                providerConfigSection
-                operationTabsSection
-                helperText
-            }
-            .padding(.bottom, 20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    // MARK: - Provider header
-
-    /// Provider name, enabled toggle, default badge, and an Edit button.
-    private var providerHeader: some View {
-        HStack(spacing: 10) {
-            Toggle("", isOn: enabledBinding)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(provider.label)
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    ProviderStatusBadges(provider: provider)
-                }
-                Text(provider.command.map(ShellWords.join) ?? "—")
-                    .font(.caption)
-                    .fontDesign(.monospaced)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .opacity(provider.enabled ? 1.0 : 0.55)
-
-            Spacer()
-
-            if provider.enabled {
-                modelPicker
-            }
-
-            Button("Edit…") { onEdit() }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-    }
-
-    // MARK: - Provider config
-
-    /// Read-only summary of the provider's config: command, env vars, API
-    /// key status. Editing is done through the Edit sheet (via `onEdit`),
-    /// not inline — this pane shows the current state.
-    private var providerConfigSection: some View {
-        Form {
-            Section {
-                LabeledContent("Command") {
-                    Text(provider.command.map(ShellWords.join) ?? "—")
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
-                }
-                LabeledContent("Environment") {
-                    if provider.env.isEmpty {
-                        Text("None")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            ForEach(provider.env.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                                HStack(spacing: 4) {
-                                    Text(key)
-                                        .fontDesign(.monospaced)
-                                    Text("=\(value)")
-                                        .fontDesign(.monospaced)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                            }
-                        }
-                    }
-                }
-                LabeledContent("API Key") {
-                    let hasKey = credentialStore.apiKey(forProvider: provider.id) != nil
-                    HStack(spacing: 4) {
-                        Image(systemName: hasKey ? "checkmark.circle.fill" : "xmark.circle")
-                            .foregroundStyle(hasKey ? .green : .secondary)
-                        Text(hasKey ? "Set" : "Not set")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                Text("Provider Configuration")
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    // MARK: - Model picker
-
-    /// Model dropdown for this provider. Reads/writes the per-provider
-    /// `selectedModelId`. When the cache is empty, the picker is disabled
-    /// and surfaces a "Chat to discover models" placeholder.
-    @ViewBuilder
-    private var modelPicker: some View {
-        let cachedModels = config.cachedModels(forProvider: provider.id)
-        VStack(alignment: .trailing, spacing: 4) {
-            Picker("Model", selection: modelBinding) {
-                if cachedModels.isEmpty {
-                    Text("Chat to discover models").tag("")
-                } else {
-                    Text("Agent default").tag("")
-                    ForEach(cachedModels, id: \.modelId) { model in
-                        Text(model.displayLabel).tag(model.modelId)
-                    }
-                }
-            }
-            .labelsHidden()
-            .disabled(cachedModels.isEmpty)
-            .frame(maxWidth: 180)
-
-            // Compact caption — keeps `modelStatus` in use.
-            switch AgentsSettingsView.modelStatus(for: provider, in: config) {
-            case .noSelectionPickable:
-                Text("pick one before running")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            case .noneCaptured, .selected, .disabled:
-                EmptyView()
-            }
-            // #612: info-tone nudge when the provider's selected model is a
-            // known free-tier model. NOT a prohibition — the user can still
-            // select it; this is a gentle steer toward a stronger model.
-            if let modelId = config.selectedModelId(forProvider: provider.id),
-               let nudge = FreeTierModelNudge.message(for: modelId) {
-                Text(nudge)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 180)
-            }
-        }
-    }
-
-    private var modelBinding: Binding<String> {
-        Binding(
-            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
-            set: { newID in
-                let updated = config.settingSelectedModel(
-                    newID.isEmpty ? nil : newID,
-                    forProvider: provider.id)
-                saveConfig(updated)
-            })
-    }
-
-    private var enabledBinding: Binding<Bool> {
-        Binding(
-            get: { provider.enabled },
-            set: { newValue in
-                var updated = config
-                if let idx = updated.providers.firstIndex(where: { $0.id == provider.id }) {
-                    updated.providers[idx].enabled = newValue
-                }
-                saveConfig(config.replacingProviders(updated.providers))
-            })
-    }
-
-    // MARK: - Operation tabs (stage pickers)
-
-    /// Operation tabs (Chat / Ingestion / Lint / Summary): a segmented
-    /// `Picker` over the four operation panes, each rendering one or more
-    /// `StageProviderModelPicker` rows. The stage pickers are GLOBAL config —
-    /// they pin which provider + model runs each stage. Shown here in the
-    /// context of the selected provider so the user can see and change the
-    /// pins.
-    private var operationTabsSection: some View {
-        VStack(spacing: 0) {
-            Picker("Operation", selection: $selectedOperationTab) {
-                ForEach(AgentsSettingsView.OperationTab.allCases) { tab in
-                    Text(tab.label).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-
-            operationTabContent
-        }
-    }
-
-    @ViewBuilder
-    private var operationTabContent: some View {
-        switch selectedOperationTab {
-        case .chat:
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "chat",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Chat Model")
-                } header: {
-                    Text("Chat Model")
-                } footer: {
-                    Text("Provider and model for new chat sessions. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .ingestion:
-            Form {
-                Section {
-                    ForEach(ACPIngestStage.allCases, id: \.rawValue) { stage in
-                        StageProviderModelPicker(
-                            stageKey: stage.rawValue,
-                            config: $config,
-                            containerDirectory: containerDirectory,
-                            label: "\(stage.label) Model")
-                    }
-                } header: {
-                    Text("Ingest Stage Models")
-                } footer: {
-                    Text("Pin a provider + model for each ingest phase (Planner / Executor / Finalizer). “Default” uses the global default provider. A warm subprocess is shared across phases when stages resolve to the same provider.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .lint:
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "lint",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Lint Model")
-                } header: {
-                    Text("Lint Model")
-                } footer: {
-                    Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        case .summary:
-            // Per-message summarizer stage (plans/chat-summary.md §5.2). The
-            // sentinel `""` (first option) means "no model — truncation" for
-            // THIS stage, so the option is relabeled to "Default (first few
-            // sentences)" to convey the actual behavior.
-            Form {
-                Section {
-                    StageProviderModelPicker(
-                        stageKey: "summarizer",
-                        config: $config,
-                        containerDirectory: containerDirectory,
-                        label: "Summary Model",
-                        defaultOptionLabel: "Default (first few sentences)")
-                } header: {
-                    Text("Message Summary")
-                } footer: {
-                    Text("“Default (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-        }
-    }
-
-    // MARK: - Helper text
-
-    private var helperText: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Models you pick on each row apply when that provider runs. Use Edit… for command, environment, API key, and Refresh Models. The Chat / Ingestion / Lint tabs below pin the provider + model each operation runs with.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Providers are stored in agent-providers.json in the app's container. Edit manually to set CLAUDE_CODE_EXECUTABLE or CODEX_PATH in a provider's env.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
-    }
-
-    // MARK: - Persistence
-
-    /// Save the updated config: write back to the parent's `@State` binding
-    /// AND save the sidecar. House rule: never bare `try?`.
-    private func saveConfig(_ updated: AgentProvidersConfig) {
-        config = updated
-        do {
-            try updated.save(to: containerDirectory)
-        } catch {
-            DebugLog.store("ProviderDetailPane save failed (provider=\(provider.id)): \(error.localizedDescription)")
-        }
-    }
-}
-
-// MARK: - Provider editor
-
-/// The provider editor sheet: label, command (parsed via `ShellWords`), env
-/// vars, API key, and the model picker fed from captured models. Saves back to
-/// the parent's config via `onSave` — this view owns no persistence itself.
-private struct ProviderEditorView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let originalID: String
     @State private var label: String
     @State private var commandText: String
-    @State private var envRows: [EnvRow]
-    @State private var apiKey: String
-    @State private var selectedModelId: String
+    /// Bash-style `KEY=value` text (one per line; `#` comments ignored). A
+    /// multiline box is friendlier than KEY/value rows for the common case:
+    /// pasting a block of variables. Seeded with the provider's suggested
+    /// variables as `#` comments when the provider has no env set yet.
+    @State private var envText: String
     @State private var isAvailable: Bool = false
-
-    /// #640: the cached-model list is now mutable local state (was `let`) so
-    /// the model `Picker` repopulates immediately on Refresh without re-
-    /// presenting the sheet. Seeded from the parent's `config.cachedModels`
-    /// at `init`; updated in-place when a refresh succeeds.
-    @State private var cachedModels: [CachedModelInfo]
-    /// #640: per-provider refresh lifecycle state. Mirrors Paseo's
-    /// `refreshProvider` status model
-    /// (`provider-snapshot-manager.ts:716-787`): `idle` → `loading` →
-    /// `ready`/`error`. On `.error`, `cachedModels` is NOT wiped (the
-    /// last-known list stays visible).
     @State private var modelRefreshState: ModelRefreshState = .idle
 
-    /// #663: progressive disclosure for Environment + Authentication. The
-    /// common-case editor shows only Command + Model; the env/apiKey fields
-    /// collapse under "Advanced" until the user has either env vars OR a
-    /// stored key (auto-expanded via `onAppear` so existing config is never
-    /// hidden). The `onAppear` assignment may cause a one-frame collapsed→
-    /// expanded flash on providers that have env/key — acceptable per
-    /// correction §7 (Low). A future two-pass `init` could compute it up
-    /// front, but the apiKey load already needs `onAppear` (Keychain is a
-    /// synchronous-actor hop on first read), so the timing is similar.
-    @State private var showAdvanced = false
-
-    let credentialStore: any ACPCredentialStore
-    let onSave: (AgentProvider, String?) -> Void
-    /// #663: invoked when the user cancels the editor on a freshly-added
-    /// provider (only fired when `isAddingNew == true`). The parent removes
-    /// the provider from `config.providers` — a newly-added provider with no
-    /// model MUST NOT persist in the list.
-    let onDelete: (() -> Void)?
-    /// #640: durable-persist callback for discovered models. The probe calls
-    /// this on success so the discovered list lands in `agent-providers.json`
-    /// immediately (survives the user never clicking Save — same behavior as
-    /// the launcher's post-spawn `cacheDiscoveredModels`). nil when the parent
-    /// does not support refresh (kept optional for the hosted-test seam).
-    let onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)?
-
-    /// #663: true when this editor was opened from the Add flow (the provider
-    /// was just appended with no model). Drives the Cancel button: when true,
-    /// Cancel removes the provider from `config.providers` via `onDelete`;
-    /// when false (Edit…/double-click on an existing provider), Cancel keeps
-    /// the provider as-is.
-    let isAddingNew: Bool
-
-    /// #640: the probe's lifecycle state. Equatable so SwiftUI skips body
-    /// re-renders when the state hasn't changed (e.g. `.idle` → `.idle`).
+    /// The probe's lifecycle state. Equatable so SwiftUI skips body re-renders
+    /// when the state hasn't changed.
     enum ModelRefreshState: Equatable {
         case idle
         case loading
@@ -894,48 +369,71 @@ private struct ProviderEditorView: View {
         case error(String)
     }
 
-    private struct EnvRow: Identifiable {
-        let id = UUID()
-        var key: String
-        var value: String
-    }
-
-    init(
-        provider: AgentProvider,
-        cachedModels: [CachedModelInfo],
-        selectedModelId: String,
-        isAddingNew: Bool = false,
-        credentialStore: any ACPCredentialStore,
-        onSave: @escaping (AgentProvider, String?) -> Void,
-        onDelete: (() -> Void)? = nil,
-        onRefreshModels: (@Sendable (AgentProvider, [CachedModelInfo]) async -> Void)? = nil
-    ) {
-        self.originalID = provider.id
+    init(provider: AgentProvider, config: Binding<AgentProvidersConfig>, containerDirectory: URL) {
+        self.provider = provider
+        self._config = config
+        self.containerDirectory = containerDirectory
         self._label = State(initialValue: provider.label)
         self._commandText = State(initialValue: provider.command.map(ShellWords.join) ?? "")
-        self._envRows = State(initialValue: provider.env
-            .sorted(by: { $0.key < $1.key })
-            .map { EnvRow(key: $0.key, value: $0.value) })
-        self._apiKey = State(initialValue: "")
-        self._selectedModelId = State(initialValue: selectedModelId)
-        self._cachedModels = State(initialValue: cachedModels)
-        self.isAddingNew = isAddingNew
-        self.credentialStore = credentialStore
-        self.onSave = onSave
-        self.onDelete = onDelete
-        self.onRefreshModels = onRefreshModels
+        self._envText = State(initialValue: EnvVarText.seed(for: provider))
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                // #663: reorder so the COMMON case is at the top — Command
-                // → Model → Advanced (Environment + Authentication). The old
-                // order had Environment between Command and Authentication,
-                // cluttering the editor for providers that have neither.
-                Section {
-                    TextField("Label", text: $label)
-                    TextField("Command", text: $commandText, prompt: Text("hermes acp"))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                providerHeader
+                configForm
+                helperText
+            }
+            .padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear { refreshAvailability() }
+    }
+
+    // MARK: - Header
+
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            // Just the name + Default badge — the command lives in the editable
+            // Command field below, so repeating it here would be redundant.
+            HStack(spacing: 6) {
+                Text(label.isEmpty ? provider.label : label)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                ProviderStatusBadges(provider: provider)
+            }
+            .opacity(provider.enabled ? 1.0 : 0.55)
+
+            Spacer()
+
+            if !provider.isDefault {
+                Button("Make Default") {
+                    saveConfig(config.settingDefault(id: provider.id))
+                }
+                .help("Use this provider when an operation isn't pinned to a specific one.")
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: - Config form
+
+    private var configForm: some View {
+        Form {
+            Section {
+                TextField("Name", text: $label)
+                    .onChange(of: label) { commitProviderConfig() }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    TextField("Command", text: $commandText, prompt: Text("bun x @agentclientprotocol/claude-agent-acp"))
+                        .fontDesign(.monospaced)
+                        .onChange(of: commandText) {
+                            commitProviderConfig()
+                            refreshAvailability()
+                        }
                     HStack(spacing: 5) {
                         Circle()
                             .fill(isAvailable ? Color.green : Color.orange)
@@ -944,121 +442,146 @@ private struct ProviderEditorView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } header: {
-                    Text("Command")
-                } footer: {
-                    Text("A single command line, e.g. bun x @agentclientprotocol/claude-agent-acp. Quote arguments containing spaces.")
+                }
+
+                defaultModelRow
+
+                if case .error(let message) = modelRefreshState {
+                    Text(message)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.red)
                 }
-
-                Section {
-                    Picker("Model", selection: $selectedModelId) {
-                        Text("Provider default").tag("")
-                        ForEach(cachedModels) { model in
-                            Text(model.name).tag(model.modelId)
-                        }
-                    }
-                    HStack {
-                        Button("Refresh Models") {
-                            refreshModels()
-                        }
-                        .disabled(onRefreshModels == nil)
-                        .help("Fetches the models this provider advertises. Requires the executable on PATH.")
-                        Spacer()
-                        switch modelRefreshState {
-                        case .idle:
-                            if cachedModels.isEmpty {
-                                Text("No models captured yet")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        case .loading:
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Discovering models…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .ready(let models):
-                            // #663: show a compact "N models" caption next
-                            // to Refresh so the count is always legible (was
-                            // EmptyView — the picker's count was the only
-                            // signal, which disappeared when collapsed).
-                            Label("\(models.count) models", systemImage: "circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .error(let message):
-                            Text(message)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .lineLimit(2)
-                        }
-                    }
-                } header: {
-                    Text("Model")
-                }
-
-                DisclosureGroup(isExpanded: $showAdvanced) {
-                    envVarsSection
-                    Section {
-                        SecureField("API Key", text: $apiKey, prompt: Text("optional"))
-                    } header: {
-                        Text("Authentication")
-                    } footer: {
-                        Text("Stored in the macOS Keychain, never in the provider's JSON config.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } label: {
-                    Label("Advanced", systemImage: "slider.horizontal.3")
-                        .font(.headline)
-                }
+            } header: {
+                Text("Provider")
+            } footer: {
+                Text("A single command line. Quote arguments containing spaces. Default Model is the model this provider runs unless an operation pins a different one; Refresh rediscovers the models it advertises.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .formStyle(.grouped)
 
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    // #663: a freshly-added provider with no model MUST NOT
-                    // persist in the list — fire the parent's `onDelete`
-                    // callback so it's removed before the sheet dismisses.
-                    // Editing an EXISTING provider (Cancel) keeps it as-is.
-                    if isAddingNew {
-                        onDelete?()
-                    }
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    // #663: a provider cannot be saved without a selected model
-                    // — otherwise the row sits with a "No model captured yet"
-                    // warning and the launcher refuses to spawn
-                    // (`SpawnModelGuard`). The "Provider default" picker option
-                    // (tag "") counts as no selection: it leaves the provider
-                    // with no selectedModelId.
-                    .disabled(!canSave)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+            environmentSection
         }
-        .frame(minWidth: 480, minHeight: 480)
-        .onAppear {
-            apiKey = credentialStore.apiKey(forProvider: originalID) ?? ""
-            // #663: auto-expand Advanced when provider already has env vars
-            // OR a stored API key, so the user doesn't have to hunt for
-            // existing config (§3.4). envRows is already initialized before
-            // onAppear from `provider.env`; apiKey is set just above. NB:
-            // this may cause a one-frame collapsed→expanded flash on env/key
-            // providers — see the `showAdvanced` declaration comment.
-            showAdvanced = showAdvanced
-                || !envRows.allSatisfy { $0.key.trimmingCharacters(in: .whitespaces).isEmpty && $0.value.isEmpty }
-                || !apiKey.isEmpty
-            refreshAvailability()
+        .formStyle(.grouped)
+    }
+
+    /// A single "Default Model" row: the provider's default model + a refresh
+    /// button to (re)discover the advertised model list. Operations can override
+    /// this per-operation; when they don't ("Same as provider"), this is what
+    /// runs.
+    @ViewBuilder
+    private var defaultModelRow: some View {
+        let cachedModels = config.cachedModels(forProvider: provider.id)
+        LabeledContent("Default Model") {
+            HStack(spacing: 8) {
+                Picker("Default Model", selection: modelBinding) {
+                    Text("Agent default").tag("")
+                    ForEach(cachedModels, id: \.modelId) { model in
+                        Text(model.displayLabel).tag(model.modelId)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 220)
+
+                if modelRefreshState == .loading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        refreshModels()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Rediscover the models this provider advertises (requires the executable on PATH).")
+                }
+            }
         }
     }
+
+    private var modelBinding: Binding<String> {
+        Binding(
+            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
+            set: { newID in
+                saveConfig(config.settingSelectedModel(
+                    newID.isEmpty ? nil : newID,
+                    forProvider: provider.id))
+            })
+    }
+
+    // MARK: - Environment (#738)
+
+    private var environmentSection: some View {
+        let malformed = EnvVarText.malformedLines(envText)
+        return Section {
+            TextEditor(text: $envText)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 120)
+                .onChange(of: envText) { commitProviderConfig() }
+        } header: {
+            Text("Environment")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("One KEY=value per line — paste a block of variables directly. Lines starting with # are ignored. Non-secret configuration only (stored in plain JSON).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !malformed.isEmpty {
+                    Text("Ignoring \(malformed.count) line\(malformed.count == 1 ? "" : "s") without a KEY=value: \(malformed.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper text
+
+    private var helperText: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Command, environment, and model apply when this provider runs. Use the Operations item in the sidebar to pin which provider runs Chat, Ingestion, Lint, and Summary.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Providers are stored in agent-providers.json in the app's container.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+    }
+
+    // MARK: - Commit / persistence
+
+    /// Build an `AgentProvider` from the pane's local edit state and merge it
+    /// back into `config.providers` (preserving `enabled`/`isDefault`, which the
+    /// toggle and "Make Default" own), then persist. Called on every field
+    /// change — the sidecar is tiny and written atomically.
+    private func commitProviderConfig() {
+        guard let idx = config.providers.firstIndex(where: { $0.id == provider.id }) else { return }
+        let existing = config.providers[idx]
+        let cleanLabel = label.trimmingCharacters(in: .whitespaces)
+        let env = EnvVarText.parse(envText)
+        let command = ShellWords.split(commandText)
+        var providers = config.providers
+        providers[idx] = AgentProvider(
+            id: existing.id,
+            label: cleanLabel.isEmpty ? existing.label : cleanLabel,
+            command: command.isEmpty ? nil : command,
+            env: env,
+            enabled: existing.enabled,
+            isDefault: existing.isDefault)
+        saveConfig(config.replacingProviders(providers))
+    }
+
+    private func saveConfig(_ updated: AgentProvidersConfig) {
+        config = updated
+        do {
+            try updated.save(to: containerDirectory)
+        } catch {
+            DebugLog.store("ProviderDetailPane save failed (provider=\(provider.id)): \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - PATH availability + model discovery
 
     private func refreshAvailability() {
         let words = ShellWords.split(commandText)
@@ -1075,186 +598,14 @@ private struct ProviderEditorView: View {
         }
     }
 
-    // MARK: - Env-var editor (#738)
-
-    /// The env-var Section with tightened layout, inline validation hints, and
-    /// suggested-keys guidance. Replaces the old bare KEY/value `HStack` list
-    /// with aligned columns, per-row red error text, and a muted common-keys
-    /// hint line surfaced from `EnvVarHints`.
-    @ViewBuilder
-    private var envVarsSection: some View {
-        Section {
-            ForEach($envRows) { $row in
-                envRowView(for: $row)
-            }
-            Button {
-                envRows.append(EnvRow(key: "", value: ""))
-            } label: {
-                Label("Add Variable", systemImage: "plus")
-            }
-            .buttonStyle(.borderless)
-        } header: {
-            HStack(spacing: 4) {
-                Text("Environment")
-                if let hintError = envSectionError {
-                    Spacer()
-                    Text(hintError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-        } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Non-secret configuration only — API keys and other secrets belong in the field below, never here (this list is stored in plain JSON).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let hints = EnvVarHints.hints(forProviderID: originalID),
-                   !hints.isEmpty {
-                    suggestedKeysView(hints)
-                }
-            }
-        }
-    }
-
-    /// One env-var row: aligned KEY/value columns + remove button + a red
-    /// per-row error hint when the key is empty-with-value or duplicated.
-    @ViewBuilder
-    private func envRowView(for row: Binding<EnvRow>) -> some View {
-        let trimmedKey = row.wrappedValue.key.trimmingCharacters(in: .whitespaces)
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                TextField("KEY", text: row.key)
-                    .fontDesign(.monospaced)
-                    .frame(maxWidth: 160)
-                TextField("value", text: row.value)
-                    .fontDesign(.monospaced)
-                Button {
-                    envRows.removeAll { $0.id == row.wrappedValue.id }
-                } label: {
-                    Image(systemName: "minus.circle")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("Remove variable")
-            }
-            // Per-row inline error: empty key with a non-empty value, or a
-            // duplicated key. By design we do NOT flag a fully-empty row
-            // (both key+value blank) — it gets dropped on save, matching the
-            // pre-existing `save()` behavior.
-            if let rowError = envRowError(for: trimmedKey, rawRow: row.wrappedValue) {
-                Text(rowError)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-            }
-        }
-    }
-
-    /// Muted "Common variables" hint line listing the suggested keys for the
-    /// current provider, so users don't have to guess exact names when
-    /// following troubleshooting guidance (#733 / #737).
-    @ViewBuilder
-    private func suggestedKeysView(_ hints: [EnvVarHints.Hint]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Common variables for this provider:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ForEach(hints, id: \.key) { hint in
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(hint.key)
-                        .font(.caption)
-                        .fontDesign(.monospaced)
-                    Text("— \(hint.description)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    // MARK: Env-var validation
-
-    /// Set of key strings (trimmed) that appear more than once across the
-    /// env rows. Empty when no duplicates. Computed on every render but cheap
-    /// (env lists are short — at most a handful of rows).
-    private var duplicateKeys: Set<String> {
-        var counts: [String: Int] = [:]
-        for row in envRows {
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
-            counts[key, default: 0] += 1
-        }
-        return Set(counts.filter { $0.value > 1 }.keys)
-    }
-
-    /// A per-row error message for the given trimmed key, or `nil` when the
-    /// row is valid. A fully-empty row (empty key + empty value) is NOT an
-    /// error — it gets dropped on save.
-    private func envRowError(for trimmedKey: String, rawRow: EnvRow) -> String? {
-        if trimmedKey.isEmpty {
-            // Only flag when the value is non-empty — a fully blank row is a
-            // not-yet-filled row, which is fine (dropped on save).
-            return rawRow.value.isEmpty ? nil : "Key is required"
-        }
-        if duplicateKeys.contains(trimmedKey) {
-            return "Duplicate key"
-        }
-        return nil
-    }
-
-    /// A section-level error summary (shown in the header) when there are any
-    /// duplicate or empty-key-with-value rows. `nil` when env rows are clean.
-    private var envSectionError: String? {
-        if !duplicateKeys.isEmpty {
-            return "Resolve duplicate keys"
-        }
-        for row in envRows {
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            if key.isEmpty && !row.value.isEmpty {
-                return "Resolve empty keys"
-            }
-        }
-        return nil
-    }
-
-    /// Whether the editor can be saved. Combines the pre-existing model/label
-    /// guards (#663) with the #738 env-var validation (no duplicate or
-    /// empty-with-value keys).
-    private var canSave: Bool {
-        let labelClean = label.trimmingCharacters(in: .whitespaces)
-        guard !labelClean.isEmpty, !selectedModelId.isEmpty else { return false }
-        return envSectionError == nil
-    }
-
-    /// #640: drive the ACP model-discovery probe for THIS provider. Mirrors
-    /// Paseo's `refreshProvider`
-    /// (`provider-snapshot-manager.ts:716-787`): an availability pre-check,
-    /// then a throwaway `initialize` + `session/new` probe (60s timeout), then
-    /// on success persist + repaint; on failure set `.error` but keep the
-    /// last-known list. Runs OFF the main actor (the probe is `Sendable`);
-    /// crosses back to `@MainActor` for the persist + UI update.
-    ///
-    /// `modelRefreshState` transitions: `idle`/`ready`/`error` → `loading`
-    /// → `ready` (success) / `error` (failure). `cachedModels` is replaced
-    /// ONLY on success — a failure keeps the last-known list visible (Paseo
-    /// parity: `provider-snapshot-manager.ts:773-786` overwrites status/error
-    /// fields only).
+    /// #640: drive the ACP model-discovery probe for THIS provider. PATH-resolve
+    /// the executable to an ABSOLUTE path first (the SDK's `Process.launch()`
+    /// does no PATH lookup and a GUI app's PATH is the launchd-minimal one).
+    /// Runs OFF the main actor; crosses back to `@MainActor` to persist +
+    /// repaint. On success the discovered models are persisted durably (survives
+    /// the user never touching the picker); on failure the last-known list is
+    /// kept and only the status line changes.
     private func refreshModels() {
-        // PATH-resolve the executable BEFORE constructing the probe — the
-        // probe (and `AgentBackendFactory.providerHints` /
-        // `ACPBackend.resolveSpawnConfig` downstream) expects
-        // `resolvedCommand[0]` to be an ABSOLUTE PATH. The swift-acp SDK's
-        // `Process.launch()` does NOT do PATH lookup, and a GUI app's process
-        // PATH is the launchd-minimal one (usually lacks `/opt/homebrew/bin`),
-        // so passing the bare exe name reproduces the bug where the green
-        // "Executable found on PATH" chip stays lit but Refresh Models fails
-        // with "file <exe> doesn't exist". `AgentLauncher.
-        // resolveACPProviderSpawn` does this same PATH hop on the real spawn
-        // path; the probe must match (#640).
-        //
-        // NB: `AgentProvider.command` (what `save()` stores) is the BARE argv
-        // — resolution is a spawn-time concern, not a stored-config concern.
-        // The probe takes both: `provider` (bare, matching `save()`) and
-        // `resolvedCommand` (resolved, matching the spawn contract).
         let words = ShellWords.split(commandText)
         let exe = words.first ?? ""
         guard !exe.isEmpty else {
@@ -1263,13 +614,11 @@ private struct ProviderEditorView: View {
             return
         }
         modelRefreshState = .loading
-        DebugLog.agent("ProviderEditorView.refreshModels: starting probe provider=\(originalID)")
+        DebugLog.agent("ProviderDetailPane.refreshModels: starting probe provider=\(provider.id)")
+        let providerID = provider.id
+        let env = EnvVarText.parse(envText)
+        let cleanLabel = label.trimmingCharacters(in: .whitespaces)
         Task {
-            // `PathPreflight.resolveOnLoginShell` spawns `/bin/zsh -lc
-            // 'echo $PATH'` (blocking I/O) — run it OFF the main actor,
-            // mirroring `refreshAvailability()`'s detached task. Re-resolve
-            // here instead of trusting the `onAppear`-time `isAvailable` state
-            // (the user's PATH could have changed in the meantime).
             let resolved = await Task.detached {
                 PathPreflight.resolveOnLoginShell(executable: exe)
             }.value
@@ -1285,68 +634,39 @@ private struct ProviderEditorView: View {
                 }
                 return
             }
-            // Reviewer finding #4: build the provider from the editor's
-            // current state, mirroring `save()`'s construction verbatim.
-            // `enabled`/`isDefault` are preserved by the parent on Save;
-            // the probe doesn't read them. `command` is the BARE argv (what
-            // `save()` stores); the resolved argv is passed separately as
-            // `resolvedCommand` below.
-            let env: [String: String] = envRows.reduce(into: [:]) { result, row in
-                let key = row.key.trimmingCharacters(in: .whitespaces)
-                guard !key.isEmpty else { return }
-                result[key] = row.value
-            }
             let providerForProbe = AgentProvider(
-                id: originalID,
-                label: label.trimmingCharacters(in: .whitespaces),
+                id: providerID,
+                label: cleanLabel,
                 command: words.isEmpty ? nil : words,
                 env: env,
                 enabled: true,
                 isDefault: false)
-            let apiKeyForProbe = apiKey.isEmpty ? nil : apiKey
-
-            // The probe struct captures only Sendable config; the SDK Client
-            // actor is the concurrency boundary. All subprocess I/O runs here,
-            // off-main.
             let probe = ACPProviderModelProbe(
                 provider: providerForProbe,
                 resolvedCommand: resolvedWords,
-                apiKey: apiKeyForProbe)
+                apiKey: nil)
             let outcome: Result<[CachedModelInfo], Error>
             do {
                 let models = try await probe.discoverModels()
                 if ACPProviderModelProbe.shouldThrowNoModels(models) {
-                    // The probe completed successfully but the agent advertised
-                    // no models (older agents). Surface a specific error rather
-                    // than wiping the cache.
-                    DebugLog.agent("ProviderEditorView.refreshModels: probe OK but no models advertised provider=\(originalID)")
+                    DebugLog.agent("ProviderDetailPane.refreshModels: probe OK but no models advertised provider=\(providerID)")
                     outcome = .failure(ACPProviderModelProbeError.noModelsAdvertised)
                 } else {
-                    DebugLog.agent("ProviderEditorView.refreshModels: probe OK models=\(models.count) provider=\(originalID)")
+                    DebugLog.agent("ProviderDetailPane.refreshModels: probe OK models=\(models.count) provider=\(providerID)")
                     outcome = .success(models)
                 }
             } catch {
-                DebugLog.agent("ProviderEditorView.refreshModels: probe failed provider=\(originalID): \(error.localizedDescription)")
+                DebugLog.agent("ProviderDetailPane.refreshModels: probe failed provider=\(providerID): \(error.localizedDescription)")
                 outcome = .failure(error)
             }
-            // Cross back to @MainActor for the persist + UI update.
             await MainActor.run {
                 switch outcome {
                 case .success(let models):
-                    cachedModels = models
                     modelRefreshState = .ready(models)
-                    // Persist durably — survives even if the user never clicks
-                    // Save (matches the launcher's post-spawn
-                    // `cacheDiscoveredModels` semantics).
-                    if let onRefreshModels {
-                        Task {
-                            await onRefreshModels(providerForProbe, models)
-                        }
-                    }
+                    // Persist durably — survives even if the user never changes
+                    // the picker (matches the launcher's post-spawn cache).
+                    saveConfig(config.settingCachedModels(models, forProvider: providerID))
                 case .failure(let error):
-                    // LAST-KNOWN list retained — only the status/error fields
-                    // change (Paseo parity). The model picker keeps showing
-                    // `cachedModels`; only the inline status updates.
                     let message: String
                     if let probeErr = error as? ACPProviderModelProbeError {
                         message = probeErr.localizedDescription
@@ -1358,24 +678,97 @@ private struct ProviderEditorView: View {
             }
         }
     }
+}
 
-    private func save() {
+// MARK: - Environment text format
+
+/// Pure helpers for the provider Environment text box: parse/serialize
+/// bash-style `KEY=value` lines, detect malformed lines, and build the
+/// commented seed shown for a provider with no env set yet. Kept as a
+/// `fileprivate enum` of static funcs so it's easy to reason about (and unit
+/// test) without any SwiftUI.
+enum EnvVarText {
+    /// Parse `KEY=value` lines into an env dict. Blank lines and `#` comments
+    /// are skipped; a leading `export ` is stripped; the value has matching
+    /// surrounding single/double quotes removed. Last duplicate key wins.
+    static func parse(_ text: String) -> [String: String] {
         var env: [String: String] = [:]
-        for row in envRows {
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
-            env[key] = row.value
+        for (key, value) in assignments(in: text) {
+            env[key] = value
         }
-        let command = ShellWords.split(commandText)
-        let updated = AgentProvider(
-            id: originalID,
-            label: label.trimmingCharacters(in: .whitespaces),
-            command: command.isEmpty ? nil : command,
-            env: env,
-            enabled: true,
-            isDefault: false)
-        try? credentialStore.setAPIKey(apiKey.isEmpty ? nil : apiKey, forProvider: originalID)
-        onSave(updated, selectedModelId.isEmpty ? nil : selectedModelId)
-        dismiss()
+        return env
+    }
+
+    /// Non-comment, non-blank lines that don't parse to a `KEY=value` (no `=`,
+    /// or an empty key). Surfaced as a gentle "ignoring N lines" hint.
+    static func malformedLines(_ text: String) -> [String] {
+        var bad: [String] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if assignment(from: line) == nil { bad.append(line) }
+        }
+        return bad
+    }
+
+    /// Serialize an env dict to sorted `KEY=value` lines.
+    static func format(_ env: [String: String]) -> String {
+        env.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\n")
+    }
+
+    /// The initial text-box contents for a provider: its existing env as
+    /// `KEY=value` lines, or — when it has none — a commented scaffold that
+    /// lists the provider's suggested variables so they're discoverable
+    /// without leaving the field.
+    static func seed(for provider: AgentProvider) -> String {
+        if !provider.env.isEmpty { return format(provider.env) }
+        var lines = ["# One KEY=value per line. Lines starting with # are ignored."]
+        if let hints = EnvVarHints.hints(forProviderID: provider.id), !hints.isEmpty {
+            lines.append("#")
+            lines.append("# Common variables for this provider:")
+            for hint in hints {
+                lines.append("# \(hint.key)=   # \(hint.description)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: Private
+
+    /// All valid `(key, value)` assignments in `text`, in order.
+    private static func assignments(in text: String) -> [(String, String)] {
+        var result: [(String, String)] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if let pair = assignment(from: line) { result.append(pair) }
+        }
+        return result
+    }
+
+    /// Parse one already-trimmed, non-comment line into `(key, value)`, or
+    /// `nil` when it isn't a well-formed assignment.
+    private static func assignment(from line: String) -> (String, String)? {
+        var body = line
+        if body.hasPrefix("export ") {
+            body = String(body.dropFirst("export ".count)).trimmingCharacters(in: .whitespaces)
+        }
+        guard let eq = body.firstIndex(of: "=") else { return nil }
+        let key = String(body[..<eq]).trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return nil }
+        let value = stripQuotes(String(body[body.index(after: eq)...]).trimmingCharacters(in: .whitespaces))
+        return (key, value)
+    }
+
+    /// Remove one layer of matching surrounding single/double quotes.
+    private static func stripQuotes(_ value: String) -> String {
+        guard value.count >= 2 else { return value }
+        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+           (value.hasPrefix("'") && value.hasSuffix("'")) {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
     }
 }

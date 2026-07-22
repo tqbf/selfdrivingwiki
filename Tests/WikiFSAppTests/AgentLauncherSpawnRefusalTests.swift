@@ -91,7 +91,7 @@ import WikiFSCore
         #expect(launcher.preflightError != nil)
         #expect(launcher.preflightError?.contains("No model selected") == true)
         #expect(launcher.preflightError?.contains("OpenCode") == true)
-        #expect(launcher.preflightError?.contains("Settings → Agents") == true)
+        #expect(launcher.preflightError?.contains("Settings → Providers") == true)
         #expect(launcher.isRunning == false)
     }
 

@@ -890,7 +890,7 @@ struct ActivityWindowView: View {
         // Markers from the readiness messages:
         // - "was not found on your PATH"
         // - "has no command configured"
-        // - "Open Settings → Agents" / "Open Settings → Extraction"
+        // - "Open Settings → Providers" / "Open Settings → Extraction"
         // - "no api key" / "add your … api key"
         // - "set a docling serve endpoint"
         // - "dependencies aren't installed" (local pdf2md)
@@ -901,7 +901,7 @@ struct ActivityWindowView: View {
         // readiness probe surfaces "agent is not available" / "re-enable the
         // agent"; the older dead-process path surfaces "agent process is not
         // running" from the swift-acp SDK through `ACPBackend.send`. Both
-        // are fixable from Settings → Agents, so both should surface the CTA
+        // are fixable from Settings → Providers, so both should surface the CTA
         // rather than leaving the row showing a stuck, generic error.
         let markers = [
             "was not found on your path",

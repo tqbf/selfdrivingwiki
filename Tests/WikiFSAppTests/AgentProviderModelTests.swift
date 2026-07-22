@@ -540,7 +540,7 @@ import ACPModel
             resolveCommand: { _ in nil })
         #expect(msg != nil)
         #expect(msg?.contains("was not found on your PATH") == true)
-        #expect(msg?.contains("Settings → Agents") == true)
+        #expect(msg?.contains("Settings → Providers") == true)
     }
 
     @Test func readinessMessageReturnsMessageWhenNoCommandConfigured() {
@@ -553,7 +553,7 @@ import ACPModel
             resolveCommand: { _ in nil })
         #expect(msg != nil)
         #expect(msg?.contains("has no command configured") == true)
-        #expect(msg?.contains("Settings → Agents") == true)
+        #expect(msg?.contains("Settings → Providers") == true)
     }
 
     @Test func readinessMessageMentionsBunForBunProvider() {

@@ -109,7 +109,7 @@ import WikiFSCore
     @Test func bannerMessage_preservesMultiLineAndSpecialCharacters() {
         let msg = """
         No model selected for provider 'OpenCode'. \
-        Open Settings → Agents and pick a model before running.
+        Open Settings → Providers and pick a model before running.
         """
         let bannerText = ChatDetailView.preflightBannerMessage(
             preflightError: msg,

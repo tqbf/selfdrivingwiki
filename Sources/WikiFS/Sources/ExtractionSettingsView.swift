@@ -204,7 +204,7 @@ struct ExtractionSettingsView: View {
         } header: {
             Text("ACP Provider")
         } footer: {
-            Text("Delegates PDF extraction to your configured ACP provider. Reuses the API key from Settings → Agents — no separate credentials needed. The provider reads the PDF from disk and returns markdown. Choose \"Default\" to use the same provider as chat and ingest.")
+            Text("Delegates PDF extraction to your configured ACP provider. Reuses the API key from Settings → Providers — no separate credentials needed. The provider reads the PDF from disk and returns markdown. Choose \"Default\" to use the same provider as chat and ingest.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

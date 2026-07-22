@@ -7,7 +7,7 @@ import WikiFSCore
 /// Pure-logic tests for `AgentsSettingsView.modelWarning(for:in:)`.
 ///
 /// The helper drives the orange "no model picked" caption shown below a
-/// provider's command line in Settings → Agents. Extracted as a STATIC pure
+/// provider's command line in Settings → Providers. Extracted as a STATIC pure
 /// function (taking the config as a parameter) so it can be tested without
 /// rendering. The row calls `Self.modelWarning(for: provider, in: config)`
 /// with the same `@State var config` source the view stores.

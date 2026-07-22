@@ -83,7 +83,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // (via `isConfigurationError`, which now matches this message).
         let config = resolveProviderConfig()
         if config.enabledProviders.isEmpty {
-            let msg = "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Agents to retry."
+            let msg = "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Providers to retry."
             DebugLog.ingest("AppQueueIngestionProvider.readiness: NO ENABLED PROVIDER (providers=\(config.providers.count))")
             return msg
         }

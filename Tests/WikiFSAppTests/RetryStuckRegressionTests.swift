@@ -35,15 +35,15 @@ struct RetryStuckRegressionTests {
     @Test("isConfigurationError matches the pre-existing #440 readiness markers")
     func configurationErrorMatchesOriginalReadinessMarkers() {
         #expect(ActivityWindowView.isConfigurationErrorMarker(
-            "‘bun’ was not found on your PATH. Install bun (bun.sh) or configure a different agent provider. Open Settings → Agents to configure one."))
+            "‘bun’ was not found on your PATH. Install bun (bun.sh) or configure a different agent provider. Open Settings → Providers to configure one."))
         #expect(ActivityWindowView.isConfigurationErrorMarker(
             "Provider ‘OpenCode’ has no command configured."))
         #expect(ActivityWindowView.isConfigurationErrorMarker(
-            "Add your Anthropic API key in Settings → Agents."))
+            "Add your Anthropic API key in Settings → Providers."))
         #expect(ActivityWindowView.isConfigurationErrorMarker(
             "Set a docling serve endpoint in Settings → Extraction."))
         #expect(ActivityWindowView.isConfigurationErrorMarker(
-            "The pdf2md dependencies aren't installed. Fix it in Settings → Agents."))
+            "The pdf2md dependencies aren't installed. Fix it in Settings → Providers."))
     }
 
     /// #635: the marker surface now covers the dead-process / agent-disabled
@@ -56,9 +56,9 @@ struct RetryStuckRegressionTests {
         // Surfaced by AppQueueIngestionProvider.readiness when all providers
         // are disabled (Part 2).
         #expect(ActivityWindowView.isConfigurationErrorMarker(
-            "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Agents to retry."))
+            "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Providers to retry."))
         #expect(ActivityWindowView.isConfigurationErrorMarker(
-            "Agent is disabled. Re-enable the agent in Settings → Agents."))
+            "Agent is disabled. Re-enable the agent in Settings → Providers."))
         // Surfaced by the swift-acp SDK through ACPBackend.send when the
         // warm subprocess was torn down by cancel-then-retry.
         #expect(ActivityWindowView.isConfigurationErrorMarker(
@@ -87,12 +87,12 @@ struct RetryStuckRegressionTests {
     @Test("isConfigurationError is case-insensitive")
     func configurationErrorIsCaseInsensitive() {
         #expect(ActivityWindowView.isConfigurationErrorMarker("AGENT PROCESS IS NOT RUNNING"))
-        #expect(ActivityWindowView.isConfigurationErrorMarker("Re-enable the Agent in Settings → Agents."))
+        #expect(ActivityWindowView.isConfigurationErrorMarker("Re-enable the Agent in Settings → Providers."))
     }
 
     // MARK: - Part 2: AppQueueIngestionProvider readiness — all-providers-disabled
 
-    /// #635: when the operator disables the agent in Settings → Agents (toggling
+    /// #635: when the operator disables the agent in Settings → Providers (toggling
     /// every provider off), `AgentProvidersConfig.selectedProvider()` still
     /// falls back to the hardcoded `claudeAcpDefault` static (so the launcher's
     /// own spawn path could try a fresh subprocess). The readiness probe must
@@ -128,8 +128,8 @@ struct RetryStuckRegressionTests {
         let unwrapped = try #require(msg)
         #expect(ActivityWindowView.isConfigurationErrorMarker(unwrapped))
         // The message MUST name the action the user needs to take
-        // ("Settings → Agents") so the user isn't left guessing.
-        #expect(unwrapped.contains("Settings → Agents"))
+        // ("Settings → Providers") so the user isn't left guessing.
+        #expect(unwrapped.contains("Settings → Providers"))
     }
 
     /// #635: when at least one provider is enabled (the partial-disabled case),

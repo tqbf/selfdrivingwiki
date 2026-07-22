@@ -20,7 +20,7 @@ import WikiFSCore
 enum SpawnModelGuard {
     /// Returns `nil` when spawning is allowed (a non-empty `modelId` is set for
     /// `provider`); otherwise a human-readable preflight error message that
-    /// names the provider and points the user at Settings → Agents.
+    /// names the provider and points the user at Settings → Providers.
     ///
     /// When `stageName` is provided (the per-stage ingest path), the message
     /// names the stage too — e.g. "No model selected for the Planner stage of
@@ -35,10 +35,10 @@ enum SpawnModelGuard {
         if let modelId, !modelId.isEmpty { return nil }
         if let stageName, !stageName.isEmpty {
             return "No model selected for the \(stageName) stage of provider ‘\(provider.label)’. "
-                 + "Open Settings → Agents and pick a model before running."
+                 + "Open Settings → Providers and pick a model before running."
         }
         return "No model selected for provider ‘\(provider.label)’. "
-             + "Open Settings → Agents and pick a model before running."
+             + "Open Settings → Providers and pick a model before running."
     }
 }
 #endif
