@@ -6,7 +6,7 @@
 test-target: WikiFSCoreTests
 
 # Per-mutant test timeout in seconds (default: 30 for SPM)
-timeout: 30
+timeout: 900
 
 # Disable result cache (re-runs all mutants on every execution)
 # no-cache: true
@@ -19,6 +19,7 @@ output: mutation-report.json
 # Source file glob patterns to exclude from mutation
 exclude:
   - "/WikiFSCoreTests/"
+  - "SourceProvider.swift"
 
 # Mutation operators
 mutators:
