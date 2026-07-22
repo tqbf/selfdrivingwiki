@@ -40,7 +40,34 @@ struct ActivityWindowView: View {
     @State private var didAutoSelect = false
 
     private var queueTitle: String {
-        queue == .extraction ? "Extraction Queue" : "Agent Queue"
+        switch queue {
+        case .extraction: return "Extraction Queue"
+        case .ingestion: return "Agent Queue"
+        case .transcription: return "Transcription Queue"
+        }
+    }
+
+    /// The toolbar/menu icon for this queue's window.
+    private var queueControlIcon: String {
+        switch queue {
+        case .extraction: return "doc.text.magnifyingglass"
+        case .ingestion: return "tray.full"
+        case .transcription: return "waveform"
+        }
+    }
+
+    /// The "Configure…" call-to-action shown on configuration errors, or `nil`
+    /// when this queue has no relevant Settings tab (transcription needs no
+    /// credentials — YouTube is a scrape, RSS is `uv`).
+    private var configureCTA: (tab: String, label: String)? {
+        switch queue {
+        case .extraction:
+            return (tab: "extraction", label: "Configure Extraction…")
+        case .ingestion:
+            return (tab: "agents", label: "Configure Agents…")
+        case .transcription:
+            return nil
+        }
     }
 
     private var activeItems: [QueueItem] {
@@ -211,12 +238,19 @@ struct ActivityWindowView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView {
+        let description: String
+        switch queue {
+        case .extraction:
+            description = "PDF extraction tasks appear here as they run."
+        case .ingestion:
+            description = "Ingestion and lint tasks appear here as they run."
+        case .transcription:
+            description = "Transcription tasks (YouTube/podcast) appear here as they run."
+        }
+        return ContentUnavailableView {
             Label("No \(queueTitle) Activity", systemImage: "checkmark.circle")
         } description: {
-            Text(queue == .extraction
-                ? "PDF extraction tasks appear here as they run."
-                : "Ingestion and lint tasks appear here as they run.")
+            Text(description)
         }
     }
 
@@ -393,7 +427,7 @@ struct ActivityWindowView: View {
     @ViewBuilder
     private var queueControlMenu: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
-        let icon = queue == .extraction ? "doc.text.magnifyingglass" : "tray.full"
+        let icon = queueControlIcon
         Menu {
             if state == .running {
                 Button("Pause \(queueTitle)", systemImage: "pause.fill") {
@@ -481,15 +515,12 @@ struct ActivityWindowView: View {
                     // provider binary wasn't found, no API key, etc.), show a
                     // call-to-action button that opens Settings on the relevant
                     // tab so the user can fix it without guessing.
-                    if isConfigurationError(error), openWindowBridge != nil {
+                    if isConfigurationError(error), openWindowBridge != nil,
+                       let cta = configureCTA {
                         Button(action: {
-                            let tab = queue == .extraction ? "extraction" : "agents"
-                            openWindowBridge?.openSettings(tab: tab)
+                            openWindowBridge?.openSettings(tab: cta.tab)
                         }) {
-                            Label(
-                                queue == .extraction ? "Configure Extraction…" : "Configure Agents…",
-                                systemImage: "gearshape"
-                            )
+                            Label(cta.label, systemImage: "gearshape")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -986,6 +1017,7 @@ struct ActivityWindowView: View {
         switch item.queue {
         case .extraction: return "Extraction"
         case .ingestion: return "Ingestion"
+        case .transcription: return "Transcription"
         }
     }
 

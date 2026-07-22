@@ -62,6 +62,27 @@ struct CompositeWorkerFactoryTests {
         #expect(providerID == "default-ingest")
     }
 
+    @Test("Routes transcription items to transcription factory")
+    func routesTranscriptionItems() async throws {
+        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
+        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let transcriptionFactory = FakeFactory(providerIDValue: "transcription")
+        let composite = CompositeWorkerFactory(factories: [
+            .extraction: extractionFactory,
+            .ingestion: ingestionFactory,
+            .transcription: transcriptionFactory
+        ])
+
+        let item = QueueItem(
+            id: "tr1", queue: .transcription, wikiID: "wiki1",
+            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
+            state: .queued, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+
+        let providerID = await composite.providerID(for: item)
+        #expect(providerID == "transcription")
+    }
+
     @Test("Missing factory returns nil provider ID")
     func missingFactoryReturnsNil() async throws {
         let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
@@ -345,6 +366,66 @@ struct QueueActivityTrackerIngestionTests {
         // Complete ingestion → both clear
         tracker.handleForTesting(.completed(ingestionItem))
         #expect(tracker.ingestingSourceIDs.isEmpty)
+    }
+
+    // MARK: - Transcription source-ID tracking (#842)
+
+    @MainActor
+    @Test("Tracker tracks transcription source IDs on started")
+    func transcriptionStartedAddsSourceIDs() async {
+        let tracker = QueueActivityTracker()
+        let item = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        tracker.start(events: AsyncStream { _ in })
+        tracker.attachForTesting(events: AsyncStream { _ in })
+        tracker.handleForTesting(.started(item))
+
+        #expect(tracker.transcribingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
+        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == true)
+        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src2")) == true)
+        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "other")) == false)
+        #expect(tracker.isTranscribingAny == true)
+    }
+
+    @MainActor
+    @Test("Tracker clears transcription source IDs on completed")
+    func transcriptionCompletedClearsSourceIDs() async {
+        let tracker = QueueActivityTracker()
+        let item = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src1")])
+        tracker.start(events: AsyncStream { _ in })
+        tracker.attachForTesting(events: AsyncStream { _ in })
+        tracker.handleForTesting(.started(item))
+        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")))
+
+        let completed = makeItem(id: item.id, queue: .transcription, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
+        tracker.handleForTesting(.completed(completed))
+        #expect(tracker.transcribingSourceIDs.isEmpty)
+        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == false)
+        #expect(tracker.isTranscribingAny == false)
+    }
+
+    @MainActor
+    @Test("Tracker does not conflate transcription with extraction")
+    func noTranscriptionConflation() async {
+        let tracker = QueueActivityTracker()
+        let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
+        let transcriptionItem = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src2")])
+        tracker.start(events: AsyncStream { _ in })
+        tracker.attachForTesting(events: AsyncStream { _ in })
+
+        tracker.handleForTesting(.started(extractionItem))
+        tracker.handleForTesting(.started(transcriptionItem))
+
+        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
+        #expect(tracker.transcribingSourceIDs == Set([PageID(rawValue: "src2")]))
+
+        // Complete transcription → only transcription clears
+        tracker.handleForTesting(.completed(transcriptionItem))
+        #expect(tracker.transcribingSourceIDs.isEmpty)
+        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
+
+        // Complete extraction → both clear
+        tracker.handleForTesting(.completed(extractionItem))
+        #expect(tracker.extractingSourceIDs.isEmpty)
     }
 
     // MARK: - #608: pending-permission surfacing

@@ -11,7 +11,7 @@ public enum StageRoutingKey: String, Sendable {
     case backend
 }
 
-/// The two persistent processing queues. Each `QueueItem` belongs to exactly
+/// The persistent processing queues. Each `QueueItem` belongs to exactly
 /// one queue, and each queue has its own independent run state (running /
 /// paused) and ordering-key sequence.
 public enum QueueKind: String, Hashable, Codable, Sendable {
@@ -21,6 +21,10 @@ public enum QueueKind: String, Hashable, Codable, Sendable {
     /// lint operations — a `.ingestion` item with `lintPageIDs` in its
     /// payload runs lint instead of ingestion.
     case ingestion
+    /// Transcription (source → transcript markdown): network/subprocess fetch
+    /// of YouTube captions or podcast feeds. Mirrors extraction's shape but
+    /// has no local bytes (no `ExtractionResolution.pdfData`).
+    case transcription
 }
 
 // MARK: - Item lifecycle states

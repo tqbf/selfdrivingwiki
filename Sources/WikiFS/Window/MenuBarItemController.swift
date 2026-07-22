@@ -222,6 +222,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         extractionItem.target = self
         menu.addItem(extractionItem)
 
+        let transcriptionItem = NSMenuItem(
+            title: "Transcription Queue…",
+            action: #selector(openTranscriptionWindow(_:)),
+            keyEquivalent: "")
+        transcriptionItem.target = self
+        menu.addItem(transcriptionItem)
+
         menu.addItem(.separator())
 
         // #528 spike: today's cumulative token/cost usage. The summary line
@@ -361,6 +368,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         openWindowBridge.openQueueWindow?(.extraction)
     }
 
+    @objc private func openTranscriptionWindow(_ sender: NSMenuItem?) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindowBridge.openQueueWindow?(.transcription)
+    }
+
     /// The session menu actions target: the frontmost wiki window's session,
     /// falling back to ANY live session — a status-item menu is reachable
     /// while no wiki window is key, and a silent `return` there reads as a
@@ -411,7 +423,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     func closeActivityWindow() {
         // Scene-managed windows have the queue title in `title`. Close any
         // visible window whose title matches a queue window title.
-        let queueTitles: Set<String> = ["Agent Queue", "Extraction Queue"]
+        let queueTitles: Set<String> = ["Agent Queue", "Extraction Queue", "Transcription Queue"]
         for window in NSApplication.shared.windows where window.isVisible {
             if queueTitles.contains(window.title) {
                 window.orderOut(nil)

@@ -181,6 +181,11 @@ public struct QueueEngineConfig: Sendable {
     /// Docling Serve). Default 2.
     public var remoteExtractionLimit: Int
 
+    /// Maximum concurrent transcription jobs. Transcription is a network/
+    /// subprocess fetch (YouTube captions scrape, RSS podcast transcript) with
+    /// no local-subprocess serialization constraint, so 2 is safe. Default 2.
+    public var transcriptionLimit: Int
+
     /// How many terminal items to load for the snapshot's `recentItems`.
     public var recentLimit: Int
 
@@ -188,11 +193,13 @@ public struct QueueEngineConfig: Sendable {
         ingestionLimits: [String: Int] = [:],
         localExtractionLimit: Int = 1,
         remoteExtractionLimit: Int = 2,
+        transcriptionLimit: Int = 2,
         recentLimit: Int = 200
     ) {
         self.ingestionLimits = ingestionLimits
         self.localExtractionLimit = localExtractionLimit
         self.remoteExtractionLimit = remoteExtractionLimit
+        self.transcriptionLimit = transcriptionLimit
         self.recentLimit = recentLimit
     }
 
