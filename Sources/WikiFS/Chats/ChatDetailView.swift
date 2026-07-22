@@ -61,7 +61,7 @@ struct ChatDetailView: View {
     ///
     /// #607: chat reads its OWN `chatPermissionMode` key (was the shared
     /// `agentPermissionMode` before the per-operation split). Ingest/lint have
-    /// their own pickers in Settings → Agents → Permissions. This chip governs
+    /// their own pickers in Settings → Providers → Permissions. This chip governs
     /// interactive chat only.
     @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 

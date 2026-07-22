@@ -532,7 +532,10 @@ struct WikiFSApp: App {
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.agents)
-                    .tabItem { Label("Agents", systemImage: "cpu") }
+                    .tabItem { Label("Providers", systemImage: "cpu") }
+                OperationsSettingsView(containerDirectory: containerDirectory)
+                    .tag(SettingsTab.operations)
+                    .tabItem { Label("Operations", systemImage: "slider.horizontal.3") }
                 AppearanceSettingsView()
                     .tag(SettingsTab.appearance)
                     .tabItem { Label("Appearance", systemImage: "paintbrush") }
@@ -549,6 +552,7 @@ struct WikiFSApp: App {
         case zotero
         case extraction
         case agents
+        case operations
         case appearance
     }
 

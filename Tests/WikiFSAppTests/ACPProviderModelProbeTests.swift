@@ -430,7 +430,7 @@ struct ACPProviderModelProbeTests {
     }
 
     @Test func spawnModelGuardMessageStillPointsAtSettings() {
-        // The error message points the user at the SAME Settings → Agents
+        // The error message points the user at the SAME Settings → Providers
         // path the probe's Refresh button lives in. Pinned so the discovery
         // guidance stays accurate.
         let provider = AgentProvider(id: "opencode", label: "OpenCode")

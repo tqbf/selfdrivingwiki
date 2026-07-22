@@ -7,7 +7,7 @@ import WikiFSCore
 ///
 /// **Why this exists (issue #453):** The app migrated to an ACP-only
 /// multi-provider architecture — every agent operation goes through
-/// `ACPBackend` with a provider configured in Settings → Agents. But PDF
+/// `ACPBackend` with a provider configured in Settings → Providers. But PDF
 /// extraction was left behind with two hardcoded HTTP clients
 /// (`AnthropicExtractionClient` / `GeminiExtractionClient`), each with its own
 /// Keychain entry and config. This backend replaces those with a single path
@@ -43,11 +43,11 @@ public struct ACPExtractionClient: MarkdownExtractor {
         public var errorDescription: String? {
             switch self {
             case .noProviderConfigured:
-                return "No ACP provider is configured. Set one up in Settings → Agents."
+                return "No ACP provider is configured. Set one up in Settings → Providers."
             case .providerCommandMissing(let label):
-                return "Provider '\(label)' has no command configured. Fix it in Settings → Agents."
+                return "Provider '\(label)' has no command configured. Fix it in Settings → Providers."
             case .providerNotFound(let id):
-                return "Extraction provider '\(id)' not found. Check Settings → Agents."
+                return "Extraction provider '\(id)' not found. Check Settings → Providers."
             case .spawnFailed(let msg):
                 return "Couldn't start the ACP agent for extraction: \(msg)"
             case .turnFailed(let msg):
@@ -104,7 +104,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
 
     public func readiness() async -> ExtractionReadiness {
         guard !resolvedCommand.isEmpty else {
-            return .needsSetup("Provider '\(provider.label)' has no command configured. Fix it in Settings → Agents.")
+            return .needsSetup("Provider '\(provider.label)' has no command configured. Fix it in Settings → Providers.")
         }
         // A nil API key is NOT a hard blocker — many ACP agents (Hermes via
         // ~/.hermes, Claude via OAuth) self-authenticate without a

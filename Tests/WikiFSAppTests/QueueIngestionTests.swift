@@ -227,7 +227,7 @@ struct QueueIngestionWorkerTests {
     @Test("Worker fails with notReady when provider is not ready (#440)")
     func workerFailsWhenNotReady() async throws {
         let provider = FakeIngestionProvider()
-        let notReadyMsg = "‘bun’ was not found on your PATH. Install bun (bun.sh) or configure a different agent provider. Open Settings → Agents to configure one."
+        let notReadyMsg = "‘bun’ was not found on your PATH. Install bun (bun.sh) or configure a different agent provider. Open Settings → Providers to configure one."
         await provider.setReadinessMessage(notReadyMsg)
         let worker = QueueIngestionWorker(
             provider: provider,

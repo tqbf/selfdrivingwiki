@@ -91,7 +91,7 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
         case .localPdf2md:
             return "On-device via the bundled pdf2md (docling + granite VLM). Private; needs a one-time ~2 GB download."
         case .acp:
-            return "Send the PDF to your configured ACP provider (Claude, Gemini, Hermes, …). Reuses the API key from Settings → Agents — no separate credentials. The PDF leaves your Mac."
+            return "Send the PDF to your configured ACP provider (Claude, Gemini, Hermes, …). Reuses the API key from Settings → Providers — no separate credentials. The PDF leaves your Mac."
         case .anthropic:
             return "Send the PDF to Claude and get markdown back. Needs an Anthropic API key; the PDF leaves your Mac."
         case .gemini:

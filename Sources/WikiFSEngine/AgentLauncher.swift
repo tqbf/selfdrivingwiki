@@ -2503,7 +2503,7 @@ public final class AgentLauncher {
     /// A quick readiness probe for an agent provider — checks whether
     /// `provider.command[0]` is resolvable on the login-shell PATH (or is the
     /// bundled bun helper). Returns `nil` when ready, or a user-facing message
-    /// explaining what to fix and pointing at Settings → Agents.
+    /// explaining what to fix and pointing at Settings → Providers.
     ///
     /// PURE + injectable (the `resolveCommand` closure) so this can be called
     /// from a headless queue worker AND unit-tested without spawning a
@@ -2517,7 +2517,7 @@ public final class AgentLauncher {
     ///
     /// #440 — replaces the cryptic `"bun: not found"` spawn error with
     /// actionable guidance. The returned message is shown verbatim in the
-    /// Activity window (and carries a CTA to open Settings → Agents).
+    /// Activity window (and carries a CTA to open Settings → Providers).
     public static nonisolated func readinessMessage(
         for provider: AgentProvider,
         resolveCommand: ((AgentProvider) -> [String]?)? = nil
@@ -2537,7 +2537,7 @@ public final class AgentLauncher {
             }
         }
         guard let command = provider.command, let exe = command.first else {
-            return "Provider ‘\(provider.label)’ has no command configured. Open Settings → Agents to fix it."
+            return "Provider ‘\(provider.label)’ has no command configured. Open Settings → Providers to fix it."
         }
         guard resolver(provider) != nil else {
             // The binary wasn't found on the login-shell PATH (and no bundled
@@ -2548,7 +2548,7 @@ public final class AgentLauncher {
             } else {
                 msg += "Install ‘\(exe)’ and make sure it is on your login shell PATH, or configure a different agent provider."
             }
-            msg += " Open Settings → Agents to configure one."
+            msg += " Open Settings → Providers to configure one."
             return msg
         }
         return nil

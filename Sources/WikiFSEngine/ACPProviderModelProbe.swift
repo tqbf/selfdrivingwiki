@@ -17,7 +17,7 @@ import WikiFSCore
 ///    (`closeProbe` in `finally`, `acp-agent.ts:881-885`).
 ///
 /// This breaks the `SpawnModelGuard` deadlock from issue #640: the user can
-/// now discover + select a model from Settings → Agents → Edit → Refresh
+/// now discover + select a model from Settings → Providers → Edit → Refresh
 /// Models, WITHOUT first starting a chat (which the guard refuses until a
 /// model is picked).
 ///

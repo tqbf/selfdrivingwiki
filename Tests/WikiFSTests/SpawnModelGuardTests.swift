@@ -44,10 +44,10 @@ struct SpawnModelGuardTests {
         #expect(msg != nil)
         // Three required message fragments per AC.1/AC.2 — actionable
         // ("No model selected"), identifies the provider (its label), and
-        // points the user where to fix it ("Settings → Agents").
+        // points the user where to fix it ("Settings → Providers").
         #expect(msg?.contains("No model selected") == true)
         #expect(msg?.contains(claude.label) == true)
-        #expect(msg?.contains("Settings → Agents") == true)
+        #expect(msg?.contains("Settings → Providers") == true)
     }
 
     @Test func returnsErrorMessageWhenModelIdIsEmptyString() {
@@ -59,7 +59,7 @@ struct SpawnModelGuardTests {
     }
 
     @Test func errorMessageIncludesProviderLabelForActionability() {
-        // The provider label is what the user sees in Settings → Agents, so the
+        // The provider label is what the user sees in Settings → Providers, so the
         // error message must use it (not the internal `id`) to be actionable.
         let opencode = AgentProvider(
             id: "opencode",
@@ -101,7 +101,7 @@ struct SpawnModelGuardTests {
         // Actionable + provider identification preserved.
         #expect(msg?.contains("No model selected") == true)
         #expect(msg?.contains(claude.label) == true)
-        #expect(msg?.contains("Settings → Agents") == true)
+        #expect(msg?.contains("Settings → Providers") == true)
     }
 
     @Test func stageNameIsIgnoredWhenModelIsPresent() {
