@@ -61,7 +61,14 @@ final class WikiDaemon {
             if let store = openStores[descriptor.id] {
                 let pages = (try? store.listPages(sortBy: .newestFirst)) ?? []
                 if pages.isEmpty {
-                    if let homePage = try? store.createPage(title: "Home", createdBy: nil) {
+                    // #797: pre-fix `createdBy: nil` mapped to the shared
+                    // `legacy-import` agent, so the daemon-seeded Home page
+                    // read as `legacy-import` in `pageOrigin` / the Provenance
+                    // panel. A daemon bootstrap is an explicit (synthesized)
+                    // user action — stamp `user`.
+                    if let homePage = try? store.createPage(
+                        title: "Home",
+                        createdBy: PageAuthor.user.rawValue) {
                         var desc = descriptor
                         desc.homePageID = homePage.id
                         registry.add(desc)

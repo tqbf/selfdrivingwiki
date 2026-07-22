@@ -113,17 +113,23 @@ struct ProvenancePanel: View {
     /// The "Go to Source" menu label + icon for a version's writer, or `nil`
     /// when the writer isn't navigable (a plain user edit, a legacy import).
     /// Mirrors the navigation targets in ``handleProvenanceTap``.
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the menu and the writer
+    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
     private func navigableSource(_ entry: ProvenanceEntry) -> (title: String, icon: String)? {
-        let name = entry.agentName
-        if name.hasPrefix("chat:") {
+        switch PageAuthor(rawValue: entry.agentName) {
+        case .chat:
             return ("Go to Chat", "bubble.left.and.bubble.right")
-        }
-        if name.hasPrefix("agent:") {
-            let kind = String(name.dropFirst("agent:".count))
+        case .agent(let kind):
+            // One-shot runs: ingest is the common case with its own label;
+            // other kinds (lint / query / bootstrap) degrade to "Activity".
             let title = kind == "ingest" ? "Go to Ingestion Job" : "Go to Activity"
             return (title, "cpu")
+        case .user, .legacyImport, .other:
+            // No navigation target for non-chat / non-agent authors.
+            return nil
         }
-        return nil
     }
 
     /// Replace the general pasteboard with a single string (macOS clipboard).
@@ -192,16 +198,23 @@ struct ProvenancePanel: View {
     /// - `chat:<id>` → open the chat tab in the wiki's tab bar.
     /// - `agent:<kind>` → open the Activity (queue) window.
     /// - Otherwise → no-op (don't break).
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the navigation handler and the writer
+    /// (`AgentLauncher.authorForRun`) can't drift on prefix spellings.
     private func handleProvenanceTap(_ entry: ProvenanceEntry) {
-        if entry.agentName.hasPrefix("chat:") {
-            let chatID = String(entry.agentName.dropFirst("chat:".count))
+        switch PageAuthor(rawValue: entry.agentName) {
+        case .chat(let chatID):
             guard !chatID.isEmpty else { return }
             let id = PageID(rawValue: chatID)
             DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
             store?.openTab(.chat(id))
-        } else if entry.agentName.hasPrefix("agent:") {
+        case .agent:
             DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
             openActivityWindow?()
+        case .user, .legacyImport, .other:
+            // No navigation target for non-chat / non-agent authors.
+            break
         }
     }
 

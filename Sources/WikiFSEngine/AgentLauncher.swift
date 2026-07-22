@@ -2646,9 +2646,13 @@ public final class AgentLauncher {
     /// provenance links back to the originating conversation; standalone one-shot
     /// runs (ingest/lint/query) get `agent:<kind>`. The `WIKI_AUTHOR` env var
     /// carries this into `wikictl`, where an explicit `--author` flag overrides it.
+    ///
+    /// Routes through `PageAuthor` (#797) — the single source of truth for the
+    /// `agents.name` convention — so the builder and the parse sites
+    /// (`GRDBWikiStore.authorKind`, `ProvenancePanel`) can't drift.
     static func authorForRun(kind: WikiOperation.Kind, chatID: String?) -> String {
-        if let chatID { return "\(ResourceKind.chat.linkPrefix!)\(chatID)" }
-        return "agent:\(kind.rawValue)"
+        if let chatID { return PageAuthor.chat(chatID).rawValue }
+        return PageAuthor.agent(kind.rawValue).rawValue
     }
 
     /// Map a one-shot `OperationRequest` to the per-stage key the shared `run()`
@@ -2892,8 +2896,13 @@ public final class AgentLauncher {
                 // provenance so created_by/last_edited_by points back to the
                 // originating conversation (resolvable via [[chat:…]]). An explicit
                 // `--author` on `wikictl page add` overrides this.
+                //
+                // Routes through `PageAuthor` (#797) — same enum the parse side
+                // uses (`GRDBWikiStore.authorKind`, `ProvenancePanel`), so the
+                // prefix can't drift from the `ResourceKind.chat.linkPrefix`
+                // value the link resolver honours.
                 if let chatID {
-                    hints[HintKey.env("WIKI_AUTHOR")] = "\(ResourceKind.chat.linkPrefix!)\(chatID)"
+                    hints[HintKey.env("WIKI_AUTHOR")] = PageAuthor.chat(chatID).rawValue
                 }
                 return hints
             }(),
