@@ -1,6 +1,9 @@
 import Foundation
 
-/// A pure, dependency-free HTML → Markdown converter.
+/// A pure, dependency-free HTML → Markdown converter (the concrete conformer
+/// `TagBasedHtmlExtractor` at the bottom of this file adapts this enum into an
+/// `HtmlMarkdownExtractor` so the Extract button and the "Re-extract with"
+/// menu can dispatch to it — issue #799 PR2).
 ///
 /// Hand-rolled on purpose. We deliberately do NOT use `NSAttributedString(html:)`:
 /// that path is WebKit-backed, main-thread-only, non-deterministic, and impossible
@@ -216,5 +219,43 @@ public enum HTMLToMarkdown {
             }
         }
         return out
+    }
+}
+
+// MARK: - HtmlMarkdownExtractor conformance
+
+/// The `HtmlMarkdownExtractor` conformer that wraps `HTMLToMarkdown.convert`.
+///
+/// Issue #799 PR2: this is the always-available backend for the "Extract" button
+/// and the "Re-extract with" menu on HTML sources. The defuddle backend
+/// (`LocalDefuddleExtractor` in `Sources/WikiFS/Sources/DefuddleExtractionService.swift`)
+/// produces higher-quality article markdown when its bundled binary is present;
+/// when it's missing (CI, clean dev before `make build`), or when the user
+/// explicitly picks the tag-based backend from the Re-extract menu, this
+/// conformer is the engine.
+///
+/// Struct (not enum) to satisfy instance-protocol conformance — mirrors the
+/// `LocalDefuddleExtractor` shape. Delegates to `HTMLToMarkdown.convert(_:)`
+/// (which already scopes to main content, strips `<script>/<style>/<nav>`,
+/// decodes entities, and extracts the `<title>`). The title carries through to
+/// `HtmlExtractionResult.title` so the filename stem + provenance chip stay
+/// consistent with the defuddle path; the other frontmatter fields
+/// (`author`/`description`/`published`/`wordCount`) are `nil` — the tag-based
+/// converter doesn't extract frontmatter.
+public struct TagBasedHtmlExtractor: HtmlMarkdownExtractor {
+    public init() {}
+
+    public func extract(html: String) async -> HtmlExtractionResult? {
+        let result = HTMLToMarkdown.convert(html)
+        guard !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return HtmlExtractionResult(
+            markdown: result.markdown,
+            title: result.title,
+            author: nil,
+            description: nil,
+            published: nil,
+            wordCount: nil)
     }
 }

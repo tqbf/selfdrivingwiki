@@ -67,6 +67,15 @@ public final class SessionManager {
     /// fallback) for headless/daemon/test callers. Issue #761.
     public let htmlMarkdownExtractorFactory: @MainActor () -> (any HtmlMarkdownExtractor)?
 
+    /// Resolver for the configured HTML extraction backend (issue #799 PR2).
+    /// Called once per session at creation. Reads `ExtractionConfig.htmlBackend`
+    /// at the app wiring time and returns the chosen `HtmlExtractionBackend`,
+    /// or `nil` if no default is set. Mirrors the `htmlMarkdownExtractorFactory`
+    /// injection shape (the model is deliberately NOT config-aware — config is
+    /// read by `ExtractionCoordinator` in this engine target — so the chosen
+    /// backend is injected from the app layer that owns the config file).
+    public let htmlBackendResolver: @MainActor () -> HtmlExtractionBackend?
+
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
@@ -74,6 +83,7 @@ public final class SessionManager {
         extractionProvider: any QueueExtractionProvider,
         pdf2mdScriptPathResolver: @escaping () -> String?,
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
+        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.containerDirectory = containerDirectory
@@ -82,6 +92,7 @@ public final class SessionManager {
         self.extractionProvider = extractionProvider
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
+        self.htmlBackendResolver = htmlBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
     }
 

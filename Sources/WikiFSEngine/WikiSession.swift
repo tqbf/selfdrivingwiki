@@ -156,6 +156,7 @@ public final class WikiSession {
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
+        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) {
         self.wikiID = wikiID
@@ -229,6 +230,14 @@ public final class WikiSession {
         // target where the concrete `LocalDefuddleExtractor` lives. `nil` (the
         // default in tests / CI) means fall back to tag-based HTMLToMarkdown.
         model.htmlMarkdownExtractor = htmlMarkdownExtractorFactory()
+        // Issue #799 PR2: inject the configured HTML extraction backend so the
+        // Extract button and the "Re-extract with" menu in `SourceDetailView`
+        // have a default to fall back on when the user taps Extract without
+        // picking a backend explicitly. The resolver reads
+        // `ExtractionConfig.htmlBackend` at the app wiring time; `nil` (no
+        // default chosen — e.g. a fresh install) means the menu prompts the
+        // user to pick from `HtmlExtractionBackend.allCases`.
+        model.htmlBackend = htmlBackendResolver()
 
         // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
         // Phase 2 CUTOVER (#634): Tantivy is the SOLE BM25 leg of the hybrid
