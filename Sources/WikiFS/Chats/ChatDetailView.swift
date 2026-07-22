@@ -629,6 +629,11 @@ struct ChatDetailView: View {
                 if let q = pendingQuestion {
                     let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
                     let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    if cached != nil {
+                        DebugLog.debug("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
+                    } else {
+                        DebugLog.debug("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
+                    }
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil
@@ -638,6 +643,11 @@ struct ChatDetailView: View {
                 if let q = pendingQuestion {
                     let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
                     let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
+                    if cached != nil {
+                        DebugLog.debug("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
+                    } else {
+                        DebugLog.debug("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
+                    }
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
                     pendingQuestion = nil

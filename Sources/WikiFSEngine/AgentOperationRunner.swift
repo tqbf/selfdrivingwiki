@@ -505,31 +505,38 @@ public enum AgentOperationRunner {
     private static func summarizePendingMessages(
         chatID: PageID, store: WikiStoreModel?, launcher: AgentLauncher
     ) {
-        guard let store else { return }
+        guard let store else {
+            DebugLog.ingest("summarizePendingMessages: store torn down, skipping")
+            return
+        }
         let config = AgentProvidersConfig.loadOrSeed(from: launcher.resolveProvidersContainerDirectory())
         let mode = MessageSummarizer.mode(for: config)
+        let summarizerPin = config.stageProviderIds["summarizer"] ?? "none"
 
-        // Query the persisted messages + filter to unsummarized assistant-text
-        // rows. This is the compute-once guard (AC.6): already-summarized rows
-        // are skipped.
         let messages = store.chatMessages(chatID: chatID)
         let pending = messages.filter { msg in
             msg.summary == nil
                 && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
         }
-        guard !pending.isEmpty else { return }
+        DebugLog.ingest("summarizePendingMessages: chatID=\(chatID.rawValue) mode=\(mode) pin=\(summarizerPin) pending=\(pending.count)")
+
+        guard !pending.isEmpty else {
+            DebugLog.ingest("summarizePendingMessages: no pending messages after dedup")
+            return
+        }
 
         switch mode {
         case .defaultTruncation:
             // Pure + cheap — run inline on the main actor.
-            for msg in pending {
-                guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-                let summary = MessageSummarizer.defaultSummary(for: text)
-                guard !summary.isEmpty else { continue }
-                store.updateMessageSummary(
-                    chatID: chatID, messageID: msg.id,
-                    summary: summary, kind: .defaultTruncation)
-            }
+        for msg in pending {
+            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+            let summary = MessageSummarizer.defaultSummary(for: text)
+            guard !summary.isEmpty else { continue }
+            store.updateMessageSummary(
+                chatID: chatID, messageID: msg.id,
+                summary: summary, kind: .defaultTruncation)
+            DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=defaultTruncation")
+        }
         case .model:
             // Off-main via a detached Task. The config + pending messages are
             // captured by value (Sendable) so the Task can cross the actor
@@ -568,16 +575,15 @@ public enum AgentOperationRunner {
         let backend = AgentBackendFactory.makeBackend(policy: .bypass)
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-            // Off-main: the backend session runs on its own actor / process.
-            // The await suspends the MainActor without blocking it.
             guard let summary = await MessageSummarizer.modelSummary(
-                text: text, backend: backend, profile: profile) else { continue }
-            // Marshal the DB write back to @MainActor (we're already here —
-            // this method is @MainActor). `updateMessageSummary` routes through
-            // `mutate()` + emits `.chat .updated` (#129).
+                text: text, backend: backend, profile: profile) else {
+                DebugLog.ingest("summarizePendingMessages: summarizer returned nil for message id=\(msg.id.rawValue.prefix(8))")
+                continue
+            }
             store.updateMessageSummary(
                 chatID: chatID, messageID: msg.id,
                 summary: summary, kind: .model)
+            DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=model")
         }
     }
 }
