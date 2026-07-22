@@ -10,9 +10,17 @@
 """podcast-transcript — Fetch podcast transcripts via RSS <podcast:transcript> tags.
 
 Usage:
-    uv run --script podcast-transcript <apple-podcasts-url> [--json] [--output file.md]
-    uv run --script podcast-transcript <apple-podcasts-url> --transcribe  # Whisper fallback
-    ./podcast-transcript <apple-podcasts-url>  (if uv is in PATH)
+    uv run --script podcast-transcript <url> [--json] [--output file.md]
+    uv run --script podcast-transcript <url> --transcribe  # Whisper fallback
+    ./podcast-transcript <url>  (if uv is in PATH)
+
+<url> may be either:
+  - an Apple Podcasts episode URL
+    (e.g. https://podcasts.apple.com/us/podcast/slug/id1234567890?i=1000123456789)
+  - a direct RSS feed URL (e.g. https://example.com/feed.rss)
+
+For a direct RSS feed URL, the feed is fetched directly (no iTunes Lookup hop),
+and when multiple <item>s exist the most recent (by <pubDate>) is selected.
 
 If uv is not installed, download it first:
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -27,9 +35,11 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import re
 import sys
+import urllib.parse
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
@@ -42,6 +52,17 @@ import webvtt
 
 _SHOW_ID_RE = re.compile(r"/id(\d+)")
 _EPISODE_ID_RE = re.compile(r"[?&]i=(\d+)")
+
+
+def _is_apple_podcasts_url(url: str) -> bool:
+    """Return True when ``url`` is an Apple Podcasts episode/show URL.
+
+    A direct RSS feed URL returns False so ``fetch_transcript`` can route it
+    to the feed-direct path (skipping the iTunes Lookup hop).
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return host == "podcasts.apple.com" or host.endswith(".podcasts.apple.com")
 
 
 def parse_apple_podcasts_url(url: str) -> tuple[str, str]:
@@ -108,16 +129,19 @@ _PODCAST_NS = {"podcast": "https://podcastindex.org/namespace/1.0"}
 
 
 def find_episode_in_feed(
-    feed_url: str, episode_id: str
+    feed_url: str, episode_id: str | None
 ) -> tuple[ET.Element, list[ET.Element]] | None:
-    """Find an episode in an RSS feed by episode ID.
+    """Find an episode in an RSS feed.
 
     Args:
         feed_url: RSS feed URL
-        episode_id: Apple Podcasts episode ID
+        episode_id: Apple Podcasts episode ID, or ``None`` to select the most
+            recent ``<item>`` by ``<pubDate>`` (fallback: document order).
+            ``None`` is the generic-RSS-feed path where there is no Apple
+            episode ID to match on.
 
     Returns:
-        (episode_item, transcript_tags) tuple, or None if not found
+        (episode_item, transcript_tags) tuple, or None if the feed has no items
 
     Raises:
         requests.RequestException: If network request fails
@@ -127,7 +151,18 @@ def find_episode_in_feed(
 
     root = ET.fromstring(response.text)
 
-    for item in root.findall(".//item"):
+    items = root.findall(".//item")
+    if not items:
+        return None
+
+    # Generic-RSS path: no Apple episode ID. Pick the most recent <item> by
+    # <pubDate> (RFC 822); fall back to document order when <pubDate> is
+    # absent/unparseable on every item. This is the v1 selection strategy for
+    # multi-item feeds — single-item feeds resolve to that one item naturally.
+    if episode_id is None:
+        return _most_recent_item(items)
+
+    for item in items:
         # Match by guid containing episode ID
         guid = item.find("guid")
         if guid is not None and guid.text is not None and episode_id in guid.text:
@@ -147,6 +182,57 @@ def find_episode_in_feed(
             return item, transcripts
 
     return None
+
+
+def _most_recent_item(
+    items: list[ET.Element],
+) -> tuple[ET.Element, list[ET.Element]] | None:
+    """Select the most recent ``<item>`` by ``<pubDate>``.
+
+    Falls back to document order (the first ``<item>``) when no item carries a
+    parseable ``<pubDate>``. Always returns the first item when the list is
+    non-empty; returns ``None`` only for an empty list (caller handles that).
+    """
+    best_item: ET.Element | None = None
+    best_date: datetime.datetime | None = None
+    for item in items:
+        pub = item.find("pubDate")
+        if pub is None or not pub.text:
+            continue
+        parsed = _parse_pub_date(pub.text)
+        if parsed is None:
+            continue
+        if best_date is None or parsed > best_date:
+            best_date = parsed
+            best_item = item
+    if best_item is None:
+        # No parseable pubDate anywhere — fall back to document order (first).
+        best_item = items[0]
+    transcripts = best_item.findall("podcast:transcript", _PODCAST_NS)
+    return best_item, transcripts
+
+
+def _parse_pub_date(raw: str) -> datetime.datetime | None:
+    """Parse an RFC 822 ``<pubDate>`` value (e.g. ``Wed, 02 Jul 2025 …``).
+
+    Returns ``None`` (not raising) on failure so the caller degrades to
+    document-order selection rather than aborting the whole feed parse.
+    """
+    # email.utils.parsedate_to_datetime handles the RFC 822 forms RSS 2.0
+    # mandates (and the common 4-digit-year variant). Tolerate the trailing
+    # whitespace/punctuation real feeds emit.
+    import email.utils
+    try:
+        dt = email.utils.parsedate_to_datetime(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    # Normalize naive datetimes to UTC so comparison is well-defined; feeds
+    # without a tz are treated as UTC (a benign assumption for ordering).
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
 
 
 def get_episode_audio_url(episode_item: ET.Element) -> str | None:
@@ -378,22 +464,36 @@ def transcribe_audio(audio_url: str) -> tuple[str, str, str | None]:
 def fetch_transcript(
     url: str, transcribe_fallback: bool = False
 ) -> dict[str, str | None]:
-    """Fetch a podcast transcript from an Apple Podcasts URL.
+    """Fetch a podcast transcript from an Apple Podcasts URL OR a raw RSS feed URL.
+
+    When ``url`` is an Apple Podcasts episode URL, the show/episode IDs are
+    parsed and the RSS feed URL is resolved via the iTunes Lookup API (the
+    Apple path — unchanged). When ``url`` is any other URL, it is treated as
+    a direct RSS feed URL and fetched directly (no iTunes hop); the most
+    recent ``<item>`` by ``<pubDate>`` is selected (generic-RSS path).
 
     Args:
-        url: Apple Podcasts episode URL
+        url: Apple Podcasts episode URL OR a direct RSS feed URL
         transcribe_fallback: If True, use Whisper transcription when no RSS transcript available
 
     Returns:
-        Dict with keys: show_id, episode_id, language, format, markdown
+        Dict with keys: show_id, episode_id, language, format, markdown.
+        On the generic-RSS path, ``show_id`` and ``episode_id`` are ``None``.
 
     Raises:
         ValueError: If parsing fails
         requests.RequestException: If network request fails
     """
-    show_id, episode_id = parse_apple_podcasts_url(url)
+    if _is_apple_podcasts_url(url):
+        # Apple path — unchanged: parse IDs → iTunes Lookup → feed URL.
+        show_id, episode_id = parse_apple_podcasts_url(url)
+        feed_url = get_feed_url(show_id)
+    else:
+        # Generic-RSS path: the URL IS the feed. No show/episode ID, no hop.
+        show_id = None
+        episode_id = None
+        feed_url = url
 
-    feed_url = get_feed_url(show_id)
     episode_result = find_episode_in_feed(feed_url, episode_id)
 
     if episode_result is None:
@@ -439,7 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Fetch podcast transcripts via RSS <podcast:transcript> tags."
     )
-    parser.add_argument("url", help="Apple Podcasts episode URL")
+    parser.add_argument(
+        "url",
+        help="Apple Podcasts episode URL OR a direct RSS feed URL",
+    )
     parser.add_argument(
         "--output", "-o", type=Path, default=None,
         help="Write markdown to file (default: stdout)",

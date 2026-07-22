@@ -208,6 +208,11 @@ struct SourceDetailView: View {
             // for `.applePodcast` outside `#if PODCAST_TRANSCRIPTS` or when
             // `ApplePodcastTranscriptService.bundled()` is nil.
             return store.isSourceRefreshable(for: file.id)
+        case .podcast:
+            // Generic RSS-feed podcast: always transcribable on every build —
+            // the `podcast-transcript` script needs only `uv` (no signing
+            // helper). Mirrors YouTube's "no runtime guard" shape.
+            return true
         case .youtube:
             // No signing helper needed — YouTube's pure-Swift scrape is always
             // available on every build. The model throws `.missingPlan` if
@@ -215,9 +220,9 @@ struct SourceDetailView: View {
             // surfaced by `runTranscription`, not gated here).
             return true
         // Unreachable: `supportsTranscription` returned false above (the
-        // property returns true only for `.applePodcast` + `.youtube`). The
-        // switch stays exhaustive so a future transcript-capable provider is
-        // automatically flagged by the compiler.
+        // property returns true only for `.applePodcast` + `.podcast` +
+        // `.youtube`). The switch stays exhaustive so a future transcript-
+        // capable provider is automatically flagged by the compiler.
         case .vimeo, .spotify, .soundcloud, .remoteMedia,
              .localFile, .website, .zotero, .markdownFolder, .legacyImport:
             return false
@@ -970,7 +975,7 @@ struct SourceDetailView: View {
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
         switch origin.provider {
-        case .website, .applePodcast, .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia:
+        case .website, .applePodcast, .podcast, .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia:
             // URL providers (web pages, podcasts, byteless media embeds) — all
             // open in the default browser via NSWorkspace.shared.open. They share
             // one action shape; only the label / icon / help text differ, and

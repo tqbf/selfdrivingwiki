@@ -60,6 +60,7 @@ import Testing
         #expect(SourceProvider.zotero.rawValue == "zotero")
         #expect(SourceProvider.markdownFolder.rawValue == "markdown-folder")
         #expect(SourceProvider.applePodcast.rawValue == "apple-podcast")
+        #expect(SourceProvider.podcast.rawValue == "podcast")
         #expect(SourceProvider.youtube.rawValue == "youtube")
         #expect(SourceProvider.vimeo.rawValue == "vimeo")
         #expect(SourceProvider.spotify.rawValue == "spotify")
@@ -78,6 +79,7 @@ import Testing
         #expect(SourceProvider.markdownFolder.displayLabel == "Folder",
                 "markdown-folder displays as 'Folder' (not 'Markdown folder') — matches DetailView UI")
         #expect(SourceProvider.applePodcast.displayLabel == "Apple Podcast")
+        #expect(SourceProvider.podcast.displayLabel == "Podcast")
         #expect(SourceProvider.youtube.displayLabel == "YouTube",
                 "YouTube brand casing (not 'Youtube')")
         #expect(SourceProvider.vimeo.displayLabel == "Vimeo")
@@ -113,6 +115,7 @@ import Testing
         #expect(SourceProvider.markdownFolder.helpVerb.hasPrefix("Reveal"))
         #expect(SourceProvider.website.helpVerb.hasPrefix("Open"))
         #expect(SourceProvider.applePodcast.helpVerb.hasPrefix("Open"))
+        #expect(SourceProvider.podcast.helpVerb.hasPrefix("Open"))
         #expect(SourceProvider.youtube.helpVerb.hasPrefix("Open"))
         #expect(SourceProvider.remoteMedia.helpVerb.hasPrefix("Open"))
     }
@@ -127,6 +130,8 @@ import Testing
         // signing helper for podcasts) on top of this predicate.
         #expect(SourceProvider.website.supportsRefresh == true)
         #expect(SourceProvider.applePodcast.supportsRefresh == true)
+        #expect(SourceProvider.podcast.supportsRefresh == true,
+                "generic .podcast is refreshable (re-fetch transcript via RSS script)")
         // Everything else is import-only or byteless-embed-only — no URL to
         // re-fetch. (Direct-remote media could in principle be re-fetched, but
         // the refresh service doesn't implement it today.)
@@ -156,6 +161,8 @@ import Testing
         // YouTube is transcribable but not refreshable; a website is
         // refreshable but not transcribable.
         #expect(SourceProvider.applePodcast.supportsTranscription == true)
+        #expect(SourceProvider.podcast.supportsTranscription == true,
+                "generic .podcast is transcribable (RSS <podcast:transcript> via uv script)")
         #expect(SourceProvider.youtube.supportsTranscription == true)
         // Every other provider has no transcript pipeline today — Vimeo is
         // a future extension (needs a Keychain OAuth token; #564 Phase 4);
@@ -216,6 +223,7 @@ import Testing
         #expect(origin(agentName: "zotero").provider == .zotero)
         #expect(origin(agentName: "markdown-folder").provider == .markdownFolder)
         #expect(origin(agentName: "apple-podcast").provider == .applePodcast)
+        #expect(origin(agentName: "podcast").provider == .podcast)
         #expect(origin(agentName: "youtube").provider == .youtube)
         #expect(origin(agentName: "vimeo").provider == .vimeo)
         #expect(origin(agentName: "spotify").provider == .spotify)
@@ -314,9 +322,9 @@ import Testing
 
     // MARK: - CaseIterable coverage
 
-    @Test("SourceProvider.allCases covers 11 cases")
+    @Test("SourceProvider.allCases covers 12 cases")
     func allCasesCount() {
-        #expect(SourceProvider.allCases.count == 11)
+        #expect(SourceProvider.allCases.count == 12)
         // Spot-check membership so adding a case without updating the count
         // assertion doesn't silently regress coverage.
         #expect(SourceProvider.allCases.contains(.localFile))
@@ -324,6 +332,7 @@ import Testing
         #expect(SourceProvider.allCases.contains(.zotero))
         #expect(SourceProvider.allCases.contains(.markdownFolder))
         #expect(SourceProvider.allCases.contains(.applePodcast))
+        #expect(SourceProvider.allCases.contains(.podcast))
         #expect(SourceProvider.allCases.contains(.youtube))
         #expect(SourceProvider.allCases.contains(.vimeo))
         #expect(SourceProvider.allCases.contains(.spotify))
