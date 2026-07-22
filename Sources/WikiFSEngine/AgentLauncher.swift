@@ -3237,7 +3237,11 @@ public final class AgentLauncher {
     /// owns the mode dispatch + the off-main Task for model mode; this method
     /// just hands it the chat id.
     private func fireMessageSummarySink() {
-        guard let chatID = activeChatID else { return }
+        guard let chatID = activeChatID else {
+            DebugLog.ingest("fireMessageSummarySink: no activeChatID, skipping")
+            return
+        }
+        DebugLog.ingest("fireMessageSummarySink: activeChatID=\(chatID)")
         messageSummarySink?(PageID(rawValue: chatID))
     }
 

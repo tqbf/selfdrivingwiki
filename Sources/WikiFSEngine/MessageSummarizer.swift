@@ -102,7 +102,8 @@ public enum MessageSummarizer {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanText.isEmpty else { return nil }
 
-        // Start the one-shot session.
+        DebugLog.ingest("MessageSummarizer: starting model mode for seq=\(cleanText.prefix(40))...")
+
         let session: SessionHandle
         do {
             session = try await backend.start(
@@ -146,7 +147,11 @@ public enum MessageSummarizer {
         }
 
         let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty else {
+            DebugLog.ingest("MessageSummarizer: model returned empty output for seq=\(cleanText.prefix(40))...")
+            return nil
+        }
+        DebugLog.ingest("MessageSummarizer: model summary for seq=\(cleanText.prefix(40))... length=\(trimmed.count)")
         return trimmed
     }
 
