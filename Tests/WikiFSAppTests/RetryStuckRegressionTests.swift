@@ -113,10 +113,12 @@ struct RetryStuckRegressionTests {
                 command: ["hermes", "acp"],
                 enabled: false, isDefault: false),
         ])
+        let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
         let provider = AppQueueIngestionProvider(
             sessionBox: SessionLookupBox(),
             fileProviderBox: FileProviderBox(),
             wikictlDirectory: NSTemporaryDirectory(),
+            queueStore: queueStore,
             resolveSelectedProvider: { disabledProviders.selectedProvider() },
             resolveProviderConfig: { disabledProviders })
 
@@ -140,7 +142,7 @@ struct RetryStuckRegressionTests {
     /// all-disabled short-circuit must not fire here.
     @MainActor
     @Test("readiness falls through to PATH check when at least one provider is enabled")
-    func readinessFallsThroughWhenAnyProviderEnabled() async {
+    func readinessFallsThroughWhenAnyProviderEnabled() async throws {
         let mixedConfig = AgentProvidersConfig(providers: [
             AgentProvider(
                 id: "claude-acp", label: "Claude",
@@ -151,10 +153,12 @@ struct RetryStuckRegressionTests {
                 command: ["hermes", "acp"],
                 enabled: true, isDefault: false),
         ])
+        let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
         let provider = AppQueueIngestionProvider(
             sessionBox: SessionLookupBox(),
             fileProviderBox: FileProviderBox(),
             wikictlDirectory: NSTemporaryDirectory(),
+            queueStore: queueStore,
             resolveSelectedProvider: { mixedConfig.selectedProvider() },
             // Use Hermes's command but route to a nonexistent binary so the
             // PATH-based readiness check surfaces a message we can verify.
@@ -179,17 +183,19 @@ struct RetryStuckRegressionTests {
     /// result must be deterministic, not stale or one-shot).
     @MainActor
     @Test("readiness is consistent across calls — re-validated on retry, not one-shot")
-    func readinessIsConsistentAcrossCalls() async {
+    func readinessIsConsistentAcrossCalls() async throws {
         let disabledConfig = AgentProvidersConfig(providers: [
             AgentProvider(
                 id: "opencode", label: "OpenCode",
                 command: ["opencode", "acp"],
                 enabled: false, isDefault: true),
         ])
+        let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
         let provider = AppQueueIngestionProvider(
             sessionBox: SessionLookupBox(),
             fileProviderBox: FileProviderBox(),
             wikictlDirectory: NSTemporaryDirectory(),
+            queueStore: queueStore,
             resolveSelectedProvider: { disabledConfig.selectedProvider() },
             resolveProviderConfig: { disabledConfig })
 

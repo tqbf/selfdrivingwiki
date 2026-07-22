@@ -664,6 +664,23 @@ public final class QueueStore: @unchecked Sendable {
         return try getItem(id)
     }
 
+    /// Update the `payload` for an item. Used to persist ACP session IDs
+    /// for crash recovery. Returns the updated item, or `nil` if the item
+    /// was not found.
+    @discardableResult
+    public func updatePayload(id: QueueItem.ID, payload: QueueItemPayload) throws -> QueueItem? {
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                let data = try JSONEncoder().encode(payload)
+                try db.execute(
+                    sql: "UPDATE queue_items SET payload = ? WHERE id = ?;",
+                    arguments: [String(data: data, encoding: .utf8)!, id])
+            }
+        }
+        return try getItem(id)
+    }
+
     /// The current maximum ordering key for a queue. Used by the engine
     /// when moving an item to the end of a queue.
     public func maxOrderingKey(for queue: QueueKind) throws -> Int64 {
