@@ -230,7 +230,7 @@ struct ProvenancePanel: View {
             store?.openTab(.chat(id))
         case .agent:
             DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
-            openActivityWindow?()
+            openActivityWindow?(.ingestion)
         case .user, .legacyImport, .other:
             // No navigation target for non-chat / non-agent authors.
             break

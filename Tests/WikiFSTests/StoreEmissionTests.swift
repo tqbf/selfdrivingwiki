@@ -259,6 +259,20 @@ struct StoreEmissionTests {
         #expect(events.last?.id == s.id.rawValue)
     }
 
+    @Test func appendProcessedMarkdownTranscriptOriginEmitsSourceUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let s = try addSeedSource(store)
+        try await drain(rec)
+        _ = try store.appendProcessedMarkdown(
+            sourceID: s.id, content: "# Transcript",
+            origin: .transcript, note: nil,
+            technique: "youtube-captions")
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .source)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == s.id.rawValue)
+    }
+
     @Test func recordMarkdownExtractionEmitsSourceUpdated() async throws {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)

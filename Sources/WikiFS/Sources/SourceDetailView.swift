@@ -105,6 +105,12 @@ struct SourceDetailView: View {
     /// Opens the Compare Extractions window (value-driven `WindowGroup`).
     @Environment(\.openWindow) private var openWindow
 
+    /// Opens the Activity (queue) window for a specific queue kind — injected
+    /// from the environment (#745, #842 PR2). Used by the Transcribe button to
+    /// navigate to the running transcription job when one is in flight for
+    /// this source (#842 PR2 C5).
+    @Environment(\.openActivityWindow) private var openActivityWindow
+
     // Find bar state. Shared via environment (see `ContentView`) so the address
     // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
     @Environment(FindModel.self) private var findModel
@@ -587,6 +593,21 @@ struct SourceDetailView: View {
             }
         }
         .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
+        // #842 PR2 C6: refresh the transcript head when the store's source list
+        // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
+        // a `ResourceChangeEvent(.source, .updated)` → the model's bus
+        // subscriber calls `reloadFromStore()` → `reloadSources()` bumps
+        // `store.sources`. This onChange picks up that bump and re-reads
+        // `processedMarkdownHead` so the reader shows the new transcript
+        // immediately after the queue worker persists it — without relying
+        // solely on `runTranscription`'s post-completion refresh (which only
+        // fires for the view that initiated the job; another wiki window
+        // viewing the same source would see the stale head without this).
+        .onChange(of: store.sources) { _, _ in
+            if !isEditing {
+                headVersion = store.processedMarkdownHead(for: file)
+            }
+        }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
         .onChange(of: file.id) { findModel.dismiss() }
@@ -828,26 +849,49 @@ struct SourceDetailView: View {
                         // a network fetch (signed bearer → AMP → TTML → parse
                         // for podcasts; watch-page scrape → caption track →
                         // parse for YouTube), NOT a bytes→markdown transform —
-                        // so it dispatches to the inline `runTranscription`
-                        // path (NOT the queue engine, which is PDF-coupled via
-                        // `ExtractionResolution.pdfData`). Disabled for podcasts
-                        // when the signing helper binary is unavailable
-                        // (`isTranscribable` mirrors `isSourceRefreshable`'s
-                        // `.applePodcast` runtime guard); YouTube needs no
-                        // signing helper, so it's always enabled when the
-                        // provider matches.
-                        Button(isTranscribing ? "Transcribing…" : "Transcribe",
-                               systemImage: "waveform") {
-                            DebugLog.extraction("SourceDetailView: Transcribe tapped — id=\(file.id.rawValue)")
-                            Task { await runTranscription() }
+                        // so it dispatches to the queue engine (`runTranscription`).
+                        // Disabled for podcasts when the signing helper binary
+                        // is unavailable (`isTranscribable` mirrors
+                        // `isSourceRefreshable`'s `.applePodcast` runtime guard);
+                        // YouTube needs no signing helper, so it's always
+                        // enabled when the provider matches.
+                        //
+                        // #842 PR2 C5: when a transcription is already in flight
+                        // for this source, the button swaps to "View
+                        // Transcription" (stays enabled) and navigates to the
+                        // running job in the Activity window — mirroring
+                        // PageDetailView's "View Lint" pattern (#837). Reuses
+                        // the existing `pendingSelectionItemID` seam (set it,
+                        // set `pendingSelectionQueue = .transcription`, then
+                        // call `openActivityWindow?(.transcription)`).
+                        Button(isTranscribing ? "View Transcription" : "Transcribe",
+                               systemImage: isTranscribing
+                               ? "checkmark.seal.fill"
+                               : "waveform") {
+                            if isTranscribing {
+                                if let itemID = tracker.transcriptionItemID(for: file.id) {
+                                    tracker.pendingSelectionItemID = itemID
+                                    tracker.pendingSelectionQueue = .transcription
+                                    openActivityWindow?(.transcription)
+                                    DebugLog.extraction("Transcribe button: navigating to transcription job \(itemID.prefix(8)) for source \(file.id.rawValue)")
+                                } else {
+                                    openActivityWindow?(.transcription)
+                                    DebugLog.extraction("Transcribe button: transcription in flight for source \(file.id.rawValue) but item not found; opening Activity window")
+                                }
+                            } else {
+                                DebugLog.extraction("SourceDetailView: Transcribe tapped — id=\(file.id.rawValue)")
+                                Task { await runTranscription() }
+                            }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(isTranscribing
-                                  || isThisFileExtracting
-                                  || tracker.isSlotBusyForOtherSource(file.id))
-                        .help(isYouTubeEmbed
-                              ? "Fetch this video's transcript via YouTube captions"
-                              : "Fetch this episode's transcript via Apple Podcasts")
+                        .disabled(!isTranscribing
+                                  && (isThisFileExtracting
+                                      || tracker.isSlotBusyForOtherSource(file.id)))
+                        .help(isTranscribing
+                              ? "View the running transcription job in the Activity window"
+                              : (isYouTubeEmbed
+                                 ? "Fetch this video's transcript via YouTube captions"
+                                 : "Fetch this episode's transcript via Apple Podcasts"))
                     }
                     ingestButton
                     // The source's content affordance is one-per-source: an

@@ -128,12 +128,22 @@ final class QueueActivityTracker {
     private var itemToLintWikiID: [QueueItem.ID: String] = [:]
 
     /// A pending item selection requested from outside the Activity window —
-    /// e.g. PageDetailView's "View Lint" button (#837). Set before calling the
+    /// e.g. PageDetailView's "View Lint" button (#837) or SourceDetailView's
+    /// "View Transcription" button (#842 PR2). Set before calling the
     /// `openActivityWindow` environment closure; consumed by
     /// `ActivityWindowView` on appear / change, which sets `selectedItemID`
     /// and clears this back to nil. Drives "open Activity window focused on a
-    /// SPECIFIC queue item" without changing the closure's no-arg signature.
+    /// SPECIFIC queue item" without changing the closure's signature.
     var pendingSelectionItemID: QueueItem.ID? = nil
+
+    /// The queue kind the pending selection belongs to (#842 PR2 C4). Set
+    /// alongside `pendingSelectionItemID` so `ActivityWindowView` can verify
+    /// the item belongs to the consuming window's queue — prevents a
+    /// cross-window race when both `.transcription` and `.ingestion` windows
+    /// exist (a lint pending-selection must not be consumed by the
+    /// transcription window, and vice versa). `nil` means "no queue guard"
+    /// (backward-compat for any future caller that doesn't set it).
+    var pendingSelectionQueue: QueueKind? = nil
 
     /// True while any extraction is running. Drives the sidebar spinner.
     var isExtracting: Bool { !extractingSourceIDs.isEmpty }
@@ -182,7 +192,20 @@ final class QueueActivityTracker {
         return nil
     }
 
-    /// Per-item typed agent events, for the Activity window's transcript view.
+    /// Returns the queue item ID of the transcription job currently running
+    /// for `sourceID`, or `nil` if no transcription is in flight. Used by
+    /// `SourceDetailView`'s Transcribe button to navigate to the specific job
+    /// in the Activity window when a transcription is already running (#842
+    /// PR2 C5). Mirrors `lintItemID(for:wikiID:)` (#837). Source IDs are
+    /// ULIDs (globally unique), so no wiki-scoping is needed.
+    func transcriptionItemID(for sourceID: PageID) -> QueueItem.ID? {
+        for (itemID, sourceIDs) in itemToTranscriptionSourceIDs {
+            if sourceIDs.contains(sourceID) {
+                return itemID
+            }
+        }
+        return nil
+    }
     /// Bounded — pruned only when items are pruned from history (not on
     /// terminal state, so users can view completed/failed/cancelled transcripts).
     private(set) var transcripts: [QueueItem.ID: [AgentEvent]] = [:]
@@ -264,6 +287,13 @@ final class QueueActivityTracker {
     /// `extractingSourceIDs` when items finish.
     private var itemToSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
 
+    /// Maps transcription queue item ID → source IDs, so
+    /// ``transcriptionItemID(for:)`` can resolve which running transcription
+    /// job covers a given source, so the Transcribe button can navigate to
+    /// that specific job in the Activity window (#842 PR2 C5). Mirrors the
+    /// `itemToLintPageIDs` mapping that exists for lint items (#837).
+    private var itemToTranscriptionSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
+
     /// Items whose transcript's last row is an in-progress streamed assistant
     /// reply — the next `.assistantTextDelta` grows that row in place instead
     /// of appending a new one (mirrors `AgentLauncher.mergeOrAppend`; without
@@ -344,7 +374,9 @@ final class QueueActivityTracker {
         wholeWikiLintingWikiIDs = []
         itemToLintPageIDs.removeAll()
         itemToLintWikiID.removeAll()
+        itemToTranscriptionSourceIDs.removeAll()
         pendingSelectionItemID = nil
+        pendingSelectionQueue = nil
         extractionLog = ""
         extractionPID = nil
         currentExtractionItemID = nil
@@ -565,6 +597,10 @@ final class QueueActivityTracker {
                 }
             case .transcription:
                 transcribingSourceIDs.formUnion(sourceIDs)
+                // Track the source mapping so `transcriptionItemID(for:)`
+                // can resolve which running job covers a given source
+                // (#842 PR2 C5).
+                itemToTranscriptionSourceIDs[item.id] = sourceIDs
             }
 
         case .transcript(let id, let agentEvent):
@@ -693,6 +729,9 @@ final class QueueActivityTracker {
         lintingItemIDs.remove(item.id)
         itemToLintPageIDs.removeValue(forKey: item.id)
         itemToLintWikiID.removeValue(forKey: item.id)
+        // Transcription items are tracked separately — remove the source
+        // mapping so `transcriptionItemID(for:)` stops resolving (#842 PR2).
+        itemToTranscriptionSourceIDs.removeValue(forKey: item.id)
         if let pageIDs = item.payload.lintPageIDs {
             if pageIDs.isEmpty {
                 // Whole-wiki lint. Safe to remove by wiki ID: the `.ingest`
