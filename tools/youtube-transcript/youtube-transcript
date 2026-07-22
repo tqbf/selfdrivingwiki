@@ -151,8 +151,8 @@ def _fetch_transcript(
 ) -> tuple[list[dict[str, str | float]], str]:
     """Fetch transcript with language preference chain.
 
-    Tries the requested language and English fallbacks via get_transcript,
-    then falls back to the first available track of any language.
+    Tries the requested language and English fallbacks via the v1.x fetch
+    API, then falls back to the first available track of any language.
 
     Raises TranscriptFetchError with the appropriate exit_code on failure.
     """
@@ -175,29 +175,41 @@ def _fetch_transcript(
         raise TranscriptFetchError(str(e), exit_code=1) from e
 
 
+def _to_raw_segments(fetched: Any) -> list[dict[str, str | float]]:
+    """Normalize a fetched transcript to a list of segment dicts.
+
+    youtube-transcript-api v1.x returns a FetchedTranscript object exposing
+    .to_raw_data(); older shapes (and test mocks) return a plain list.
+    """
+    if hasattr(fetched, "to_raw_data"):
+        return list(fetched.to_raw_data())
+    return list(fetched)
+
+
 def _try_fetch(
     yta: Any, video_id: str, lang: str
 ) -> tuple[list[dict[str, str | float]], str]:
     """Try language preference, then first available track.
 
-    Raises youtube_transcript_api exceptions on failure.
+    Uses the youtube-transcript-api v1.x instance API
+    (YouTubeTranscriptApi().fetch/.list). Raises youtube_transcript_api
+    exceptions on failure.
     """
     langs = _build_language_list(lang)
-    segments: list[dict[str, str | float]] = []
+    api = yta.YouTubeTranscriptApi()
 
     try:
-        segments = list(
-            yta.YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
-        )
+        fetched = api.fetch(video_id, languages=langs)
+        segments = _to_raw_segments(fetched)
         if segments:
-            return segments, langs[0]
+            return segments, getattr(fetched, "language_code", langs[0])
     except yta.NoTranscriptFound:
         pass  # Fall through to first available
 
     # Fallback: first available track of any language
-    transcript_list = yta.YouTubeTranscriptApi.list_transcripts(video_id)
+    transcript_list = api.list(video_id)
     for transcript_obj in transcript_list:
-        segments = list(transcript_obj.fetch())
+        segments = _to_raw_segments(transcript_obj.fetch())
         if segments:
             return segments, transcript_obj.language_code
 

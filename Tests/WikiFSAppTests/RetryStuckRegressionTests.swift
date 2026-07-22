@@ -17,9 +17,11 @@ import WikiFSEngine
 ///    enabled (the operator-disabled state). Tested with injectable
 ///    `resolveProviderConfig` so no app-group filesystem or Settings UI is
 ///    touched.
-/// 3. Fix the odd-shaped window lifecycle — `MenuBarItemController.isAutosaveFrameValid`
-///    rejects corrupted/zero saved frames so a stale autosave can't shrink the
-///    window back to its (near-)zero fitting size after we sized it to 760×500.
+/// 3. ~~Fix the odd-shaped window lifecycle~~ — superseded by #835: the Activity
+///    window is now scene-managed (`WindowGroup(for: QueueKind.self)`), so the
+///    manual `NSWindow` frame-autosave validation (`isAutosaveFrameValid`,
+///    `queueWindowAutosaveName`, `queueWindowDefaultSize`) is no longer needed.
+///    The part-3 tests were removed with those helpers.
 ///
 /// Pure-logic tests (no real NSWindows, no real AppKit, no real subprocess) so
 /// they run in the fast CI tier — no `.integration` tag.
@@ -208,69 +210,6 @@ struct RetryStuckRegressionTests {
         #expect(first != nil)
         #expect(second != nil)
         #expect(first == second)
-    }
-
-    // MARK: - Part 3: NSWindow autosave frame validation
-
-    /// #635: validates the canonical NSStringFromRect format AppKit persists
-    /// to UserDefaults under `"NSWindow Frame <autosaveName>"`. A real saved
-    /// frame from a healthy 760×500 window MUST pass so the Activity window
-    /// restores last position/size instead of always re-centering.
-    @Test("isAutosaveFrameValid accepts canonical NSStringFromRect saved frames")
-    func autosaveFrameAcceptsCanonicalFormat() {
-        // NSStringFromRect(NSRect(x: 100, y: 200, width: 760, height: 500))
-        let canonical = "{{100, 200}, {760, 500}}"
-        #expect(MenuBarItemController.isAutosaveFrameValid(canonical))
-        // Variable whitespace + edge values still valid.
-        #expect(MenuBarItemController.isAutosaveFrameValid("{{0, 0}, {760, 500}}"))
-        #expect(MenuBarItemController.isAutosaveFrameValid("{{10,5},{760,500}}"))
-    }
-
-    /// #635: a zero-size or malformed frame — saved during a prior
-    /// transitional/aborted state where the hosting controller hadn't yet
-    /// produced a fitting size — MUST be rejected. Otherwise the
-    /// restored-over-760×500 override shrinks the Activity window back to the
-    /// corrupted size: the "odd-shaped window behind the Activity window"
-    /// symptom.
-    @Test("isAutosaveFrameValid rejects zero / negative / malformed saved frames")
-    func autosaveFrameRejectsCorruptFrames() {
-        // Zero size — the headline corruption from the issue repro.
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{0, 0}, {0, 0}}"))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{100, 200}, {0, 500}}"))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{100, 200}, {760, 0}}"))
-        // Sub-minimum width/height — undetectable as a real user window.
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{0, 0}, {50, 500}}"))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{0, 0}, {760, 50}}"))
-        // Negative dimensions.
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{0, 0}, {-760, 500}}"))
-        // Malformed strings (missing brackets, non-numeric garbage).
-        #expect(!MenuBarItemController.isAutosaveFrameValid(""))
-        #expect(!MenuBarItemController.isAutosaveFrameValid(nil))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("garbage"))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{{abc, def}, {760, 500}}"))
-        #expect(!MenuBarItemController.isAutosaveFrameValid("{100, 200, 760, 500}"))
-    }
-
-    /// #635: the queue-window autosave-name helper MUST return distinct names
-    /// per queue kind so the Ingestion + Extraction Activity windows keep
-    /// independent frames (a corrupted Ingestion frame must not propagate
-    /// to the Extraction window, and vice versa).
-    @Test("queueWindowAutosaveName is distinct per QueueKind")
-    func queueWindowAutosaveNameDistinctPerQueue() {
-        let ingestion = MenuBarItemController.queueWindowAutosaveName(for: .ingestion)
-        let extraction = MenuBarItemController.queueWindowAutosaveName(for: .extraction)
-        #expect(ingestion != extraction)
-        #expect(ingestion == "AgentQueueWindow")
-        #expect(extraction == "ExtractionQueueWindow")
-    }
-
-    /// #635: the default queue window size constant — kept as a static so
-    /// the explicit `NSWindow(contentRect:...)` initializer and any future
-    /// "minimum acceptable saved frame" threshold share one source of truth.
-    @Test("queueWindowDefaultSize is 760×500")
-    func queueWindowDefaultSizeIs760x500() {
-        #expect(MenuBarItemController.queueWindowDefaultSize.width == 760)
-        #expect(MenuBarItemController.queueWindowDefaultSize.height == 500)
     }
 }
 #endif

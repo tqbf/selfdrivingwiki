@@ -93,6 +93,15 @@ struct ActivityWindowView: View {
                 queueControlMenu
             }
         }
+        // #835: pin the unified window-toolbar background so SwiftUI reserves
+        // the toolbar region (non-floating) and insets the sidebar content below
+        // it. With the default `.automatic` background (transparent when idle)
+        // the sidebar List gets no top safe-area inset, so the first rows render
+        // up under the red/yellow/green traffic-light buttons. `.listStyle(
+        // .sidebar)` above only sets the sidebar appearance; the toolbar must be
+        // visibly established for the inset to apply (the main wiki window gets
+        // this implicitly via its `.navigation` + `.principal` toolbar items).
+        .toolbarBackground(.visible, for: .windowToolbar)
         .onAppear {
             viewModel.attach(engine: queueEngine)
             consumePendingSelectionIfNeeded()

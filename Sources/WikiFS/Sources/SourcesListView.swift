@@ -488,17 +488,41 @@ extension SourcesListViewController {
     }
 
     private func canExtract(_ source: SourceSummary) -> Bool {
-        MimeType.isPDF(source.mimeType)
-            && store?.processedMarkdownHead(for: source) == nil
+        // PR2 §5.5: registry-driven gate (replaces `MimeType.isPDF`).
+        // Fixes the latent drift where the list menu offered Extract for
+        // PDF only — the detail-view Extract button also covers HTML
+        // (`isHTMLSource`), but the list's old `MimeType.isPDF` check
+        // silently omitted HTML. Now both go through the registry's
+        // `hasFileExtractionBackend` (true for `.pdfBackend` AND
+        // `.htmlToMarkdown`). Pass provider=nil: the list view doesn't
+        // pre-load origin for every row, and MIME is authoritative for
+        // byte-bearing file sources anyway — a podcast/YouTube byteless
+        // embed's synthetic `video/youtube` mime would not pass either
+        // (it classifies as `.binary`, no `extractionPath`).
+        SourcesListContentGates.canExtract(
+            source: source,
+            processedMarkdownHead: store?.processedMarkdownHead(for: source))
     }
 
-    /// Mirrors the chokepoint rule in `enqueueIngestion` (via
-    /// `WikiStoreModel.canIngest`): a source is ingestible iff it has
-    /// processed markdown to ingest or raw bytes the staging path reads.
-    /// Used to hide the Ingest item for sources that can never be ingested
-    /// (e.g. a byteless YouTube video with no transcript).
+    /// Double gate hiding the Ingest menu item for sources the chokepoint
+    /// (`enqueueIngestion`) would drop anyway. The chokepoint runs BOTH the
+    /// byte gate (`store.canIngest`) AND the content-type gate
+    /// (`store.shouldAutoIngest`, PR2 §5.2 / §11-C1). For the menu UX, we
+    /// don't want a "Ingest" item that silently does nothing — so we mirror
+    /// the same pair here. A PNG with bytes passes the byte gate but fails
+    /// the content-type gate (PR1 fix); a byteless YouTube source without a
+    /// transcript fails BOTH (byteless + no transcript); both stay hidden
+    /// in the context menu.
+    ///
+    /// Per §5.2 narrative, the manual Ingest button (Detail view, line 831:
+    /// `ingestButton`) keeps the byte-only gate (`canIngest`) — the user can
+    /// still try to ingest a no-markdown-path source via the prominent
+    /// button (the chokepoint will drop it cleanly). This list-context-menu
+    /// item is intentionally stricter — discoverability > permissiveness
+    /// for the menu (an item that does nothing is misleading).
     private func canIngest(_ source: SourceSummary) -> Bool {
-        store?.canIngest(source) ?? false
+        guard let store else { return false }
+        return store.canIngest(source) && store.shouldAutoIngest(source)
     }
 
     private func item(title: String, systemImage: String,
@@ -598,5 +622,43 @@ final class SourcesNSTableView: NSTableView {
         }
         self.selectAll(self)
         return true
+    }
+}
+
+// MARK: - PR2 test seam — SourcesListView content-type gates (§5.5)
+
+/// Pure helpers backing the SourcesListView context-menu gating. PR2
+/// extracted these so `SourcesListContentGatesTests` can assert the
+/// registry-driven decisions (and the latent HTML-extract drift fix)
+/// without hosting the `SourcesListViewController` NSViewController (which
+/// requires an `NSWindow` + table + selection state).
+///
+/// Both helpers take `SourceSummary`-shaped primitives — no `WikiStoreModel`,
+/// no queue engine. The actual list view feeds them `store` reads that
+/// already cached per source; tests inject the same primitives directly.
+enum SourcesListContentGates {
+
+    /// `true` iff the list-view "Extract Markdown" context-menu item should
+    /// be shown for this source. PR2 §5.5: this is the registry-backed
+    /// replacement for the old `MimeType.isPDF(source.mimeType) && head == nil`
+    /// — which silently omitted HTML extraction in the list menu even though
+    /// the detail-view Extract button covered it (the "latent drift bug").
+    /// Now both PDF and HTML route through `hasFileExtractionBackend`
+    /// (true for `.pdfBackend` AND `.htmlToMarkdown`). Passes `provider: nil`
+    /// because the list doesn't pre-load origin; MIME + ext is authoritative
+    /// for byte-bearing file sources, and a podcast/YouTube byteless embed's
+    /// synthetic mime (`video/youtube`) classifies as `.binary` (no
+    /// `extractionPath`), so it's correctly excluded regardless.
+    ///
+    /// The `processedMarkdownHead == nil` guard mirrors the detail-view
+    /// `needsExtraction` shape: don't offer Extract when there's already an
+    /// extracted head (use Re-extract instead).
+    static func canExtract(
+        source: SourceSummary,
+        processedMarkdownHead: SourceMarkdownVersion?
+    ) -> Bool {
+        ContentKind.resolve(mimeType: source.mimeType, provider: nil, ext: source.ext)
+            .capabilities.hasFileExtractionBackend
+            && processedMarkdownHead == nil
     }
 }

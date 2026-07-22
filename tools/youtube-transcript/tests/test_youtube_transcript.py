@@ -99,39 +99,39 @@ class TestLanguagePreference:
     def test_primary_lookup_passes_language_list(self, mocker, mock_yta):
         """get_transcript receives the full language preference list."""
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt._fetch_transcript("dQw4w9WgXcQ", "en")
 
-        call_kwargs = mock_yta.YouTubeTranscriptApi.get_transcript.call_args.kwargs
+        call_kwargs = mock_yta.YouTubeTranscriptApi.return_value.fetch.call_args.kwargs
         assert call_kwargs["languages"][0] == "en"
         assert "en-US" in call_kwargs["languages"]
 
     def test_custom_lang_prepended(self, mocker, mock_yta):
         """A custom language is first, English fallbacks follow."""
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt._fetch_transcript("dQw4w9WgXcQ", "fr")
 
-        call_kwargs = mock_yta.YouTubeTranscriptApi.get_transcript.call_args.kwargs
+        call_kwargs = mock_yta.YouTubeTranscriptApi.return_value.fetch.call_args.kwargs
         assert call_kwargs["languages"][0] == "fr"
         assert "en" in call_kwargs["languages"]
 
     def test_fallback_to_first_available(self, mocker, mock_yta):
         """When get_transcript raises NoTranscriptFound, use list_transcripts."""
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.side_effect = NoTranscriptFound("test")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = NoTranscriptFound("test")
 
         fallback_segments = [{"text": "Bonjour tout le monde", "start": 0.0, "duration": 2.0}]
         fallback_transcript = MockTranscript("fr", fallback_segments)
-        mock_yta.YouTubeTranscriptApi.list_transcripts.return_value = [fallback_transcript]
+        mock_yta.YouTubeTranscriptApi.return_value.list.return_value = [fallback_transcript]
 
         segments, language = _yt._fetch_transcript("dQw4w9WgXcQ", "en")
 
         assert language == "fr"
         assert segments == fallback_segments
-        mock_yta.YouTubeTranscriptApi.list_transcripts.assert_called_once_with("dQw4w9WgXcQ")
+        mock_yta.YouTubeTranscriptApi.return_value.list.assert_called_once_with("dQw4w9WgXcQ")
 
 
 # ── Output formatting ──────────────────────────────────────────────────
@@ -264,7 +264,7 @@ class TestArgParsing:
 class TestMainSuccess:
     def test_markdown_to_stdout(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt.main(argv=["dQw4w9WgXcQ"])
 
@@ -274,7 +274,7 @@ class TestMainSuccess:
 
     def test_json_to_stdout(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt.main(argv=["dQw4w9WgXcQ", "--json"])
 
@@ -286,7 +286,7 @@ class TestMainSuccess:
 
     def test_markdown_to_file(self, mocker, mock_yta, tmp_path, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         out_file = tmp_path / "transcript.md"
         _yt.main(argv=["dQw4w9WgXcQ", "--output", str(out_file)])
@@ -299,7 +299,7 @@ class TestMainSuccess:
 
     def test_timestamps_flag(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt.main(argv=["dQw4w9WgXcQ", "--timestamps"])
 
@@ -309,13 +309,13 @@ class TestMainSuccess:
 
     def test_url_input(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.return_value = build_mock_segments()
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = build_mock_segments()
 
         _yt.main(argv=["https://www.youtube.com/watch?v=dQw4w9WgXcQ"])
 
         out = capsys.readouterr().out
         assert "# YouTube Transcript: dQw4w9WgXcQ" in out
-        call_args = mock_yta.YouTubeTranscriptApi.get_transcript.call_args.args
+        call_args = mock_yta.YouTubeTranscriptApi.return_value.fetch.call_args.args
         assert call_args[0] == "dQw4w9WgXcQ"
 
 
@@ -325,8 +325,8 @@ class TestMainSuccess:
 class TestExitCodes:
     def test_exit_no_transcript(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.side_effect = NoTranscriptFound("test")
-        mock_yta.YouTubeTranscriptApi.list_transcripts.side_effect = NoTranscriptFound("test")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = NoTranscriptFound("test")
+        mock_yta.YouTubeTranscriptApi.return_value.list.side_effect = NoTranscriptFound("test")
 
         with pytest.raises(SystemExit) as exc:
             _yt.main(argv=["dQw4w9WgXcQ"])
@@ -337,7 +337,7 @@ class TestExitCodes:
 
     def test_exit_transcripts_disabled(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.side_effect = TranscriptsDisabled("test")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = TranscriptsDisabled("test")
 
         with pytest.raises(SystemExit) as exc:
             _yt.main(argv=["dQw4w9WgXcQ"])
@@ -348,7 +348,7 @@ class TestExitCodes:
 
     def test_exit_video_unavailable(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.side_effect = VideoUnavailable("test")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = VideoUnavailable("test")
 
         with pytest.raises(SystemExit) as exc:
             _yt.main(argv=["dQw4w9WgXcQ"])
@@ -359,7 +359,7 @@ class TestExitCodes:
 
     def test_exit_unknown_error(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.get_transcript.side_effect = RuntimeError("network failure")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = RuntimeError("network failure")
 
         with pytest.raises(SystemExit) as exc:
             _yt.main(argv=["dQw4w9WgXcQ"])

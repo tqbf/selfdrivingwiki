@@ -17,6 +17,18 @@ import WikiFSEngine
 /// enqueued no matter which UI path originated the request. The UI predicate
 /// (`WikiStoreModel.canIngest`) mirrors this for affordance gating.
 ///
+/// **Content-type gate (PR2 §5.2 / §11-C1):** the chokepoint ALSO consults
+/// `WikiStoreModel.shouldAutoIngest(_:)` — the registry-backed
+/// "does this content TYPE have any markdown path?" predicate added in PR1.
+/// A byte-bearing PNG or XML source (the bug class) passes the byte gate
+/// but fails this second gate, so it's dropped here rather than enqueued
+/// for a wasted agent run. **Provider-aware** (PR1's wrapper uses
+/// `ContentKind.resolve(mimeType:provider:ext:)`, not `fromMIME` alone) so
+/// a byteless `.youtube` source WITH a transcript (whose synthetic
+/// `video/youtube` mime alone would classify as `.binary`) classifies as
+/// `.youtubeTranscript` → `shouldAutoIngest == true` and passes — locking
+/// the §11-C1 regression guard.
+///
 /// **Deduplication:** before enqueuing, checks the engine's active items
 /// (`.queued` or `.running`) for this wiki. Sources already active in either
 /// the extraction or ingestion queue are skipped — a user tapping Ingest
@@ -59,6 +71,15 @@ func enqueueIngestion(
 
         // PDF without extracted markdown → enqueue extraction, wait for it,
         // then include in ingestion batch (extraction produces the markdown).
+        // Stays `MimeType.isPDF` rather than `extractionPath == .pdfBackend`
+        // because the extraction queue is PDF-only (HTML extraction routes
+        // through the inline `runHtmlExtraction` path, not the queue engine —
+        // see `SourceDetailView.runExtraction` / `runHtmlExtraction` split).
+        // Equivalent under the registry today (`.pdf` kind has
+        // `extractionPath == .pdfBackend` and only `application/pdf` MIME
+        // resolves to `.pdf`), kept as a direct MIME check because the
+        // condition is specifically "PDF extraction queue knows how to handle
+        // this" — the content-type decision is below.
         if MimeType.isPDF(source.mimeType),
            store.processedMarkdownHead(for: source) == nil {
             let request = QueueItemRequest(
@@ -74,17 +95,35 @@ func enqueueIngestion(
         }
 
         // ── Chokepoint ───────────────────────────────────────────────────
-        // The single enforcement of "don't ingest sources without content."
-        // `canIngest` is true when the source has processed markdown (a
-        // transcript, extracted PDF) **or** raw bytes (`byteSize > 0`) the
-        // staging path reads directly. A byteless source with no processed
-        // markdown — e.g. a YouTube video whose transcript never arrived —
-        // has neither, so it is dropped here rather than enqueuing a run the
-        // staging path would hand empty bytes to. Every UI entry point
-        // (detail view, list context menu, batch ingest) funnels through
-        // here, so the rule is *guaranteed* regardless of origin.
+        // Two gates, in order:
+        // 1. **Byte gate** (`canIngest`): true when the source has processed
+        //    markdown (a transcript, extracted PDF) **or** raw bytes
+        //    (`byteSize > 0`) the staging path reads directly. A byteless
+        //    source with no processed markdown — e.g. a YouTube video whose
+        //    transcript never arrived — has neither, so it is dropped here.
+        //    Kept from PR1; defense-in-depth: even if the content-type gate
+        //    below somehow let a byteless source through (it doesn't, but
+        //    future registry edits could), nothing is enqueued without
+        //    content. Every UI entry point (detail view, list context menu,
+        //    batch ingest) funnels through here, so the rule is *guaranteed*
+        //    regardless of origin.
+        // 2. **Content-type gate** (PR2 §5.2 / §11-C1, `shouldAutoIngest`):
+        //    the registry's markdown-path predicate. A byte-bearing PNG
+        //    (`image/png` → `.image`) or XML (`application/xml` → `.binary`)
+        //    passes gate #1 (it has bytes) but fails gate #2 (no markdown
+        //    path) — dropped rather than enqueued for wasted agent runs.
+        //    Provider-aware via PR1's wrapper (`ContentKind.resolve(mime:
+        //    provider: ext:)` — NOT `fromMIME` alone) so a byteless YouTube
+        //    source WITH a transcript classifies as `.youtubeTranscript` and
+        //    passes; fromMIME alone would classify its synthetic
+        //    `video/youtube` mime as `.binary` and incorrectly drop it (the
+        //    §11-C1 regression the original §5.2 caught).
         guard store.canIngest(source) else {
             DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — no markdown or bytes to ingest")
+            continue
+        }
+        guard store.shouldAutoIngest(source) else {
+            DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — content type has no markdown path")
             continue
         }
         ingestionSourceIDs.append(sourceID)
