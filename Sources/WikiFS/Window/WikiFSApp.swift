@@ -791,7 +791,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Activate the app so the alert appears frontmost. On macOS 14+, the
         // new activate() API replaces the deprecated activate(ignoringOtherApps:).
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
 
         // Present as a sheet on the current key window when possible; fall back
         // to a modal dialog when no window is available (e.g. all windows
@@ -799,6 +799,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = sender.windows.first(
             where: { $0.isVisible && $0.canBecomeKey }
         ) {
+            window.makeKeyAndOrderFront(nil)
             alert.beginSheetModal(for: window) { response in
                 if response == .alertFirstButtonReturn, let cancel = self.cancelInFlightForQuit {
                     // Cancel in-flight items BEFORE replying to terminate so
