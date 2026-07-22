@@ -16,6 +16,11 @@
 #   * Ad-hoc fallback (no cert): app still bundles/launches, but the extension
 #     will NOT register as a File Provider. Fine for Phase 0/1 UI work.
 #
+# Identity selection is CONFIG-aware (#746): debug builds use DEV_IDENTITY
+# (Apple Development, local-only) and release builds use DIST_IDENTITY
+# (Developer ID Application, for distribution / notarization). The Makefile
+# passes the right one via SIGN_IDENTITY; see plans/fix-signing-cert.md.
+#
 set -euo pipefail
 
 CONFIG="${1:-debug}"
@@ -362,9 +367,24 @@ PLIST
 # ---------------------------------------------------------------------------
 # Codesign
 # ---------------------------------------------------------------------------
-# Identity precedence: SIGN_IDENTITY env (Makefile passes this) → DEV_IDENTITY
-# from signing/local.config → ad-hoc ("-").
-IDENTITY="${SIGN_IDENTITY:-${DEV_IDENTITY:--}}"
+# Identity precedence (#746):
+#   * release (CONFIG=release): SIGN_IDENTITY env (Makefile passes
+#     DIST_IDENTITY) → DIST_IDENTITY from signing/local.config → ad-hoc ("-").
+#     Does NOT fall back to DEV_IDENTITY — a release built with the Apple
+#     Development cert is the bug this fixes (#746); notarytool rejects it and
+#     Gatekeeper rejects it on other machines. Ad-hoc "-" is the only fallback
+#     (and `make sign` then re-signs the outer app with Developer ID + hardened
+#     runtime + timestamp for notarization).
+#   * debug/local (CONFIG=debug): SIGN_IDENTITY env (Makefile passes
+#     DEV_IDENTITY) → DEV_IDENTITY from signing/local.config → ad-hoc ("-").
+#     No DIST_IDENTITY fallback — a local debug build must never silently pick
+#     up the distribution cert.
+# See plans/fix-signing-cert.md.
+if [ "${CONFIG}" = "release" ]; then
+  IDENTITY="${SIGN_IDENTITY:-${DIST_IDENTITY:--}}"
+else
+  IDENTITY="${SIGN_IDENTITY:-${DEV_IDENTITY:--}}"
+fi
 if [ "${IDENTITY}" != "-" ] && ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "${IDENTITY}"; then
   echo "  (identity '${IDENTITY}' not in keychain — falling back to ad-hoc)"
   IDENTITY="-"

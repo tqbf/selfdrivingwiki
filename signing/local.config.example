@@ -19,7 +19,20 @@ TEAM_ID="ABCDE12345"
 
 # Codesigning identity — a valid "Apple Development" identity in your login
 # keychain. Copy the quoted name from `security find-identity -v -p codesigning`.
+# Used by `make build` / `make run` (local dev). Falls back to ad-hoc ("-") if
+# the named identity is missing from the keychain.
 DEV_IDENTITY="Apple Development: Your Name (XXXXXXXXXX)"
+
+# Distribution signing identity — a valid "Developer ID Application" identity in
+# your login keychain. REQUIRED for `make dist` / `make release` / `make notarize`
+# (notarytool rejects non-Developer-ID signatures; Gatekeeper rejects Apple
+# Development on other machines). Copy the quoted name from:
+#   security find-identity -v -p codesigning | grep 'Developer ID Application:'
+# Leave empty/uncommented-with-empty-value if you haven't issued one yet — local
+# `make build` / `make run` don't need it, and `make dist` will fail loudly
+# (rather than silently signing with the dev cert, which was #746). See
+# plans/fix-signing-cert.md.
+DIST_IDENTITY="Developer ID Application: Your Name (XXXXXXXXXX)"
 
 # App + File Provider extension bundle ids. Use your own reverse-DNS namespace;
 # the extension id MUST be the app id + ".FileProvider".
@@ -31,5 +44,7 @@ EXT_BUNDLE_ID="com.example.WikiFS.FileProvider"
 # bundle ids above.
 APP_GROUP="group.com.example.wiki"
 
-# Optional — distribution only (Developer ID signing for notarized release).
+# Optional override for the `make sign` target's codesign identity (defaults to
+# DIST_IDENTITY above). Set this only if you need `make sign` to use a different
+# identity than `make release` / build.sh — normally leave it commented out.
 # CERT_NAME="Developer ID Application: Your Name (XXXXXXXXXX)"
