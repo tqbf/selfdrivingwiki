@@ -112,7 +112,7 @@ public enum MediaTitleFetcher {
         case .soundcloud:
             return URL(string: "https://soundcloud.com/oembed?format=json&url=\(encoded)")
         case .localFile, .website, .zotero, .markdownFolder, .applePodcast,
-             .remoteMedia, .legacyImport, nil:
+             .podcast, .remoteMedia, .legacyImport, nil:
             return nil
         }
     }
