@@ -63,6 +63,10 @@ actor FakeAgentBackend: AgentBackend {
     private(set) var allYieldedEvents: [AgentEvent] = []
     /// Model hints seen in start profiles (the `acpSelectedModelId` provider hint).
     private(set) var startModelHints: [String?] = []
+    /// #830: Session IDs passed to `resume()` in call order.
+    private(set) var resumedSessionIDs: [String] = []
+    /// #830: Whether `start()` was called (for asserting resume-success skips fresh start).
+    var startCount_observable: Int { startCount }
 
     // MARK: - Scripted behavior
 
@@ -70,9 +74,14 @@ actor FakeAgentBackend: AgentBackend {
     private var behaviorIndex = 0
     private var sessionCounter = 0
     private var sessionBehaviors: [String: FakeSessionBehavior] = [:]
+    /// #830: If set, `resume()` returns a handle with this id. If nil (default),
+    /// `resume()` returns nil (resume failed — agent doesn't support it or
+    /// session GC'd).
+    var resumeSessionID: String? = nil
 
-    init(behaviors: [FakeSessionBehavior] = []) {
+    init(behaviors: [FakeSessionBehavior] = [], resumeSessionID: String? = nil) {
         self.behaviors = behaviors
+        self.resumeSessionID = resumeSessionID
     }
 
     // MARK: - AgentBackend conformance
@@ -131,6 +140,13 @@ actor FakeAgentBackend: AgentBackend {
     }
 
     func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? {
+        resumedSessionIDs.append(sessionID)
+        if let id = resumeSessionID {
+            sessionCounter += 1
+            startedSessionIDs.append(id)
+            sessionBehaviors[id] = FakeSessionBehavior()
+            return SessionHandle(id: id)
+        }
         return nil
     }
 

@@ -1343,6 +1343,12 @@ struct ChatDetailView: View {
     /// the tab back to the draft state (.newChat). The old chat stays
     /// in history.
     private func startNewChat() {
+        // #830: Clear the old chat's ACP session ID — the old session is gone,
+        // and a future continue of the old chat should start fresh (not retry
+        // a dead resume). Per C8: the caller clears before transitioning.
+        if let chatID {
+            store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
+        }
         launcher.startNewChat()
         // D2 retarget-back: morph the active tab from .chat(id) back to the draft
         // state so the user sees a fresh composer.

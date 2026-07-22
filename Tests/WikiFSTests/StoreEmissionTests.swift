@@ -446,6 +446,20 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    /// ACP session ID write/clear (#830). The new `updateChatAcpSessionId`
+    /// mutator MUST route through `mutate()` and emit a `.chat .updated`
+    /// event. Modeled on `updateMessageSummaryEmitsChatUpdated`.
+    @Test func updateChatAcpSessionIdEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try await drain(rec)
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-123")
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     // MARK: - Nil-bus store (wikictl path)
 
     @Test func nilBusStoreEmitsSilently() throws {

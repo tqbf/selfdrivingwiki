@@ -223,4 +223,75 @@ import SQLite3
         #expect(messages.count == 2)
         #expect(messages.map(\.event) == [.userText("before"), .assistantText("after")])
     }
+
+    // MARK: - ACP session ID (#830)
+
+    /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
+    @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
+        let store = try tempStore()
+        #expect(GRDBWikiStore.schemaVersion == 43)
+        let hasCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
+        #expect(hasCol == "1")
+    }
+
+    /// AC.3: round-trip write + read + clear of `acpSessionId`.
+    @Test func updateChatAcpSessionIdRoundTrip() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+
+        // Initially nil.
+        #expect(try store.getChat(id: chat.id).acpSessionId == nil)
+
+        // Write.
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-123")
+        #expect(try store.getChat(id: chat.id).acpSessionId == "acp-123")
+
+        // Clear.
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: nil)
+        #expect(try store.getChat(id: chat.id).acpSessionId == nil)
+    }
+
+    /// AC.4: `listChats` includes the `acpSessionId` in the result set.
+    @Test func listChatsIncludesAcpSessionId() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-456")
+        let listed = try store.listChats()
+        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == "acp-456")
+    }
+
+    /// AC.4b: `listAllChatsOrderedByID` includes the `acpSessionId`.
+    @Test func listAllChatsIncludesAcpSessionId() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-789")
+        let listed = try store.listAllChatsOrderedByID()
+        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == "acp-789")
+    }
+
+    /// AC.1: migration v42→v43 adds the `acp_session_id` column to a DB
+    /// that was at v42 without it.
+    @Test func chatAcpSessionIdMigrationAddsColumn() throws {
+        let url = tempDatabaseURL()
+
+        // Build a v42 DB by hand: chats table WITHOUT acp_session_id, user_version=42.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chats (id TEXT PRIMARY KEY, kind TEXT, title TEXT,
+            created_at REAL, updated_at REAL, summary TEXT, summary_at REAL);
+        """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
+
+        // Open via GRDBWikiStore — triggers the migration ladder.
+        let store = try GRDBWikiStore(databaseURL: url)
+
+        // The column exists and the version is 43.
+        #expect(store.pragmaValue("user_version") == "43")
+        let hasCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
+        #expect(hasCol == "1")
+    }
 }

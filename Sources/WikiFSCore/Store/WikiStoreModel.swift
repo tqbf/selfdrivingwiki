@@ -4211,6 +4211,23 @@ public final class WikiStoreModel {
         }
     }
 
+    /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
+    /// at spawn time (persist) and on resume failure (clear). No manual reload
+    /// — the bus fires `reloadFromStore()` async after the store write.
+    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) {
+        do {
+            try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: acpSessionId)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatAcpSessionId failed: \(error)")
+        }
+    }
+
+    /// `@MainActor` wrapper for `getChat(id:)` (#830). Returns `nil` if the
+    /// chat doesn't exist or the read fails.
+    public func getChat(id: PageID) -> ChatSummary? {
+        try? store.getChat(id: id)
+    }
+
     /// `@MainActor` wrapper for the per-message summary write (chat-summary
     /// plan §3.5). The summarizer's off-main compute marshals back here for the
     /// DB write (no inference inside a transaction). No manual reload — the bus

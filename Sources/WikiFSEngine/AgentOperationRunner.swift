@@ -91,6 +91,14 @@ public enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
+            onAcpSessionId: chat.map { chat -> (@MainActor (String?) -> Void) in
+                return { [weak store] sessionId in
+                    guard let store else { return }
+                    if let sessionId {
+                        store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: sessionId)
+                    }
+                }
+            },
             onLock: { store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() },
             // Weak store: if the user switches wikis mid-session the model may be
@@ -353,7 +361,10 @@ public enum AgentOperationRunner {
         // Build the condensed transcript + new message as the first prompt.
         let history = store.chatMessages(chatID: chatID)
         let firstMessage = continuationPreamble(from: history, newMessage: trimmed)
-        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count)")
+        // #830: Read the chat's prior ACP session ID so startInteractiveQuery
+        // can attempt resume before falling back to the fresh-start + preamble.
+        let priorAcpSessionId = store.getChat(id: chatID)?.acpSessionId
+        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId ?? "nil")")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
         // flips ChatDetailView to live for this tab (seq continues, title
@@ -370,6 +381,11 @@ public enum AgentOperationRunner {
             wikictlDirectory: wikictlDirectory,
             chatID: chatID.rawValue,
             historySeed: history.map(\.event),
+            priorAcpSessionId: priorAcpSessionId,
+            onAcpSessionId: { [weak store] sessionId in
+                guard let store else { return }
+                store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionId)
+            },
             onLock: { store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() },
             onTranscript: { [weak store] events in
