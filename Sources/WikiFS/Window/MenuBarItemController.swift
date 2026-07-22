@@ -43,7 +43,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     // MARK: - AppKit
 
     private var statusItem: NSStatusItem?
-    private var queueWindows: [QueueKind: NSWindow] = [:]
 
     // MARK: - State tracking
 
@@ -84,10 +83,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         DebugLog.tabs("MenuBarItemController.start: creating status item")
 
         // #745: wire the Activity window opener so the Provenance panel can
-        // navigate to it from an `agent:<kind>` provenance entry. Done in
-        // `start()` (not `init`) because the closure captures `self`.
+        // navigate to it from an `agent:<kind>` provenance entry. Routes
+        // through `openQueueWindow` (the scene-managed `WindowGroup(for:
+        // QueueKind.self)` in `WikiFSApp`) — always opens `.ingestion` since
+        // the Provenance panel navigates to the agent/ingestion window.
         openWindowBridge.openActivityWindow = { [weak self] in
-            self?.showQueueWindow(for: .ingestion)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            self?.openWindowBridge.openQueueWindow?(.ingestion)
         }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -350,11 +352,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
-        showQueueWindow(for: .ingestion)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindowBridge.openQueueWindow?(.ingestion)
     }
 
     @objc private func openExtractionWindow(_ sender: NSMenuItem?) {
-        showQueueWindow(for: .extraction)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindowBridge.openQueueWindow?(.extraction)
     }
 
     /// The session menu actions target: the frontmost wiki window's session,
@@ -385,11 +389,12 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// looks like it did nothing.
     private func activateWikiWindow() {
         NSApplication.shared.activate(ignoringOtherApps: true)
-        let ownedWindowIDs = Set(queueWindows.values.map(ObjectIdentifier.init))
+        // Focus the first visible, main-capable window. Queue windows are
+        // now scene-managed (#835), so they're indistinguishable from wiki
+        // windows here — but `activateWikiWindow` is only called after a wiki
+        // operation (Vacuum, etc.), where the wiki window is the relevant one.
         if let window = NSApplication.shared.windows.first(where: { window in
-            window.isVisible
-                && window.canBecomeMain
-                && !ownedWindowIDs.contains(ObjectIdentifier(window))
+            window.isVisible && window.canBecomeMain
         }) {
             window.makeKeyAndOrderFront(nil)
         }
@@ -397,126 +402,20 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Per-queue activity windows
 
-    private func showQueueWindow(for queue: QueueKind) {
-        if queueWindows[queue] == nil {
-            let contentView = ActivityWindowView(
-                queue: queue,
-                queueEngine: queueEngine,
-                activityTracker: activityTracker,
-                sessionManager: sessionManager,
-                openWindowBridge: openWindowBridge
-            )
-            // NSHostingController (not a bare NSHostingView) so SwiftUI can
-            // install the window's unified toolbar from the view's `.toolbar`.
-            //
-            // #635: pass an explicit `contentRect` to the canonical NSWindow
-            // initializer instead of the convenience
-            // `init(contentViewController:)`. The convenience initializer
-            // derives its content rect from the controller's fitting size,
-            // which for a SwiftUI view is `.zero` until the first layout
-            // pass — so the window is born at (near-)zero size, then resized
-            // post-hoc via `setContentSize`. If a stale/zero `setFrameAutosaveName`
-            // value is then applied on top, the window stays malformed ("odd-shaped
-            // window behind the Activity window"). Using an explicit contentRect
-            // up front makes the 760×500 sizing authoritative at construction.
-            let contentRect = NSRect(
-                x: 0, y: 0,
-                width: Self.queueWindowDefaultSize.width,
-                height: Self.queueWindowDefaultSize.height)
-            let window = NSWindow(
-                contentRect: contentRect,
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false)
-            window.contentViewController = NSHostingController(rootView: contentView)
-            window.toolbarStyle = .unified
-            window.titleVisibility = .hidden
-            window.isReleasedWhenClosed = false
-
-            // #635: `setFrameAutosaveName` restores the saved frame from
-            // UserDefaults IN PLACE of the just-set contentRect. If a prior
-            // transitional/aborted window state persisted a zero or malformed
-            // frame (when the hosting view had no fitting size yet), that
-            // override would shrink the window back to the corrupted size —
-            // the "odd-shaped" symptom. Validate the saved frame BEFORE
-            // setting the autosave name; if invalid/missing, clear the stale
-            // UserDefaults entry so `setFrameAutosaveName` has nothing to
-            // restore (and we center below). Distinct names per queue so the
-            // two windows keep independent frames.
-            let autosaveName = Self.queueWindowAutosaveName(for: queue)
-            let savedFrameKey = "NSWindow Frame \(autosaveName)"
-            let savedFrame = UserDefaults.standard.string(forKey: savedFrameKey)
-            if Self.isAutosaveFrameValid(savedFrame) {
-                // Valid saved frame — registering the autosave name applies it
-                // (preserves last position/size across opens). No centering.
-                window.setFrameAutosaveName(autosaveName)
-            } else {
-                // Corrupted/missing saved frame — nuke it so the autosave name
-                // has nothing to restore over our 760×500 contentRect, then
-                // center. Future app opens will pick up this fresh frame.
-                UserDefaults.standard.removeObject(forKey: savedFrameKey)
-                window.setFrameAutosaveName(autosaveName)
-                window.center()
-            }
-            queueWindows[queue] = window
-        }
-        queueWindows[queue]?.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
-    // MARK: - Queue window constants + helpers (#635)
-
-    /// Default content size for the per-queue Activity window.
-    /// `nonisolated` because the value is a Sendable `NSSize` literal — no
-    /// AppKit state — so the pure window-frame helpers (`isAutosaveFrameValid`)
-    /// and tests can read it without a main-actor hop.
-    nonisolated static let queueWindowDefaultSize = NSSize(width: 760, height: 500)
-
-    /// Autosave name for the per-queue Activity window. Distinct per queue so
-    /// the Ingestion + Extraction windows keep independent frames.
-    /// `nonisolated` — pure (no AppKit state) so tests can call without a
-    /// main-actor hop.
-    nonisolated static func queueWindowAutosaveName(for queue: QueueKind) -> String {
-        queue == .extraction ? "ExtractionQueueWindow" : "AgentQueueWindow"
-    }
-
-    /// #635: validate a previously-saved NSWindow autosave frame string.
-    /// AppKit persists a window's frame in UserDefaults under
-    /// `"NSWindow Frame <autosaveName>"` in `NSStringFromRect` format:
-    /// `"{{x, y}, {w, h}}"`. A frame saved during a prior transitional or
-    /// aborted window state (before the hosting controller produced a fitting
-    /// size) can be zero or non-positive — the "odd-shaped window that opens
-    /// behind the Activity window" symptom. PURE + tested directly
-    /// (`RetryStuckRegressionTests`) so the corruption detection stays
-    /// correct without instantiating AppKit windows. `nonisolated` so tests
-    /// can call without a main-actor hop.
-    nonisolated static func isAutosaveFrameValid(_ rawFrame: String?) -> Bool {
-        guard let rawFrame, !rawFrame.isEmpty else { return false }
-        // NSStringFromRect(NSRect(...)) → "{{x, y}, {w, h}}" — the canonical
-        // AppKit autosave format. Require it strictly so non-AppKit
-        // persisted values (or a partially-overwritten UserDefaults string)
-        // don't accidentally pass the size check below.
-        let trimmed = rawFrame.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("{{"), trimmed.hasSuffix("}}") else { return false }
-        // Strip braces/commas + collapse whitespace before numeric parse.
-        let stripped = trimmed
-            .replacingOccurrences(of: "{", with: " ")
-            .replacingOccurrences(of: "}", with: " ")
-            .replacingOccurrences(of: ",", with: " ")
-        let parts = stripped
-            .split(whereSeparator: { $0.isWhitespace })
-            .compactMap(Double.init)
-        guard parts.count >= 4 else { return false }
-        let width = parts[2]
-        let height = parts[3]
-        // Require a sensible minimum — the default is 760×500, so anything
-        // smaller than ~100pt on either axis is a corrupted/transitional save.
-        return width >= 100 && height >= 100
-    }
-
+    /// #835: Queue Activity windows are now scene-managed
+    /// (`WindowGroup(for: QueueKind.self)` in `WikiFSApp`). Opening is done
+    /// via `openWindowBridge.openQueueWindow?(queue)`, which calls SwiftUI's
+    /// `openWindow(value:)`. This method closes any open queue windows during
+    /// `stop()` (app teardown) — the system will close them during termination
+    /// anyway, but this makes them disappear before the status item is removed.
     func closeActivityWindow() {
-        for window in queueWindows.values {
-            window.orderOut(nil)
+        // Scene-managed windows have the queue title in `title`. Close any
+        // visible window whose title matches a queue window title.
+        let queueTitles: Set<String> = ["Agent Queue", "Extraction Queue"]
+        for window in NSApplication.shared.windows where window.isVisible {
+            if queueTitles.contains(window.title) {
+                window.orderOut(nil)
+            }
         }
     }
 
