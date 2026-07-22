@@ -160,6 +160,20 @@ struct SourceDetailView: View {
         return ext == "html" || ext == "htm" || ext == "xhtml"
     }
 
+    /// The source's resolved `ContentKind` — the registry classification for
+    /// this source's MIME + provider + extension. PR2 (§5.4): the Extract /
+    /// Transcribe button gating switches on this kind's `capabilities` rather
+    /// than re-deriving the PDF/HTML/transcript decision ad-hoc. Kept `private`
+    /// to the view; tests exercise the same `resolve(mimeType:provider:ext:)`
+    /// call via the `internal static` seam (`SourceDetailView.extractionDecision`,
+    /// below).
+    private var contentKind: ContentKind {
+        ContentKind.resolve(
+            mimeType: file.mimeType,
+            provider: origin?.provider,
+            ext: file.ext)
+    }
+
     /// The source's original HTML bytes, decoded as text. Used by the HTML tab
     /// (the WKWebView renders them verbatim). Returns `nil` when the source
     /// isn't HTML or the bytes couldn't be decoded.
@@ -188,20 +202,20 @@ struct SourceDetailView: View {
 
     /// `true` when this source can be transcribed right now — the single
     /// source of truth for the Transcribe button's enable state (issue #799
-    /// PR4 AC.16, generalized to YouTube in PR5). Dispatches on
-    /// `provider.supportsTranscription` (the enum property gates which
-    /// providers have ANY transcript pipeline); the podcast runtime guard
-    /// (the bundled signing helper present AND this build compiles podcast
-    /// support via `#if PODCAST_TRANSCRIPTS`) weiterhin delegates to
+    /// PR4 AC.16, generalized to YouTube in PR5). The registry half of the
+    /// gate (PR2 §5.4) consults `contentKind.capabilities.hasTranscriptBackend`
+    /// (true only for `.podcastTranscript` / `.youtubeTranscript`), then
+    /// runtime guards layer on top: the podcast runtime guard (bundled
+    /// signing helper present AND this build compiles podcast support via
+    /// `#if PODCAST_TRANSCRIPTS`) delegates to
     /// `store.isSourceRefreshable(for:)` so the predicate is identical to
-    /// the Refresh button's guard for podcasts. YouTube needs no signing
-    /// helper, so it's always "available" once a valid video ID is recorded
-    /// (the gate is just `provider == .youtube` — the model throws
-    /// `.missingPlan` when the ID is missing, surfaced by `runTranscription`).
+    /// the Refresh button's guard for podcasts. YouTube and generic RSS need
+    /// no signing helper, so they're always "available" once the provider
+    /// matches (the model throws `.missingPlan` when the ID is missing,
+    /// surfaced by `runTranscription`).
     private var isTranscribable: Bool {
-        guard let provider = origin?.provider,
-              provider.supportsTranscription else { return false }
-        switch provider {
+        guard contentKind.capabilities.hasTranscriptBackend else { return false }
+        switch origin?.provider {
         case .applePodcast:
             // Mirror the Refresh button's runtime guard (helper present +
             // build compiles podcast support). The predicate returns `false`
@@ -219,12 +233,13 @@ struct SourceDetailView: View {
             // `origin.externalIdentity` is missing (a data-integrity edge case
             // surfaced by `runTranscription`, not gated here).
             return true
-        // Unreachable: `supportsTranscription` returned false above (the
-        // property returns true only for `.applePodcast` + `.podcast` +
-        // `.youtube`). The switch stays exhaustive so a future transcript-
-        // capable provider is automatically flagged by the compiler.
+        // Unreachable when `hasTranscriptBackend == true` (the registry
+        // resolves `.applePodcast` / `.podcast` / `.youtube` providers to
+        // transcript kinds and every other provider to a non-transcript
+        // kind). The switch stays exhaustive so a future transcript-capable
+        // provider is automatically flagged by the compiler.
         case .vimeo, .spotify, .soundcloud, .remoteMedia,
-             .localFile, .website, .zotero, .markdownFolder, .legacyImport:
+             .localFile, .website, .zotero, .markdownFolder, .legacyImport, .none:
             return false
         }
     }
@@ -372,18 +387,27 @@ struct SourceDetailView: View {
 
     private var showTabs: Bool { !availableTabs.isEmpty }
 
-    /// `true` when this source's content type has extraction backends (issue
-    /// #799 PR2) — the gate for the Extract button and the Re-extract menu.
-    /// Generalized from `isPDF` so an un-extracted HTML source also shows the
-    /// Extract call-to-action. A source is extractable iff it's a PDF (backed
-    /// by `ExtractionBackend.allCases`) or HTML (backed by
-    /// `HtmlExtractionBackend.allCases`). Text/binary/byteless sources skip
-    /// extraction entirely. Podcast embeds are handled separately (issue
-    /// #799 PR4: `isTranscribable` + `needsTranscription` gate the Transcribe
-    /// button); they're NOT in `isExtractable` because podcast "extraction"
-    /// is a network fetch (not a bytes→markdown transform), so the HTML/PDF
-    /// Extract button doesn't apply.
-    private var isExtractable: Bool { isPDF || isHTMLSource }
+    /// `true` when this source's content type has a file-extraction backend
+    /// — the gate for the Extract button and the Re-extract menu. PR2 §5.4:
+    /// migrated from `isPDF || isHTMLSource` (which already encoded the same
+    /// intent ad-hoc) onto the registry's `hasFileExtractionBackend`
+    /// (`extractionPath == .pdfBackend || .htmlToMarkdown`). Stays PDF/HTML
+    /// only — podcast / YouTube transcript kinds have
+    /// `canExtractToMarkdown == true` too, but their affordance is the
+    /// Transcribe button (`isTranscribable`, gated on
+    /// `hasTranscriptBackend`). The two are mutually exclusive per kind, so
+    /// `needsExtraction` and `needsTranscription` never both become `true`
+    /// for the same source — the UI shows one prominent button per source.
+    ///
+    /// Text/binary/byteless sources skip extraction entirely (their
+    /// `extractionPath == nil`). A PDF with bytes (isPDF true) and a raw
+    /// HTML byte source (isHTMLSource true) both resolve to a kind with a
+    /// file-extraction backend via `ContentKind.resolve` — the registry's
+    /// MIME + ext path matches the same MIME/extension checks the old
+    /// predicate did.
+    private var isExtractable: Bool {
+        contentKind.capabilities.hasFileExtractionBackend
+    }
 
     /// `true` when this source's content type has a provenance chip — the gate
     /// for `extractionProvenanceChip(head:)` rendering above the action row
@@ -399,7 +423,9 @@ struct SourceDetailView: View {
     /// the prominent "Extract" call-to-action. Also the exclusivity guard for
     /// the source's single "act on this source's content" affordance: an
     /// unextracted PDF or HTML source shows Extract, so Refresh is suppressed
-    /// until it has a derivation (one affordance per source).
+    /// until it has a derivation (one affordance per source). PR2: relies on
+    /// `isExtractable`'s registry-backed gate (no shape change to this
+    /// predicate).
     private var needsExtraction: Bool { isExtractable && !hasMarkdown }
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
@@ -1937,4 +1963,60 @@ struct SourceDetailView: View {
 private struct PDFTaskKey: Hashable {
     let sourceID: PageID
     let anchorVersion: Int
+}
+
+// MARK: - PR2 testable seam — Extract / Transcribe affordance (§5.4)
+
+extension SourceDetailView {
+
+    /// The single-affordance decision for a source's content type, computed
+    /// from the registry BEFORE any runtime guard (signing helper present /
+    /// `#if PODCAST_TRANSCRIPTS`). Used by the UI to gate the Extract /
+    /// Transcribe buttons (`isExtractable` / `isTranscribable`) and by tests
+    /// to pin the registry-driven gating without hosting the SwiftUI view.
+    ///
+    /// Mutually exclusive by construction: a `ContentKind.extractionPath` is
+    /// one of four cases or `nil`, so `extract` and `transcribe` never both
+    /// fire for the same (mime, provider, ext) triple. The runtime guard
+    /// (`store.isSourceRefreshable(for:)` for `.applePodcast`) is layered on
+    /// top in `SourceDetailView.isTranscribable`.
+    enum ExtractionAffordance: Sendable, Equatable {
+        /// PDF / HTML — the Extract Markdown button (`runExtraction` /
+        /// `runHtmlExtraction`). `extractionPath == .pdfBackend` or
+        /// `.htmlToMarkdown`.
+        case extract
+        /// Podcast / YouTube — the Transcribe button (`runTranscription`).
+        /// `extractionPath == .podcastTranscript` or `.youtubeTranscript`.
+        case transcribe
+        /// Native markdown / text / image / binary / vimeo / unknown — no
+        /// extraction button; the content either is already markdown or has
+        /// no path to it (the auto-ingest gate also excludes these).
+        case none
+    }
+
+    /// Pure registry-driven decision for the Extract-vs-Transcribe-vs-Neither
+    /// affordance. `internal static` so `@testable import WikiFS` tests can
+    /// reach it without instantiating a `SourceDetailView` (which needs a
+    /// `WikiStoreModel`, `AgentLauncher`, `ExtractionCoordinator`, etc.).
+    /// Mirrors the PR1 `BackgroundIngestCoordinator.ingestionDecision` seam.
+    ///
+    /// `nonisolated` because it's pure (a single `ContentKind.resolve(...)`
+    /// call with no actor dependencies) despite the enclosing SwiftUI `View`
+    /// struct getting implicit `@MainActor` isolation. Tests would otherwise
+    /// need `@MainActor` annotations on the suite, and the in-view call site
+    /// is already on the main actor.
+    ///
+    /// See `plans/content-type-registry.md` §5.4 (PR2).
+    nonisolated static func extractionAffordance(
+        mimeType: String?,
+        provider: SourceProvider?,
+        ext: String?
+    ) -> ExtractionAffordance {
+        let kind = ContentKind.resolve(mimeType: mimeType, provider: provider, ext: ext)
+        switch kind.capabilities.extractionPath {
+        case .pdfBackend, .htmlToMarkdown:             return .extract
+        case .podcastTranscript, .youtubeTranscript:   return .transcribe
+        case nil:                                       return .none
+        }
+    }
 }
