@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WikiFSCore
 
 /// Bridges SwiftUI's `@Environment(\.openWindow)` action to AppKit code that
 /// can't access the SwiftUI environment (notably `MenuBarItemController` and
@@ -42,6 +43,14 @@ final class OpenWindowBridge {
     /// when it creates the window. Used by the Provenance panel to navigate
     /// from a provenance entry to the run that produced it.
     var openActivityWindow: (() -> Void)?
+
+    /// Opens (or focuses) the Activity window for a specific queue
+    /// (`WindowGroup(for: QueueKind.self)` deduplicates by `==`, so calling
+    /// this for a queue that already has a window focuses it). Replaces the
+    /// hand-built `NSWindow` lifecycle in `MenuBarItemController.showQueueWindow`
+    /// (#835: the system-managed scene correctly handles title-bar inset + frame
+    /// persistence).
+    var openQueueWindow: ((QueueKind) -> Void)?
 
     /// Opens Settings on a specific tab. Sets the `@AppStorage` key that the
     /// Settings `TabView(selection:)` binds to, then calls `openSettings`.
@@ -92,6 +101,12 @@ struct WindowBridgeProbe: View {
         // removed by `removeRedundantAppMenuItems`.
         bridge.openSettings = {
             openSettings()
+        }
+        // `openWindow(value: queue)` targets `WindowGroup(for: QueueKind.self)`,
+        // deduplicating by ==: if a window for that queue is already open, it's
+        // focused instead of spawning a duplicate (#835).
+        bridge.openQueueWindow = { queue in
+            openWindow(value: queue)
         }
     }
 }

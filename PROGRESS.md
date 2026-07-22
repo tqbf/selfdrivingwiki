@@ -1,5 +1,34 @@
 # Progress log
 
+## fix: Queue window sidebar rendering behind traffic lights (#835)
+
+**Symptom:** the Agent Queue / Extraction Queue window's sidebar `List`
+rendered its first rows up into the title bar, behind the red/yellow/green
+traffic-light buttons.
+
+**Root cause:** the Activity window is a hand-built `NSWindow`
+(`MenuBarItemController.showQueueWindow`) with `toolbarStyle = .unified` +
+`titleVisibility = .hidden`, hosting a `NavigationSplitView` whose `.toolbar`
+carries only a trailing `.primaryAction` item. `.listStyle(.sidebar)` was
+already applied (since the file's first commit `c695b55`) — it set the sidebar
+*appearance* but did not establish the sidebar's top safe-area inset. With the
+unified toolbar background at its default `.automatic` (transparent while
+idle) and no leading/principal toolbar content, SwiftUI treated the toolbar as
+floating/transparent, reserved no toolbar region, and the sidebar `List`
+started at the very top of the window — behind the traffic lights. The main
+wiki window (`ContentView`) avoids this implicitly via its `.navigation` +
+`.principal` toolbar items and explicitly calls `titleVisibility = .hidden` a
+"fragile hack" (ContentView.swift:281).
+
+**Fix:** one modifier on the `NavigationSplitView` in
+`ActivityWindowView.swift` — `.toolbarBackground(.visible, for:
+.windowToolbar)`. Pinning the window-toolbar background to `.visible` makes
+SwiftUI treat the unified toolbar as a reserved (non-floating) region, so the
+sidebar `List` content is inset below it and the first rows clear the
+traffic-light buttons. Minimal, no redesign. PR #839.
+
+**Verified:** `make build` ✓ + `swift test` ✓ (3503 tests, 295 suites).
+
 ## feat: Versions tab — browse/diff/restore page history (#817)
 
 **Goal:** a "Versions" surface that browses page versions at any point in time,

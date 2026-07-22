@@ -14,7 +14,7 @@ public enum StageRoutingKey: String, Sendable {
 /// The two persistent processing queues. Each `QueueItem` belongs to exactly
 /// one queue, and each queue has its own independent run state (running /
 /// paused) and ordering-key sequence.
-public enum QueueKind: String, Codable, Sendable {
+public enum QueueKind: String, Hashable, Codable, Sendable {
     /// PDF / document extraction (source → extracted markdown).
     case extraction
     /// Content ingestion (extracted markdown → wiki pages). Also covers

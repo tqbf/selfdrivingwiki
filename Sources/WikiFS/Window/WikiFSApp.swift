@@ -538,6 +538,30 @@ struct WikiFSApp: App {
         .defaultSize(width: 1080, height: 740)
         .windowResizability(.contentMinSize)
 
+        // Queue Activity windows: one per `QueueKind` (Ingestion + Extraction),
+        // opened via `openWindow(value:)` / `openWindowBridge.openQueueWindow`.
+        // `WindowGroup(for:)` deduplicates by `==`, so re-opening a queue's
+        // window focuses the existing one (#835). System-managed scene replaces
+        // the hand-built `NSWindow` — correct title-bar inset, frame persistence,
+        // and state restoration come for free.
+        WindowGroup("Agent Queue", for: QueueKind.self) { $queue in
+            ActivityWindowView(
+                queue: queue ?? .ingestion,
+                queueEngine: queueEngine,
+                activityTracker: activityTracker,
+                sessionManager: sessionManager,
+                openWindowBridge: openWindowBridge
+            )
+            .appEnvironment(
+                tracker: activityTracker,
+                openActivityWindow: { [weak openWindowBridge] in
+                    openWindowBridge?.openQueueWindow?(.ingestion)
+                })
+            .preferredColorScheme(appearanceColorScheme)
+        }
+        .defaultSize(width: 760, height: 500)
+        .windowResizability(.contentMinSize)
+
         Settings {
             TabView(selection: settingsSelectedTab) {
                 ZoteroSettingsView(containerDirectory: containerDirectory)
