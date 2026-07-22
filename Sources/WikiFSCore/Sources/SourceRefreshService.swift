@@ -81,12 +81,18 @@ public struct SourceRefreshService: Sendable {
     /// for import-only sources and `.missingPlan` when a refreshable source's
     /// origin has no URL.
     public func materialize(origin: SourceOrigin) async throws -> RefreshMaterial {
-        switch origin.agentName {
-        case "website":
+        // nil/unknown provider (forward-compat: a newer build wrote an unknown
+        // `agents.name`) → not refreshable. The known-provider arms mirror the
+        // `provider.supportsRefresh` baseline, but stay explicit so the refresh
+        // path's branching is self-documenting (and the compiler's
+        // exhaustiveness check fails if a new provider is added).
+        switch origin.provider {
+        case .website:
             return try await materializeWebsite(origin: origin)
-        case "apple-podcast":
+        case .applePodcast:
             return try await materializePodcast(origin: origin)
-        default:
+        case .localFile, .zotero, .markdownFolder, .youtube, .vimeo, .spotify,
+             .soundcloud, .remoteMedia, .legacyImport, nil:
             throw RefreshError.notRefreshable(origin.agentName)
         }
     }

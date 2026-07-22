@@ -2846,16 +2846,27 @@ public final class WikiStoreModel {
     ///   is import-only and not refreshable.
     public func isSourceRefreshable(for id: PageID) -> Bool {
         guard let origin = sourceOrigin(for: id), origin.plan != nil else { return false }
-        switch origin.agentName {
-        case "website":
+        // Delegate the baseline to `provider.supportsRefresh`, then layer the
+        // runtime guards on top (snapshot image siblings for websites; the
+        // bundled signing helper for podcasts). See `plans/source-provider-enum.md`
+        // §supportsRefresh — this is the full predicate; the enum property is
+        // baseline-only.
+        guard let provider = origin.provider, provider.supportsRefresh else { return false }
+        switch provider {
+        case .website:
             return !((try? store.hasImageSiblings(sourceID: id)) ?? false)
-        case "apple-podcast":
+        case .applePodcast:
             #if PODCAST_TRANSCRIPTS
             return ApplePodcastTranscriptService.bundled() != nil
             #else
             return false
             #endif
-        default:
+        // Exhaustive over the non-refreshable providers — `supportsRefresh`
+        // returned false above, so these are unreachable; the compiler still
+        // enforces exhaustiveness if a new provider is ever added (it has to
+        // be added here, to `supportsRefresh`, or the build fails).
+        case .localFile, .zotero, .markdownFolder,
+             .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia, .legacyImport:
             return false
         }
     }

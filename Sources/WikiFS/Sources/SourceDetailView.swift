@@ -562,9 +562,13 @@ struct SourceDetailView: View {
                         } else {
                             Label(zoteroLabel, systemImage: "books.vertical")
                         }
-                    } else if let origin, origin.agentName != "legacy-import" {
+                    } else if let origin, origin.provider != .legacyImport {
                         // Phase 3a provider origin: website → clickable link to the
                         // origin URL; local-file → "File"; markdown-folder → "Folder".
+                        // `provider != .legacyImport` filters the shared
+                        // `legacy-import` agent (the pre-v39 degraded fallback —
+                        // nil satisfies it too, since `SourceProvider(rawValue:nil)`
+                        // is nil).
                         metadataSeparator
                         providerOriginTag(origin)
                     }
@@ -816,112 +820,72 @@ struct SourceDetailView: View {
     /// "File / {content type}" (e.g. "File / Mermaid", "File / PDF") since a
     /// drag-drop can carry anything. URL/media providers and markdown folders
     /// imply their content type, so their labels stay single-dimensional.
+    ///
+    /// The per-provider label/icon/helpVerb are sourced from
+    /// `SourceProvider.displayLabel` / `.systemImage` / `.helpVerb` so the
+    /// DetailView and `SourceOrigin.displayLabel` can't drift (#source-
+    /// provider-enum). `mediaProviderInfo`'s former switch table is now
+    /// enum-carried and lives on `SourceProvider` itself.
     @ViewBuilder
     private func providerOriginTag(_ origin: SourceOrigin) -> some View {
-        switch origin.agentName {
-        case "website":
-            let websiteLabel = SourceProvenanceLabel.combine(
-                provider: "Website", ext: file.ext, mimeType: file.mimeType)
+        switch origin.provider {
+        case .website, .applePodcast, .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia:
+            // URL providers (web pages, podcasts, byteless media embeds) — all
+            // open in the default browser via NSWorkspace.shared.open. They share
+            // one action shape; only the label / icon / help text differ, and
+            // those come from the enum. Force-unwrap is safe — this arm only
+            // matched when `origin.provider` is `.some(…)` (non-nil).
+            let provider = origin.provider!
+            let providerLabel = SourceProvenanceLabel.combine(
+                provider: provider.displayLabel, ext: file.ext, mimeType: file.mimeType)
             let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if let url = URL(string: urlString), url.scheme != nil {
                 Button {
                     NSWorkspace.shared.open(url)
                 } label: {
-                    Label(websiteLabel, systemImage: "globe")
+                    Label(providerLabel, systemImage: provider.systemImage)
                 }
                 .buttonStyle(.link)
-                .help("Open original: \(urlString)")
+                .help("\(provider.helpVerb): \(urlString)")
             } else {
-                Label(websiteLabel, systemImage: "globe")
+                Label(providerLabel, systemImage: provider.systemImage)
             }
-        case "markdown-folder":
-            // Two-dimensional label (#644): "Folder / Markdown" when the content
-            // type is derivable, or just "Folder" when it's unknown.
-            let folderLabel = SourceProvenanceLabel.combine(
-                provider: "Folder", ext: file.ext, mimeType: file.mimeType)
-            let folderPath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
-            if !folderPath.isEmpty {
+        case .localFile, .markdownFolder, .zotero, .legacyImport, nil:
+            // Local-path reveal (Finder). `.localFile` shows "File" + "doc";
+            // `.markdownFolder` shows "Folder" + "folder" — both via their
+            // own enum values. `.legacyImport` is filtered out at the caller
+            // (the `origin.provider != .legacyImport` gate above), and
+            // `nil` covers any future/unknown provider; both fall back to
+            // `SourceProvider.localFile`'s values ("File" / "doc" /
+            // "Reveal original file"), matching the pre-enum default arm.
+            //
+            // `.zotero` is also handled inline ABOVE the caller's gate (a
+            // dedicated `zotero://select?itemKey=…` button row); reaching
+            // providerOriginTag with a zotero origin is unreachable in
+            // practice but listed here so the switch is exhaustive. The
+            // pre-enum `default:` arm rendered it as "File" — preserved here
+            // via the `.localFile` fallback below.
+            //
+            // Single ternary expression (not a conditional statement) so the
+            // surrounding @ViewBuilder doesn't try to fold this into a view.
+            let effective: SourceProvider = (origin.provider == .localFile || origin.provider == .markdownFolder)
+                ? origin.provider!
+                : .localFile
+            let providerLabel = SourceProvenanceLabel.combine(
+                provider: effective.displayLabel, ext: file.ext, mimeType: file.mimeType)
+            let path = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !path.isEmpty {
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: folderPath)])
+                        [URL(fileURLWithPath: path)])
                 } label: {
-                    Label(folderLabel, systemImage: "folder")
+                    Label(providerLabel, systemImage: effective.systemImage)
                 }
                 .buttonStyle(.link)
-                .help("Reveal original folder: \(folderPath)")
+                .help("\(effective.helpVerb): \(path)")
             } else {
-                Label(folderLabel, systemImage: "folder")
+                Label(providerLabel, systemImage: effective.systemImage)
             }
-        case "apple-podcast":
-            // Byteless source (a transcript) — link to the episode page, like the
-            // website tag. Never "File": a podcast source carries no file bytes.
-            let podcastLabel = SourceProvenanceLabel.combine(
-                provider: "Apple Podcast", ext: file.ext, mimeType: file.mimeType)
-            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
-            if let url = URL(string: urlString), url.scheme != nil {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    Label(podcastLabel, systemImage: "waveform")
-                }
-                .buttonStyle(.link)
-                .help("Open episode: \(urlString)")
-            } else {
-                Label(podcastLabel, systemImage: "waveform")
-            }
-        case "youtube", "vimeo", "spotify", "soundcloud", "remote-media":
-            // Phase 4b byteless media providers. The watch/listen URL lives on
-            // `origin.plan` (the pasted link, normalized); never "File" — these
-            // sources carry no file bytes. (Issue #618.)
-            let info = mediaProviderInfo(origin.agentName)
-            let mediaLabel = SourceProvenanceLabel.combine(
-                provider: info.label, ext: file.ext, mimeType: file.mimeType)
-            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
-            if let url = URL(string: urlString), url.scheme != nil {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    Label(mediaLabel, systemImage: info.systemImage)
-                }
-                .buttonStyle(.link)
-                .help("\(info.helpVerb): \(urlString)")
-            } else {
-                Label(mediaLabel, systemImage: info.systemImage)
-            }
-        default:
-            // Local-file (and any unrecognized import provider). Two-dimensional
-            // label (#644): "File / Mermaid", "File / PDF", "File / Markdown",
-            // or just "File" when the content type is unknown. A drag-drop can
-            // carry anything, so the suffix is meaningful here.
-            let fileLabel = SourceProvenanceLabel.combine(
-                provider: "File", ext: file.ext, mimeType: file.mimeType)
-            let filePath = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
-            if !filePath.isEmpty {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: filePath)])
-                } label: {
-                    Label(fileLabel, systemImage: "doc")
-                }
-                .buttonStyle(.link)
-                .help("Reveal original file: \(filePath)")
-            } else {
-                Label(fileLabel, systemImage: "doc")
-            }
-        }
-    }
-
-    /// Provider-correct display text, SF Symbol, and tooltip verb for the
-    /// Phase 4b byteless media providers (`youtube`/`vimeo`/`spotify`/
-    /// `soundcloud`/`remote-media`). Used by `providerOriginTag(_:)`.
-    private func mediaProviderInfo(_ agentName: String) -> (label: String, systemImage: String, helpVerb: String) {
-        switch agentName {
-        case "youtube":      return ("YouTube", "play.rectangle", "Open video")
-        case "vimeo":        return ("Vimeo", "play.rectangle", "Open video")
-        case "spotify":      return ("Spotify", "music.note", "Open track")
-        case "soundcloud":   return ("SoundCloud", "waveform", "Open track")
-        case "remote-media": return ("Media", "music.note", "Open media")
-        default:             return ("Media", "music.note", "Open media")
         }
     }
 
@@ -1040,8 +1004,8 @@ struct SourceDetailView: View {
 
     /// The placeholder copy when a byteless embed has no transcript yet.
     private var embedEmptyLabel: String {
-        switch origin?.agentName {
-        case "youtube": return "No Transcript Available"
+        switch origin?.provider {
+        case .youtube?: return "No Transcript Available"
         default: return "No Transcript"
         }
     }
@@ -1049,7 +1013,7 @@ struct SourceDetailView: View {
     /// The placeholder description; explains why there's no text and that the
     /// player above is the source's content.
     private var embedEmptyDescription: String {
-        if origin?.agentName == "youtube" {
+        if origin?.provider == .youtube {
             return "This video has no captions, so no transcript was extracted. The player above is the source."
         }
         return "This media source has no extracted text yet. The player above is the source."

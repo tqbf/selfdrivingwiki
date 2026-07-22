@@ -42,6 +42,13 @@ public struct MediaEmbedMatch: Sendable, Equatable {
         self.planURL = planURL
         self.activityKind = activityKind
     }
+
+    /// The typed provider parsed from `agentName` (`SourceProvider(rawValue:)`),
+    /// or `nil` for unknown/empty values. Switch sites consult this so the
+    /// compiler can enforce exhaustiveness over the known-provider arms.
+    public var provider: SourceProvider? {
+        SourceProvider(rawValue: agentName)
+    }
 }
 
 public enum MediaEmbedURL {
@@ -80,7 +87,7 @@ public enum MediaEmbedURL {
         guard isValidYouTubeID(id) else { return nil }
         let absolute = url.absoluteString
         return MediaEmbedMatch(
-            agentName: "youtube",
+            agentName: SourceProvider.youtube.rawValue,
             mimeType: "video/youtube",
             externalIdentity: id,
             filename: "youtube-\(id)",
@@ -101,7 +108,7 @@ public enum MediaEmbedURL {
         guard let id, !id.isEmpty else { return nil }
         let absolute = url.absoluteString
         return MediaEmbedMatch(
-            agentName: "vimeo",
+            agentName: SourceProvider.vimeo.rawValue,
             mimeType: "video/vimeo",
             externalIdentity: id,
             filename: "vimeo-\(id)",
@@ -124,7 +131,7 @@ public enum MediaEmbedURL {
         guard !id.isEmpty else { return nil }
         let absolute = url.absoluteString
         return MediaEmbedMatch(
-            agentName: "spotify",
+            agentName: SourceProvider.spotify.rawValue,
             mimeType: "audio/spotify",
             externalIdentity: "\(type)/\(id)",
             filename: "spotify-\(type)-\(id)",
@@ -145,7 +152,7 @@ public enum MediaEmbedURL {
         let trackSlug = segs.last ?? segs[1]
         let absolute = url.absoluteString
         return MediaEmbedMatch(
-            agentName: "soundcloud",
+            agentName: SourceProvider.soundcloud.rawValue,
             mimeType: "audio/soundcloud",
             externalIdentity: absolute,
             filename: "soundcloud-\(trackSlug)",
@@ -167,7 +174,7 @@ public enum MediaEmbedURL {
         let last = (url.path as NSString).lastPathComponent
         let filename = last.isEmpty ? "remote-\(url.host ?? "media")" : last
         return MediaEmbedMatch(
-            agentName: "remote-media",
+            agentName: SourceProvider.remoteMedia.rawValue,
             mimeType: mime,
             externalIdentity: absolute,
             filename: filename,
