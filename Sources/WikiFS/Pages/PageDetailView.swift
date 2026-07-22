@@ -48,6 +48,9 @@ struct PageDetailView: View {
     /// this page (whole-wiki or page-level). Explains the running state rather
     /// than silently enqueuing a duplicate.
     @State private var isShowingLintActiveAlert = false
+    /// Opens the value-driven Versions `WindowGroup` (#817). Captured from the
+    /// environment (only available inside a `WindowGroup`'s view hierarchy).
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -343,7 +346,8 @@ struct PageDetailView: View {
                     outlineWidth: $outlineWidth,
                     origin: provenanceOrigin?.provenanceEntry,
                     history: provenanceHistory.map(\.provenanceEntry),
-                    store: store) {
+                    store: store,
+                    onCompareVersions: openVersionsWindow) {
                     PageOutlineView(markdown: store.draftBody,
                                     caretCharIndex: caretCharIndex) { heading in
                         if isEditing {
@@ -452,6 +456,19 @@ struct PageDetailView: View {
     private var currentPageID: PageID? {
         guard case .page(let id) = store.selection else { return nil }
         return id
+    }
+
+    /// Open the Versions window for the current page (#817). Injected into the
+    /// inspector's `ProvenancePanel` as `onCompareVersions` (page-only). The
+    /// `WindowGroup(for: PageVersionCompareContext.self)` dedups by pageID +
+    /// wikiID, so re-opening focuses the existing window.
+    private func openVersionsWindow() {
+        guard let pageID = currentPageID else { return }
+        let title = store.summaries.first { $0.id == pageID }?.title ?? ""
+        openWindow(value: PageVersionCompareContext(
+            pageID: pageID,
+            title: title,
+            wikiID: store.eventBus?.wikiID ?? ""))
     }
 
     // MARK: - Subviews

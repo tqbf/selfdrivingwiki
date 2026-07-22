@@ -4639,6 +4639,34 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
+    /// Read the full blob-decoded body of an arbitrary page version by its id.
+    /// The read-side counterpart of `revertPage`'s internal join: the same
+    /// `page_versions → blobs` query, but as a pure read with no mutation.
+    /// Returns `nil` when no `page_versions` row matches `versionID`. The body
+    /// is decoded as UTF-8 (page bodies are always written as UTF-8 by
+    /// `appendPageVersion`); a decode failure degrades to an empty string
+    /// rather than throwing (mirrors `revertPage`'s `?? ""` fallback).
+    ///
+    /// READ-ONLY: routes through `dbWriter.read`, so this is safe off-main via
+    /// `WikiReadPool` and emits no `ResourceChangeEvent`. Used by the Versions
+    /// window to view/diff a historical version without restoring it.
+    public func pageVersionBody(versionID: String) throws -> String? {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT b.content
+                FROM page_versions pv
+                JOIN blobs b ON b.hash = pv.blob_hash
+                WHERE pv.id = ?;
+                """,
+                arguments: [versionID]
+            ) else { return nil }
+            let bodyData: Data = row["content"]
+            return String(data: bodyData, encoding: .utf8) ?? ""
+        }
+    }
+
     public func revertPage(pageID: PageID, to versionID: String) throws {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
@@ -4677,6 +4705,86 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 generation = generation + 1,
                 updated_at = excluded.updated_at;
             """, arguments: [pageID.rawValue, versionID, now])
+        }
+    }
+
+
+    /// Restore a page to a previous version by appending a NEW version node
+    /// (the append-only counterpart of `revertPage`; mirrors
+    /// `revertProcessedMarkdown` for sources). The new row reuses the target's
+    /// `blob_hash` (CAS dedup — identical bytes already dedup to one blob), so a
+    /// restore adds zero blob bytes; what's new is the auditable `page_versions`
+    /// node + its `'restore'` PROV activity. The new node becomes HEAD (the
+    /// `page-content` ref is repointed to it); history is never mutated. Emits a
+    /// `.page .updated` `ResourceChangeEvent` via `mutate()`.
+    @discardableResult
+    public func restorePage(pageID: PageID, to versionID: String) throws -> String {
+        try mutate(event: { _ in
+            self.localEvent(.page, id: pageID.rawValue, change: .updated)
+        }) { db in
+            // 1. Read the target version's blob_hash + title + content.
+            guard let row = try Row.fetchOne(db, sql: """
+            SELECT pv.blob_hash, pv.title, b.content
+            FROM page_versions pv
+            JOIN blobs b ON b.hash = pv.blob_hash
+            WHERE pv.id = ? AND pv.page_id = ?;
+            """, arguments: [versionID, pageID.rawValue]) else {
+                throw WikiStoreError.unexpected("restore target \(versionID) not found for page \(pageID.rawValue)")
+            }
+            let targetBlobHash: String = row["blob_hash"]
+            let targetTitle: String = row["title"]
+            let bodyData: Data = row["content"]
+            let body = String(data: bodyData, encoding: .utf8) ?? ""
+
+            // 2. Current HEAD is the parent of the new restore node.
+            let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
+
+            // 3. Create a 'restore' PROV activity (distinct from 'edit'/'import'
+            //    so the history badges it as a restore). Author = the user
+            //    (a manual restore is an explicit user action).
+            let agentID = try self.ensurePageAuthorAgent(PageAuthor.user.rawValue, on: db)
+            let activityID = ULID.generate()
+            let now = Date()
+            let nowTS = now.timeIntervalSince1970
+            try db.execute(sql: """
+            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
+            VALUES (?, 'restore', ?, ?, ?);
+            """, arguments: [activityID, agentID, nowTS, nowTS])
+
+            // 4. Append the new version node (parent = current head; reuses the
+            //    target's blob_hash — no blob INSERT needed, it already exists).
+            let newVersionID = ULID.generate()
+            let sanitizedTitle = WikiNameRules.sanitized(targetTitle)
+            let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
+            try db.execute(sql: """
+            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
+            VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
+            """, arguments: [newVersionID, pageID.rawValue, head, targetBlobHash,
+                            sanitizedTitle, activityID, nowTS])
+
+            // 5. Update the denormalized pages mirror (fires the FTS5 trigger —
+            //    pages use external-content FTS over `pages`, so no manual
+            //    search refresh is needed).
+            try db.execute(sql: """
+            UPDATE pages
+            SET title = ?, slug = ?, body_markdown = ?,
+                updated_at = ?, version = version + 1, last_edited_by = ?
+            WHERE id = ?;
+            """, arguments: [sanitizedTitle, slug, body, nowTS,
+                            PageAuthor.user.rawValue, pageID.rawValue])
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
+
+            // 6. Repoint HEAD to the NEW restore node.
+            try db.execute(sql: """
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('page-content', ?, ?, 1, ?)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = generation + 1,
+                updated_at = excluded.updated_at;
+            """, arguments: [pageID.rawValue, newVersionID, nowTS])
+
+            return newVersionID
         }
     }
 

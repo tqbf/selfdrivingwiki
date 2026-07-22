@@ -34,6 +34,11 @@ struct DetailInspectorView<Outline: View>: View {
     let origin: ProvenanceEntry?
     let history: [ProvenanceEntry]
     var store: WikiStoreModel?
+    /// Optional entry to the Versions window (#817). Passed through to
+    /// `ProvenancePanel.onCompareVersions` — injected by `PageDetailView`
+    /// (page-only); `SourceDetailView` leaves this `nil` so the button is
+    /// hidden for sources. See `ProvenancePanel.onCompareVersions`.
+    var onCompareVersions: (() -> Void)? = nil
     @ViewBuilder let outline: () -> Outline
 
     @State private var dragStartWidth: Double? = nil
@@ -110,7 +115,8 @@ struct DetailInspectorView<Outline: View>: View {
                         ProvenancePanel(
                             origin: origin,
                             history: history,
-                            store: store)
+                            store: store,
+                            onCompareVersions: onCompareVersions)
                         .padding()
                     }
                 }

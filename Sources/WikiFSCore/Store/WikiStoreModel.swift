@@ -2820,6 +2820,28 @@ public final class WikiStoreModel {
         (try? store.pageEditHistory(pageID: id)) ?? []
     }
 
+    /// The full blob-decoded body of an arbitrary page version by id, or `nil`
+    /// when no version matches (or the read fails). READ-ONLY — emits nothing.
+    /// Used by the Versions window to view/diff a historical version without
+    /// restoring it (the read-side counterpart of the `revertPage` body join).
+    public func pageVersionBody(for versionID: String) -> String? {
+        try? store.pageVersionBody(versionID: versionID)
+    }
+
+    /// Restore a page to a previous version (append-only, #817). Wraps
+    /// `store.restorePage`: appends a NEW `page_versions` node reusing the
+    /// target's blob, records a `'restore'` PROV activity (auditable in
+    /// history), and repoints HEAD to the new node. History is never mutated.
+    /// The store routes the write through `mutate()` so a `.page .updated`
+    /// `ResourceChangeEvent` fires (File Provider + this model's `.external`
+    /// reload subscribe). Throws are swallowed (the Versions UI calls this from
+    /// a button; a failure is non-fatal) — matches the `setActiveMarkdown`
+    /// wrapper posture. Returns the new version id, or `nil` on failure.
+    @discardableResult
+    public func restorePage(for id: PageID, to versionID: String) -> String? {
+        try? store.restorePage(pageID: id, to: versionID)
+    }
+
     /// `true` iff `refreshSource(_:)` would actually succeed for this source —
     /// the single source of truth the detail view gates the Refresh button on.
     /// Mirrors `SourceRefreshService.materialize` + the `performRefresh` snapshot
