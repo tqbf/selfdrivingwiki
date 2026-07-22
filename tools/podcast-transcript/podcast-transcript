@@ -1,0 +1,493 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "requests>=2.31",
+#     "webvtt-py>=0.5",
+#     "srt>=3.5",
+# ]
+# ///
+"""podcast-transcript — Fetch podcast transcripts via RSS <podcast:transcript> tags.
+
+Usage:
+    uv run --script podcast-transcript <apple-podcasts-url> [--json] [--output file.md]
+    uv run --script podcast-transcript <apple-podcasts-url> --transcribe  # Whisper fallback
+    ./podcast-transcript <apple-podcasts-url>  (if uv is in PATH)
+
+If uv is not installed, download it first:
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+Exit codes:
+    0   Success
+    1   No transcript available / network error
+    3   Podcast not found
+    4   Episode not found in feed
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
+from pathlib import Path
+
+import requests
+import srt
+import webvtt
+
+# ── URL parsing ────────────────────────────────────────────────────────────
+
+_SHOW_ID_RE = re.compile(r"/id(\d+)")
+_EPISODE_ID_RE = re.compile(r"[?&]i=(\d+)")
+
+
+def parse_apple_podcasts_url(url: str) -> tuple[str, str]:
+    """Extract show ID and episode ID from an Apple Podcasts URL.
+
+    Args:
+        url: Apple Podcasts episode URL (e.g., https://podcasts.apple.com/us/podcast/slug/id1234567890?i=1000123456789)
+
+    Returns:
+        (show_id, episode_id) tuple
+
+    Raises:
+        ValueError: If show ID or episode ID cannot be extracted
+    """
+    show_match = _SHOW_ID_RE.search(url)
+    if not show_match:
+        raise ValueError(f"Cannot extract show ID from URL: {url}")
+    show_id = show_match.group(1)
+
+    episode_match = _EPISODE_ID_RE.search(url)
+    if not episode_match:
+        raise ValueError(f"Cannot extract episode ID from URL: {url}")
+    episode_id = episode_match.group(1)
+
+    return show_id, episode_id
+
+
+# ── iTunes Lookup API ───────────────────────────────────────────────────────
+
+_ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
+
+
+def get_feed_url(show_id: str) -> str:
+    """Get the RSS feed URL for a podcast show via iTunes Lookup API.
+
+    Args:
+        show_id: iTunes podcast show ID
+
+    Returns:
+        RSS feed URL
+
+    Raises:
+        ValueError: If feedUrl not found in response
+        requests.RequestException: If network request fails
+    """
+    params = {"id": show_id, "entity": "podcast"}
+    response = requests.get(_ITUNES_LOOKUP_URL, params=params, timeout=10)
+    response.raise_for_status()
+
+    data = response.json()
+    if not data.get("results"):
+        raise ValueError(f"Podcast not found (show_id: {show_id})")
+
+    feed_url = data["results"][0].get("feedUrl")
+    if not feed_url:
+        raise ValueError(f"Podcast found but no feedUrl available (show_id: {show_id})")
+
+    return feed_url
+
+
+# ── RSS parsing ─────────────────────────────────────────────────────────────
+
+_PODCAST_NS = {"podcast": "https://podcastindex.org/namespace/1.0"}
+
+
+def find_episode_in_feed(
+    feed_url: str, episode_id: str
+) -> tuple[ET.Element, list[ET.Element]] | None:
+    """Find an episode in an RSS feed by episode ID.
+
+    Args:
+        feed_url: RSS feed URL
+        episode_id: Apple Podcasts episode ID
+
+    Returns:
+        (episode_item, transcript_tags) tuple, or None if not found
+
+    Raises:
+        requests.RequestException: If network request fails
+    """
+    response = requests.get(feed_url, timeout=10)
+    response.raise_for_status()
+
+    root = ET.fromstring(response.text)
+
+    for item in root.findall(".//item"):
+        # Match by guid containing episode ID
+        guid = item.find("guid")
+        if guid is not None and guid.text is not None and episode_id in guid.text:
+            transcripts = item.findall("podcast:transcript", _PODCAST_NS)
+            return item, transcripts
+
+        # Match by link containing episode ID
+        link = item.find("link")
+        if link is not None and link.text is not None and episode_id in link.text:
+            transcripts = item.findall("podcast:transcript", _PODCAST_NS)
+            return item, transcripts
+
+        # Match by itunes:episode attribute
+        itunes_ep = item.find("itunes:episode", {"itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"})
+        if itunes_ep is not None and itunes_ep.text == episode_id:
+            transcripts = item.findall("podcast:transcript", _PODCAST_NS)
+            return item, transcripts
+
+    return None
+
+
+def get_episode_audio_url(episode_item: ET.Element) -> str | None:
+    """Get the audio enclosure URL from an episode item.
+
+    Args:
+        episode_item: RSS <item> element
+
+    Returns:
+        Audio URL or None if not found
+    """
+    enclosure = episode_item.find("enclosure")
+    if enclosure is not None:
+        return enclosure.get("url")
+    return None
+
+
+# ── Transcript parsing ───────────────────────────────────────────────────────
+
+
+def _parse_vtt(vtt_text: str) -> str:
+    """Parse WebVTT format and extract text.
+
+    Args:
+        vtt_text: WebVTT content
+
+    Returns:
+        Extracted text with paragraphs
+    """
+    vtt = webvtt.from_string(vtt_text)
+    lines = [caption.text.strip() for caption in vtt if caption.text.strip()]
+    return "\n\n".join(lines)
+
+
+def _parse_srt(srt_text: str) -> str:
+    """Parse SRT format and extract text.
+
+    Args:
+        srt_text: SRT content
+
+    Returns:
+        Extracted text with paragraphs
+    """
+    subtitles = list(srt.parse(srt_text))
+    lines = [subtitle.content.strip() for subtitle in subtitles if subtitle.content.strip()]
+    return "\n\n".join(lines)
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Extract plain text from HTML, stripping tags."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.text: list[str] = []
+        self.in_script_or_style = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("script", "style"):
+            self.in_script_or_style = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style"):
+            self.in_script_or_style = False
+
+    def handle_data(self, data: str) -> None:
+        if not self.in_script_or_style:
+            self.text.append(data)
+
+    def get_text(self) -> str:
+        """Return extracted text with normalized whitespace."""
+        text = " ".join(self.text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+
+def _parse_html(html_text: str) -> str:
+    """Parse HTML and extract plain text.
+
+    Args:
+        html_text: HTML content
+
+    Returns:
+        Extracted plain text
+    """
+    parser = _HTMLTextExtractor()
+    parser.feed(html_text)
+    text = parser.get_text()
+
+    # Split on multiple spaces or newlines that indicate paragraph breaks
+    paragraphs = re.split(r"\s{2,}|\n+", text)
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+    return "\n\n".join(paragraphs)
+
+
+def _parse_plain(text: str) -> str:
+    """Use plain text directly with normalized paragraphs.
+
+    Args:
+        text: Plain text content
+
+    Returns:
+        Normalized text with paragraphs
+    """
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return "\n\n".join(lines)
+
+
+def parse_transcript(
+    transcript_text: str, content_type: str | None = None, url: str | None = None
+) -> tuple[str, str]:
+    """Parse a transcript and extract text, auto-detecting format if needed.
+
+    Args:
+        transcript_text: Transcript content
+        content_type: MIME type from podcast:transcript type attribute
+        url: Transcript URL (used for extension-based detection)
+
+    Returns:
+        (extracted_text, format) tuple where format is "vtt", "srt", "html", or "plain"
+    """
+    # Auto-detect format from content_type or URL extension
+    if content_type:
+        if "vtt" in content_type.lower():
+            return _parse_vtt(transcript_text), "vtt"
+        elif "srt" in content_type.lower() or "subrip" in content_type.lower():
+            return _parse_srt(transcript_text), "srt"
+        elif "html" in content_type.lower():
+            return _parse_html(transcript_text), "html"
+        elif "plain" in content_type.lower():
+            return _parse_plain(transcript_text), "plain"
+
+    if url:
+        ext = Path(url).suffix.lower()
+        if ext == ".vtt":
+            return _parse_vtt(transcript_text), "vtt"
+        elif ext == ".srt":
+            return _parse_srt(transcript_text), "srt"
+        elif ext == ".html" or ext == ".htm":
+            return _parse_html(transcript_text), "html"
+
+    # Default: try VTT first, then plain text
+    try:
+        return _parse_vtt(transcript_text), "vtt"
+    except Exception:
+        return _parse_plain(transcript_text), "plain"
+
+
+def download_transcript(transcript_tag: ET.Element) -> tuple[str, str, str | None]:
+    """Download and parse a transcript from a <podcast:transcript> tag.
+
+    Args:
+        transcript_tag: <podcast:transcript> XML element
+
+    Returns:
+        (markdown_text, format, language) tuple
+
+    Raises:
+        ValueError: If required attributes missing or download fails
+        requests.RequestException: If network request fails
+    """
+    url = transcript_tag.get("url")
+    if not url:
+        raise ValueError("Transcript tag missing required 'url' attribute")
+
+    content_type = transcript_tag.get("type")
+    language = transcript_tag.get("lang")
+
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    transcript_text = response.text
+    markdown_text, format = parse_transcript(transcript_text, content_type, url)
+
+    return markdown_text, format, language
+
+
+# ── Transcription fallback ───────────────────────────────────────────────────
+
+
+def transcribe_audio(audio_url: str) -> tuple[str, str, str | None]:
+    """Transcribe audio file using faster-whisper.
+
+    This is an optional fallback when no RSS transcript is available.
+    Requires faster-whisper to be installed via --with flag.
+
+    Args:
+        audio_url: URL to audio file
+
+    Returns:
+        (markdown_text, format, language) tuple
+
+    Raises:
+        ImportError: If faster-whisper not installed
+        requests.RequestException: If download fails
+    """
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise ImportError(
+            "faster-whisper is not installed. "
+            "Use: uv run --script podcast-transcript --with faster-whisper <url> --transcribe"
+        ) from None
+
+    import tempfile
+
+    # Download audio to temp file
+    response = requests.get(audio_url, timeout=300)
+    response.raise_for_status()
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp.write(response.content)
+        tmp_path = tmp.name
+
+    try:
+        model = WhisperModel("base", device="cpu", compute_type="int8")
+        segments, info = model.transcribe(tmp_path, beam_size=5)
+
+        lines = [segment.text.strip() for segment in segments if segment.text.strip()]
+        markdown_text = "\n\n".join(lines)
+
+        return markdown_text, "whisper", info.language
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+# ── Main API ───────────────────────────────────────────────────────────────
+
+
+def fetch_transcript(
+    url: str, transcribe_fallback: bool = False
+) -> dict[str, str | None]:
+    """Fetch a podcast transcript from an Apple Podcasts URL.
+
+    Args:
+        url: Apple Podcasts episode URL
+        transcribe_fallback: If True, use Whisper transcription when no RSS transcript available
+
+    Returns:
+        Dict with keys: show_id, episode_id, language, format, markdown
+
+    Raises:
+        ValueError: If parsing fails
+        requests.RequestException: If network request fails
+    """
+    show_id, episode_id = parse_apple_podcasts_url(url)
+
+    feed_url = get_feed_url(show_id)
+    episode_result = find_episode_in_feed(feed_url, episode_id)
+
+    if episode_result is None:
+        raise ValueError(f"Episode not found in feed (episode_id: {episode_id})")
+
+    episode_item, transcript_tags = episode_result
+
+    if not transcript_tags:
+        if transcribe_fallback:
+            audio_url = get_episode_audio_url(episode_item)
+            if not audio_url:
+                raise ValueError("No transcript available and no audio URL for transcription")
+            markdown_text, format, language = transcribe_audio(audio_url)
+            return {
+                "show_id": show_id,
+                "episode_id": episode_id,
+                "language": language,
+                "format": format,
+                "markdown": markdown_text,
+            }
+        else:
+            raise ValueError(
+                "No transcript available (use --transcribe for audio transcription)"
+            )
+
+    transcript_tag = transcript_tags[0]
+    markdown_text, format, language = download_transcript(transcript_tag)
+
+    return {
+        "show_id": show_id,
+        "episode_id": episode_id,
+        "language": language,
+        "format": format,
+        "markdown": markdown_text,
+    }
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser (extracted for testability)."""
+    parser = argparse.ArgumentParser(
+        description="Fetch podcast transcripts via RSS <podcast:transcript> tags."
+    )
+    parser.add_argument("url", help="Apple Podcasts episode URL")
+    parser.add_argument(
+        "--output", "-o", type=Path, default=None,
+        help="Write markdown to file (default: stdout)",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Output JSON with metadata instead of raw markdown",
+    )
+    parser.add_argument(
+        "--transcribe", action="store_true",
+        help="Use Whisper transcription fallback when no RSS transcript available",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        result = fetch_transcript(args.url, args.transcribe)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            sys.exit(3 if "podcast not found" in msg.lower() else 4)
+        if args.json:
+            json.dump({"error": msg, "url": args.url}, sys.stdout)
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        msg = f"Network or parsing error: {e}"
+        if args.json:
+            json.dump({"error": msg, "url": args.url}, sys.stdout)
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.json:
+        json.dump(result, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    elif args.output:
+        markdown = f"# Podcast Transcript\n\n{result['markdown']}"
+        args.output.write_text(markdown, encoding="utf-8")
+    else:
+        markdown = f"# Podcast Transcript\n\n{result['markdown']}"
+        sys.stdout.write(markdown)
+
+
+if __name__ == "__main__":
+    main()
