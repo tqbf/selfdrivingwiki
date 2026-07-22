@@ -8,10 +8,50 @@ public struct QuotaSignal: Sendable, Equatable {
     public let resetTime: Date?
     public let kind: Kind
 
-    public enum Kind: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable, Codable {
         case claudeSession           // "session limit" / "Opus limit"
         case claudeWeekly            // "weekly limit"
         case zaiErrorCode(Int)       // 1310/1316/1317/1318/1319/1308
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case code
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let type = try container.decode(String.self, forKey: .type)
+
+            switch type {
+            case "claudeSession":
+                self = .claudeSession
+            case "claudeWeekly":
+                self = .claudeWeekly
+            case "zaiErrorCode":
+                let code = try container.decode(Int.self, forKey: .code)
+                self = .zaiErrorCode(code)
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .type,
+                    in: container,
+                    debugDescription: "Invalid quota signal kind: \(type)"
+                )
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+
+            switch self {
+            case .claudeSession:
+                try container.encode("claudeSession", forKey: .type)
+            case .claudeWeekly:
+                try container.encode("claudeWeekly", forKey: .type)
+            case .zaiErrorCode(let code):
+                try container.encode("zaiErrorCode", forKey: .type)
+                try container.encode(code, forKey: .code)
+            }
+        }
     }
 }
 

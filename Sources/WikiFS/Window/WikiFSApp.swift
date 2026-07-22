@@ -235,7 +235,8 @@ struct WikiFSApp: App {
         
         let backgroundIngestCoordinator = BackgroundIngestCoordinator(
             sessionManager: sm,
-            queueEngine: queueEngine
+            queueEngine: queueEngine,
+            quotaCoordinator: QuotaFallbackCoordinator()
         )
         _backgroundIngestCoordinator = State(initialValue: backgroundIngestCoordinator)
         // Wire the session-lookup box to the real session manager now that

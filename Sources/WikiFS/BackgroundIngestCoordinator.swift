@@ -9,17 +9,19 @@ import WikiFSEngine
 final class BackgroundIngestCoordinator {
     private let sessionManager: SessionManager
     private let queueEngine: QueueEngine
+    private let quotaCoordinator: QuotaFallbackCoordinator
     private var scanTask: Task<Void, Never>?
-    
+
     private var recentlyFailedIDs: Set<PageID> = []
     private let maxBackoffCycles = 3
     private var backoffCount: [PageID: Int] = [:]
-    
+
     let scanInterval: TimeInterval = 60
-    
-    init(sessionManager: SessionManager, queueEngine: QueueEngine) {
+
+    init(sessionManager: SessionManager, queueEngine: QueueEngine, quotaCoordinator: QuotaFallbackCoordinator) {
         self.sessionManager = sessionManager
         self.queueEngine = queueEngine
+        self.quotaCoordinator = quotaCoordinator
     }
     
     func start() {
