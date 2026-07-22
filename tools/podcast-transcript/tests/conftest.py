@@ -177,3 +177,62 @@ def itunes_lookup_no_results() -> dict:
 def itunes_lookup_no_feed_url() -> dict:
     """iTunes Lookup API response without feedUrl."""
     return _ITUNES_LOOKUP_NO_FEED_URL
+
+
+# ── Generic-RSS-feed fixtures (out-of-order pubDate) ────────────────────────
+
+# A multi-item feed whose <pubDate> values are deliberately OUT OF DOCUMENT
+# ORDER (the 2nd document item is the newest). Used to lock the "most recent
+# by pubDate" selection so a naive first-match implementation fails the test.
+_MULTI_ITEM_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Multi Podcast</title>
+    <item>
+      <title>Oldest Episode</title>
+      <guid>https://example.com/episode/old</guid>
+      <pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate>
+      <podcast:transcript url="https://example.com/old.vtt" type="text/vtt" lang="en"/>
+    </item>
+    <item>
+      <title>Newest Episode</title>
+      <guid>https://example.com/episode/new</guid>
+      <pubDate>Wed, 03 Jul 2025 12:00:00 GMT</pubDate>
+      <podcast:transcript url="https://example.com/new.vtt" type="text/vtt" lang="en"/>
+    </item>
+    <item>
+      <title>Middle Episode</title>
+      <guid>https://example.com/episode/mid</guid>
+      <pubDate>Fri, 15 Mar 2024 09:30:00 GMT</pubDate>
+      <podcast:transcript url="https://example.com/mid.vtt" type="text/vtt" lang="en"/>
+    </item>
+  </channel>
+</rss>
+"""
+
+# A single-item feed — the common per-episode-feed case.
+_SINGLE_ITEM_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+  <channel>
+    <title>Single Podcast</title>
+    <item>
+      <title>Only Episode</title>
+      <guid>https://example.com/episode/only</guid>
+      <pubDate>Tue, 10 Jun 2025 08:00:00 GMT</pubDate>
+      <podcast:transcript url="https://example.com/only.srt" type="application/x-subrip" lang="en"/>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+@pytest.fixture
+def multi_item_feed() -> str:
+    """Multi-item RSS feed with out-of-order pubDate (newest is 2nd in document order)."""
+    return _MULTI_ITEM_FEED
+
+
+@pytest.fixture
+def single_item_feed() -> str:
+    """Single-item RSS feed."""
+    return _SINGLE_ITEM_FEED
