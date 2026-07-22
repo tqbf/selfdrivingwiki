@@ -35,11 +35,17 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// When the summary was written, for staleness display. `nil` alongside
     /// `summary`.
     public var summaryAt: Date?
+    /// The ACP session ID for resume (#830). Set after the chat's session is
+    /// created; cleared on terminal teardown (resume permanently failed) or
+    /// successful completion. `nil` for pre-#830 chats and chats whose resume
+    /// permanently failed.
+    public var acpSessionId: String?
 
     public init(
         id: PageID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
-        summary: String? = nil, summaryAt: Date? = nil
+        summary: String? = nil, summaryAt: Date? = nil,
+        acpSessionId: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -49,6 +55,7 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         self.messageCount = messageCount
         self.summary = summary
         self.summaryAt = summaryAt
+        self.acpSessionId = acpSessionId
     }
 
     /// Derive a chat title from the first user message: first line, trimmed,

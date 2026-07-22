@@ -2792,6 +2792,8 @@ public final class AgentLauncher {
         chatID: String? = nil,
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
+        priorAcpSessionId: String? = nil,
+        onAcpSessionId: (@MainActor (String?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
@@ -2994,23 +2996,71 @@ public final class AgentLauncher {
             debugLogURL: debugFolderURL)
         DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)")
 
+        // #830: Attempt to resume a prior ACP session for this chat. Mirrors
+        // the queue-side resume at AgentLauncher.swift:1177-1211. If the chat
+        // row has an acp_session_id and the agent supports cross-process resume,
+        // this restores the full session context — no preamble re-seeding
+        // needed. If resume fails (session GC'd, process dead, agent doesn't
+        // support it), fall through to the fresh-start + preamble path below.
+        var resumedSession: SessionHandle? = nil
+        if let priorAcpSessionId {
+            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId) for chat \(chatID ?? "?")")
+            do {
+                if let handle = try await backend.resume(
+                    sessionID: priorAcpSessionId,
+                    profile: profile
+                ) {
+                    resumedSession = handle
+                    DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId)")
+                } else {
+                    DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId), will start fresh")
+                }
+            } catch {
+                DebugLog.agent("startInteractiveQuery: resume threw for session \(priorAcpSessionId): \(error), will start fresh")
+            }
+            // If we had a prior session ID but resume failed, clear it so
+            // future continues don't keep retrying a dead session.
+            if resumedSession == nil {
+                onAcpSessionId?(nil)
+                DebugLog.agent("startInteractiveQuery: clearing stale ACP session ID (resume failed)")
+            }
+        }
+
         do {
-            DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])")
             let runToken = UUID()
-            let session = try await backend.start(
-                profile: profile,
-                systemPrompt: systemPrompt,
-                onExit: { [weak self] status in
-                    Task { @MainActor [weak self] in
-                        // Only finish if THIS session is still current — a stale
-                        // onExit (a prior session terminating after a new one
-                        // started, e.g. D3's continueChat takeover:
-                        // stopAgent → startInteractiveQuery) must not tear down
-                        // the new session.
-                        guard let self, self.currentRunToken == runToken else { return }
-                        self.finish(status: Int32(status))
+            let session: SessionHandle
+            if let resumed = resumedSession {
+                session = resumed
+                DebugLog.agent("startInteractiveQuery: using resumed ACP session \(session.id)")
+            } else {
+                DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])")
+                session = try await backend.start(
+                    profile: profile,
+                    systemPrompt: systemPrompt,
+                    onExit: { [weak self] status in
+                        Task { @MainActor [weak self] in
+                            // Only finish if THIS session is still current — a stale
+                            // onExit (a prior session terminating after a new one
+                            // started, e.g. D3's continueChat takeover:
+                            // stopAgent → startInteractiveQuery) must not tear down
+                            // the new session.
+                            guard let self, self.currentRunToken == runToken else { return }
+                            self.finish(status: Int32(status))
+                        }
+                    })
+                // #830: Persist the ACP session ID for chat resume. Mirrors the
+                // queue-side capture at AgentLauncher.swift:1339-1355. The session
+                // ID is available via currentResumableSessionId() right after
+                // createSession sets it (ACPBackend.swift:653). Written to the
+                // chats row so a continued chat can attempt resume instead of
+                // re-seeding a preamble.
+                if let acpBackend = backend as? ACPBackend {
+                    if let sessionId = await acpBackend.currentResumableSessionId() {
+                        onAcpSessionId?(sessionId.value)
+                        DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID ?? "?")")
                     }
-                })
+                }
+            }
             sessionHandle = session
             currentRunToken = runToken
             // SPAWN COMMIT: process is alive. isRunning = true (process alive across turns).
@@ -3036,8 +3086,16 @@ public final class AgentLauncher {
             // steering, and the agent defaults to its built-in behavior (e.g.
             // websearch before wikictl). The `displayText` stays as the user's
             // raw message so the transcript shows what the user typed.
-            let taskPrompt = operation.prompt(wikiRoot: wikiRoot)
-            let composedFirstMessage = "\(taskPrompt)\n\n# USER MESSAGE\n\(firstMessage)"
+            //
+            // #830: On the resume-success path, the resumed session already has
+            // the full task context — send only the user's raw message.
+            let composedFirstMessage: String
+            if resumedSession != nil {
+                composedFirstMessage = firstMessageDisplay ?? firstMessage
+            } else {
+                let taskPrompt = operation.prompt(wikiRoot: wikiRoot)
+                composedFirstMessage = "\(taskPrompt)\n\n# USER MESSAGE\n\(firstMessage)"
+            }
             sendInteractiveMessage(composedFirstMessage, displayText: firstMessageDisplay ?? firstMessage)
             // Mirror `run()`: arm the completion watchdog so a process that exits
             // without a reconciling `onExit` still clears `isRunning`.

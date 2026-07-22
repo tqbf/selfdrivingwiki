@@ -194,9 +194,9 @@ struct LogIndexTests {
         #expect(token1.log == token0.log)
     }
 
-    // MARK: - v3 → v42 migration (preserves prior data, drops system_prompt, seeds index)
+    // MARK: - v3 → v43 migration (preserves prior data, drops system_prompt, seeds index)
 
-    @Test func migratesV3DatabaseToV42PreservingData() throws {
+    @Test func migratesV3DatabaseToV43PreservingData() throws {
         let url = tempDatabaseURL()
 
         // Build a v3-shaped DB by hand: pages + slug index + sources +
@@ -252,7 +252,7 @@ struct LogIndexTests {
         #expect(prompt.body == SystemPrompt.defaultBody)
         #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
 
-        // user_version advanced to v42.
+        // user_version advanced to v43.
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }

@@ -58,7 +58,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 42
+    private static let currentSchemaVersion = 43
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1223,6 +1223,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 41
         }
 
+        // v42→v43: add acp_session_id to the chats table (#830). Stores the ACP
+        // session ID so a continued chat can attempt resumeSession/loadSession
+        // instead of re-seeding a preamble. Nullable: NULL for all existing
+        // chats (they predate resume) and for chats whose resume permanently
+        // failed. Idempotent via the column-existence guard.
+        if version < 43 {
+            if !(try Self.hasColumn("acp_session_id", on: "chats", in: db)) {
+                try db.execute(sql: "ALTER TABLE chats ADD COLUMN acp_session_id TEXT;")
+            }
+            try db.execute(sql: "PRAGMA user_version = 43;")
+            version = 43
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1436,13 +1449,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private static func createChatTablesV23(in db: Database) throws {
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id         TEXT PRIMARY KEY,
-            kind       TEXT NOT NULL,
-            title      TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            summary    TEXT,
-            summary_at REAL
+            id              TEXT PRIMARY KEY,
+            kind            TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            summary         TEXT,
+            summary_at      REAL,
+            acp_session_id  TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -2465,13 +2479,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // v25: persisted chat history (chats + chat_messages).
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id         TEXT PRIMARY KEY,
-            kind       TEXT NOT NULL,
-            title      TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            summary    TEXT,
-            summary_at REAL
+            id              TEXT PRIMARY KEY,
+            kind            TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            summary         TEXT,
+            summary_at      REAL,
+            acp_session_id  TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -6078,7 +6093,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at
+                   c.summary, c.summary_at, c.acp_session_id
             FROM chats c
             ORDER BY c.updated_at DESC, c.rowid DESC;
             """)
@@ -6186,6 +6201,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Write (or clear) the ACP session ID for resume (#830). Bumps
+    /// `updated_at`. Routes through `mutate(event:_:)` so it emits a
+    /// `.chat .updated` event. Pass `nil` to clear (terminal teardown /
+    /// permanent resume failure).
+    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chats SET acp_session_id = ?, updated_at = ?
+            WHERE id = ?;
+            """, arguments: [acpSessionId, Date().timeIntervalSince1970,
+                            chatID.rawValue])
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(chatID) }
+        }
+    }
+
     /// Write the cached one-line summary for a single assistant message
     /// (chat-summary plan §3.5). Routes through `mutate(event:_:)` and emits a
     /// `.chat .updated` event on the chat the message belongs to — the
@@ -6214,7 +6246,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at
+                   c.summary, c.summary_at, c.acp_session_id
             FROM chats c
             ORDER BY c.id ASC;
             """)
@@ -6312,7 +6344,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                            (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                           cc.embedding
+                           cc.embedding, c.acp_session_id
                     FROM chat_chunks cc
                     JOIN chats c ON c.id = cc.chat_id;
                     """)
@@ -6545,7 +6577,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private static func readChatSummary(
         from row: Row, summary: String?, summaryAt: Date?
     ) -> ChatSummary {
-        ChatSummary(
+        let acpSessionId: String? = row["acp_session_id"]
+        return ChatSummary(
             id: PageID(rawValue: row["id"]),
             kind: ChatKind(rawValue: row["kind"]) ?? .edit,
             title: row["title"],
@@ -6553,7 +6586,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
             messageCount: row["msg_count"],
             summary: summary,
-            summaryAt: summaryAt
+            summaryAt: summaryAt,
+            acpSessionId: acpSessionId
         )
     }
 
@@ -7480,7 +7514,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                       c.summary, c.summary_at
+                       c.summary, c.summary_at, c.acp_session_id
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]

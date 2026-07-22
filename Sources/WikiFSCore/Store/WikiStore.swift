@@ -666,6 +666,14 @@ public protocol WikiStore: Sendable {
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
     func updateChatSummary(chatID: PageID, summary: String) throws
 
+    /// Write or clear the ACP session ID for resume (#830). Pass `nil` to
+    /// clear (terminal teardown / permanent resume failure). Bumps
+    /// `updated_at`.
+    func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) throws
+
+    /// One chat summary by id. Throws `.notFound` if no chat has `id`.
+    func getChat(id: PageID) throws -> ChatSummary
+
     /// Write the cached one-line summary for a single assistant message
     /// (chat-summary plan §3.5). The chat row is the change-emission resource
     /// (there is no `.message` resource kind); emits `.chat .updated` with the
