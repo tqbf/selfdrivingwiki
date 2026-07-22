@@ -928,4 +928,136 @@ struct QueueActivityTrackerRehydrateTests {
         #expect(tracker.progressLog(for: "never-existed") == "")
     }
 }
+
+// MARK: - Lint item ID resolution (#837)
+
+@Suite("QueueActivityTracker lint item ID resolution")
+struct QueueActivityTrackerLintItemIDTests {
+
+    /// Mirrors the helper in the transcript tests but with a configurable wikiID
+    /// so cross-wiki scoping can be exercised.
+    private func makeLintItem(
+        id: String,
+        wikiID: String = "w1",
+        lintPageIDs: [PageID],
+        state: QueueItemState = .running
+    ) -> QueueItem {
+        QueueItem(
+            id: id, queue: .ingestion, wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: lintPageIDs),
+            state: state, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+    }
+
+    @MainActor
+    @Test("Page-level lint resolves to the correct item ID")
+    func pageLevelLintResolvesItemID() {
+        let tracker = QueueActivityTracker()
+        let pageA = PageID(rawValue: "pageA")
+        let pageB = PageID(rawValue: "pageB")
+        let item = makeLintItem(id: "lint-1", lintPageIDs: [pageA, pageB])
+
+        tracker.handleForTesting(.started(item))
+
+        #expect(tracker.lintItemID(for: pageA, wikiID: "w1") == "lint-1")
+        #expect(tracker.lintItemID(for: pageB, wikiID: "w1") == "lint-1")
+    }
+
+    @MainActor
+    @Test("Whole-wiki lint resolves for any page in that wiki")
+    func wholeWikiLintResolvesForAnyPage() {
+        let tracker = QueueActivityTracker()
+        let anyPage = PageID(rawValue: "any-page")
+        let item = makeLintItem(id: "lint-wiki", lintPageIDs: [])
+
+        tracker.handleForTesting(.started(item))
+
+        #expect(tracker.lintItemID(for: anyPage, wikiID: "w1") == "lint-wiki")
+    }
+
+    @MainActor
+    @Test("Nil when no lint is running for the page")
+    func nilWhenNoLintRunning() {
+        let tracker = QueueActivityTracker()
+        let page = PageID(rawValue: "lonely")
+
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+    }
+
+    @MainActor
+    @Test("Whole-wiki lint does not cross wiki boundaries")
+    func wholeWikiLintWikiScoped() {
+        let tracker = QueueActivityTracker()
+        let page = PageID(rawValue: "p1")
+        let item = makeLintItem(id: "lint-w2", wikiID: "w2", lintPageIDs: [])
+
+        tracker.handleForTesting(.started(item))
+
+        // A whole-wiki lint in w2 should not match a page in w1.
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+        #expect(tracker.lintItemID(for: page, wikiID: "w2") == "lint-w2")
+    }
+
+    @MainActor
+    @Test("Page-level lint does not match a page not in its set")
+    func pageLevelLintDoesNotMatchUnlistedPage() {
+        let tracker = QueueActivityTracker()
+        let pageA = PageID(rawValue: "pageA")
+        let pageC = PageID(rawValue: "pageC")
+        let item = makeLintItem(id: "lint-2", lintPageIDs: [pageA])
+
+        tracker.handleForTesting(.started(item))
+
+        #expect(tracker.lintItemID(for: pageA, wikiID: "w1") == "lint-2")
+        #expect(tracker.lintItemID(for: pageC, wikiID: "w1") == nil)
+    }
+
+    @MainActor
+    @Test("Mapping cleared after completion")
+    func mappingClearedOnCompletion() {
+        let tracker = QueueActivityTracker()
+        let page = PageID(rawValue: "done-page")
+        let item = makeLintItem(id: "lint-done", lintPageIDs: [page])
+
+        tracker.handleForTesting(.started(item))
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == "lint-done")
+
+        let completed = makeLintItem(id: "lint-done", lintPageIDs: [page], state: .completed)
+        tracker.handleForTesting(.completed(completed))
+
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+    }
+
+    @MainActor
+    @Test("Mapping cleared after cancellation")
+    func mappingClearedOnCancellation() {
+        let tracker = QueueActivityTracker()
+        let page = PageID(rawValue: "cancelled-page")
+        let item = makeLintItem(id: "lint-cancel", lintPageIDs: [page])
+
+        tracker.handleForTesting(.started(item))
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == "lint-cancel")
+
+        let cancelled = makeLintItem(id: "lint-cancel", lintPageIDs: [page], state: .cancelled)
+        tracker.handleForTesting(.cancelled(cancelled))
+
+        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+    }
+
+    @MainActor
+    @Test("pendingSelectionItemID defaults to nil")
+    func pendingSelectionDefaultsNil() {
+        let tracker = QueueActivityTracker()
+        #expect(tracker.pendingSelectionItemID == nil)
+    }
+
+    @MainActor
+    @Test("pendingSelectionItemID cleared by stop()")
+    func pendingSelectionClearedByStop() {
+        let tracker = QueueActivityTracker()
+        tracker.pendingSelectionItemID = "some-item"
+        tracker.stop()
+        #expect(tracker.pendingSelectionItemID == nil)
+    }
+}
 #endif

@@ -42,12 +42,12 @@ struct PageDetailView: View {
     @State private var findVersion = 0
 
     /// The app-wide queue activity tracker — used to reflect an in-flight lint
-    /// on this page's "Lint" button (icon + disable + warning when tapped).
+    /// on this page's "Lint" button (icon + label + navigation when running).
     @Environment(QueueActivityTracker.self) private var activityTracker
-    /// Shown when the Lint button is tapped while a lint is already running on
-    /// this page (whole-wiki or page-level). Explains the running state rather
-    /// than silently enqueuing a duplicate.
-    @State private var isShowingLintActiveAlert = false
+    /// Opens the Activity (queue) window — injected from the environment
+    /// (#745). Used by the Lint button to navigate to the running lint job
+    /// when a lint is already in flight for this page (#837).
+    @Environment(\.openActivityWindow) private var openActivityWindow
     /// Opens the value-driven Versions `WindowGroup` (#817). Captured from the
     /// environment (only available inside a `WindowGroup`'s view hierarchy).
     @Environment(\.openWindow) private var openWindow
@@ -105,11 +105,6 @@ struct PageDetailView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
-        .alert("Lint Already Running", isPresented: $isShowingLintActiveAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("A lint job is already running on this page. It will appear in the Activity window when it finishes.")
-        }
         .onAppear {
             lastKnownActiveTabID = store.activeTabID
             // Seed edit mode from the active tab on first mount. `.onChange(of:
@@ -289,23 +284,34 @@ struct PageDetailView: View {
 
     /// The page-level "Lint" action button. Reflects an in-flight lint on this
     /// page: when a lint (whole-wiki or page-level) is running, the button swaps
-    /// to a filled "Linting…" state, disables itself, and would warn if tapped
-    /// — though `.disabled` prevents the tap. The alert covers the keyboard /
-    /// accessibility path where the action could still fire.
+    /// to a filled "View Lint" state and taps navigate to that specific lint job
+    /// in the Activity window (#837). When no lint is running, tapping enqueues
+    /// a new page-level lint.
     @ViewBuilder
     private var lintButton: some View {
         if case .page(let id) = store.selection {
             let pageIsLinting = activityTracker.isLinting(
                 pageID: id, wikiID: session.wikiID)
-            Button(pageIsLinting ? "Linting…" : "Lint",
+            Button(pageIsLinting ? "View Lint" : "Lint",
                    systemImage: pageIsLinting
                    ? "checkmark.seal.fill"
                    : "checkmark.seal") {
                 if pageIsLinting {
                     // A lint is already active for this page (whole-wiki or
-                    // page-level) — warn instead of enqueuing a duplicate.
-                    isShowingLintActiveAlert = true
-                    DebugLog.ingest("Lint button: already running for page \(id) in wiki \(session.wikiID.prefix(8)); warning shown")
+                    // page-level) — navigate to the job in the Activity window
+                    // instead of enqueuing a duplicate (#837).
+                    if let itemID = activityTracker.lintItemID(
+                        for: id, wikiID: session.wikiID) {
+                        activityTracker.pendingSelectionItemID = itemID
+                        openActivityWindow?()
+                        DebugLog.ingest("Lint button: navigating to lint job \(itemID.prefix(8)) for page \(id) in wiki \(session.wikiID.prefix(8))")
+                    } else {
+                        // isLinting returned true but we couldn't resolve the
+                        // specific item (race: item just finished). Fall back to
+                        // opening the Activity window without a selection.
+                        openActivityWindow?()
+                        DebugLog.ingest("Lint button: lint in flight for page \(id) but item not found; opening Activity window")
+                    }
                 } else {
                     Task {
                         try? await session.queueEngine.enqueue(QueueItemRequest(
@@ -316,9 +322,8 @@ struct PageDetailView: View {
                     }
                 }
             }
-            .disabled(pageIsLinting)
             .help(pageIsLinting
-                  ? "A lint is already running on this page"
+                  ? "View the running lint job in the Activity window"
                   : "Fix [[wiki-link]] syntax and run LLM lint on this page")
         }
     }
