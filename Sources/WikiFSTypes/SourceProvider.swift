@@ -131,4 +131,34 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
             return false
         }
     }
+
+    /// **Baseline** transcription capability — `true` for providers that *in
+    /// principle* support fetching on-demand a fresh transcript markdown version
+    /// via `WikiStoreModel.transcribe(sourceID:)` (the unified dispatch entry
+    /// point, issue #799 PR5). Sister property to `supportsRefresh`; covers the
+    /// byteless-embed providers whose only path to a transcript markdown is the
+    /// on-demand Transcribe button (`SourceDetailView.runTranscription`):
+    /// - `applePodcast` — signed bearer → AMP metadata → TTML download → parse
+    ///   (PR4). Runtime guard layered on top at the model: the bundled
+    ///   signing helper must be present (`ApplePodcastTranscriptService.bundled()`
+    ///   != nil) AND this build must compile podcast support
+    ///   (`#if PODCAST_TRANSCRIPTS`).
+    /// - `youtube` — pure-Swift watch-page → caption track scrape (PR5). No
+    ///   signing helper needed; always available when the source has a valid
+    ///   11-char video ID in `origin.externalIdentity`.
+    ///
+    /// Every other provider (local-file / Zotero / folder / website / Vimeo /
+    /// Spotify / SoundCloud / remote-media / legacy-import / unknown) has no
+    /// transcript pipeline today — `transcribe` on those throws
+    /// `.notRefreshable`. Vimeo is a future extension (needs a Keychain OAuth
+    /// token; #564 Phase 4 follow-up).
+    public var supportsTranscription: Bool {
+        switch self {
+        case .applePodcast, .youtube:
+            return true
+        case .localFile, .website, .zotero, .markdownFolder,
+             .vimeo, .spotify, .soundcloud, .remoteMedia, .legacyImport:
+            return false
+        }
+    }
 }

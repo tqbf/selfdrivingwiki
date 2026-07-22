@@ -141,6 +141,58 @@ import Testing
         #expect(SourceProvider.legacyImport.supportsRefresh == false)
     }
 
+    // MARK: - AC.8 (PR5): supportsTranscription baseline
+
+    @Test("supportsTranscription is true only for applePodcast + youtube (PR5 baseline)")
+    func supportsTranscriptionBaseline() {
+        // Issue #799 PR5 — `supportsTranscription` is a sister property to
+        // `supportsRefresh`, gating the byteless-embed providers whose only
+        // path to a transcript markdown is the on-demand Transcribe button
+        // (`WikiStoreModel.transcribe(sourceID:)` — the unified provider-
+        // dispatch entry point). This is BASELINE ONLY —
+        // `SourceDetailView.isTranscribable` layers runtime guards on top
+        // (the bundled signing helper for podcasts; always-available for
+        // YouTube). `supportsTranscription` differs from `supportsRefresh`:
+        // YouTube is transcribable but not refreshable; a website is
+        // refreshable but not transcribable.
+        #expect(SourceProvider.applePodcast.supportsTranscription == true)
+        #expect(SourceProvider.youtube.supportsTranscription == true)
+        // Every other provider has no transcript pipeline today — Vimeo is
+        // a future extension (needs a Keychain OAuth token; #564 Phase 4);
+        // Spotify/SoundCloud/remote-media have no public transcript API;
+        // local-file / Zotero / folder / website / legacy-import have no
+        // network fetch to perform.
+        #expect(SourceProvider.localFile.supportsTranscription == false)
+        #expect(SourceProvider.website.supportsTranscription == false)
+        #expect(SourceProvider.zotero.supportsTranscription == false)
+        #expect(SourceProvider.markdownFolder.supportsTranscription == false)
+        #expect(SourceProvider.vimeo.supportsTranscription == false)
+        #expect(SourceProvider.spotify.supportsTranscription == false)
+        #expect(SourceProvider.soundcloud.supportsTranscription == false)
+        #expect(SourceProvider.remoteMedia.supportsTranscription == false)
+        #expect(SourceProvider.legacyImport.supportsTranscription == false)
+    }
+
+    @Test("supportsTranscription and supportsRefresh differ only for website + youtube")
+    func supportsTranscriptionVsRefreshDivergence() {
+        // Pins the documented divergence (issue #799 PR5):
+        // - website is refreshable but NOT transcribable (HTML→md re-extract
+        //   lives on a separate, queue-coupled extraction path; the
+        //   `transcribe` dispatch switch throws `.notRefreshable` for it).
+        // - youtube is transcribable but NOT refreshable (the byteless embed
+        //   has no source URL to "re-fetch"; the captions scrape is the only
+        //   on-demand transcript pipeline, and it runs through `transcribe`).
+        // - applePodcast is BOTH refreshable AND transcribable (the signing
+        //   helper runs both a refresh fetch AND a fresh transcription).
+        // - every other provider is neither.
+        #expect(SourceProvider.website.supportsRefresh)
+        #expect(!SourceProvider.website.supportsTranscription)
+        #expect(!SourceProvider.youtube.supportsRefresh)
+        #expect(SourceProvider.youtube.supportsTranscription)
+        #expect(SourceProvider.applePodcast.supportsRefresh)
+        #expect(SourceProvider.applePodcast.supportsTranscription)
+    }
+
     // MARK: - AC.4: SourceOrigin.provider
 
     /// Build a minimal `SourceOrigin` for testing the `provider` computed
