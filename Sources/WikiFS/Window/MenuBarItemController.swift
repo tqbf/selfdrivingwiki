@@ -82,14 +82,16 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         guard statusItem == nil else { return }
         DebugLog.tabs("MenuBarItemController.start: creating status item")
 
-        // #745: wire the Activity window opener so the Provenance panel can
-        // navigate to it from an `agent:<kind>` provenance entry. Routes
-        // through `openQueueWindow` (the scene-managed `WindowGroup(for:
-        // QueueKind.self)` in `WikiFSApp`) — always opens `.ingestion` since
-        // the Provenance panel navigates to the agent/ingestion window.
-        openWindowBridge.openActivityWindow = { [weak self] in
+        // #745: wire the Activity window opener so the Provenance panel and
+        // SourceDetailView's Transcribe button can navigate to the running
+        // job. Routes through `openQueueWindow` (the scene-managed
+        // `WindowGroup(for: QueueKind.self)` in `WikiFSApp`). PR2 (#842):
+        // the closure takes a `QueueKind` so callers open the correct window
+        // (ingestion, extraction, or transcription) — the Provenance panel
+        // passes `.ingestion`, SourceDetailView passes `.transcription`.
+        openWindowBridge.openActivityWindow = { [weak self] queue in
             NSApplication.shared.activate(ignoringOtherApps: true)
-            self?.openWindowBridge.openQueueWindow?(.ingestion)
+            self?.openWindowBridge.openQueueWindow?(queue)
         }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

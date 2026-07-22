@@ -1140,5 +1140,134 @@ struct QueueActivityTrackerLintItemIDTests {
         tracker.stop()
         #expect(tracker.pendingSelectionItemID == nil)
     }
+
+    // MARK: - #842 PR2: pendingSelectionQueue guard
+
+    @MainActor
+    @Test("pendingSelectionQueue defaults to nil")
+    func pendingSelectionQueueDefaultsNil() {
+        let tracker = QueueActivityTracker()
+        #expect(tracker.pendingSelectionQueue == nil)
+    }
+
+    @MainActor
+    @Test("pendingSelectionQueue cleared by stop()")
+    func pendingSelectionQueueClearedByStop() {
+        let tracker = QueueActivityTracker()
+        tracker.pendingSelectionQueue = .transcription
+        tracker.stop()
+        #expect(tracker.pendingSelectionQueue == nil)
+    }
+
+    // MARK: - #842 PR2: transcriptionItemID resolution
+
+    private func makeTranscriptionItem(
+        id: String,
+        sourceIDs: [PageID],
+        state: QueueItemState = .running
+    ) -> QueueItem {
+        QueueItem(
+            id: id, queue: .transcription, wikiID: "w1",
+            payload: QueueItemPayload(sourceIDs: sourceIDs),
+            state: state, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+    }
+
+    @MainActor
+    @Test("Transcription item resolves to the correct item ID")
+    func transcriptionItemResolvesItemID() {
+        let tracker = QueueActivityTracker()
+        let srcA = PageID(rawValue: "srcA")
+        let srcB = PageID(rawValue: "srcB")
+        let item = makeTranscriptionItem(id: "tr-1", sourceIDs: [srcA, srcB])
+
+        tracker.handleForTesting(.started(item))
+
+        #expect(tracker.transcriptionItemID(for: srcA) == "tr-1")
+        #expect(tracker.transcriptionItemID(for: srcB) == "tr-1")
+    }
+
+    @MainActor
+    @Test("Nil when no transcription is running for the source")
+    func nilWhenNoTranscriptionRunning() {
+        let tracker = QueueActivityTracker()
+        let src = PageID(rawValue: "lonely")
+
+        #expect(tracker.transcriptionItemID(for: src) == nil)
+    }
+
+    @MainActor
+    @Test("Transcription item ID does not resolve via extraction items")
+    func transcriptionItemIDDoesNotResolveExtractionItems() {
+        let tracker = QueueActivityTracker()
+        let src = PageID(rawValue: "src1")
+        let extractionItem = QueueItem(
+            id: "ext-1", queue: .extraction, wikiID: "w1",
+            payload: QueueItemPayload(sourceIDs: [src]),
+            state: .running, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+
+        tracker.handleForTesting(.started(extractionItem))
+
+        // An extraction item tracking the same source should NOT resolve
+        // via transcriptionItemID — the mapping is queue-kind-specific.
+        #expect(tracker.transcriptionItemID(for: src) == nil)
+    }
+
+    @MainActor
+    @Test("Transcription item mapping cleared after completion")
+    func transcriptionMappingClearedOnCompletion() {
+        let tracker = QueueActivityTracker()
+        let src = PageID(rawValue: "done-src")
+        let item = makeTranscriptionItem(id: "tr-done", sourceIDs: [src])
+
+        tracker.handleForTesting(.started(item))
+        #expect(tracker.transcriptionItemID(for: src) == "tr-done")
+
+        let completed = makeTranscriptionItem(id: "tr-done", sourceIDs: [src], state: .completed)
+        tracker.handleForTesting(.completed(completed))
+
+        #expect(tracker.transcriptionItemID(for: src) == nil)
+    }
+
+    @MainActor
+    @Test("Transcription item mapping cleared after cancellation")
+    func transcriptionMappingClearedOnCancellation() {
+        let tracker = QueueActivityTracker()
+        let src = PageID(rawValue: "cancel-src")
+        let item = makeTranscriptionItem(id: "tr-cancel", sourceIDs: [src])
+
+        tracker.handleForTesting(.started(item))
+        #expect(tracker.transcriptionItemID(for: src) == "tr-cancel")
+
+        let cancelled = makeTranscriptionItem(id: "tr-cancel", sourceIDs: [src], state: .cancelled)
+        tracker.handleForTesting(.cancelled(cancelled))
+
+        #expect(tracker.transcriptionItemID(for: src) == nil)
+    }
+
+    @MainActor
+    @Test("Transcription does not conflate with extraction for item ID resolution")
+    func transcriptionItemIDNoCrossKindConflation() {
+        let tracker = QueueActivityTracker()
+        let src1 = PageID(rawValue: "src1")
+        let src2 = PageID(rawValue: "src2")
+        let extractionItem = QueueItem(
+            id: "ext-1", queue: .extraction, wikiID: "w1",
+            payload: QueueItemPayload(sourceIDs: [src1]),
+            state: .running, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+        let transcriptionItem = makeTranscriptionItem(id: "tr-1", sourceIDs: [src2])
+
+        tracker.handleForTesting(.started(extractionItem))
+        tracker.handleForTesting(.started(transcriptionItem))
+
+        #expect(tracker.transcriptionItemID(for: src1) == nil)
+        #expect(tracker.transcriptionItemID(for: src2) == "tr-1")
+
+        // Complete transcription → only transcription clears
+        tracker.handleForTesting(.completed(transcriptionItem))
+        #expect(tracker.transcriptionItemID(for: src2) == nil)
+    }
 }
 #endif

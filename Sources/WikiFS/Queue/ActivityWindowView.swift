@@ -144,14 +144,25 @@ struct ActivityWindowView: View {
     }
 
     /// Consume a pending item selection requested from outside the Activity
-    /// window (#837). Set on `activityTracker.pendingSelectionItemID` before
-    /// the window-opening closure fires; read here and cleared. Overrides
-    /// the current selection — the user explicitly asked to see this item.
-    /// Marks `didAutoSelect` so `autoSelectIfNeeded` won't override it back
-    /// when the first snapshot lands.
+    /// window (#837, #842 PR2 C4). Set on `activityTracker.pendingSelectionItemID`
+    /// (and `pendingSelectionQueue`) before the window-opening closure fires;
+    /// read here and cleared. The `pendingSelectionQueue` guard ensures the
+    /// item belongs to THIS window's queue — prevents a cross-window race when
+    /// both `.transcription` and `.ingestion` windows exist (a lint pending-
+    /// selection must not be consumed by the transcription window, and vice
+    /// versa). Overrides the current selection — the user explicitly asked to
+    /// see this item. Marks `didAutoSelect` so `autoSelectIfNeeded` won't
+    /// override it back when the first snapshot lands.
     private func consumePendingSelectionIfNeeded() {
         guard let pending = activityTracker.pendingSelectionItemID else { return }
+        // C4: verify the pending item belongs to this window's queue. When
+        // the guard is nil (backward-compat), skip the check.
+        if let guardQueue = activityTracker.pendingSelectionQueue,
+           guardQueue != queue {
+            return
+        }
         activityTracker.pendingSelectionItemID = nil
+        activityTracker.pendingSelectionQueue = nil
         selectedItemID = pending
         didAutoSelect = true
     }

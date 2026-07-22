@@ -434,7 +434,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
+                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) })
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",
@@ -508,7 +508,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] in openWindowBridge?.openActivityWindow?() })
+                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) })
             .preferredColorScheme(appearanceColorScheme)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
@@ -563,8 +563,8 @@ struct WikiFSApp: App {
             )
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] in
-                    openWindowBridge?.openQueueWindow?(.ingestion)
+                openActivityWindow: { [weak openWindowBridge] queue in
+                    openWindowBridge?.openQueueWindow?(queue)
                 })
             .preferredColorScheme(appearanceColorScheme)
         }
@@ -942,7 +942,7 @@ extension View {
     @MainActor
     func appEnvironment(
         tracker: QueueActivityTracker,
-        openActivityWindow: (() -> Void)? = nil
+        openActivityWindow: ((QueueKind) -> Void)? = nil
     ) -> some View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self

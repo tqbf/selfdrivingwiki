@@ -303,13 +303,13 @@ struct PageDetailView: View {
                     if let itemID = activityTracker.lintItemID(
                         for: id, wikiID: session.wikiID) {
                         activityTracker.pendingSelectionItemID = itemID
-                        openActivityWindow?()
+                        openActivityWindow?(.ingestion)
                         DebugLog.ingest("Lint button: navigating to lint job \(itemID.prefix(8)) for page \(id) in wiki \(session.wikiID.prefix(8))")
                     } else {
                         // isLinting returned true but we couldn't resolve the
                         // specific item (race: item just finished). Fall back to
                         // opening the Activity window without a selection.
-                        openActivityWindow?()
+                        openActivityWindow?(.ingestion)
                         DebugLog.ingest("Lint button: lint in flight for page \(id) but item not found; opening Activity window")
                     }
                 } else {

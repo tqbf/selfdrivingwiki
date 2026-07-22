@@ -38,11 +38,13 @@ final class OpenWindowBridge {
     /// item is AppKit and can't read SwiftUI environment values directly).
     var openSettings: (() -> Void)?
 
-    /// Opens the Activity (queue) window for `.ingestion` — the window that
-    /// shows ingestion and lint runs (#745). Set by `MenuBarItemController`
-    /// when it creates the window. Used by the Provenance panel to navigate
-    /// from a provenance entry to the run that produced it.
-    var openActivityWindow: (() -> Void)?
+    /// Opens the Activity (queue) window for the given queue kind (#745, #842
+    /// PR2). Set by `MenuBarItemController` when it creates the window. Used
+    /// by the Provenance panel and by `SourceDetailView`'s Transcribe button
+    /// to navigate from a source to the running job. The `QueueKind` argument
+    /// routes through `openQueueWindow` so the correct window (ingestion,
+    /// extraction, or transcription) is focused or created.
+    var openActivityWindow: ((QueueKind) -> Void)?
 
     /// Opens (or focuses) the Activity window for a specific queue
     /// (`WindowGroup(for: QueueKind.self)` deduplicates by `==`, so calling
