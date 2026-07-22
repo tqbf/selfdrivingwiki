@@ -208,6 +208,45 @@ struct MessageSummaryTests {
         #expect(result == nil)
     }
 
+    @Test func modelSummary_collectsAssistantTextDelta() async {
+        // Regression test for issue where .assistantTextDelta events were silently
+        // dropped because only .assistantText was handled in the collection loop.
+        // ACPBackend emits deltas, not full text — this test verifies they're
+        // concatenated correctly.
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .assistantTextDelta("Hello "),
+                .assistantTextDelta("world "),
+                .assistantTextDelta("from "),
+                .assistantTextDelta("model."),
+                .messageStop
+            ])
+        ])
+        let profile = BackendProfile(model: "test-model")
+        let result = await MessageSummarizer.modelSummary(
+            text: "Some long assistant text that needs summarizing.",
+            backend: backend,
+            profile: profile)
+        #expect(result == "Hello world from model.")
+    }
+
+    @Test func modelSummary_mixedAssistantTextAndDelta() async {
+        // Some backends may emit both .assistantText and .assistantTextDelta —
+        // verify both are collected and concatenated.
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .assistantText("Full "),
+                .assistantTextDelta("delta "),
+                .assistantTextDelta("chunks."),
+                .messageStop
+            ])
+        ])
+        let profile = BackendProfile()
+        let result = await MessageSummarizer.modelSummary(
+            text: "Content.", backend: backend, profile: profile)
+        #expect(result == "Full delta chunks.")
+    }
+
     // MARK: - resolveProfile (production backend wiring, §4.3)
 
     @Test func resolveProfile_emptyPin_returnsNil() {

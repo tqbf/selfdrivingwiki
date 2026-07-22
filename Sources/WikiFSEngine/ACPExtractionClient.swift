@@ -180,6 +180,8 @@ public struct ACPExtractionClient: MarkdownExtractor {
             switch event {
             case .assistantText(let text):
                 collectedText += text
+            case .assistantTextDelta(let text):
+                collectedText += text
             case .result(let isError, let text):
                 if isError {
                     turnError = text
