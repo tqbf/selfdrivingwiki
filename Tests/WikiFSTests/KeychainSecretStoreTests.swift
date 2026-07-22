@@ -26,7 +26,10 @@ import Security
 struct KeychainSecretStoreTests {
 
     @Test func dataProtectionQueryCarriesGroupAndDPFlag() {
-        let group = "5YSK9BFLQH.com.willsargent.wiki"
+        // An arbitrary (clearly fake) access group — the test asserts the query
+        // SHAPE, not a real per-developer value (which comes from
+        // signing/local.config at build time via tools/keychaingen).
+        let group = "ABCDE12345.com.example.wiki"
         let query = KeychainSecretStore.baseQuery(
             service: "org.sockpuppet.WikiFS.acp",
             account: "acp-provider:claude",

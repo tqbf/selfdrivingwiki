@@ -28,6 +28,15 @@ LOCAL_CONFIG := signing/local.config
 cfg = $(shell . $(LOCAL_CONFIG) >/dev/null 2>&1 && printf '%s' "$$$(1)")
 
 EXT_BUNDLE_ID := $(or $(call cfg,EXT_BUNDLE_ID),org.sockpuppet.WikiFS.FileProvider)
+APP_GROUP      := $(or $(call cfg,APP_GROUP),group.org.sockpuppet.wiki)
+# Shared keychain access group (app + wikid daemon). Derived per-developer from
+# TEAM_ID + APP_GROUP (the App Group minus its "group." prefix, team-prefixed —
+# Apple requires the Team ID prefix on keychain-access-groups). Override with
+# KEYCHAIN_ACCESS_GROUP in signing/local.config. build.sh and tools/keychaingen
+# use the SAME formula, so app, daemon, and code agree. Deferred assignment (=)
+# so $(TEAM_ID) (defined further below) is expanded at use time, not now.
+# See plans/keychain-sharing.md.
+KEYCHAIN_ACCESS_GROUP = $(or $(call cfg,KEYCHAIN_ACCESS_GROUP),$(TEAM_ID).$(patsubst group.%,%,$(APP_GROUP)))
 LSREGISTER   := /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 PLUGINKIT    := pluginkit
 MIN_MACOS    := 14
@@ -462,9 +471,30 @@ install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .buil
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
+	@echo "→ Generating wikid entitlements (keychain-access-group: $(KEYCHAIN_ACCESS_GROUP))…"
+	@mkdir -p build
+	@printf '%s\n' \
+		'<?xml version="1.0" encoding="UTF-8"?>' \
+		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		'<plist version="1.0">' \
+		'<dict>' \
+		'	<key>com.apple.security.application-groups</key>' \
+		'	<array>' \
+		'		<string>$(APP_GROUP)</string>' \
+		'	</array>' \
+		'</dict>' \
+		'</plist>' > build/wikid.entitlements
+	@# Append the keychain-access-groups entry only when a group is configured
+	@# (TEAM_ID resolved from local.config). Ad-hoc / no-config → no entry.
+	@if [ -n "$(KEYCHAIN_ACCESS_GROUP)" ]; then \
+		plutil -insert keychain-access-groups -array \
+			build/wikid.entitlements -o build/wikid.entitlements; \
+		plutil -insert keychain-access-groups.0 -string "$(KEYCHAIN_ACCESS_GROUP)" \
+			build/wikid.entitlements -o build/wikid.entitlements; \
+	fi
 	@echo "→ Codesigning wikid + wikictl (identity: $(WIKID_SIGN_IDENTITY))…"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
-		--entitlements signing/wikid.entitlements \
+		--entitlements build/wikid.entitlements \
 		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_BIN)" 2>/dev/null \
 		|| codesign --force --timestamp=none --sign - "$(WIKID_BIN)"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \

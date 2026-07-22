@@ -29,10 +29,11 @@ public enum KeychainSecretStore {
 
     /// The shared Keychain access group (app + `wikid` daemon). Baked in at
     /// build time from `signing/local.config` by `tools/keychaingen/main.swift`
-    /// (`make keychain`); matches the literal suffix in
-    /// `signing/wikid.entitlements` (`$(AppIdentifierPrefix)com.willsargent.wiki`,
-    /// which codesign resolves to this same `<TEAM_ID>.com.willsargent.wiki`).
-    /// Empty when unconfigured → "no group".
+    /// (`make keychain`): an explicit `KEYCHAIN_ACCESS_GROUP` override wins;
+    /// otherwise derived from `TEAM_ID` + `APP_GROUP` (the App Group minus its
+    /// `group.` prefix, team-prefixed). `build.sh` and the Makefile derive the
+    /// SAME value for the generated entitlements, so app, daemon, and this
+    /// constant agree for ANY developer. Empty when unconfigured → "no group".
     static let accessGroup: String = GeneratedKeychain.accessGroup
 
     /// True when a shared access group is configured → queries target the

@@ -11,17 +11,20 @@
 // What it bakes in:
 //   accessGroup — "<TEAM_ID>.<suffix>" shared by the app + the wikid daemon so
 //     the daemon can read the ACP API keys the app wrote to the Keychain. Read
-//     from signing/local.config (TEAM_ID + APP_GROUP); the suffix is APP_GROUP
-//     with the leading "group." stripped (so "group.com.willsargent.wiki" →
-//     "com.willsargent.wiki"), matching the literal suffix in the committed
-//     signing/wikid.entitlements ($(AppIdentifierPrefix)com.willsargent.wiki).
-//     codesign resolves $(AppIdentifierPrefix) to the signing identity's Team ID,
-//     so the entitlement and this constant always agree on the builder's team.
+//     from signing/local.config: an explicit KEYCHAIN_ACCESS_GROUP override
+//     wins; otherwise derived from TEAM_ID + APP_GROUP (the App Group with its
+//     leading "group." stripped — so APP_GROUP="group.com.example.wiki" yields
+//     "com.example.wiki"). App + daemon link this module, so the SAME constant
+//     reaches both — no Bundle.main / Info.plist lookup at runtime.
 //
 // Empty string when signing/local.config is absent (fresh clones / CI / tests) —
 // "no group" semantics: KeychainSecretStore then uses the legacy file-based
 // keychain with no access group, preserving the pre-sharing behavior so the test
 // runner (no entitlements) round-trips Keychain ops without errSecMissingEntitlement.
+//
+// build.sh and the Makefile derive the SAME value (same formula, same override)
+// for the generated entitlements, so app, daemon, and code agree for ANY
+// developer who clones + runs signing/setup.sh. See plans/keychain-sharing.md.
 //
 // Run:
 //   swift tools/keychaingen/main.swift          overwrite the generated file
@@ -77,10 +80,13 @@ func parseLocalConfig(_ path: String) -> [String: String]? {
 
 /// "<TEAM_ID>.<suffix>" where suffix is APP_GROUP minus a leading "group.".
 /// Empty when local.config is absent or either value is missing — "no group"
-/// semantics (legacy file keychain). Matches build.sh's derivation:
+/// semantics (legacy file keychain). Honors an explicit KEYCHAIN_ACCESS_GROUP
+/// override in local.config first (one override point for app entitlements +
+/// this constant); otherwise derives it, matching build.sh's:
 ///   KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-${TEAM_ID}.${APP_GROUP#group.}}"
 func resolveAccessGroup() -> String {
     guard let cfg = parseLocalConfig("signing/local.config") else { return "" }
+    if let explicit = cfg["KEYCHAIN_ACCESS_GROUP"], !explicit.isEmpty { return explicit }
     let teamID = cfg["TEAM_ID"] ?? ""
     var appGroup = cfg["APP_GROUP"] ?? ""
     if appGroup.hasPrefix("group.") { appGroup.removeFirst("group.".count) }

@@ -44,6 +44,15 @@ EXT_BUNDLE_ID="com.example.WikiFS.FileProvider"
 # bundle ids above.
 APP_GROUP="group.com.example.wiki"
 
+# Shared keychain access group (app + wikid daemon). Derived by default from
+# TEAM_ID + APP_GROUP (the App Group minus its "group." prefix, team-prefixed —
+# Apple requires the Team ID prefix on keychain-access-groups). Normally leave
+# this COMMENTED OUT; set it only to override the derived value. build.sh, the
+# Makefile, and tools/keychaingen all honor an explicit value here. The
+# provisioning profile must authorize the <TEAM_ID>.* keychain wildcard (it does
+# by default). See plans/keychain-sharing.md.
+# KEYCHAIN_ACCESS_GROUP="ABCDE12345.com.example.wiki"
+
 # Optional override for the `make sign` target's codesign identity (defaults to
 # DIST_IDENTITY above). Set this only if you need `make sign` to use a different
 # identity than `make release` / build.sh — normally leave it commented out.

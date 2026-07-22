@@ -14,15 +14,19 @@ Two changes, one portal step:
 
 1. **Migrate `KeychainSecretStore` to the DataProtection keychain with an
    explicit shared access group** — add `kSecUseDataProtectionKeychain: true`
-   and `kSecAttrAccessGroup: "<TEAM_ID>.com.willsargent.wiki"` to every query.
+   and `kSecAttrAccessGroup: "<TEAM_ID>.<suffix>"` to every query, where the
+   group is **derived per-developer from `signing/local.config`** (never
+   hardcoded to one developer's slug).
 2. **Add `keychain-access-groups` to the entitlements of BOTH the app and the
-   daemon**, signing the daemon with an entitlements plist (it was previously
-   signed with none in production).
+   daemon**, **generated at build time** from the per-developer config (the app
+   entitlements are already generated this way; the daemon entitlements are now
+   generated too — the previously-committed static `signing/wikid.entitlements`
+   is deleted, since a committed file baked to one developer's group would break
+   for anyone else).
 3. *(Portal, human-only)* The provisioning profiles already authorize the
-   `<TEAM_ID>.*` keychain wildcard, so **no new profile is strictly required**
-   — but you must add the explicit access-group string to the entitlements
-   plist. **R1 spike PASSED**: the operator verified the daemon launches fine
-   with `keychain-access-groups` and the committed `signing/wikid.entitlements`.
+   `<TEAM_ID>.*` keychain wildcard, so **no new profile is strictly required**.
+   **R1 spike PASSED**: the operator verified the daemon launches fine with
+   `keychain-access-groups`.
 
 > Why not "do nothing, the file keychain already shares"? See §2 (Alternatives)
 > — the file keychain *may* work for two same-user non-sandboxed processes today,
@@ -30,6 +34,15 @@ Two changes, one portal step:
 > daemon, and breaks the moment either target gains a sandbox. The
 > DataProtection keychain + access group is the Apple-blessed, future-proof
 > mechanism.
+
+> **Per-developer resolution (the load-bearing invariant):** the access group is
+> NEVER hardcoded to one developer's slug. It is derived from
+> `signing/local.config` (`TEAM_ID` + `APP_GROUP`, the latter with its `group.`
+> prefix stripped), with an optional explicit `KEYCHAIN_ACCESS_GROUP` override.
+> `build.sh`, the Makefile, and `tools/keychaingen` all use the **same formula**,
+> so app entitlements, daemon entitlements, and the Swift constant agree for ANY
+> developer who clones + runs `signing/setup.sh`. This mirrors how `APP_GROUP`
+> and `BUNDLE_ID` are handled (PR #20).
 
 ---
 
@@ -75,7 +88,10 @@ and — once Phases B/C land — the daemon's workload path (the daemon links
 - It runs as the **same Unix user** as the app (LaunchAgent in the user domain).
 - It is **NOT sandboxed** (no `com.apple.security.app-sandbox`).
 - **Production signing (`build.sh`) signed `wikid` with NO entitlements**, while
-  dev signing (`Makefile install-daemon`) DID apply `signing/wikid.entitlements`.
+  dev signing (`Makefile install-daemon`) applied a committed
+  `signing/wikid.entitlements`. That committed file was baked to ONE developer's
+  App Group (`group.com.willsargent.wiki`), so it only worked for them — this
+  branch deletes it and generates the daemon entitlements per-developer (§3.4).
 
 ---
 
@@ -93,14 +109,26 @@ XPC delegation — were rejected; see the original draft for rationale.)
 
 ## 3. Provisioning & build changes (implemented here)
 
-### 3.1 Access group string
+### 3.1 Access group string — derived per-developer
 
-`<TEAM_ID>.com.willsargent.wiki` — the team prefix is mandatory for
-`keychain-access-groups`. For the operator's machine `TEAM_ID="5YSK9BFLQH"`
-(`signing/local.config`); `com.willsargent.wiki` is the suffix shared with the
-committed `signing/wikid.entitlements` literal `$(AppIdentifierPrefix)com.willsargent.wiki`.
-codesign resolves `$(AppIdentifierPrefix)` to the signing identity's Team ID, so
-the daemon entitlement and the code-derived group always match the builder's team.
+`<TEAM_ID>.<suffix>` — the team prefix is mandatory for `keychain-access-groups`.
+The suffix is the App Group with its leading `group.` stripped (so
+`APP_GROUP="group.com.example.wiki"` → suffix `com.example.wiki`). An explicit
+`KEYCHAIN_ACCESS_GROUP` in `signing/local.config` overrides the derived value.
+The derivation is the SAME in three places, so app, daemon, and the Swift
+constant always agree:
+
+| Producer | Where | Expression |
+|---|---|---|
+| Swift constant | `tools/keychaingen/main.swift` | explicit `KEYCHAIN_ACCESS_GROUP` ‖ else `${TEAM_ID}.${APP_GROUP#group.}` |
+| App + daemon entitlements | `build.sh` heredocs | `KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-${TEAM_ID}.${APP_GROUP#group.}}"` |
+| Makefile dev path | `Makefile` | `$(or $(call cfg,KEYCHAIN_ACCESS_GROUP),$(TEAM_ID).$(patsubst group.%,%,$(APP_GROUP)))` |
+
+`signing/local.config` is gitignored, per-developer; `signing/setup.sh` writes
+`TEAM_ID` + `APP_GROUP`, so the group tracks every developer's real account
+with **zero per-user values in committed source** (matching the codebase
+convention for `APP_GROUP`/`BUNDLE_ID`). `signing/local.config.example`
+documents the optional override.
 
 ### 3.2 How the code resolves the group — compile-time, per-developer
 
@@ -109,18 +137,15 @@ helper; we did not want to rely on `Bundle.main` at runtime). We follow the
 existing **`GeneratedVersion.swift` codegen pattern** exactly:
 
 - New generator `tools/keychaingen/main.swift` reads `signing/local.config`
-  (`TEAM_ID` + `APP_GROUP`), derives `<TEAM_ID>.<APP_GROUP without the leading
-  "group.">`, and writes the gitignored `Sources/WikiFSCore/GeneratedKeychain.swift`
-  with `public enum GeneratedKeychain { public static let accessGroup = "…" }`.
-  Empty string when `signing/local.config` is absent (fresh clones / CI / tests →
-  "no group" → legacy file-keychain behavior preserved).
+  (`KEYCHAIN_ACCESS_GROUP`, else `TEAM_ID` + `APP_GROUP`), and writes the
+  gitignored `Sources/WikiFSCore/GeneratedKeychain.swift`
+  with `public static let accessGroup = "…"` (empty when `signing/local.config`
+  is absent — fresh clones / CI / tests → "no group" → legacy file-keychain
+  behavior preserved).
 - A new `make keychain` target (mirroring `make version` / `make prompts`) is a
   prerequisite of `build`/`check`/`test`/…; CI runs `make version prompts keychain`.
-- `Signining/local.config` is the SAME per-developer file `build.sh` and
-  `WikiIdentifiers` already read, so the group tracks the developer's real team
-  with **zero per-user values in committed source** (matching the codebase
-  convention). Both the app and the daemon get the constant by linking
-  `WikiFSCore` — no Info.plist lookup, no `Bundle.main` dependency.
+- Both the app and the daemon get the constant by linking `WikiFSCore` — no
+  Info.plist lookup, no `Bundle.main` dependency.
 
 ### 3.3 App entitlements — `build/WikiFS.entitlements` (generated by `build.sh`)
 
@@ -133,29 +158,38 @@ Added to the `APP_ENTITLEMENTS` heredoc in `build.sh`:
 </array>
 ```
 
-where `build.sh` derives `KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-${TEAM_ID}.${APP_GROUP#group.}}"`
-(the same formula the codegen uses, sourced from `signing/local.config`).
+### 3.4 Daemon entitlements — generated per-developer (committed static DELETED)
 
-### 3.4 Daemon entitlements — `signing/wikid.entitlements` (committed)
+The daemon is a bare Mach-O with no Info.plist, so its entitlements can't ride
+the app's Info.plist. Previously a committed `signing/wikid.entitlements` held
+them — but that file was baked to one developer's App Group + access-group
+suffix, so it would break for anyone else (`errSecMissingEntitlement` / AMFI
+kill at exec, or a nil key).
 
-Operator-verified file already holds:
+**Fix (PR #20 pattern — "remove committed .entitlements, generate at build
+time"):** `build.sh` now generates `${WIKID_ENTITLEMENTS}` (`build/wikid.entitlements`,
+next to `build/WikiFS.entitlements`) from a heredoc using the per-developer
+`${APP_GROUP}` and `${KEYCHAIN_ACCESS_GROUP}`, and signs `wikid` with
+`--entitlements "${WIKID_ENTITLEMENTS}"`. The Makfile dev path
+(`make install-daemon`) generates the same file inline. The committed
+`signing/wikid.entitlements` is **deleted**. The generated content carries:
 
 ```xml
+<key>com.apple.security.application-groups</key>
+<array><string>${APP_GROUP}</string></array>
 <key>keychain-access-groups</key>
-<array>
-    <string>$(AppIdentifierPrefix)com.willsargent.wiki</string>
-</array>
+<array><string>${KEYCHAIN_ACCESS_GROUP}</string></array>
 ```
 
-The load-bearing build change: production `build.sh` now signs `wikid` WITH
-`--entitlements signing/wikid.entitlements` (it previously signed with none).
+(For the operator's machine this resolves to the exact value the R1 spike
+verified, so that result still holds — same entitlement lands on the binary.)
 
 ### 3.5 FileProvider / wikictl
 
-No change. The FileProvider extension does not access the Keychain (§1.1);
-`wikictl` neither spawns ACP agents nor reads API keys. (Adding the entitlement
-to the sandboxed FileProvider was considerated and rejected — its profile may
-not carry the keychain capability, risking an AMFI kill at exec.)
+No change. The FileProvider extension does not access the Keychain (§1.1); it
+is NOT given `keychain-access-groups` (adding it would risk AMFI killing the
+sandboxed extension if its profile lacks the capability). `wikictl` neither
+spawns ACP agents nor reads API keys.
 
 ---
 
@@ -224,7 +258,8 @@ Documented as a runbook, because it needs a real signed build:
    `keychain-access-groups` entitlement.
 2. Launch the app, enter an ACP API key, confirm it writes.
 3. `security find-generic-password -s "org.sockpuppet.WikiFS.acp" -a "acp-provider:<id>" -g`
-   — confirm the item now has an `agrp` matching `<TEAM_ID>.com.willsargent.wiki`.
+   — confirm the item now has an `agrp` matching `<TEAM_ID>.<APP_GROUP-suffix>`
+   (the value `make keychain` / `build.sh` derived from your `signing/local.config`).
 4. Start the daemon, trigger an ACP workload, confirm the daemon does NOT
    re-prompt and the ACP agent spawns (auth works).
 5. Negative control: rebuild with the daemon entitlement removed → the daemon
