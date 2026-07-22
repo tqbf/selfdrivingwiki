@@ -150,6 +150,12 @@ let package = Package(
                          condition: .when(platforms: [.linux])),
             ],
             path: "Sources/WikiFSCore",
+            resources: [
+                // Prompt markdown files, bundled as read-only resources so they
+                // are available inside the .app's Contents/Resources/ at runtime.
+                // Loaded via Bundle.module (see PromptLoader.swift).
+                .copy("Resources/Prompts"),
+            ],
             swiftSettings: strictSwiftSettings,
         ),
         // — which the File Provider extension must NOT (com.apple.fileprovider-

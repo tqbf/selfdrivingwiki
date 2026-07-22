@@ -1,0 +1,1 @@
+Reads an assigned chunk/section/page-range of a large source and returns a structured digest (facts, entities, concepts, quotes+locations). Does NOT write to the wiki. Use to read source volume in parallel.
