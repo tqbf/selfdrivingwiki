@@ -65,10 +65,47 @@ calls `WebsiteSnapshotExtractor.snapshot(...)` which builds its OWN
 image-rewritten markdown it computed via `HTMLToMarkdown.scopedTokens` +
 `rewriteImageSrcs` + `HTMLToMarkdown.markdown(fromScopedTokens:)`. The
 dispatch-side `extractedMarkdown` is ignored. So removing the dispatch-side
-sidecar computation has **no effect** on the snapshot path — its markdown
+sidecar computation has **no effect** on the snapshot path's data — its markdown
 still lands via `appendExtractedMarkdown(to: pageSummary, from: snapshot.page)`
 in `storeSnapshot` (line 2559), which now reads the snapshot's own image-
 rewritten markdown from `snapshot.page.extractedMarkdown`.
+
+### Implementation-time finding (test-driven) — `WebsiteSnapshotExtractor`
+conditional sidecar
+
+The original plan assumed removing the three `enrichWithDefuddle` calls +
+the dispatch-side sidecar computation was sufficient to stop non-snapshot HTML
+auto-extraction. **It wasn't.** `WebsiteSnapshotExtractor.snapshot` always set
+`page.extractedMarkdown = markdown` (even when the snapshot had no images —
+the markdown was just the same tag-based conversion `dispatch` had stopped
+doing). The first full-suite test run caught this:
+`extractHtmlWorksOnUnextractedURLIngest` failed because URL HTML ingest was
+still writing a sidecar via the snapshot path (the no-images branch's
+`storeMaterialized(page)` calls `appendExtractedMarkdown`, which saw the
+non-nil sidecar set by the snapshot extractor and wrote it).
+
+Fix (one line in `WebsiteSnapshotExtractor.swift`, at the `MaterializedSource`
+construction):
+
+```swift
+let pageExtractedMarkdown = images.isEmpty ? nil : markdown
+let page = MaterializedSource(
+    filename: filename,
+    data: Data(html.utf8),
+    mimeType: nil,
+    provenance: provenance,
+    extractedMarkdown: pageExtractedMarkdown)
+```
+
+This honors the scope boundary precisely: image-bearing snapshots STILL
+write the sidecar (storeSnapshot path unchanged — `snapshot.page.extractedMarkdown`
+is non-nil because `images.isEmpty` is false); no-images URL ingests do NOT
+write a sidecar (the no-images branch's `storeMaterialized` →
+`appendExtractedMarkdown` sees `nil` and returns early — exactly the PR3
+invariant for AC.9). The `snapshotPlan.extractedMarkdown = markdown` field
+is preserved unchanged so the existing
+`convertedMarkdownCarriesRelativeSrcs` test (which reads
+`snapshot.plan.extractedMarkdown`) keeps passing.
 
 ## Concrete changes
 
@@ -264,21 +301,39 @@ swift test                        # full suite — ~1.5 min (in-memory fixtures 
 - **New:** none.
 - **Edit (code):** `Sources/WikiFSCore/Sources/FormatMaterializer.swift` (skip
   markdown sidecar in `dispatch`; keep `.html` detection + title-based filename
-  via `titleOnly`),
+  via `titleOnly`; update `SourceFormat` + `FormatPlan` doc comments to reflect
+  the post-PR3 invariant),
   `Sources/WikiFSCore/Store/WikiStoreModel.swift` (remove 3
   `enrichWithDefuddle` calls; collapse the `addURLViaWebsite` no-images
   branch; update the `enrichWithDefuddle` doc comment + the `extractHtml`
   doc comment that referenced the ingest-time `enrichWithDefuddle`→
-  `appendExtractedMarkdown` path as a model).
+  `appendExtractedMarkdown` path as a model),
+  `Sources/WikiFSCore/Integrations/WebsiteSnapshotExtractor.swift`
+  (conditionally set `page.extractedMarkdown` — only when the snapshot has
+  images, so the no-images `addURLViaWebsite` branch stores raw HTML only;
+  the storeSnapshot path with images is unchanged — see "Implementation-time
+  finding" above. `snapshotPlan.extractedMarkdown` remains unchanged for
+  test continuity).
 - **Edit (tests):** `Tests/WikiFSTests/WikiStoreModelAddURLTests.swift`
-  (rewrite the sidecar test → no-sidecar), `Tests/WikiFSTests/WikiStoreModelHtmlExtractionTests.swift`
-  (delete the PR2 regression-guard test; add the file-URL no-auto-extract test +
-  the URL-ingest + Extract-button-works test),
+  (rewrite the sidecar test → no-sidecar — AC.9),
+  `Tests/WikiFSTests/WikiStoreModelHtmlExtractionTests.swift`
+  (delete the PR2 regression-guard test; add the file-URL no-auto-extract test
+  — AC.10 — + the URL-ingest + Extract-button-works test — AC.9 + AC.13;
+  rename `AutoExtractionFakeFetcher` → `HTMLFakeFetcher`),
   `Tests/WikiFSTests/WikiStoreModelZoteroIngestTests.swift` (add the HTML
-  attachment no-sidecar test), `Tests/WikiFSTests/WikiStoreModelDropRoutingTests.swift`
-  (rewrite the webloc test + comment cleanup).
-- **Edit (docs):** `PLAN.md` (master index — add the PR3 plan entry / mark PR3
-  landed), `PROGRESS.md` (entry for PR3), this file.
+  attachment no-sidecar test — AC.11),
+  `Tests/WikiFSTests/WikiStoreModelDropRoutingTests.swift`
+  (rewrite the webloc test + comment cleanup),
+  `Tests/WikiFSTests/FormatMaterializerTests.swift` (rewrite the three
+  HTML dispatch-seam tests + rename `htmlSidecarMarkdownIsEmptyWhenBodyIsBlank`
+  → `htmlBlankBodyPreservesBytesVerbatim`; all four now assert
+  `plan.extractedMarkdown == nil`),
+  `Tests/WikiFSTests/SourceMaterializerTests.swift`
+  (rename `zoteroHtmlAttachmentPreservedWithMarkdownSidecar` →
+  `…WithoutMarkdownSidecar`; assert `source.extractedMarkdown == nil`).
+- **Edit (docs):** `PLAN.md` (master index — mark PR3 landed +
+  the `WebsiteSnapshotExtractor` scope-boundary tweak),
+  `PROGRESS.md` (entry for PR3), this file.
 
 ## Out of scope (covered by parent plan)
 
