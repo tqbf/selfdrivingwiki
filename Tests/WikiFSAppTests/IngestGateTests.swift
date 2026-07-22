@@ -20,6 +20,14 @@ import WikiFSEngine
 /// A **byteless** source (e.g. a YouTube video, `video/youtube` mime,
 /// `byteSize == 0`) whose transcript never arrived has neither, so it must
 /// not be ingested. That is the regression these tests pin down.
+///
+/// PR1 adds a sibling gate, **`WikiStoreModel.shouldAutoIngest(_:)`** — the
+/// content-type-eligibility gate ("is the content TYPE one with any markdown
+/// path?"), distinct from `canIngest` ("is there content to stage?"). A PNG
+/// with bytes passes `canIngest` (the bug) but fails `shouldAutoIngest`
+/// (the fix). Provider-aware so byteless `.youtube`/`.podcast` WITH transcripts
+/// aren't dropped (locks the §11-C1 behavior — see
+/// `plans/content-type-registry.md`).
 @MainActor
 @Suite(.timeLimit(.minutes(5)))
 struct IngestGateTests {
@@ -94,6 +102,100 @@ struct IngestGateTests {
         #expect(source.byteSize == 0)  // still byteless…
         #expect(model.hasProcessedMarkdown(for: source.id))  // …but has a transcript
         #expect(model.canIngest(source))
+    }
+
+    // MARK: - shouldAutoIngest (content-type registry wrapper, PR1)
+
+    /// The content-type-eligibility gate, sibling to `canIngest`.
+    /// Distinct from `canIngest` (which asks "is there content to stage?"):
+    /// `shouldAutoIngest` asks "is the content TYPE one with any markdown
+    /// path?" — `false` for PNG/XML/etc. even when they have bytes.
+    ///
+    /// Wrapper is provider-aware (`ContentKind.resolve(mimeType:provider:ext:)`)
+    /// so byteless `.youtube`/`.podcast` sources WITH transcripts return
+    /// `true` (their synthetic `video/youtube` MIME alone would classify as
+    /// `.binary`). This locks the §11-C1 behavior — when PR2's chokepoint
+    /// migration calls `shouldAutoIngest`, it won't reintroduce the YouTube
+    /// regression the original `fromMIME`-only wrapper had.
+
+    @Test("shouldAutoIngest is false for PNG (the bug class)")
+    func shouldAutoIngestExcludesPNG() throws {
+        let model = WikiStoreModel(store: try tempStore())
+        model.addSource(filename: "diagram.png",
+                        data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        model.reloadFromStore()
+        let png = try #require(model.sources.first)
+        #expect(png.byteSize > 0)
+        #expect(model.canIngest(png))        // passes byte gate (the bug)…
+        #expect(!model.shouldAutoIngest(png)) // …but registry excludes
+    }
+
+    @Test("shouldAutoIngest is false for XML (application/xml)")
+    func shouldAutoIngestExcludesXML() throws {
+        let model = WikiStoreModel(store: try tempStore())
+        model.addSource(filename: "feed.xml",
+                        data: Data("<?xml version=\"1.0\"?><foo/>".utf8))
+        model.reloadFromStore()
+        let xml = try #require(model.sources.first)
+        #expect(xml.byteSize > 0)
+        #expect(model.canIngest(xml))        // passes byte gate (the bug)…
+        #expect(!model.shouldAutoIngest(xml)) // …but registry excludes (§11-C3)
+    }
+
+    @Test("shouldAutoIngest is true for PDF")
+    func shouldAutoIngestKeepsPDF() throws {
+        let model = WikiStoreModel(store: try tempStore())
+        model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
+        model.reloadFromStore()
+        let pdf = try #require(model.sources.first)
+        #expect(model.canIngest(pdf))
+        #expect(model.shouldAutoIngest(pdf))
+    }
+
+    @Test("shouldAutoIngest is true for native markdown")
+    func shouldAutoIngestKeepsMarkdown() throws {
+        let model = WikiStoreModel(store: try tempStore())
+        model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
+        model.reloadFromStore()
+        let md = try #require(model.sources.first)
+        #expect(model.canIngest(md))
+        #expect(model.shouldAutoIngest(md))
+    }
+
+    @Test("shouldAutoIngest is true for byteless YouTube (provider-aware, §11-C1)")
+    func shouldAutoIngestKeepsBytelessYouTube() throws {
+        // The critical §11-C1 case: a byteless YouTube source whose
+        // synthetic `video/youtube` mime would classify as `.binary` under
+        // `fromMIME` alone. The wrapper resolves with the provider so it
+        // classifies as `.youtubeTranscript` → `shouldAutoIngest == true`.
+        // (Whether the agent actually runs is a separate question:
+        // `canIngest` returns `false` here — no transcript yet — so the
+        // byteless guard catches it. But the TYPE eligibility is `true`.)
+        let store = try tempStore()
+        _ = try addBytelessYouTube(to: store)
+        let model = WikiStoreModel(store: store)
+        model.reloadFromStore()
+        let yt = try #require(model.sources.first)
+        #expect(!model.canIngest(yt))         // byteless + no transcript
+        #expect(model.shouldAutoIngest(yt))    // but the kind is auto-ingestible
+    }
+
+    @Test("shouldAutoIngest is true for byteless YouTube WITH transcript")
+    func shouldAutoIngestKeepsYouTubeWithTranscript() throws {
+        // The §11-C1 regression case: provider-aware wrapper would not drop
+        // a YouTube source whose transcript has arrived.
+        let store = try tempStore()
+        let yt = try addBytelessYouTube(to: store)
+        _ = try store.appendProcessedMarkdown(
+            sourceID: yt.id,
+            content: "# Transcript\n\ncaption body",
+            origin: .transcript, note: nil, technique: nil)
+        let model = WikiStoreModel(store: store)
+        model.reloadFromStore()
+
+        let source = try #require(model.sources.first(where: { $0.id == yt.id }))
+        #expect(model.canIngest(source))         // transcript staged
+        #expect(model.shouldAutoIngest(source))   // + content type eligible
     }
 
     // MARK: - enqueueIngestion chokepoint

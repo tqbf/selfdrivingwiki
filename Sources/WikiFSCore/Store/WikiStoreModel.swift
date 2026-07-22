@@ -2930,6 +2930,47 @@ public final class WikiStoreModel {
         hasProcessedMarkdown(for: source.id) || source.byteSize > 0
     }
 
+    /// Whether this source's content TYPE has ANY path to markdown — the
+    /// **auto-ingest eligibility** gate. Distinct from `canIngest(_:)`:
+    /// `canIngest` asks "is there content to stage?" (bytes or processed
+    /// markdown); `shouldAutoIngest` asks "is the content TYPE one we can
+    /// summarize / extract / transcribe into markdown at all?".
+    ///
+    /// A PNG (`image/png` → `.image`) and an XML (`application/xml` →
+    /// `.binary`) return `false` here — they have bytes (so `canIngest` is
+    /// `true`) but no markdown-extraction path, so the continuous-ingest
+    /// coordinator must NOT enqueue them. The bug (PR1): the coordinator
+    /// previously consulted `canIngest` alone, so PNG/XML sources passed
+    /// and got enqueued for wasted agent runs.
+    ///
+    /// # Provider-aware (PR2 chokepoint-safe)
+    ///
+    /// Resolves via `ContentKind.resolve(mimeType:provider:ext:)` — the
+    /// origin lookup is done internally so byteless `.youtube` / `.podcast`
+    /// sources WITH transcripts return `true` (their synthetic MIME
+    /// `video/youtube` would otherwise classify as `.binary`). The PR2
+    /// chokepoint migration (`QueueIngestionHelper.enqueueIngestion`) can
+    /// safely call this without re-introducing the §11-C1 YouTube/podcast
+    /// regression the original §5.2 `fromMIME`-only wrapper had.
+    ///
+    /// # Coordinator use
+    ///
+    /// The coordinator's `scanWiki` does NOT call this directly — it
+    /// consults `BackgroundIngestCoordinator.ingestionDecision(for:store:)`
+    /// (the testable seam), which calls `ContentKind.resolve` directly so
+    /// the per-source decision returns the resolved `ContentKind` (for
+    /// logging / tests) without re-wrapping into a `Bool`. This wrapper is
+    /// future infrastructure for the PR2 chokepoint + (optionally) the UI
+    /// gates — see `plans/content-type-registry.md` §5.2.
+    public func shouldAutoIngest(_ source: SourceSummary) -> Bool {
+        let origin = sourceOrigin(for: source.id)
+        let kind = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: origin?.provider,
+            ext: source.ext)
+        return kind.capabilities.shouldAutoIngest
+    }
+
     /// All versions for a source, newest first. Empty if none.
     public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
         (try? store.processedMarkdownHistory(sourceID: sourceID)) ?? []

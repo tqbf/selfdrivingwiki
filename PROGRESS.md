@@ -8801,3 +8801,70 @@ site #796 added (`navigableSource`, which builds the "Go to Chat" / "Go to
 Ingestion Job" labels via `hasPrefix`) is now the second `ProvenancePanel`
 parse site routed through `PageAuthor` (alongside `handleProvenanceTap`).
 `swift test` re-green post-merge (3355 tests / 280 suites).
+
+---
+
+## 2026-07-22 — Content-type registry PR1: filter continuous ingestion (#835-related)
+
+**Bug fixed:** `BackgroundIngestCoordinator.scanWiki` enqueued every un-ingested
+source that passed `WikiStoreModel.canIngest(source)` — but `canIngest` is a
+**byte availability** predicate (`hasProcessedMarkdown || byteSize > 0`), NOT a
+markdown-path predicate. So a PNG / XML / random binary source with `byteSize > 0`
+sailed through and got enqueued for wasted agent runs (PNG/XML have no markdown
+extraction path).
+
+**Fix:** Introduced a content-type registry (`ContentKind` enum +
+`ContentCapabilities` struct in `Sources/WikiFSTypes/ContentTypeRegistry.swift`)
+with a closed 12-case table that switches on the resolved kind. The coordinator's
+`scanWiki` now consults `BackgroundIngestCoordinator.ingestionDecision(for:store:)`
+which runs the **registry gate** (`shouldAutoIngest`) BEFORE the existing
+byteless guard (`canIngest`). PNG (`image/png` → `.image`) and XML
+(`application/xml` → `.binary`) are filtered out before enqueueing.
+
+**Chokepoint NOT touched (§11-C1):** `QueueIngestionHelper.enqueueIngestion`
+stays as-is in PR1. The plan-reviewer flagged a critical regression — using
+`fromMIME`-only at the chokepoint would drop YouTube/podcast byteless sources
+(whose synthetic `video/youtube` MIME classifies as `.binary`). The coordinator
+fix alone is sufficient for PR1: PNG/XMF filtered at scan time, before they
+reach the chokepoint. The chokepoint migration is deferred to PR2.
+
+**New API:**
+- `ContentKind` enum (12 cases) — `ContentTypeRegistry.swift:84`.
+- `ContentKind.fromMIME(_:)` — XML exclusion (§11-C3): `text/xml` AND
+  `application/xml` → `.binary`, BEFORE the `isText` / `hasPrefix("text/")` check.
+- `ContentKind.resolve(mimeType:provider:ext:)` — provider-first for byteless
+  embeds (`.youtube` → `.youtubeTranscript`, NOT `.binary`); MIME-first for
+  byte-bearing sources; extension fallback for legacy nil-mime markdown sources
+  (`.md` → `.markdown`).
+- `ContentKind.capabilities: ContentCapabilities` — canExtractToMarkdown,
+  shouldAutoIngest, extractionPath.
+- `WikiStoreModel.shouldAutoIngest(_:)` — provider-aware wrapper
+  (uses `resolve(mimeType:provider:ext:)`), infrastructure for PR2 chokepoint.
+- `BackgroundIngestCoordinator.ingestionDecision(for:store:)` — internal static
+  testable seam returning `IngestionDecision` (`.enqueue` /
+  `.skipNonIngestible(kind:)` / `.skipByteless`). `scanWiki` calls this; tests
+  call it directly via `@testable import WikiFS`.
+- `BackgroundIngestCoordinator.filterIngestibleSources(_:store:)` — convenience
+  batch filter returning `[PageID]` of sources to enqueue.
+
+**Tests:** new `Tests/WikiFSTests/ContentTypeRegistryTests.swift` (40 tests —
+exhaustive per-kind capability table + MIME/provider/ext resolution + XML
+exclusion + closed-enum count) and `Tests/WikiFSAppTests/
+BackgroundIngestCoordinatorTests.swift` (9 tests — per-source decision +
+batch filter, including the C5 case where YouTube-with-transcript is enqueued
+and YouTube-without is skipped). Full `swift test` suite green (3552 tests /
+297 suites). Existing `IngestGateTests` chokepoint regression tests still pass
+(unchanged behavior at the chokepoint).
+
+**No DB migration.** The registry reads existing `mime_type` / `ext` /
+`agents.name` columns; it adds no schema.
+
+**Build:** `make version prompts && swift build && swift test`.
+
+**Plan:** [`plans/content-type-registry.md`](plans/content-type-registry.md).
+PR2 will migrate the UI decision sites (`SourceDetailView.isExtractable` /
+`isTranscribable`, `SourcesListView.canExtract`, `AppQueueIngestionProvider`
+staging) atop the registry, fix the latent HTML-extract drift in
+`SourcesListView.canExtract`, and migrate the chokepoint using
+`resolve(mimeType:provider:ext:)` (provider-aware — locks the §11-C1
+behavior the critical finding protects).
