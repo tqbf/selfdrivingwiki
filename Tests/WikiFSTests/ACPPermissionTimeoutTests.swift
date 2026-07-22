@@ -71,10 +71,9 @@ struct ACPPermissionTimeoutTests {
             try await delegate.handlePermissionRequest(request: request)
         }
 
-        // Give the suspended continuation + armed timer a moment to register,
-        // then resolve ALLOW BEFORE the 500ms budget elapses.
-        try await Task.sleep(nanoseconds: 80_000_000)
-        #expect(delegate.pendingSnapshot().count == 1)
+        // Wait for the pending entry to register, then resolve ALLOW BEFORE the
+        // 500ms budget elapses.
+        try await awaitPendingCount(delegate, atLeast: 1)
         let resolved = delegate.resolve(optionId: "opt-allow")
         #expect(resolved == true)
 
@@ -95,10 +94,11 @@ struct ACPPermissionTimeoutTests {
             try await delegate.handlePermissionRequest(request: request)
         }
 
-        // Resolve BEFORE the 150ms budget elapses, then sleep WELL past it so
-        // the timer task wakes + tries to fire. If the single-resume invariant
-        // is correct, the timer task's `timeOut` finds the entry gone and no-ops.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Wait for the pending entry to register, then resolve BEFORE the 150ms
+        // budget elapses. Then sleep WELL past it so the timer task wakes + tries
+        // to fire. If the single-resume invariant is correct, the timer task's
+        // `timeOut` finds the entry gone and no-ops.
+        try await awaitPendingCount(delegate, atLeast: 1)
         #expect(delegate.resolve(optionId: "opt-allow") == true)
         let response = try await requestTask.value
         #expect(response.outcome.optionId == "opt-allow")
@@ -192,6 +192,18 @@ struct ACPPermissionTimeoutTests {
         // surfaced there; either way the continuation was resumed exactly once.
         _ = await t2.result
         #expect(delegate.pendingSnapshot().isEmpty)
+    }
+
+    /// Poll until the pending permission count reaches at least `count`, or time
+    /// out after `timeoutMillis`. This prevents flaky tests where a resolve call
+    /// runs before the pending entry is registered under thread pool pressure.
+    private func awaitPendingCount(_ delegate: ACPPermissionDelegate, atLeast count: Int, timeoutMillis: Int = 2000) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(timeoutMillis))
+        while ContinuousClock.now < deadline {
+            if delegate.pendingSnapshot().count >= count { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("Timed out waiting for \(count) pending permission entries")
     }
 }
 #endif // os(macOS)
