@@ -21,6 +21,17 @@ import Testing
 @MainActor
 struct WikiStoreModelHtmlExtractionTests {
 
+    /// Minimal `URLFetchService.URLResourceFetcher` conformer for the
+    /// auto-extraction test. Mirrors the `FakeFetcher` pattern in
+    /// `WikiStoreModelAddURLTests` — returns a canned HTML response with the
+    /// content-type set explicitly, which works cross-platform (vs.
+    /// `addFiles`'s `LocalFileMaterializer` which needs `UniformTypeIdentifiers`
+    /// for extension → MIME — an Apple-only framework).
+    struct AutoExtractionFakeFetcher: URLFetchService.URLResourceFetcher {
+        let response: URLFetchService.FetchResponse
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
+    }
+
     private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-htmlextract-\(UUID().uuidString)", isDirectory: true)
@@ -155,18 +166,28 @@ struct WikiStoreModelHtmlExtractionTests {
         // it's the regression guard that PR3's "remove auto-extraction" work is
         // intentionally deleting this behavior. (See AC.9–AC.13 in the parent
         // plan: PR3 removes the three `enrichWithDefuddle` callers.)
+        //
+        // Uses `addURL` + a fake HTTP fetcher (mirrors the existing
+        // `WikiStoreModelAddURLTests.htmlURLLandsVerbatimWithMarkdownSidecar`)
+        // rather than `addFiles` because `addFiles` routes through
+        // `LocalFileMaterializer`, which derives MIME from the file extension
+        // via `UTType(filenameExtension:)`. `UniformTypeIdentifiers` is an
+        // Apple-only framework, so on Linux the MIME resolves to nil, the
+        // dispatch falls through to binary storage, and no markdown sidecar is
+        // written — a pre-existing Linux limitation unrelated to this PR. The
+        // HTTP fetcher provides the content-type explicitly, which works cross-
+        // platform and is the same path the existing test uses.
         let store = try tempStore()
         store.eventBus = WikiEventBus(wikiID: "test-autoextract")
         let model = WikiStoreModel(store: store)
-
-        // Ingest an HTML file via the model's public path so it routes through
-        // `FormatMaterializer.dispatch` (which computes a tag-based
-        // extractedMarkdown sidecar for `.html` files) and `appendExtractedMarkdown`.
-        let tmpFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("autoextract-\(UUID().uuidString).html", isDirectory: false)
-        try Data(sampleHTML.utf8).write(to: tmpFile)
-        await model.addFiles([tmpFile])
+        let fetcher = AutoExtractionFakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data(sampleHTML.utf8),
+            contentType: "text/html",
+            finalURL: URL(string: "https://example.com/article")!))
+        let outcome = try await model.addURL("example.com/article", fetcher: fetcher)
         model.reloadFromStore()
+
+        #expect(outcome.kind == .html, "PR2 invariant: HTML source preserves its bytes and lands an extracted-markdown sidecar")
 
         let sourceID = try #require(model.sources.first?.id)
         let head = try store.processedMarkdownHead(sourceID: sourceID)
