@@ -308,12 +308,25 @@ public enum WebsiteSnapshotExtractor {
         //    snapshot markdown with rewritten image srcs rides as the
         //    extracted-markdown sidecar on the FormatPlan and is written as a
         //    `.extraction`-origin processed-markdown version).
+        //
+        // Issue #799 PR3: the page's `extractedMarkdown` sidecar is set ONLY
+        // when the snapshot has images — the `storeSnapshot` path's
+        // `appendExtractedMarkdown(to:from:)` then writes it as a
+        // `.extraction`-origin processed-markdown version so the reader shows
+        // rendered content with inlined images (image-src rewriting is
+        // inseparable from extraction — see AC.12 in the parent plan). When
+        // the snapshot has NO images, the page has NO sidecar — the no-images
+        // `addURLViaWebsite` branch stores raw HTML only (PR3 AC.9 — non-
+        // snapshot HTML stops auto-extracting at ingest; the user triggers
+        // extraction via the Extract button from PR2). `snapshotPlan.extractedMarkdown`
+        // is preserved unchanged for callers/tests that read the plan-level sidecar.
+        let pageExtractedMarkdown = images.isEmpty ? nil : markdown
         let page = MaterializedSource(
             filename: filename,
             data: Data(html.utf8),
             mimeType: nil,
             provenance: provenance,
-            extractedMarkdown: markdown)
+            extractedMarkdown: pageExtractedMarkdown)
         let snapshotPlan = FormatPlan(
             filename: filename,
             data: Data(html.utf8),

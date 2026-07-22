@@ -15,18 +15,23 @@ import Foundation
 // MARK: - Source format
 
 /// The format-layer subset of `FetchOutcome.Kind`: what a source produces after
-/// dispatch (HTML verbatim with extracted-markdown sidecar, PDF verbatim, text
-/// verbatim, binary verbatim). Byteless origins (podcasts, embeds) bypass format
-/// dispatch entirely.
+/// dispatch (HTML verbatim, PDF verbatim, text verbatim, binary verbatim).
+/// Byteless origins (podcasts, embeds) bypass format dispatch entirely.
 ///
-/// Issue #599: HTML sources are now treated like PDF sources — the original
-/// HTML bytes are the source blob (`.html` format), and the extracted markdown
-/// rides as a `FormatPlan.extractedMarkdown` sidecar that the store path writes
-/// as a `SourceMarkdownOrigin.extraction` processed-markdown version. This
-/// replaces the old `.htmlConverted` behavior that stored ONLY the markdown and
+/// Issue #599: HTML sources are treated like PDF sources — the original HTML
+/// bytes are the source blob (`.html` format), and any extracted markdown rides
+/// as a `FormatPlan.extractedMarkdown` sidecar that the store path writes as a
+/// `SourceMarkdownOrigin.extraction` processed-markdown version. This replaces
+/// the old `.htmlConverted` behavior that stored ONLY the markdown and
 /// discarded the original HTML.
+///
+/// Issue #799 PR3: `dispatch` no longer populates `extractedMarkdown` for
+/// non-snapshot HTML at ingest time — the user triggers extraction via the
+/// Extract button (PR2). The snapshot-with-images path (via
+/// `WebsiteSnapshotExtractor`) STILL sets the sidecar because image-src
+/// rewriting is inseparable from extraction there.
 public enum SourceFormat: Sendable, Equatable {
-    case html           // verbatim HTML (extracted markdown carried as sidecar)
+    case html           // verbatim HTML (sidecar only on snapshot path post-PR3)
     case pdf            // verbatim PDF
     case text            // verbatim text
     case binary          // verbatim other bytes
@@ -38,7 +43,10 @@ public enum SourceFormat: Sendable, Equatable {
 /// For HTML sources (`.html` format), `extractedMarkdown` carries the
 /// HTML→Markdown conversion (mirrors PDF → pdf2md extraction: original bytes
 /// live as the source blob, extracted markdown as a processed-markdown version).
-/// `nil` for non-HTML formats.
+/// `nil` for non-HTML formats, AND `nil` for non-snapshot HTML at the
+/// `dispatch` seam post-PR3 (issue #799 — non-snapshot HTML no longer
+/// auto-extracts at ingest; the snapshot path overrides the field downstream
+/// via `WebsiteSnapshotExtractor`).
 public struct FormatPlan: Sendable, Equatable {
     public let filename: String
     public let data: Data
@@ -109,19 +117,25 @@ public enum FormatMaterializer {
         }
 
         if mime == MimeType.html || mime == MimeType.xhtml {
-            // Issue #599: preserve the original HTML bytes as the source blob
-            // (mirroring PDF → pdf2md extraction). The extracted markdown rides
-            // as a sidecar on the FormatPlan and is written as a
-            // `.extraction`-origin processed-markdown version by the store path.
+            // Issue #799 PR3: extraction no longer runs at ingest time. Still
+            // detect `.html` so the source is tagged correctly, and use the
+            // document `<title>` (when present) for the filename stem — same
+            // naming UX as the old `convert` path, but NO markdown body
+            // computed. The user triggers extraction via the Extract button
+            // (PR2). The cheap `titleOnly` scan (tokenize + scan `<title>`)
+            // avoids the full tag→markdown render at ingest; the snapshot path
+            // uses the same call family for naming before it rewrites image
+            // srcs. The bytes ARE preserved verbatim as the source blob (issue
+            // #599 two-layer model); only the sidecar extraction is gone.
             let html = decodeText(data)
-            let result = HTMLToMarkdown.convert(html)
-            let resolvedStem = result.title.flatMap { nonEmpty($0) } ?? stem
+            let resolvedStem = HTMLToMarkdown.titleOnly(from: html)
+                .flatMap { nonEmpty($0) } ?? stem
             let filename = ensureExtension(sanitizeStem(resolvedStem), ext: "html")
             return FormatPlan(
                 filename: filename,
                 data: data,
                 format: .html,
-                extractedMarkdown: result.markdown)
+                extractedMarkdown: nil)
         }
 
         if MimeType.isPDF(mime) {

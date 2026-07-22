@@ -7,7 +7,8 @@ import Testing
 /// the inline path (NOT the queue engine, which is PDF-coupled via
 /// `ExtractionResolution.pdfData` / `convert(pdfData:)` / `seedPdfMarkdown`).
 ///
-/// Covers AC.5–AC.8 from `plans/extraction-framework-pr2.md`:
+/// Covers AC.5–AC.7 from `plans/extraction-framework-pr2.md` + AC.9/AC.10/
+/// AC.13 from `plans/extraction-framework-pr3.md`:
 /// - AC.5: tag-based extraction stamps the matching technique
 ///   (`"html-to-markdown"`) and produces non-empty markdown.
 /// - AC.6: defuddle extraction without an injected `htmlMarkdownExtractor`
@@ -16,18 +17,22 @@ import Testing
 /// - AC.7: re-extraction appends a coexisting alternative
 ///   (`appendProcessedMarkdown` always appends — first version is HEAD by the
 ///   default-active rule, later versions ride as alternatives until nominated).
-/// - AC.8: existing auto-extraction at ingest still runs (the `enrichWithDefuddle`
-///   callers are NOT touched in PR2 — PR3 removes them).
+/// - AC.9/AC.13: PR3 made `addURL` HTML ingest store raw bytes with NO
+///   extracted-markdown sidecar; the Extract button then works on the
+///   un-extracted source to create the first markdown version (proven here
+///   in one test).
+/// - AC.10: PR3 made `addFiles` HTML ingest store raw bytes with NO markdown
+///   sidecar (LocalFileMaterializer → `FormatMaterializer.dispatch` HTML branch).
 @MainActor
 struct WikiStoreModelHtmlExtractionTests {
 
-    /// Minimal `URLFetchService.URLResourceFetcher` conformer for the
-    /// auto-extraction test. Mirrors the `FakeFetcher` pattern in
+    /// Minimal `URLFetchService.URLResourceFetcher` conformer for the URL-
+    /// ingest tests. Mirrors the `FakeFetcher` pattern in
     /// `WikiStoreModelAddURLTests` — returns a canned HTML response with the
     /// content-type set explicitly, which works cross-platform (vs.
     /// `addFiles`'s `LocalFileMaterializer` which needs `UniformTypeIdentifiers`
     /// for extension → MIME — an Apple-only framework).
-    struct AutoExtractionFakeFetcher: URLFetchService.URLResourceFetcher {
+    struct HTMLFakeFetcher: URLFetchService.URLResourceFetcher {
         let response: URLFetchService.FetchResponse
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
     }
@@ -155,53 +160,109 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(head?.id == v2.id)
     }
 
-    // MARK: - AC.8 — auto-extraction at ingest still runs
+    // MARK: - PR3 — no auto-extraction at ingest + Extract button works on
+    //   un-extracted sources (AC.9 / AC.10 / AC.13)
 
-    @Test func autoExtractionStillRunsAtIngestInPR2() async throws {
-        // PR2 does NOT remove the `enrichWithDefuddle` calls at ingest — that's
-        // PR3. So ingesting an HTML source via the regular path (which routes
-        // through `FormatMaterializer.dispatch` → `extractedMarkdown` sidecar →
-        // `appendExtractedMarkdown`) must still produce a markdown version
-        // alongside the source bytes. This test will START FAILING in PR3 —
-        // it's the regression guard that PR3's "remove auto-extraction" work is
-        // intentionally deleting this behavior. (See AC.9–AC.13 in the parent
-        // plan: PR3 removes the three `enrichWithDefuddle` callers.)
-        //
-        // Uses `addURL` + a fake HTTP fetcher (mirrors the existing
-        // `WikiStoreModelAddURLTests.htmlURLLandsVerbatimWithMarkdownSidecar`)
-        // rather than `addFiles` because `addFiles` routes through
-        // `LocalFileMaterializer`, which derives MIME from the file extension
-        // via `UTType(filenameExtension:)`. `UniformTypeIdentifiers` is an
-        // Apple-only framework, so on Linux the MIME resolves to nil, the
-        // dispatch falls through to binary storage, and no markdown sidecar is
-        // written — a pre-existing Linux limitation unrelated to this PR. The
-        // HTTP fetcher provides the content-type explicitly, which works cross-
-        // platform and is the same path the existing test uses.
+    /// PR3 AC.9 + AC.13: ingesting an HTML URL stores the raw bytes with NO
+    /// extracted-markdown sidecar (`FormatMaterializer.dispatch` returns
+    /// `extractedMarkdown: nil` for HTML post-PR3), AND the Extract button
+    /// (`model.extractHtml(for:backend:)`) then works on that un-extracted
+    /// source to create the first markdown version.
+    ///
+    /// This test REPLACES the deleted PR2 regression guard
+    /// `autoExtractionStillRunsAtIngestInPR2` (which asserted the OPPOSITE —
+    /// that an `addURL` HTML ingest auto-extracted a `"html-to-markdown"`
+    /// sidecar). PR3 deliberately removes that behavior; the guard is updated
+    /// here to assert the new invariant instead.
+    @Test func extractHtmlWorksOnUnextractedURLIngest() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-autoextract")
+        store.eventBus = WikiEventBus(wikiID: "test-pr3-url")
         let model = WikiStoreModel(store: store)
-        let fetcher = AutoExtractionFakeFetcher(response: URLFetchService.FetchResponse(
+        let fetcher = HTMLFakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(sampleHTML.utf8),
             contentType: "text/html",
             finalURL: URL(string: "https://example.com/article")!))
+
+        // 1. Ingest the HTML source via the regular URL path.
         let outcome = try await model.addURL("example.com/article", fetcher: fetcher)
         model.reloadFromStore()
 
-        #expect(outcome.kind == .html, "PR2 invariant: HTML source preserves its bytes and lands an extracted-markdown sidecar")
-
+        #expect(outcome.kind == .html, "format is still detected as .html post-PR3")
         let sourceID = try #require(model.sources.first?.id)
-        let head = try store.processedMarkdownHead(sourceID: sourceID)
-        let headGeneratedByIngest = try #require(
-            head,
-            "PR2 invariant: ingesting an HTML source auto-extracts a markdown sidecar")
-        // The ingest path's auto-extraction stamps "html-to-markdown" (the
-        // tag-based converter) when no defuddle extractor is injected — same
-        // technique as the explicit extractHtml trigger above.
-        #expect(headGeneratedByIngest.technique == "html-to-markdown")
-        // The original HTML bytes are preserved as the source blob alongside
-        // the extracted-markdown version (issue #599 two-layer model).
-        let originalBytes = try store.sourceContent(id: sourceID)
-        #expect(originalBytes == Data(sampleHTML.utf8))
+
+        // 2. PR3 AC.9: NO extracted-markdown sidecar landed. The store has
+        //    zero `source_markdown_versions` rows for this source — the user
+        //    must trigger extraction explicitly.
+        #expect(try store.processedMarkdownHead(sourceID: sourceID) == nil,
+               "PR3: URL HTML ingest must NOT auto-extract markdown")
+        #expect(try store.processedMarkdownHistory(sourceID: sourceID).isEmpty)
+
+        // The original HTML bytes ARE preserved as the source blob (issue #599
+        // two-layer model is intact — only the sidecar extraction is gone).
+        #expect(try store.sourceContent(id: sourceID) == Data(sampleHTML.utf8))
+
+        // 3. PR3 AC.13: the Extract button (PR2's `extractHtml`) works on the
+        //    un-extracted source — it creates the first markdown version.
+        let version = await model.extractHtml(for: sourceID, backend: .tagBased)
+        let head = try #require(version)
+        #expect(head.origin == .extraction)
+        #expect(head.technique == "html-to-markdown")
+        #expect(!head.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        // Tag-based extraction scopes to <article>; noise containers must NOT appear.
+        #expect(!head.content.contains("Home"))
+        #expect(!head.content.contains("Example Corp"))
+
+        // 4. The store now reflects the new head version (default-active rule).
+        let headFromStore = try store.processedMarkdownHead(sourceID: sourceID)
+        #expect(headFromStore?.id == head.id)
+        #expect(try store.processedMarkdownHistory(sourceID: sourceID).count == 1)
+    }
+
+    /// PR3 AC.10: ingesting an HTML FILE via `addFiles` (the drag-drop / file-
+    /// picker path) stores the raw bytes with NO extracted-markdown sidecar.
+    /// `LocalFileMaterializer` derives the MIME from the `.html` extension via
+    /// `UTType(filenameExtension: "html")` (Apple-only — see caveat below), so
+    /// `FormatMaterializer.dispatch` hits the HTML branch and returns
+    /// `extractedMarkdown: nil` post-PR3.
+    ///
+    /// Caveat: on Linux `UniformTypeIdentifiers` is unavailable, so the MIME
+    /// resolves to nil → dispatch falls through to binary storage → no sidecar
+    /// (the test passes for the wrong reason on Linux). CI is macOS-only per
+    /// AGENTS.md so the macOS assertion is authoritative.
+    @Test func htmlFileIngestDoesNotAutoExtract() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test-pr3-file")
+        let model = WikiStoreModel(store: store)
+
+        // Write an HTML fixture to a real temp file so `LocalFileMaterializer`
+        // can read + dispatch it (mirrors what `addFiles` does on drag-drop).
+        let tmpFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-pr3-file-\(UUID().uuidString).html")
+        try Data(sampleHTML.utf8).write(to: tmpFile)
+        defer { try? FileManager.default.removeItem(at: tmpFile) }
+
+        await model.addFiles([tmpFile])
+        model.reloadFromStore()
+
+        #expect(model.sources.count == 1, "the HTML file landed as a source")
+        let id = try #require(model.sources.first?.id)
+
+        // The original HTML bytes are preserved verbatim as the source blob.
+        #expect(try store.sourceContent(id: id) == Data(sampleHTML.utf8))
+
+        // PR3 AC.10: NO extracted-markdown sidecar — `source_markdown_versions`
+        // for this source is empty until the user clicks Extract.
+        #expect(try store.processedMarkdownHead(sourceID: id) == nil,
+               "PR3: HTML file ingest (addFiles) must NOT auto-extract markdown")
+        #expect(try store.processedMarkdownHistory(sourceID: id).isEmpty)
+
+        // Sanity: the Extract button works on the un-extracted file-ingested
+        // source too (mirrors the URL path's AC.13 assertion above).
+        let version = await model.extractHtml(for: id, backend: .tagBased)
+        let head = try #require(version)
+        #expect(head.origin == .extraction)
+        #expect(head.technique == "html-to-markdown")
+        #expect(!head.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     // MARK: - guard: empty / unreadable bytes

@@ -2016,7 +2016,17 @@ public final class WikiStoreModel {
     ///
     /// Does NOT run for website snapshots (those use `WebsiteSnapshotExtractor`
     /// which does image-aware extraction — defuddle can't replace that without
-    /// losing image src rewriting). Called by `addFiles` and `ingestFromZotero`.
+    /// losing image src rewriting).
+    ///
+    /// Issue #799 PR3: the three ingest callers (`addFiles`,
+    /// `addURLViaWebsite` no-images branch, `ingestFromZotero`) NO LONGER call
+    /// this — non-snapshot HTML stops auto-extracting at ingest; the user
+    /// triggers extraction via the Extract button (PR2). Retained as a private
+    /// building block for any future ingest-side defuddle enrichment and to
+    /// preserve the comment chain to the active trigger path
+    /// (`extractHtml(for:backend:)` + its `extractHtml(html:backend:using:)`
+    /// static helper below). The active HTML extraction dispatch is
+    /// `extractHtml(html:backend:using:)`, NOT this method.
     private func enrichWithDefuddle(_ m: MaterializedSource) async -> MaterializedSource {
         // Only HTML sources have a non-nil extractedMarkdown sidecar (issue #599
         // two-layer model). Non-HTML sources skip enrichment entirely.
@@ -2070,16 +2080,19 @@ public final class WikiStoreModel {
                 continue
             }
 
-            // Best-effort defuddle enrichment for HTML sources (issue #761).
-            let materializedEnriched = await enrichWithDefuddle(materialized)
+            // Issue #799 PR3: HTML no longer auto-extracts at ingest — store
+            // the raw bytes only; the user triggers extraction via the Extract
+            // button (PR2). The `FormatMaterializer.dispatch` HTML branch returns
+            // `extractedMarkdown: nil`, so `appendExtractedMarkdown` (called by
+            // `storeMaterialized`) writes no markdown version for HTML sources.
 
             // Pre-resolve display name off-main for PDFs (issue #229).
             let resolvedDisplayName = await preResolveDisplayName(
-                filename: materializedEnriched.filename, data: materializedEnriched.data,
-                mimeType: materializedEnriched.mimeType, zoteroItemTitle: materializedEnriched.zoteroItemTitle)
+                filename: materialized.filename, data: materialized.data,
+                mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
 
             do {
-                let summary = try storeMaterialized(materializedEnriched, resolvedDisplayName: resolvedDisplayName)
+                let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
                 lastSourceName = summary.effectiveName
             } catch WikiStoreError.duplicateContent(let existing) {
@@ -2475,27 +2488,27 @@ public final class WikiStoreModel {
     ) async throws -> URLFetchService.FetchOutcome {
         let provider = WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
         let snapshot = try await provider.materializeSnapshot()
-        // For HTML pages without snapshot images (no-download or image-less),
-        // enrich the extracted markdown via defuddle (issue #761). The snapshot
-        // path (images present) keeps its image-aware extraction — defuddle
-        // can't replace the src rewriting without losing image references.
-        let pageEnriched: MaterializedSource
-        if snapshot.plan.format == .html && snapshot.images.isEmpty {
-            pageEnriched = await enrichWithDefuddle(snapshot.page)
-        } else {
-            pageEnriched = snapshot.page
-        }
+        // Issue #799 PR3: non-snapshot HTML no longer auto-extracts at ingest —
+        // the no-images branch below passes `snapshot.page` straight through
+        // (its `extractedMarkdown` sidecar is `nil` post-PR3 because
+        // `FormatMaterializer.dispatch` no longer computes it for HTML). The
+        // snapshot-with-images path is a SEPARATE code path: `storeSnapshot`
+        // runs `WebsiteSnapshotExtractor`'s image-aware extraction (image-src
+        // rewriting is inseparable from extraction) and writes the result via
+        // `appendExtractedMarkdown(to:from:)`. That path STAYS auto-extracting
+        // — see AC.12 in `plans/extraction-framework-pr3.md`.
+        let page = snapshot.page
         // Pre-resolve the page's display name off the main actor so a PDF
         // source's PDFKit parse doesn't block the UI or delay the store write
         // (issue #229). Non-PDFs are unaffected (helper returns nil → inline).
         let resolvedDisplayName = await preResolveDisplayName(
-            filename: pageEnriched.filename, data: pageEnriched.data,
-            mimeType: pageEnriched.mimeType, zoteroItemTitle: pageEnriched.zoteroItemTitle)
+            filename: page.filename, data: page.data,
+            mimeType: page.mimeType, zoteroItemTitle: page.zoteroItemTitle)
         var summary: SourceSummary
         if snapshot.plan.format == .html && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
         } else {
-            summary = try storeMaterialized(pageEnriched, resolvedDisplayName: resolvedDisplayName)
+            summary = try storeMaterialized(page, resolvedDisplayName: resolvedDisplayName)
         }
         // HTML sources have ".html" appended to the storage filename (issue #599:
         // the original HTML bytes are now the source blob, not the converted
@@ -2663,14 +2676,17 @@ public final class WikiStoreModel {
         // Resolve + read off the main actor (the provider materializes, throwing
         // ZoteroFetchError.unavailable when the attachment isn't local).
         let materialized = try await provider.materialize()
-        // Best-effort defuddle enrichment for HTML sources (issue #761).
-        let materializedEnriched = await enrichWithDefuddle(materialized)
+        // Issue #799 PR3: HTML no longer auto-extracts at ingest — store the
+        // raw bytes only; the user triggers extraction via the Extract button
+        // (PR2). The `FormatMaterializer.dispatch` HTML branch returns
+        // `extractedMarkdown: nil`, so `appendExtractedMarkdown` (called by
+        // `storeMaterialized`) writes no markdown version for HTML sources.
         // Pre-resolve display name off-main for PDFs (issue #229).
         let resolvedDisplayName = await preResolveDisplayName(
-            filename: materializedEnriched.filename, data: materializedEnriched.data,
-            mimeType: materializedEnriched.mimeType, zoteroItemTitle: materializedEnriched.zoteroItemTitle)
+            filename: materialized.filename, data: materialized.data,
+            mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
         do {
-            let summary = try storeMaterialized(materializedEnriched, resolvedDisplayName: resolvedDisplayName)
+            let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write. The tab title is passed explicitly so tabTitle (which
             // reads `sources`) needs no synchronous freshness.
@@ -3067,11 +3083,14 @@ public final class WikiStoreModel {
     /// backend (issue #799 PR2). Inline — does NOT route through the queue
     /// engine (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
     /// `convert(pdfData:)` / `seedPdfMarkdown`; generalizing it is a deferred
-    /// sub-project per the parent plan's "Out of scope" section). Mirrors the
-    /// write path `enrichWithDefuddle` → `appendExtractedMarkdown` uses at
-    /// ingest time: reads source bytes, runs the chosen extractor, writes
-    /// the result through `appendProcessedMarkdown` with the matching
-    /// technique tag.
+    /// sub-project per the parent plan's "Out of scope" section). The write
+    /// path mirrors what `enrichWithDefuddle` → `appendExtractedMarkdown`
+    /// USED to do at ingest time pre-PR3: reads source bytes, runs the chosen
+    /// extractor, writes the result through `appendProcessedMarkdown` with
+    /// the matching technique tag. Post-PR3 this is the CANONICAL way to
+    /// extract HTML — non-snapshot HTML sources no longer auto-extract at
+    /// ingest, so a fresh HTML source has zero `source_markdown_versions`
+    /// rows until the user clicks Extract (which routes here).
     ///
     /// `appendProcessedMarkdown` always appends a new version — the FIRST
     /// version becomes HEAD by the default-active rule; subsequent calls
@@ -3085,9 +3104,10 @@ public final class WikiStoreModel {
     /// (the AppKit-coupled `LocalDefuddleExtractor` in the WikiFS target). On
     /// any failure (extractor nil, defuddle subprocess missing, empty body),
     /// the call degrades to `TagBasedHtmlExtractor` (same fallback semantics
-    /// as `FormatMaterializer.enrich` at ingest) rather than silently
-    /// returning nil — so the user always gets a markdown version on Extract.
-    /// `backend == .tagBased` skips the defuddle path entirely.
+    /// `FormatMaterializer.enrich` USED to provide at ingest pre-PR3) rather
+    /// than silently returning nil — so the user always gets a markdown
+    /// version on Extract. `backend == .tagBased` skips the defuddle path
+    /// entirely.
     ///
     /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
     ///   bytes couldn't be read, the extractor returned empty markdown, or

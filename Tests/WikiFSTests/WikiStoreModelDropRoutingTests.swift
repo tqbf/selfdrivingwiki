@@ -4,8 +4,10 @@ import Testing
 
 /// Verifies the window-wide drop routing (#163): an `http(s)` URL dragged from
 /// a browser, and a `.webloc` shortcut that resolves to one, flow through the
-/// "Add from URL" fetch path (`addURL` → HTML bytes preserved + markdown sidecar,
-/// issue #599), while genuine local files still ingest as raw bytes (`addFiles`).
+/// "Add from URL" fetch path (`addURL` → HTML bytes preserved as the source
+/// blob, issue #599; the markdown sidecar is NO LONGER written at ingest as
+/// of issue #799 PR3 — the user triggers extraction via the Extract button),
+/// while genuine local files still ingest as raw bytes (`addFiles`).
 /// Uses a fake fetcher — no real network.
 @MainActor
 struct WikiStoreModelDropRoutingTests {
@@ -38,7 +40,7 @@ struct WikiStoreModelDropRoutingTests {
         return fileURL
     }
 
-    @Test func weblocRoutesThroughURLIngestAsMarkdown() async throws {
+    @Test func weblocRoutesThroughURLIngestAsRawHTML() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         let dir = FileManager.default.temporaryDirectory
@@ -58,19 +60,22 @@ struct WikiStoreModelDropRoutingTests {
         await model.addDroppedURLs([webloc], fetcher: fetcher)
         model.reloadFromStore()
 
-        // Issue #599: routed through `addURL` → HTML bytes preserved as the
-        // source blob (filename `Article.html`), markdown extracted as a
-        // sidecar processed-markdown version. NOT the raw plist bytes.
+        // Issue #599 + #799 PR3: routed through `addURL` → HTML bytes preserved
+        // as the source blob (filename `Article.html`). The extracted-markdown
+        // sidecar is NO LONGER written at ingest (PR3 removed the auto-extraction;
+        // the user triggers extraction via the Extract button from PR2).
+        // NOT the raw plist bytes of the `.webloc`.
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "Article.html")
         let id = model.sources.first!.id
         let bytes = try store.sourceContent(id: id)
-        // The source blob IS the original HTML (not the markdown "Body.").
+        // The source blob IS the original HTML (not the markdown "Body.",
+        // and not the raw `.webloc` plist bytes).
         #expect(String(data: bytes, encoding: .utf8) == "<title>Article</title><body><p>Body.</p></body>")
-        // The extracted markdown rides as a `.extraction` processed-markdown version.
-        let head = try #require(try store.processedMarkdownHead(sourceID: id))
-        #expect(head.content == "Body.")
-        #expect(head.origin == .extraction)
+        // PR3 AC.9: no markdown sidecar — `source_markdown_versions` for this
+        // source is empty until the user clicks Extract.
+        #expect(try store.processedMarkdownHead(sourceID: id) == nil,
+               "PR3: dropped-URL HTML ingest must NOT auto-extract markdown")
     }
 
     @Test func remoteHTTPURLRoutesThroughURLIngest() async throws {
@@ -134,8 +139,9 @@ struct WikiStoreModelDropRoutingTests {
         model.reloadFromStore()
 
         let names = model.sources.map(\.filename).sorted()
-        // Issue #599: HTML routed through `addURL` → filename ends in `.html`
-        // (the original HTML bytes are preserved, markdown stored as a sidecar).
+        // Issue #599 + #799 PR3: HTML routed through `addURL` → filename ends
+        // in `.html` (the original HTML bytes are preserved as the source blob;
+        // no extracted-markdown sidecar is written at ingest post-PR3).
         #expect(names == ["Web.html", "doc.txt"])
     }
 

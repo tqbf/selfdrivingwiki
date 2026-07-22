@@ -233,9 +233,13 @@ struct SourceMaterializerTests {
     /// converted to Markdown at the format-dispatch layer and the original HTML
     /// was discarded; before Phase 3a it was stored as raw HTML without a
     /// derived-markdown version.
-    @Test func zoteroHtmlAttachmentPreservedWithMarkdownSidecar() async throws {
+    @Test func zoteroHtmlAttachmentPreservedWithoutMarkdownSidecar() async throws {
+        // (Issue #799 PR3 renames the pre-PR3 `…WithMarkdownSidecar` test:
+        // post-PR3 `ZoteroMaterializer` routes through `FormatMaterializer.dispatch`
+        // which returns `extractedMarkdown: nil` for HTML — no sidecar at
+        // ingest; the user triggers extraction via the Extract button from PR2.)
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prov-zotero-html-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("wikifs-zotero-html-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let attachmentDir = dir.appendingPathComponent("storage", isDirectory: true)
@@ -259,10 +263,12 @@ struct SourceMaterializerTests {
         // derives from <title> with an `.html` extension.
         #expect(source.filename == "Zotero Page.html")
         #expect(source.data == Data(html.utf8))
-        // The extracted markdown sidecar carries the HTML→Markdown conversion.
-        let md = try #require(source.extractedMarkdown)
-        #expect(md.contains("Hello world"))
-        #expect(!md.contains("<html>"))
+        // PR3: NO extracted-markdown sidecar at ingest (was non-nil pre-PR3 —
+        // the Zotero materializer used to produce a tag-based sidecar via
+        // `FormatMaterializer.dispatch`). The user triggers extraction via the
+        // Extract button (PR2) afterward.
+        #expect(source.extractedMarkdown == nil,
+               "PR3: Zotero HTML materialization must NOT auto-extract markdown")
     }
 
     @Test func addSourceZoteroPersistsAgentAndRetainedColumns() async throws {

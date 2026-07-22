@@ -140,6 +140,55 @@ struct WikiStoreModelZoteroIngestTests {
         #expect(filenames == ["paper.pdf", "notes.md"])
     }
 
+    // MARK: - Issue #799 PR3 — no auto-extraction at ingest for HTML
+
+    /// PR3 AC.11: ingesting a Zotero HTML attachment stores the raw HTML bytes
+    /// only — NO `source_markdown_versions` row is written. `ZoteroMaterializer`
+    /// routes through `FormatMaterializer.dispatch`, which (post-PR3) returns
+    /// `extractedMarkdown: nil` for HTML; `appendExtractedMarkdown` is then a
+    /// no-op. The attachment's `contentType: "text/html"` is what makes dispatch
+    /// hit the HTML branch. The user triggers extraction via the Extract button
+    /// (PR2) afterward.
+    @Test func zoteroHtmlAttachmentLandsWithoutMarkdownSidecar() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: "test-zotero-html")
+        let model = WikiStoreModel(store: store)
+        let zoteroDir = try tempZoteroDir()
+        let html = #"""
+        <!DOCTYPE html>
+        <html><head><title>Zotero Page</title></head>
+        <body><article><h1>Heading</h1><p>Body.</p></article></body></html>
+        """#
+        try writeFixture(
+            zoteroDir: zoteroDir, key: "HTML1", filename: "page.html",
+            data: Data(html.utf8))
+
+        try await model.ingestFromZotero(
+            attachment(key: "HTML1", filename: "page.html", contentType: "text/html"),
+            parentItem: parentItem(key: "PARENT_HTML", title: "Zotero Page"),
+            zoteroDir: zoteroDir)
+        model.reloadFromStore()
+
+        #expect(model.sources.count == 1)
+        let summary = model.sources.first!
+        #expect(summary.filename == "Zotero Page.html",
+               "filename is derived from <title> via `HTMLToMarkdown.titleOnly` — same naming UX as pre-PR3")
+        #expect(summary.ext == "html")
+        #expect(summary.zoteroItemKey == "PARENT_HTML")
+        #expect(summary.zoteroItemTitle == "Zotero Page")
+
+        // The source bytes are the ORIGINAL HTML (the source blob).
+        let bytes = try store.sourceContent(id: summary.id)
+        #expect(String(data: bytes, encoding: .utf8) == html)
+
+        // PR3 AC.11: NO markdown sidecar — `source_markdown_versions` for
+        // this source is empty. The user triggers extraction via the Extract
+        // button (PR2) afterward.
+        #expect(try store.processedMarkdownHead(sourceID: summary.id) == nil,
+               "PR3: Zotero HTML attachment ingest must NOT auto-extract markdown")
+        #expect(try store.processedMarkdownHistory(sourceID: summary.id).isEmpty)
+    }
+
     // MARK: - ZoteroFetchError
 
     @Test func zoteroFetchErrorDescriptionReturnsReason() {

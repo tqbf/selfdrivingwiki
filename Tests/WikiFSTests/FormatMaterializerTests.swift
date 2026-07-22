@@ -11,22 +11,27 @@ import Testing
 /// AC.7 — `FormatMaterializer` has no dependency on URL types.
 struct FormatMaterializerTests {
 
-    // MARK: - HTML → verbatim bytes + extracted-markdown sidecar (issue #599)
+    // MARK: - HTML → verbatim bytes (issue #599; no sidecar post-#799 PR3)
 
-    @Test func htmlStoredVerbatimWithMarkdownSidecar() {
+    @Test func htmlStoredVerbatimWithoutMarkdownSidecar() {
         let html = "<html><head><title>Cool Page</title></head><body><h1>Hi</h1><p>Hello <strong>world</strong>.</p></body></html>"
         let plan = FormatMaterializer.dispatch(
             data: Data(html.utf8), contentType: "text/html; charset=utf-8",
             stem: "article", extensionHint: nil)
 
         // Issue #599: HTML sources preserve the ORIGINAL HTML bytes (format
-        // .html); the extracted markdown rides as a sidecar.
+        // .html) — the source blob IS the original HTML. Issue #799 PR3: the
+        // extracted-markdown sidecar is NO LONGER computed at ingest time —
+        // `dispatch` returns `extractedMarkdown: nil` for HTML; the user
+        // triggers extraction via the Extract button (PR2). Format detection
+        // + the title-derived filename are unchanged.
         #expect(plan.format == .html)
         #expect(plan.filename == "Cool Page.html")
         // Byte-identical: the source blob IS the original HTML.
         #expect(plan.data == Data(html.utf8))
-        // The extracted markdown sidecar carries the conversion.
-        #expect(plan.extractedMarkdown == "# Hi\n\nHello **world**.")
+        // PR3: NO extracted-markdown sidecar.
+        #expect(plan.extractedMarkdown == nil,
+               "PR3: HTML dispatch must NOT auto-extract markdown")
     }
 
     @Test func htmlWithoutTitleFallsBackToStem() {
@@ -38,7 +43,8 @@ struct FormatMaterializerTests {
         #expect(plan.format == .html)
         #expect(plan.filename == "photosynthesis.html")
         #expect(plan.data == Data(html.utf8))
-        #expect(plan.extractedMarkdown != nil)
+        // PR3: NO extracted-markdown sidecar (was non-nil pre-PR3).
+        #expect(plan.extractedMarkdown == nil)
     }
 
     @Test func xhtmlAlsoStoredVerbatim() {
@@ -50,12 +56,14 @@ struct FormatMaterializerTests {
         #expect(plan.format == .html)
         #expect(plan.filename == "X.html")
         #expect(plan.data == Data(html.utf8))
-        #expect(plan.extractedMarkdown != nil)
+        // PR3: NO extracted-markdown sidecar (was non-nil pre-PR3).
+        #expect(plan.extractedMarkdown == nil)
     }
 
-    @Test func htmlSidecarMarkdownIsEmptyWhenBodyIsBlank() {
-        // Blank body still preserves the HTML bytes verbatim; the sidecar markdown
-        // is whatever HTMLToMarkdown converts (likely empty/whitespace).
+    @Test func htmlBlankBodyPreservesBytesVerbatim() {
+        // Blank body still preserves the HTML bytes verbatim; no sidecar is
+        // computed post-PR3 (was: the sidecar markdown was whatever
+        // HTMLToMarkdown converted — likely empty/whitespace).
         let html = "<html><head><title>Empty</title></head><body></body></html>"
         let plan = FormatMaterializer.dispatch(
             data: Data(html.utf8), contentType: "text/html",
@@ -63,6 +71,7 @@ struct FormatMaterializerTests {
 
         #expect(plan.format == .html)
         #expect(plan.data == Data(html.utf8))
+        #expect(plan.extractedMarkdown == nil)
     }
 
     // MARK: - PDF verbatim (AC.1)
