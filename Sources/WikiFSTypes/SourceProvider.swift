@@ -167,13 +167,26 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     /// transcript pipeline today — `transcribe` on those throws
     /// `.notRefreshable`. Vimeo is a future extension (needs a Keychain OAuth
     /// token; #564 Phase 4 follow-up).
+    ///
+    /// # PR2: delegates to the content-type registry
+    ///
+    /// The static baseline now routes through the registry rather than
+    /// duplicating the provider switch (PR1 introduced the registry as the
+    /// single decision table; this property was the last holdout among the
+    /// §2 sites). `ContentKind.resolve(mimeType: nil, provider: self)`
+    /// classifies `applePodcast` / `podcast` → `.podcastTranscript` and
+    /// `youtube` → `.youtubeTranscript`; every other provider falls through
+    /// to MIME → `.unknown` (`extractionPath == nil`) since `mimeType` is
+    /// `nil` here. `hasTranscriptBackend` on the capabilities struct is the
+    /// boolean form of "extractionPath is `.podcastTranscript` or
+    /// `.youtubeTranscript`" — same semantics as the original switch.
+    ///
+    /// The runtime guards (signing helper present, `#if PODCAST_TRANSCRIPTS`)
+    /// still layer on top at `SourceDetailView.isTranscribable` /
+    /// `WikiStoreModel.isSourceRefreshable(for:)`; this property is the
+    /// *static* capability, not the runtime availability.
     public var supportsTranscription: Bool {
-        switch self {
-        case .applePodcast, .podcast, .youtube:
-            return true
-        case .localFile, .website, .zotero, .markdownFolder,
-             .vimeo, .spotify, .soundcloud, .remoteMedia, .legacyImport:
-            return false
-        }
+        ContentKind.resolve(mimeType: nil, provider: self)
+            .capabilities.hasTranscriptBackend
     }
 }

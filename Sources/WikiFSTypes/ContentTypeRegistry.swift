@@ -298,4 +298,49 @@ public extension ContentCapabilities {
         /// watch-page → caption-track scrape (pure-Swift).
         case youtubeTranscript
     }
+
+    /// `true` when this kind has a **non-transcript file-extraction
+    /// backend** (PDF or HTML) — i.e. the Extract button (NOT the Transcribe
+    /// button) is the appropriate UI affordance, and the staging path
+    /// (`AppQueueIngestionProvider`) reuses the extracted head when one
+    /// exists.
+    ///
+    /// Distinct from `.canExtractToMarkdown` — that one is also `true` for
+    /// `.podcastTranscript` / `.youtubeTranscript`, so using it for the
+    /// Extract button would widen the affordance to podcasts/YouTube and
+    /// break the one-button-per-source exclusivity with the Transcribe
+    /// button (`needsExtraction` would be `true` AND `needsTranscription`
+    /// would be `true` for the same source — two borderedProminent buttons).
+    ///
+    /// Used by (PR2):
+    /// - `SourceDetailView.isExtractable` (replaces `isPDF || isHTMLSource`).
+    /// - `SourcesListView.canExtract` (a latent-drift fix — the list menu
+    ///   now offers HTML extraction, matching the detail view).
+    /// - `AppQueueIngestionProvider` staging reuse (replaces `MimeType.isPDF`).
+    var hasFileExtractionBackend: Bool {
+        switch extractionPath {
+        case .pdfBackend, .htmlToMarkdown: return true
+        case .podcastTranscript, .youtubeTranscript, nil: return false
+        }
+    }
+
+    /// `true` when this kind has a **transcript extraction path** (podcast
+    /// / YouTube) — i.e. the Transcribe button is the appropriate UI
+    /// affordance. The Extract button has its own gate
+    /// (`hasFileExtractionBackend`); the two are mutually exclusive by
+    /// construction (a kind's `extractionPath` is one of the four cases or
+    /// `nil` — never both a file backend and a transcript path).
+    ///
+    /// Used by (PR2):
+    /// - `SourceDetailView.isTranscribable` (the registry half of the
+    ///   gate; the runtime signing-helper / `#if PODCAST_TRANSCRIPTS`
+    ///   guards layer on top for `.applePodcast`).
+    /// - `SourceProvider.supportsTranscription` (delegated to the registry
+    ///   so the static baseline isn't a duplicated switch).
+    var hasTranscriptBackend: Bool {
+        switch extractionPath {
+        case .podcastTranscript, .youtubeTranscript: return true
+        case .pdfBackend, .htmlToMarkdown, nil: return false
+        }
+    }
 }

@@ -157,14 +157,26 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             var sourceBytes = bytes
             var sourceExt = source.ext
 
-            // PDF → reuse extracted markdown if available (extraction already
-            // ran via the extraction queue item).
-            if MimeType.isPDF(source.mimeType) {
-                if let head = store.processedMarkdownHead(for: source) {
-                    sourceBytes = head.content.data(using: .utf8) ?? bytes
-                    sourceExt = "md"
-                    DebugLog.extraction("AppQueueIngestionProvider: reusing markdown for \(source.filename)")
-                }
+            // PR2 §5.6: registry-driven staging reuse. Was `if MimeType.isPDF`
+            // (PDF-only); generalized to `hasFileExtractionBackend`, which
+            // covers PDF AND HTML sources — both have extraction back ends
+            // (`extractionPath == .pdfBackend` or `.htmlToMarkdown`) and
+            // both may have a `processedMarkdownHead` produced by an
+            // earlier extraction item / inline `runHtmlExtraction`. The pure
+            // half of the decision is extracted as
+            // `AppQueueIngestionProvider._stagedBytesAndExt(...)` so tests
+            // can pin the registry-driven widening (PDF + HTML) without
+            // standing up the full staging path (which needs a real session,
+            // launcher, fileProvider, etc.).
+            let head = store.processedMarkdownHead(for: source)
+            let staged = Self._stagedBytesAndExt(
+                for: source,
+                originalBytes: bytes,
+                processedMarkdownHead: head)
+            sourceBytes = staged.bytes
+            sourceExt = staged.ext
+            if staged.ext == "md" && staged.bytes != bytes {
+                DebugLog.extraction("AppQueueIngestionProvider: reusing markdown for \(source.filename) (\(head?.origin.rawValue ?? "?"))")
             }
 
             sources.append(OperationRequest.StagedSource(
@@ -482,5 +494,58 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     private func ingestSourcePath(for source: SourceSummary) -> String {
         let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
         return "sources/by-id/\(leaf)"
+    }
+
+    // MARK: - PR2 §5.6 testable seam — staging reuse decision
+
+    /// The pure half of the staging decision: what (bytes, ext) should the
+    /// staging path hand the agent for this source? PR2 §5.6 widens the
+    /// pre-PR2 `MimeType.isPDF(source.mimeType) → reuse head` PDF-only rule
+    /// onto the registry's `hasFileExtractionBackend`, which covers PDF AND
+    /// HTML — both have extraction back ends and both may have an extracted
+    /// `processedMarkdownHead` produced by an earlier extraction queue item
+    /// / inline `runHtmlExtraction`. Reusing extracted markdown at stage
+    /// time avoids re-running extraction on the same bytes the agent will
+    /// summarize.
+    ///
+    /// Transcript kinds (`.podcastTranscript` / `.youtubeTranscript`) are
+    /// excluded — `hasFileExtractionBackend` returns `false` for them. Their
+    /// transcript bytes already come through `store.sourceBytes` (for the
+    /// checksum'd stored transcript). Binary / image / unknown kinds have
+    /// `extractionPath == nil` and never enter this branch — the staging
+    /// uses the raw bytes verbatim.
+    ///
+    /// `internal static` so `@testable import WikiFS` tests can pin the
+    /// registry-driven widening (PDF + HTML) without standing up the full
+    /// staging path (which requires a real `WikiSession` + `AgentLauncher`
+    /// + `FileProviderFacade` — see `RetryStuckRegressionTests` for the
+    /// heaviness of an integration-shape test against this class).
+    ///
+    /// # Returns
+    /// `(bytes, ext)` — the bytes + lowercased ext the staging should use.
+    /// If the source is an extractable PDF / HTML with a markdown head,
+    /// returns `(head.content data, "md")`. Otherwise returns the original
+    /// bytes + source's ext verbatim. The caller detects a reuse by
+    /// `ext == "md" && bytes != originalBytes` (it just gates the log line).
+    ///
+    /// `nonisolated` because the method is pure (no actor dependencies)
+    /// despite the enclosing `@MainActor` class. Tests would otherwise
+    /// need `@MainActor` annotations on the suite, and the staging call
+    /// site pays no isolation hop in either direction.
+    nonisolated static func _stagedBytesAndExt(
+        for source: SourceSummary,
+        originalBytes: Data,
+        processedMarkdownHead: SourceMarkdownVersion?
+    ) -> (bytes: Data, ext: String) {
+        let kind = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: nil,          // byte-bearing MIME is authoritative (§5.6)
+            ext: source.ext)
+        guard kind.capabilities.hasFileExtractionBackend,
+              let head = processedMarkdownHead,
+              let markdownBytes = head.content.data(using: .utf8) else {
+            return (originalBytes, source.ext)
+        }
+        return (markdownBytes, "md")
     }
 }

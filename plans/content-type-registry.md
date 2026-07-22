@@ -237,3 +237,269 @@ final class BackgroundIngestCoordinator {
 
 Tests live in `Tests/WikiFSAppTests/BackgroundIngestCoordinatorTests.swift` (the coordinator is
 in the `WikiFS` executable target; `@testable import WikiFS` is required).
+
+---
+
+# PR2 — Migrate the UI decision sites + the chokepoint to the registry
+
+> **Scope (PR2):** Consolidate the remaining ad-hoc "can this become markdown?"
+> decisions onto the PR1 registry. No new behavior is expected except the
+> latent HTML-extraction drift fix in `SourcesListView.canExtract` — the
+> list menu now offers HTML extraction (matching the detail-view Extract
+> button). The coordinator + registry from PR1 are unchanged.
+>
+> **Branch:** `content-type-registry-pr2`
+
+## What PR2 touches
+
+The four UI decision sites (§2 #4-#9 + #12) + the deferred chokepoint (#3,
+§11-C1). The provider enum (#10) is delegated. Sites #11 (`supportsRefresh`)
+and #13 (`ExtractionCoordinator`) stay as-is per §5.7.
+
+### PR2.1 — Registry conveniences (`WikiFSTypes`)
+
+Add two computed booleans on `ContentCapabilities` so call sites express
+intent (Extract-button vs Transcribe-button) rather than enumerating paths:
+
+```swift
+public extension ContentCapabilities {
+    /// `true` when this kind has a non-transcript file-extraction backend
+    /// (PDF / HTML). Drives the Extract button (`SourceDetailView
+    /// .isExtractable`, `SourcesListView.canExtract`) and the staging reuse
+    /// branch (`AppQueueIngestionProvider`). Distinct from
+    /// `canExtractToMarkdown` — that one ALSO matches transcript kinds.
+    var hasFileExtractionBackend: Bool {
+        extractionPath == .pdfBackend || extractionPath == .htmlToMarkdown
+    }
+
+    /// `true` when this kind has a transcript extraction path (podcast /
+    /// YouTube). Drives the Transcribe button (`SourceDetailView
+    /// .isTranscribable`) and `SourceProvider.supportsTranscription`.
+    var hasTranscriptBackend: Bool {
+        extractionPath == .podcastTranscript || extractionPath == .youtubeTranscript
+    }
+}
+```
+
+**Why these matter (the §5.4 nuance the plan original missed):** the plan's
+§5.4 example used `canExtractToMarkdown` for `isExtractable`. That property
+is `true` for `.podcastTranscript` / `.youtubeTranscript` too, so a podcast
+or YouTube source with no transcript would have BOTH `needsExtraction`
+AND `needsTranscription` true — the UI would render two borderedProminent
+buttons (Extract + Transcribe). That's a regression on the existing
+one-affordance-per-source UX. Using `hasFileExtractionBackend` keeps the
+Extract button gated to PDF/HTML only, leaving the Transcribe button to
+gate on `hasTranscriptBackend`. The two are mutually exclusive by
+construction (a kind's `extractionPath` is one of the four cases or nil).
+
+### PR2.2 — `SourceProvider.supportsTranscription` (#10)
+
+Delegate to the registry — the enum property stays the static baseline the
+runtime guard layers on, but the table stops being duplicated:
+
+```swift
+public var supportsTranscription: Bool {
+    ContentKind.resolve(mimeType: nil, provider: self)
+        .capabilities.hasTranscriptBackend
+}
+```
+
+Behavior identical (the registry's provider switch returns `.podcastTranscript`
+for `.applePodcast` / `.podcast` and `.youtubeTranscript` for `.youtube`,
+every other provider falls through to MIME / extension resolution which
+since the mime is nil returns `.unknown` → `extractionPath == nil`).
+
+### PR2.3 — `SourceDetailView` (#4-#7)
+
+```swift
+private var contentKind: ContentKind {
+    ContentKind.resolve(mimeType: file.mimeType,
+                        provider: origin?.provider,
+                        ext: file.ext)
+}
+private var isExtractable: Bool {
+    contentKind.capabilities.hasFileExtractionBackend  // was isPDF || isHTMLSource
+}
+private var needsExtraction: Bool { isExtractable && !hasMarkdown }   // shape unchanged
+
+private var isTranscribable: Bool {
+    guard contentKind.capabilities.hasTranscriptBackend else { return false }
+    // existing runtime guards (.applePodcast signing-helper / #if flag,
+    // .podcast / .youtube always available) layered on top.
+    switch origin?.provider {
+    case .applePodcast: return store.isSourceRefreshable(for: file.id)
+    case .podcast:      return true
+    case .youtube:      return true
+    default:            return false
+    }
+}
+```
+
+`isHTMLSource`/`isPDF` stay — they're used by other code paths (the HTML tab
+rendering at `:360`, the `htmlSourceString` decoder, the PDF tab gating at
+`:352`). The registry gate supersedes them only for the Extract / Transcribe
+button decision, not for the tab-dispatch question "which raw-bytes viewer
+should I show?".
+
+### PR2.4 — `SourcesListView.canExtract` + `canIngest` (#8, #9)
+
+```swift
+private func canExtract(_ source: SourceSummary) -> Bool {
+    ContentKind.resolve(mimeType: source.mimeType, provider: nil, ext: source.ext)
+        .capabilities.hasFileExtractionBackend      // was MimeType.isPDF only
+        && store?.processedMarkdownHead(for: source) == nil
+}
+
+private func canIngest(_ source: SourceSummary) -> Bool {
+    store?.canIngest(source) == true           // byte gate (unchanged)
+        && store?.shouldAutoIngest(source) == true  // content-type gate (NEW)
+}
+```
+
+**The latent HTML-extract drift fix (§5.5):** the list menu now offers
+"Extract Markdown" for both PDF AND HTML sources (previously PDF only).
+This was a discovered bug — the detail view offered HTML extraction but the
+list context menu silently omitted it.
+
+`canIngest` here switches from the byte-only predicate to the
+chokepoint-mirrored pair (byte gate + content-type gate) so the right-click
+Ingest item is hidden for non-ingestible byte-bearing sources (PNG/XML) —
+consistent with what the PR2 chokepoint does. Comments inside the helper
+point at the chokepoint as the authoritative rule and warn against drifting.
+
+### PR2.5 — `QueueIngestionHelper` chokepoint (#3, §5.2 / §11-C1)
+
+```swift
+// PDF-without-extracted-head branch: stays as MimeType.isPDF (the queue
+// engine is PDF-specific; HTML extraction routes through runHtmlExtraction
+// inline, not the extraction queue).
+if MimeType.isPDF(source.mimeType),
+   store.processedMarkdownHead(for: source) == nil { ... }
+
+// Chokepoint: byte gate (existing) + content-type gate (NEW, provider-aware).
+guard store.canIngest(source) else { ... continue }
+guard store.shouldAutoIngest(source) else {
+    DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — content type has no markdown path")
+    continue
+}
+ingestionSourceIDs.append(sourceID)
+```
+
+**Provider-aware (§11-C1):** `WikiStoreModel.shouldAutoIngest(_:)` already
+resolves via `ContentKind.resolve(mimeType:provider:ext:)` (PR1 made it
+provider-aware — see `WikiStoreModel.swift:2965-2972`). A YouTube source
+with `mime = video/youtube` and `provider = .youtube` resolves to
+`.youtubeTranscript` → `shouldAutoIngest == true`, NOT `.binary`. So a
+byteless YouTube WITH a transcript (`canIngest == true` because
+`hasProcessedMarkdown == true`) passes both gates. The fromMIME-only
+regression the §11-C1 review caught is locked by
+`IngestGateTests.shouldAutoIngestKeepsBytelessYouTube` (PR1).
+
+### PR2.6 — `AppQueueIngestionProvider` staging (#12, §5.6)
+
+```swift
+let kind = ContentKind.resolve(mimeType: source.mimeType,
+                                provider: nil,         // byte-bearing MIME is authoritative
+                                ext: source.ext)
+if kind.capabilities.hasFileExtractionBackend,              // was MimeType.isPDF only
+   let head = store.processedMarkdownHead(for: source) {
+    sourceBytes = head.content.data(using: .utf8) ?? bytes
+    sourceExt = "md"
+    DebugLog.extraction("AppQueueIngestionProvider: reusing markdown for \(source.filename)")
+}
+```
+
+**Behavior widening (intentional):** HTML sources now reuse their extracted
+markdown the same way PDFs do. A byteless YouTube-with-transcript doesn't
+hit this branch (it has bytes from `store.sourceBytes` already, since
+`canIngest` is true via `hasProcessedMarkdown` — wait, no, the staging
+loops over `sourceIDs` and reads `store.sourceBytes(id:)`, which for a
+byteless source... (verify behavior — see Tests section). Either way, the
+`hasFileExtractionBackend` filter excludes the transcript kinds, so the
+branch runs only for PDF/HTML — same as PDF-only before, plus HTML now.
+
+## PR2 tests
+
+### Existing tests (PR1) that act as guard rails
+
+- `ContentTypeRegistryTests` (40 tests) — the closed table.
+- `IngestGateTests.shouldAutoIngestKeepsBytelessYouTube` (PR1) — locks the
+  provider-aware wrapper that the PR2 chokepoint relies on.
+- `IngestGateTests.chokepointDropsBytelessYouTubeFromIngestionQueue` — pins
+  the byteless-no-transcript drop (still applies post-PR2; the new
+  `shouldAutoIngest` gate is also `false`-equivalent there because
+  `canIngest == false` first).
+
+### PR2 additions
+
+1. **Registry conveniences** (`Tests/WikiFSTests/ContentTypeRegistryTests.swift`):
+   `hasFileExtractionBackend` true for pdf/html only; `hasTranscriptBackend`
+   true for podcastTranscript/youtubeTranscript only; mutually exclusive.
+
+2. **`SourceProvider.supportsTranscription` delegation** (new test file or
+   extension of an existing provider-test file): assert the property
+   matches the registry's `hasTranscriptBackend` for every provider case
+   (an exhaustive switch — pins the delegation against drift).
+
+3. **`SourceDetailView` Extract/Transcribe gating** (new test file
+   `Tests/WikiFSAppTests/SourceDetailViewContentKindTests.swift` or
+   similar — the view can't be hosted directly, so test the `contentKind`
+   resolution + the gating predicates via `@testable import WikiFS`):
+   - PDF → `isExtractable == true`, `isTranscribable == false`.
+   - HTML → `isExtractable == true`, `isTranscribable == false` (the
+     drift fix).
+   - Podcast (provider `.applePodcast`) → `isTranscribable == ?` (runtime
+     guard; assert the registry-side `hasTranscriptBackend == true` and
+     that `hasFileExtractionBackend == false`).
+   - YouTube (provider `.youtube`) → same.
+   - PNG → both `false`.
+   - Markdown → both `false` (already the content).
+   - Exclusivity invariant: no kind has both true.
+
+   > **Implementation note:** the predicates are `private` in the view. Two
+   > options: (a) extract the decision into an `internal static` helper on
+   > the view (or a free function) that the tests invoke directly (mirrors
+   > the PR1 `ingestionDecision` seam in `BackgroundIngestCoordinator`); (b)
+   > replicate the same `resolve(...)` calls in the test (less faithful but
+   > still pins the registry integration). Prefer (a) — the seam pays off
+   > if the gating logic moves again.
+
+4. **`SourcesListView.canExtract` + `canIngest`** (new test file
+   `Tests/WikiFSAppTests/SourcesListViewContentKindTests.swift`): the list
+   view's helpers are `private` — same seam dilemma. Mirror the (a)
+   approach: extract `SourcesListContentGates` as `internal` helpers so the
+   tests exercise the real predicate.
+   - `canExtract` returns true for PDF AND HTML (the latent bug fix).
+   - `canIngest` returns false for a byte-bearing PNG (was true pre-PR2).
+
+5. **Chokepoint regression (§11-C7):** in `IngestGateTests` — add
+   `chokepointKeepsBytelessYouTubeWithTranscript`. A YouTube source with a
+   seeded transcript must end up in the ingestion queue (not dropped by the
+   new `shouldAutoIngest` gate). This is the C7 test the §11 plan asks for.
+
+6. **`AppQueueIngestionProvider` staging**: if there's an existing staging
+   test, extend it to assert HTML sources reuse their extracted head
+   (mirroring PDFs); if not, add a narrow test that drives
+   `OperationRequest.StagedSource` for an HTML source with extracted head
+   and asserts `ext == "md"` + bytes == head content. If the staging
+   surface is too coupled to test, fall back to a unit test on the
+   content-type decision (`kind.capabilities.hasFileExtractionBackend ==
+   true` for HTML) + reference the staging code by file:line.
+
+## PR2 file touch-list
+
+| File | Change |
+|------|--------|
+| `Sources/WikiFSTypes/ContentTypeRegistry.swift` | add `hasFileExtractionBackend` / `hasTranscriptBackend` (`extension ContentCapabilities`) |
+| `Sources/WikiFSTypes/SourceProvider.swift` | `supportsTranscription` delegates to registry |
+| `Sources/WikiFS/Sources/SourceDetailView.swift` | `isExtractable` / `isTranscribable` / `needsExtraction` / `needsTranscription` via `contentKind` + registry |
+| `Sources/WikiFS/Sources/SourcesListView.swift` | `canExtract` / `canIngest` via registry (HTML drift fix) |
+| `Sources/WikiFS/Queue/QueueIngestionHelper.swift` | chokepoint: add `store.shouldAutoIngest(source)` guard (provider-aware via PR1 wrapper) |
+| `Sources/WikiFS/Queue/AppQueueIngestionProvider.swift` | staging: `hasFileExtractionBackend` reuse (generalize `isPDF` to PDF+HTML) |
+| `Tests/WikiFSTests/ContentTypeRegistryTests.swift` | convenience-property tests |
+| `Tests/WikiFSAppTests/SourceDetailViewContentKindTests.swift` (NEW) | gating predicate tests |
+| `Tests/WikiFSAppTests/SourcesListViewContentKindTests.swift` (NEW) | gating predicate tests |
+| `Tests/WikiFSAppTests/IngestGateTests.swift` | extend with `chokepointKeepsBytelessYouTubeWithTranscript` (C7) |
+| `Tests/WikiFSAppTests/SourceProviderSupportsTranscriptionTests.swift` (NEW) | delegation regression (provider × registry) |
+
+No DB migration. No new dependencies.
