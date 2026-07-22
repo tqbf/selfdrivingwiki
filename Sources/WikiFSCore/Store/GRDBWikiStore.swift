@@ -4686,6 +4686,44 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return id
     }
 
+    /// Validate and execute a `workspaces.status` transition on `db`.
+    ///
+    /// This is the **single write seam** for the `status` column: every UPDATE
+    /// to it routes through here (the initial `INSERT … 'open'` in
+    /// `createWorkspace` is the lone exception — it sets the starting state,
+    /// not a transition). Reads the current status inside the caller's
+    /// savepoint, asserts it is in `allowedFrom`, and writes the new status —
+    /// read-validate-write in one transaction, so there is no TOCTOU window
+    /// between the guard and the write. Mirrors `QueueStore.validateTransition`
+    /// but operates inline on the caller's `Database` (it does NOT open its own
+    /// write, so it preserves the `mutate(event:_:)` emission invariant — every
+    /// public mutator still owns its `mutate` call and event emission).
+    ///
+    /// The per-call `allowedFrom` reflects the status that is **actually
+    /// reachable at that call site** (e.g. the merge catch block runs from
+    /// `.open`, because `mutate()` rolls the step-1 `'merging'` write back when
+    /// the closure throws on conflict). See `plans/workspace-status-fsm.md`.
+    private func transitionWorkspace(
+        on db: Database, id: String,
+        to: WorkspaceStatus, allowedFrom: Set<WorkspaceStatus>
+    ) throws {
+        let currentRaw = try String.fetchOne(
+            db, sql: "SELECT status FROM workspaces WHERE id = ?;",
+            arguments: [id]
+        )
+        guard let currentRaw else { throw WorkspaceError.notFound(id) }
+        guard let current = WorkspaceStatus(rawValue: currentRaw) else {
+            throw WorkspaceError.invalidStateTransition(from: nil, to: to)
+        }
+        guard allowedFrom.contains(current) else {
+            throw WorkspaceError.invalidStateTransition(from: current, to: to)
+        }
+        try db.execute(
+            sql: "UPDATE workspaces SET status = ?, updated_at = ? WHERE id = ?;",
+            arguments: [to.rawValue, Date().timeIntervalSince1970, id]
+        )
+    }
+
     public func workspaceSummary(id: String) throws -> WorkspaceSummary? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(db, sql: """
@@ -4891,14 +4929,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         var mergedPageIDs: [String] = []
         do {
             try mutate(event: { _ in nil }) { db in
-                // 1. Mark workspace as 'merging'.
-                try db.execute(sql: """
-                UPDATE workspaces SET status = 'merging', updated_at = ?
-                WHERE id = ? AND status = 'open';
-                """, arguments: [Date().timeIntervalSince1970, workspaceID])
-                guard db.changesCount > 0 else {
-                    throw WikiStoreError.unexpected("workspace \(workspaceID) is not open (already merging/merged/conflicted/abandoned)")
-                }
+                // 1. Mark workspace as 'merging' (.open → .merging, validated).
+                try self.transitionWorkspace(
+                    on: db, id: workspaceID, to: .merging, allowedFrom: [.open]
+                )
 
                 // 2. For each workspace_ref, attempt fast-forward or mint.
                 let refs = try Row.fetchAll(db, sql: """
@@ -4996,10 +5030,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     throw WikiStoreError.unexpected("workspace \(workspaceID) merge: \(conflicts.count) conflict(s)")
                 }
 
-                // 4. All fast-forwarded → mark 'merged'.
-                try db.execute(sql: """
-                UPDATE workspaces SET status = 'merged', updated_at = ? WHERE id = ?;
-                """, arguments: [Date().timeIntervalSince1970, workspaceID])
+                // 4. All fast-forwarded → mark 'merged' (.merging → .merged).
+                try self.transitionWorkspace(
+                    on: db, id: workspaceID, to: .merged, allowedFrom: [.merging]
+                )
             }
         } catch {
             // Only park if there were actual conflicts (not a different error).
@@ -5011,9 +5045,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 // Park in a separate transaction.
                 try mutate(event: { _ in nil }) { db in
                     let nowTS = Date().timeIntervalSince1970
-                    try db.execute(sql: """
-                    UPDATE workspaces SET status = 'conflicted', updated_at = ? WHERE id = ?;
-                    """, arguments: [nowTS, workspaceID])
+                    // The merge savepoint rolled back on the conflict throw, so
+                    // status reverted to .open (the step-1 'merging' write was
+                    // undone) — transition from .open, not .merging.
+                    try self.transitionWorkspace(
+                        on: db, id: workspaceID, to: .conflicted, allowedFrom: [.open]
+                    )
 
                     try db.execute(sql: """
                     DELETE FROM workspace_conflicts WHERE workspace_id = ?;
@@ -5055,8 +5092,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func abandonWorkspace(id: String) throws {
         try mutate(event: { _ in nil }) { db in
-            try db.execute(sql: "UPDATE workspaces SET status = 'abandoned', updated_at = ? WHERE id = ?;",
-                           arguments: [Date().timeIntervalSince1970, id])
+            try self.transitionWorkspace(
+                on: db, id: id, to: .abandoned,
+                allowedFrom: [.open, .merging, .conflicted]
+            )
             try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
                            arguments: [id])
         }
@@ -5151,9 +5190,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if !conflicts.isEmpty {
                 try mutate(event: { _ in nil }) { db in
                     let nowTS = Date().timeIntervalSince1970
-                    try db.execute(sql: """
-                    UPDATE workspaces SET status = 'conflicted', updated_at = ? WHERE id = ?;
-                    """, arguments: [nowTS, workspaceID])
+                    // Refresh never wrote status in its savepoint (it only
+                    // read-validated ==.open); that savepoint rolled back on the
+                    // conflict throw, so status is still .open here.
+                    try self.transitionWorkspace(
+                        on: db, id: workspaceID, to: .conflicted, allowedFrom: [.open]
+                    )
 
                     try db.execute(sql: """
                     DELETE FROM workspace_conflicts WHERE workspace_id = ?;
@@ -5269,13 +5311,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func workspaceRetryMerge(workspaceID: String) throws {
         try mutate(event: { _ in nil }) { db in
-            try db.execute(sql: """
-            UPDATE workspaces SET status = 'open', updated_at = ?
-            WHERE id = ? AND status = 'conflicted';
-            """, arguments: [Date().timeIntervalSince1970, workspaceID])
-            guard db.changesCount > 0 else {
-                throw WikiStoreError.unexpected("workspace \(workspaceID) is not conflicted")
-            }
+            try self.transitionWorkspace(
+                on: db, id: workspaceID, to: .open, allowedFrom: [.conflicted]
+            )
         }
         // Now attempt the merge again.
         _ = try workspaceMerge(workspaceID: workspaceID)
@@ -5296,15 +5334,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // Delete refs + conflicts, then mark abandoned (mirrors
             // SQLiteWikiStore.reapStaleWorkspaces — the refs are the staging
             // rows, which must not survive a reap).
-            let now = Date().timeIntervalSince1970
             for id in staleIDs {
                 try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
                                arguments: [id])
                 try db.execute(sql: "DELETE FROM workspace_conflicts WHERE workspace_id = ?;",
                                arguments: [id])
-                try db.execute(
-                    sql: "UPDATE workspaces SET status = 'abandoned', updated_at = ? WHERE id = ?;",
-                    arguments: [now, id]
+                // staleIDs are all '.open' (the SELECT filters on status='open'),
+                // so the transition is .open → .abandoned.
+                try self.transitionWorkspace(
+                    on: db, id: id, to: .abandoned, allowedFrom: [.open]
                 )
             }
             return staleIDs.count

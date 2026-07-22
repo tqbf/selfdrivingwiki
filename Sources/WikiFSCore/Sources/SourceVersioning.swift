@@ -169,12 +169,58 @@ public struct PageConflictError: Error, Equatable {
 /// The lifecycle state of a workspace. Transitions: `open` → `merging` →
 /// `merged` (success) or `conflicted` (merge parked). `abandoned` is terminal
 /// (the workspace is GC'd — its `workspace_refs` are deleted).
-public enum WorkspaceStatus: String, Sendable, Equatable {
+///
+/// Legal transitions are declared by `allowedTargets` and enforced centrally by
+/// `GRDBWikiStore.transitionWorkspace(on:id:to:allowedFrom:)` — the single
+/// write seam for the `workspaces.status` column (see
+/// `plans/workspace-status-fsm.md`). Every UPDATE to that column routes through
+/// it; raw `UPDATE workspaces SET status = …` writes must not be reintroduced.
+public enum WorkspaceStatus: String, Sendable, CaseIterable, Codable, Equatable {
     case open
     case merging
     case merged
     case conflicted
     case abandoned
+
+    /// Legal target states reachable from this state in a single transition.
+    /// Terminal states (`merged`, `abandoned`) return an empty set. This is the
+    /// spec the validator consults; the per-call `allowedFrom` sets at each
+    /// write site are subsets of these (narrowed by what's actually reachable
+    /// at that site — e.g. the merge catch block always runs from `.open`
+    /// because `mutate()`'s savepoint rolled the step-1 `'merging'` write back).
+    public var allowedTargets: Set<WorkspaceStatus> {
+        switch self {
+        case .open:        return [.merging, .abandoned]
+        case .merging:     return [.merged, .conflicted, .abandoned]
+        case .merged:      return []
+        case .conflicted:  return [.open, .abandoned]
+        case .abandoned:   return []
+        }
+    }
+}
+
+/// Thrown by `GRDBWikiStore.transitionWorkspace` when a workspace row is
+/// missing (`.notFound`) or its current status is not in the call's
+/// `allowedFrom` set (`.invalidStateTransition`). Mirrors
+/// `QueueStoreError.invalidStateTransition`; keeps the workspace domain's
+/// errors with the workspace types rather than overloading `WikiStoreError`.
+/// `from` is `nil` only when the row exists but its `status` column holds a
+/// value outside the `WorkspaceStatus` domain — unreachable given the closed
+/// write seam, but surfaced (not silently coerced) for a corrupt DB.
+public enum WorkspaceError: Error, Equatable, CustomStringConvertible, LocalizedError {
+    case notFound(String)
+    case invalidStateTransition(from: WorkspaceStatus?, to: WorkspaceStatus)
+
+    public var description: String {
+        switch self {
+        case .notFound(let id):
+            return "Workspace not found: \(id)"
+        case .invalidStateTransition(let from, let to):
+            return "Invalid workspace status transition: \(from?.rawValue ?? "unknown") → \(to.rawValue)"
+        }
+    }
+
+    public var errorDescription: String? { description }
 }
 
 /// A summary of one workspace (W1, PR #312).
