@@ -124,6 +124,13 @@ struct WikiFSApp: App {
         if WikiRegistry.load(from: directory).isEmpty {
             DatabaseLocation.migrateFromApplicationSupportIfNeeded()
         }
+        // One-shot: move any legacy file-keychain secrets onto the shared
+        // DataProtection keychain (under the keychain-access-groups access group)
+        // so the app AND the wikid daemon keep reading them after the
+        // keychain-sharing change. No-op when no access group is configured
+        // (tests / fresh clones) and idempotent in production. See
+        // plans/keychain-sharing.md.
+        KeychainSecretStore.migrateLegacyItemsToDataProtection()
         containerDirectory = directory
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means

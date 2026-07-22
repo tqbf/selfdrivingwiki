@@ -32,6 +32,10 @@ tmp/
 # Note: prompts are no longer code-generated — they are bundled as .md
 # resources in Sources/WikiFSCore/Resources/Prompts/ (loaded via Bundle.module).
 Sources/WikiFSCore/GeneratedVersion.swift
+# Shared keychain access group, baked from signing/local.config (TEAM_ID +
+# APP_GROUP) so the app + wikid daemon agree. Same codegen/build-time contract
+# as GeneratedVersion.swift above — run `make keychain` on a fresh clone.
+Sources/WikiFSCore/GeneratedKeychain.swift
 
 # swift-mutation-testing (schematized mutation testing — `make mutate`).
 # Result cache + JSON/HTML/Sonar reports; all derived, never committed.

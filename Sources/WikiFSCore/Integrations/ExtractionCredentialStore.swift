@@ -30,9 +30,10 @@ public struct ExtractionKeychainError: Error, Equatable {
 }
 
 /// The production `ExtractionCredentialStore`: one generic-password Keychain
-/// item per secret, under a shared `service`. `WikiFS.entitlements` has no App
-/// Sandbox, so this needs no keychain-access-group entitlement — the same
-/// un-sandboxed access `URLSession` already has for outbound network calls.
+/// item per secret, under a shared `service`. `KeychainSecretStore` (the shared
+/// helper) writes items to the DataProtection keychain under a shared
+/// `keychain-access-groups` access group so the un-sandboxed `wikid` daemon can
+/// read them — see `plans/keychain-sharing.md`.
 public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.extraction"
 
