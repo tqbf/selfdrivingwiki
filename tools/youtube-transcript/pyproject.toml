@@ -1,0 +1,43 @@
+[project]
+name = "youtube-transcript"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+# Runtime dependencies are in the PEP 723 inline metadata block of the
+# youtube-transcript script. This pyproject.toml only holds dev tooling.
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3",
+    "ruff>=0.11",
+    "pyright>=1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingImports = false
+reportMissingModuleSource = false
+reportMissingTypeStubs = false
