@@ -17,10 +17,21 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
-        newConnection.exportedInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        // Build the daemon-side interface with the event-sink parameter
+        // declared as an interface proxy (not a serialized object). This is
+        // required for bidirectional XPC: when the app calls
+        // `registerEventSink(sink)`, XPC creates a proxy for `sink` on the
+        // daemon side so the daemon can call `deliverEvent(_:)` back on it.
+        let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        let sinkInterface = NSXPCInterface(with: WikiDaemonEventSink.self)
+        daemonInterface.setInterface(
+            sinkInterface,
+            for: #selector(WikiDaemonProtocol.registerEventSink(_:)),
+            argumentIndex: 0,
+            ofReply: false
+        )
+        newConnection.exportedInterface = daemonInterface
 
-        // Wrap the daemon in an XPC-serving adapter so the @objc protocol
-        // methods can call into the Swift daemon.
         let exporter = WikiDaemonExporter(daemon: daemon)
         newConnection.exportedObject = exporter
         newConnection.resume()
@@ -30,7 +41,7 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
 
 /// Bridges the `@objc WikiDaemonProtocol` (XPC requires @objc) to the pure-Swift
 /// `WikiDaemon`. Each method serializes JSON `Data` over XPC.
-final class WikiDaemonExporter: NSObject, WikiDaemonProtocol {
+final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendable {
     private let daemon: WikiDaemon
 
     init(daemon: WikiDaemon) {
@@ -69,6 +80,32 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol {
     func changeToken(wikiID: String, reply: @escaping (String) -> Void) {
         reply(daemon.changeToken(wikiID: wikiID))
     }
+
+    // MARK: - Workload: event sink registration (Phase 0)
+
+    func registerEventSink(_ sink: WikiDaemonEventSink) {
+        daemon.registerEventSink(sink)
+    }
+
+    // MARK: - Workload: queue snapshot (Phase 0 — scaffold)
+
+    func queueSnapshot(reply: @escaping (Data) -> Void) {
+        // XPC reply closures are called exactly once and are safe from any
+        // thread. Wrap in a @unchecked Sendable box so the Task closure
+        // satisfies Swift 6's sending requirement.
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.queueSnapshotData()
+            sendableReply.reply(data)
+        }
+    }
+}
+
+/// Wraps an XPC `@escaping (Data) -> Void` reply in a `@unchecked Sendable`
+/// box. XPC reply closures are designed to be called once from any thread —
+/// this satisfies Swift 6 strict-concurrency without changing semantics.
+private struct SendableDataReply: @unchecked Sendable {
+    let reply: (Data) -> Void
 }
 
 // MARK: - Main
@@ -217,6 +254,14 @@ while let line = readLine() {
     case "changeToken":
         let wikiID = params["wikiID"] as? String ?? ""
         result = daemon.changeToken(wikiID: wikiID)
+    case "queueSnapshot":
+        // Phase 0 scaffold: returns an empty JSON snapshot (no WikiFSEngine
+        // on Linux — workload host is compiled out).
+        result = "{}"
+    case "registerEventSink":
+        // No-op on Linux (no XPC event-sink transport). Logged for visibility.
+        DebugLog.store("wikid: registerEventSink is a no-op on Linux")
+        result = nil
     default:
         error = "unknown method: \(method)"
     }

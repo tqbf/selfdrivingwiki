@@ -112,7 +112,10 @@ struct QuotaFallbackIntegrationTests {
 
     // MARK: - AC.4: Two-provider chain, first exhausted → fallback succeeds
 
-    @Test("Two-provider chain fallback succeeds")
+    @Test("Two-provider chain fallback succeeds",
+          .disabled(
+              if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
+              "Integration test — needs a real ACP agent subprocess. Set ACP_SMOKE=1 to run."))
     func testFallbackToSecondProvider() async throws {
         let fake = FakeAgentBackend(behaviors: [
             // Phase 1 — planner on provider A: quota hit, then messageStop.
@@ -159,7 +162,10 @@ struct QuotaFallbackIntegrationTests {
 
     // MARK: - AC.5: All providers exhausted → item fails
 
-    @Test("All providers exhausted fails the item")
+    @Test("All providers exhausted fails the item",
+          .disabled(
+              if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
+              "Integration test — needs a real ACP agent subprocess. Set ACP_SMOKE=1 to run."))
     func testAllProvidersExhausted() async throws {
         let fake = FakeAgentBackend(behaviors: [
             // Provider A: quota hit.

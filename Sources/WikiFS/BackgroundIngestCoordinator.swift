@@ -8,7 +8,7 @@ import WikiFSEngine
 @Observable
 final class BackgroundIngestCoordinator {
     private let sessionManager: SessionManager
-    private let queueEngine: QueueEngine
+    private let queueEngine: any QueueEngineClient
     private let quotaCoordinator: QuotaFallbackCoordinator
     private var scanTask: Task<Void, Never>?
 
@@ -18,7 +18,7 @@ final class BackgroundIngestCoordinator {
 
     let scanInterval: TimeInterval = 60
 
-    init(sessionManager: SessionManager, queueEngine: QueueEngine, quotaCoordinator: QuotaFallbackCoordinator) {
+    init(sessionManager: SessionManager, queueEngine: any QueueEngineClient, quotaCoordinator: QuotaFallbackCoordinator) {
         self.sessionManager = sessionManager
         self.queueEngine = queueEngine
         self.quotaCoordinator = quotaCoordinator

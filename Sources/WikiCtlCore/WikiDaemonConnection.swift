@@ -33,7 +33,7 @@ public final class WikiDaemonConnection {
     public static let serviceName = "com.selfdrivingwiki.wikid"
 
     private let connection: NSXPCConnection
-    private var proxy: WikiDaemonProtocol { connection.remoteObjectProxy as! WikiDaemonProtocol }
+    internal var proxy: WikiDaemonProtocol { connection.remoteObjectProxy as! WikiDaemonProtocol }
 
     private init(connection: NSXPCConnection) {
         self.connection = connection
@@ -41,9 +41,22 @@ public final class WikiDaemonConnection {
 
     /// Connect to the daemon. The connection auto-launches via launchd if the
     /// daemon isn't running.
+    ///
+    /// The `WikiDaemonProtocol` interface is set up with the
+    /// `WikiDaemonEventSink` sub-interface on the `registerEventSink(_:)`
+    /// selector, so XPC creates a proxy for the sink parameter (bidirectional
+    /// XPC) rather than trying to serialize it.
     public static func connect() throws -> WikiDaemonConnection {
         let connection = NSXPCConnection(machServiceName: serviceName)
-        connection.remoteObjectInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        let sinkInterface = NSXPCInterface(with: WikiDaemonEventSink.self)
+        daemonInterface.setInterface(
+            sinkInterface,
+            for: #selector(WikiDaemonProtocol.registerEventSink(_:)),
+            argumentIndex: 0,
+            ofReply: false
+        )
+        connection.remoteObjectInterface = daemonInterface
         connection.resume()
         return WikiDaemonConnection(connection: connection)
     }

@@ -26,7 +26,7 @@ struct ActivityWindowView: View {
     /// Which queue this window shows. Items from the other queue are
     /// filtered out of every snapshot read.
     let queue: QueueKind
-    let queueEngine: QueueEngine
+    let queueEngine: any QueueEngineClient
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
     /// Bridges the SwiftUI environment's `openSettings` action so the

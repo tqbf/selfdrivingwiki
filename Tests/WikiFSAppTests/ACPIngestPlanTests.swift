@@ -472,7 +472,12 @@ struct ACPIngestCollapsedRoutingTests {
         )
     }
 
-    @Test func runACPIngestResolvesOneBackendAcrossAllPhases() async throws {
+    @Test(
+        .disabled(
+            if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
+            "Integration test — needs a real ACP agent subprocess. Set ACP_SMOKE=1 to run.")
+    )
+    func runACPIngestResolvesOneBackendAcrossAllPhases() async throws {
         // Plan the planner will write: one source file, one page assignment.
         // The `sourceFile` field must match the leaf `stageSources` produces
         // for `largeSource()` — i.e. `Large-Source--01FAKE01KQ8HDDR3ZXK72XHG6R.md`.

@@ -68,7 +68,11 @@ public final class WikiSession {
     /// the engine routes extraction work off-main via workers, and serializes
     /// via the persistent `queue.sqlite` store. Session views access it to
     /// enqueue extraction + await completion during ingest.
-    public let queueEngine: QueueEngine
+    ///
+    /// Widened to `any QueueEngineClient` (Phase 0) so the source can flip
+    /// from in-process `QueueEngine` to an `XPCQueueEngineProxy` without
+    /// rewriting call sites. See `plans/daemon-workloads.md` Phase 0 §4.
+    public let queueEngine: any QueueEngineClient
 
     /// Shared, app-wide extraction provider. The app-layer bridge from the
     /// headless queue engine to the `@MainActor` `ExtractionCoordinator` +
@@ -151,7 +155,7 @@ public final class WikiSession {
         descriptor: WikiDescriptor,
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
-        queueEngine: QueueEngine,
+        queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },

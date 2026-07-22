@@ -14,7 +14,7 @@ struct WikiDetailView: View {
     let fileProvider: FileProviderFacade
     let extractionCoordinator: ExtractionCoordinator
     @Environment(QueueActivityTracker.self) private var tracker
-    let queueEngine: QueueEngine
+    let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let runIngest: (PageID) -> Void
     @Binding var showingImportMarkdown: Bool

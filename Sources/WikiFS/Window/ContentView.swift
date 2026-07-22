@@ -17,7 +17,7 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     let chatLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
-    let queueEngine: QueueEngine
+    let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     @State private var pendingAddURL: PendingAddURL?
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle

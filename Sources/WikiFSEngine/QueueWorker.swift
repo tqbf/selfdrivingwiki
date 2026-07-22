@@ -135,7 +135,7 @@ public enum QueueEvent: Sendable {
 /// A point-in-time view of the engine's full state, for UI bootstrap (Phase 6)
 /// and test assertions. Contains only `Sendable` value types so it can cross
 /// actor boundaries.
-public struct QueueSnapshot: Sendable {
+public struct QueueSnapshot: Sendable, Codable {
     /// All non-terminal items (`.queued` + `.running`), ordered by
     /// `orderingKey` ascending.
     public var activeItems: [QueueItem]

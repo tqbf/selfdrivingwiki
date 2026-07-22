@@ -15,7 +15,7 @@ struct SourcesContainerView: View {
     var session: WikiSession
     @Environment(QueueActivityTracker.self) private var tracker
     let launcher: AgentLauncher
-    let queueEngine: QueueEngine
+    let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<PageID> = []
 

@@ -27,14 +27,14 @@ final class OperationNotifier {
 
     // MARK: - Dependencies
 
-    private let queueEngine: QueueEngine
+    private let queueEngine: any QueueEngineClient
 
     /// The stream consumer task. Kept so `stop()` can cancel it.
     private var streamTask: Task<Void, Never>?
 
     // MARK: - Init
 
-    init(queueEngine: QueueEngine) {
+    init(queueEngine: any QueueEngineClient) {
         self.queueEngine = queueEngine
     }
 
