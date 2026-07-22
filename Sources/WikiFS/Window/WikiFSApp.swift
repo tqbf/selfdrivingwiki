@@ -53,6 +53,7 @@ struct WikiFSApp: App {
     /// exposes `@Observable` extraction state (extractingSourceIDs, progress
     /// log, etc.) that replaces the launcher's slot machinery.
     @State private var activityTracker: QueueActivityTracker
+    @State private var backgroundIngestCoordinator: BackgroundIngestCoordinator
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
@@ -62,6 +63,7 @@ struct WikiFSApp: App {
     /// Per-app appearance override (Light / Dark / System). Shared key with
     /// `AppearanceSettingsView`. Applied via `.preferredColorScheme` on every
     /// scene + `NSApp.appearance` for AppKit surfaces (NSAlert, menu bar).
+    @AppStorage("backgroundIngestEnabled") private var backgroundIngestEnabled = false
     @AppStorage(AppearanceSettingsView.storageKey) private var appearanceModeRaw = AppearanceMode.system.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
@@ -222,30 +224,20 @@ struct WikiFSApp: App {
             extractionProvider: extractionProvider,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
             htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
-            // Issue #799 PR2: resolve the configured HTML extraction backend
-            // from `extraction-config.json` (PR1 added the field + Settings
-            // picker). The resolver is called once per session; `nil` (no
-            // default chosen — fresh install or legacy config) means the
-            // Extract button prompts the user to pick a backend.
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
-            // Issue #799 PR4: resolve the configured podcast transcription
-            // backend from `extraction-config.json` (PR1 added the field +
-            // Settings picker). Mirrors `htmlBackendResolver` one-to-one.
-            // `nil` (the default on a fresh install or a config written before
-            // PR1) means the Transcribe button uses `.appleTranscript` directly
-            // (the only backend today); the "Re-transcribe with" menu lists
-            // `PodcastTranscriptionBackend.allCases` so future backends (Whisper
-            // / Rev.ai / etc.) slot in by adding a case without touching this
-            // wiring.
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
-                // Interactive chat (Ask/Edit) usage delta → daily total so the
-                // menu bar "Today: X tokens" includes chat, not just queue runs.
                 activityTracker?.recordInteractiveUsage(usage)
             }
         )
         _sessionManager = State(initialValue: sm)
         _windowTracker = State(initialValue: WindowListTracker())
+        
+        let backgroundIngestCoordinator = BackgroundIngestCoordinator(
+            sessionManager: sm,
+            queueEngine: queueEngine
+        )
+        _backgroundIngestCoordinator = State(initialValue: backgroundIngestCoordinator)
         // Wire the session-lookup box to the real session manager now that
         // it's constructed. The provider (already captured by the factory)
         // sees live sessions through the box.
@@ -553,6 +545,13 @@ struct WikiFSApp: App {
             .appEnvironment(tracker: activityTracker)
             .preferredColorScheme(appearanceColorScheme)
             .frame(minWidth: 560, minHeight: 520)
+            .onChange(of: backgroundIngestEnabled) { _, newValue in
+                if newValue {
+                    backgroundIngestCoordinator.start()
+                } else {
+                    backgroundIngestCoordinator.stop()
+                }
+            }
         }
         .windowResizability(.contentMinSize)
     }
