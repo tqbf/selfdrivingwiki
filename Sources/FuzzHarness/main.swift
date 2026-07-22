@@ -538,7 +538,6 @@ func runFuzz() {
         if i > 0 && i % 10_000 == 0 {
             FileHandle.standardOutput.write(Data("progress iter=\(i)\n".utf8))
         }
-        if i % 0xFF == 0 { fflush(stdout) }
         i &+= 1
     }
 
