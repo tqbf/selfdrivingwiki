@@ -28,13 +28,18 @@ struct OperationsSettingsView: View {
         // switcher is the first section; the selected operation's pins follow.
         Form {
             Section {
-                Picker("Operation", selection: $selectedOperationTab) {
-                    ForEach(AgentsSettingsView.OperationTab.allCases) { tab in
-                        Text(tab.label).tag(tab)
+                HStack {
+                    Spacer(minLength: 0)
+                    Picker("Operation", selection: $selectedOperationTab) {
+                        ForEach(AgentsSettingsView.OperationTab.allCases) { tab in
+                            Text(tab.label).tag(tab)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 0)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             } footer: {
                 Text("Pin which provider and model runs each operation. Applies across all providers.")
                     .font(.caption)
