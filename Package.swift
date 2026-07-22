@@ -238,6 +238,30 @@ let package = Package(
             path: "Sources/wikid",
             swiftSettings: strictSwiftSettings
         ),
+        // FuzzHarness — property-based fuzzer for the pure-logic parser cluster
+        // (WikiFSLinks + WikiFSMarkdown). NOT a swift-test target — it's a
+        // standalone executable that runs an open-ended grammar-driven fuzzer
+        // against the wiki-link / markdown / HTML parsers to hunt memory-safety
+        // bugs (precondition failures, force-unwraps, EXC_BAD_ACCESS). Builds
+        // with Address Sanitizer via the documented user command:
+        //   swift build --target FuzzHarness -Xswiftc -sanitize=address
+        // and runs as `.build/debug/FuzzHarness [seed] [iterations]`. See
+        // plans/fuzz-harness.md for the full design.
+        //
+        // -sanitize=address is intentionally NOT baked into unsafeFlags —
+        // SwiftPM refuses to mix sanitized and non-sanitized object files
+        // across git-imported dependencies, and `-warnings-as-errors` interacts
+        // poorly with the sanitizer runtime. Documenting the build flag on the
+        // command line is the standard pattern (clang/swift docs).
+        .executableTarget(
+            name: "FuzzHarness",
+            dependencies: ["WikiFSLinks", "WikiFSMarkdown", "WikiFSTypes"],
+            path: "Sources/FuzzHarness",
+            // No `-warnings-as-errors` here — fuzzer output is noisy and the
+            // harness deliberately exercises formatting paths that are
+            // sometimes_warnable. The dependencies still build strict.
+            swiftSettings: []
+        ),
         // podcast-token-helper — the FairPlay/Mescal bearer-token signer for Apple
         // Podcasts transcripts. An ObjC executable ON PURPOSE: it dlopens the private
         // PodcastsFoundation framework and calls undeclared selectors (AMSMescal /
