@@ -2190,7 +2190,7 @@ public final class WikiStoreModel {
         return try await addURL(
             rawInput, fetcher: fetcher,
             podcastFetcher: ApplePodcastTranscriptService.bundled(),
-            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(fetcher: fetcher))
+            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService())
         #else
         // Phase 5b: byteless external-embed media (YouTube/Vimeo/Spotify/
         // SoundCloud/remote-media) routes uniformly through `bytelessMediaOutcome`,
@@ -3147,7 +3147,7 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: PageID,
         podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(fetcher: URLSessionFetcher())
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3170,7 +3170,7 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: PageID,
         podcastFetcher: Any? = nil,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(fetcher: URLSessionFetcher())
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3228,10 +3228,11 @@ public final class WikiStoreModel {
               let episode = PodcastEpisodeURL.parse(planURLString) else {
             throw SourceRefreshService.RefreshError.missingPlan
         }
-        guard let svc = fetcher else {
-            throw PodcastTranscriptError.signatureUnavailable(
-                "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
-        }
+        // Prefer the injected fetcher (FairPlay path when the signing helper is
+        // available). Fall back to the RSS subprocess service — it needs only
+        // `uv` (no macOS signing helper), so podcast transcripts work even in
+        // builds where `podcast-token-helper` is absent. Issue #812.
+        let svc = fetcher ?? RSSPodcastTranscriptService(episodeURL: pageURL)
         // The materializer runs the transcript fetch (helper subprocess + two
         // HTTP round-trips + TTML parse) off-main in a detached Task; the
         // model never touches the store inside this `await`.

@@ -53,6 +53,13 @@ PDF2MD_NAME="pdf2md"
 PDF2MD_SRC="tools/pdf2md/pdf2md"
 DEFUDDLE_NAME="defuddle"
 DEFUDDLE_SRC="tools/defuddle/defuddle"
+# youtube-transcript / podcast-transcript — PEP 723 inline scripts spawned via
+# `uv run --script` (same shape as pdf2md). Used by YouTubeTranscriptService
+# and RSSPodcastTranscriptService respectively. Issues #811, #812.
+YT_TRANSCRIPT_NAME="youtube-transcript"
+YT_TRANSCRIPT_SRC="tools/youtube-transcript/youtube-transcript"
+POD_TRANSCRIPT_NAME="podcast-transcript"
+POD_TRANSCRIPT_SRC="tools/podcast-transcript/podcast-transcript"
 BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
@@ -215,6 +222,22 @@ if [ -f "${DEFUDDLE_SRC}" ]; then
   cp "${DEFUDDLE_SRC}" "${BUILD_DIR}/${DEFUDDLE_NAME}"
 else
   echo "  (defuddle not found at ${DEFUDDLE_SRC} — skipping; HTML extraction will fall back to tag-based)"
+fi
+# Bundle the youtube-transcript PEP 723 script (spawned by
+# YouTubeTranscriptService). Same shape as pdf2md/defuddle.
+if [ -f "${YT_TRANSCRIPT_SRC}" ]; then
+  cp "${YT_TRANSCRIPT_SRC}" "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}"
+  cp "${YT_TRANSCRIPT_SRC}" "${BUILD_DIR}/${YT_TRANSCRIPT_NAME}"
+else
+  echo "  (youtube-transcript not found at ${YT_TRANSCRIPT_SRC} — skipping; YouTube transcript ingest will be unavailable)"
+fi
+# Bundle the podcast-transcript PEP 723 script (spawned by
+# RSSPodcastTranscriptService). Fetches RSS <podcast:transcript> tags.
+if [ -f "${POD_TRANSCRIPT_SRC}" ]; then
+  cp "${POD_TRANSCRIPT_SRC}" "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}"
+  cp "${POD_TRANSCRIPT_SRC}" "${BUILD_DIR}/${POD_TRANSCRIPT_NAME}"
+else
+  echo "  (podcast-transcript not found at ${POD_TRANSCRIPT_SRC} — skipping; podcast transcript ingest will fall back to FairPlay if available)"
 fi
 # Semantic vector search is now pure Swift (`VectorCosine` in WikiFSSearch —
 # issue #628): no C extension to copy, no per-connection registration.
@@ -471,6 +494,16 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${DEFUDDLE_NAME}"
   fi
+  # youtube-transcript — same plain-script signing as pdf2md/defuddle.
+  if [ -f "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}"
+  fi
+  # podcast-transcript — same plain-script signing.
+  if [ -f "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}"
+  fi
   # podcast-token-helper is a nested Mach-O — sign it before the outer app (same
   # inside-out discipline as wikictl). Only present in a feature-on build.
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
@@ -504,6 +537,12 @@ else
   fi
   if [ -f "${HELPERS_DIR}/${DEFUDDLE_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${DEFUDDLE_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}"
   fi
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
