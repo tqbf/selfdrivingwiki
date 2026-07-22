@@ -1,5 +1,8 @@
 import Foundation
 import WikiFSCore
+#if canImport(WikiFSEngine)
+import WikiFSEngine
+#endif
 
 /// The daemon's in-process state. Holds the live wiki registry + open stores.
 ///
@@ -8,7 +11,7 @@ import WikiFSCore
 /// All mutations are serialized on the daemon's dispatch queue for thread safety.
 ///
 /// See `plans/multi-wiki-daemon.md` §4.2.
-final class WikiDaemon {
+final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Dependencies
 
@@ -20,6 +23,32 @@ final class WikiDaemon {
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
     private var registry: WikiRegistry
     private var openStores: [String: GRDBWikiStore] = [:]
+
+    /// The per-connection event-sink proxies the daemon pushes live workload
+    /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
+    /// the app exports its `WikiDaemonEventSink` conformer on the connection.
+    /// Phase 0: captured but not yet pushed to (no real workload dispatch).
+    private var eventSinks: [WikiDaemonEventSink] = []
+
+    // MARK: - Workload host scaffold (Phase 0)
+
+    #if canImport(WikiFSEngine)
+    /// Lazily-constructed queue engine over the container's `queue.sqlite`.
+    /// `nil` until `ensureQueueEngine()` is called. Phase 0: constructed but
+    /// not wired to real workers (the stub factory produces no workers).
+    /// See `plans/daemon-workloads.md` Phase 0 §3.
+    private var _queueEngine: QueueEngine?
+    #endif
+
+    /// Whether the daemon can host workloads (macOS + WikiFSEngine linked).
+    /// On Linux, this is always `false` — the workload host is compiled out.
+    var canHostWorkloads: Bool {
+        #if canImport(WikiFSEngine)
+        return true
+        #else
+        return false
+        #endif
+    }
 
     // MARK: - Init
 
@@ -204,4 +233,87 @@ final class WikiDaemon {
     private func databaseURL(forWikiID id: String) -> URL {
         containerDirectory.appendingPathComponent("\(id).sqlite", isDirectory: false)
     }
+
+    // MARK: - Event sink management (Phase 0)
+
+    /// Register an event-sink proxy for a connection. The daemon holds it weakly
+    /// (the proxy is retained by the `NSXPCConnection`). Called from
+    /// `WikiDaemonExporter.registerEventSink`.
+    func registerEventSink(_ sink: WikiDaemonEventSink) {
+        queue.sync {
+            eventSinks.append(sink)
+        }
+    }
+
+    /// All currently-registered event-sink proxies. Used by future phases to
+    /// push live workload events; Phase 0 exposes it for testing.
+    var registeredEventSinks: [WikiDaemonEventSink] {
+        queue.sync { eventSinks }
+    }
+
+    // MARK: - Workload host (Phase 0 — scaffold)
+
+    /// The `queue.sqlite` URL inside the container directory.
+    private var queueDatabaseURL: URL {
+        containerDirectory.appendingPathComponent("queue.sqlite", isDirectory: false)
+    }
+
+    #if canImport(WikiFSEngine)
+    /// Construct (or return the existing) `QueueEngine` over the container's
+    /// `queue.sqlite`. The engine is constructed with a **stub worker factory**
+    /// that never produces workers — Phase 0 demonstrates the daemon CAN host
+    /// the engine; Phase A wires real extraction workers, Phase B ingestion.
+    ///
+    /// Thread-safe: synchronized on `queue`. The engine itself is a `Sendable`
+    /// actor, so once constructed it is safe to serve from XPC handlers.
+    func ensureQueueEngine() throws -> QueueEngine {
+        try queue.sync {
+            if let engine = _queueEngine {
+                return engine
+            }
+            let store = try QueueStore(databaseURL: queueDatabaseURL)
+            let engine = QueueEngine(
+                store: store,
+                config: QueueEngineConfig(),
+                workerFactory: DaemonStubWorkerFactory()
+            )
+            _queueEngine = engine
+            return engine
+        }
+    }
+
+    /// Serve a queue snapshot as JSON `Data` for the XPC `queueSnapshot` method.
+    /// The engine's `snapshot()` is async (it's an actor method), so this is
+    /// async too — the exporter wraps it in a `Task` and replies when it
+    /// resolves. In Phase 0 the stub factory never dispatches workers, so the
+    /// snapshot contains only items the app enqueues (none yet).
+    func queueSnapshotData() async -> Data {
+        guard let engine = try? ensureQueueEngine() else {
+            return (try? JSONEncoder().encode(QueueSnapshot())) ?? Data()
+        }
+        let snapshot = await engine.snapshot()
+        return (try? JSONEncoder().encode(snapshot)) ?? Data()
+    }
+    #else
+    /// On Linux (no WikiFSEngine), returns an empty JSON snapshot.
+    func queueSnapshotData() async -> Data {
+        Data()
+    }
+    #endif
 }
+
+#if canImport(WikiFSEngine)
+/// A no-op `QueueWorkerFactory` used by the daemon's workload host in Phase 0.
+/// `providerID(for:)` always returns `nil`, so the `QueueEngine`'s dispatch
+/// scan never claims an item — enqueued items sit in `.queued` indefinitely.
+/// This is intentional: Phase 0 demonstrates the daemon CAN construct and host
+/// a `QueueEngine`; Phase A replaces this with a real extraction factory.
+///
+/// See `plans/daemon-workloads.md` Phase 0 §3.
+private struct DaemonStubWorkerFactory: QueueWorkerFactory {
+    func providerID(for item: QueueItem) async -> String? { nil }
+    func worker(for item: QueueItem) async throws -> any QueueWorker {
+        throw QueueIngestionError.noSources
+    }
+}
+#endif

@@ -26,7 +26,7 @@ func enqueueIngestion(
     sourceIDs: [PageID],
     store: WikiStoreModel,
     wikiID: String,
-    queueEngine: QueueEngine
+    queueEngine: any QueueEngineClient
 ) async {
     guard !sourceIDs.isEmpty else { return }
 

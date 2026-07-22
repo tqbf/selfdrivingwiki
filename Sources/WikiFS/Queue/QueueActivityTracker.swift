@@ -221,7 +221,7 @@ final class QueueActivityTracker {
 
     /// The queue engine — held weakly to avoid a retain cycle (the engine
     /// does not retain the tracker).
-    private weak var queueEngine: QueueEngine?
+    private weak var queueEngine: (any QueueEngineClient)?
 
     /// The stream consumer task.
     private var streamTask: Task<Void, Never>?
@@ -230,7 +230,7 @@ final class QueueActivityTracker {
 
     /// Attach to a queue engine and start consuming its events. Idempotent —
     /// calling again replaces the previous attachment.
-    func attach(engine: QueueEngine) {
+    func attach(engine: any QueueEngineClient) {
         queueEngine = engine
         start(events: engine.events)
     }
@@ -249,7 +249,7 @@ final class QueueActivityTracker {
     /// `lintingItemIDs`, …) are deliberately NOT rehydrated — on restart,
     /// `.running` items are reset to `.queued` by `resetRunningToQueued()`, so
     /// these sets rebuild naturally from live `.started` events.
-    func rehydrate(from engine: QueueEngine) async {
+    func rehydrate(from engine: any QueueEngineClient) async {
         let snapshots = await engine.loadAllActivitySnapshots()
         for (id, snap) in snapshots {
             if let usage = snap.usage { itemUsage[id] = usage }

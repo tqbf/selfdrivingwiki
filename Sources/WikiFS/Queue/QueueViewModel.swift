@@ -10,9 +10,9 @@ final class QueueViewModel {
     var snapshot: QueueSnapshot = QueueSnapshot()
     private var streamTask: Task<Void, Never>?
 
-    private weak var queueEngine: QueueEngine?
+    private weak var queueEngine: (any QueueEngineClient)?
 
-    func attach(engine: QueueEngine) {
+    func attach(engine: any QueueEngineClient) {
         queueEngine = engine
         streamTask?.cancel()
         streamTask = Task { @MainActor [weak self] in

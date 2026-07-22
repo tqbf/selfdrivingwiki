@@ -45,5 +45,42 @@ import Foundation
     /// The current changeToken for a wiki (per #129 event bus design).
     /// Returns an empty string if the store is not open or the token is unavailable.
     func changeToken(wikiID: String, reply: @escaping (String) -> Void)
+
+    // MARK: - Workload: event sink registration (Phase 0)
+
+    /// Tell the daemon which object to push live workload events to. The app
+    /// calls this once after connecting, passing its `WikiDaemonEventSink`
+    /// conformer. The daemon captures a weak reference and pushes JSON-encoded
+    /// `QueueEvent` envelopes / chat `AgentEvent` batches via `deliverEvent`.
+    ///
+    /// See `plans/daemon-workloads.md` §3 + §5.2.
+    func registerEventSink(_ sink: WikiDaemonEventSink)
+
+    // MARK: - Workload: queue engine (Phase 0 — scaffold)
+
+    /// Full snapshot of all queue items (JSON-encoded `QueueSnapshot`). The app
+    /// calls this on launch to rehydrate the Activity window / menu-bar state
+    /// after a reconnect. In Phase 0 the daemon serves an empty snapshot (the
+    /// engine is constructed but not wired to real workers).
+    func queueSnapshot(reply: @escaping (Data) -> Void)
+}
+
+/// The reverse-channel protocol the app implements so the daemon can push
+/// fine-grained *live* workload events (queue `QueueEvent`s, chat
+/// `AgentEvent`s, pending permissions). The app sets itself as the XPC
+/// connection's `exportedObject`; the daemon holds a proxy and calls
+/// `deliverEvent` with JSON-encoded payloads.
+///
+/// This is the standard bidirectional-`NSXPCConnection` pattern: one
+/// connection carries request/reply (the daemon's `WikiDaemonProtocol`) AND
+/// callbacks (the app's `WikiDaemonEventSink`).
+///
+/// See `plans/daemon-workloads.md` §3 + §5.2.
+@objc public protocol WikiDaemonEventSink: AnyObject {
+    /// One streamed workload event, JSON-encoded. The daemon encodes a
+    /// `QueueEventEnvelope` (`{itemID, kind, payload}`) or an `AgentEvent`
+    /// batch; the app decodes and forwards into its existing
+    /// `QueueEventBroadcaster` / launcher `events` array.
+    func deliverEvent(_ payload: Data)
 }
 #endif

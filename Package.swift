@@ -208,7 +208,14 @@ let package = Package(
         // below is a thin process shell over it.
         .target(
             name: "WikiCtlCore",
-            dependencies: ["WikiFSCore"],
+            dependencies: [
+                "WikiFSCore",
+                // WikiFSEngine is needed for DaemonWorkloadClient (Phase 0 daemon
+                // workloads) which decodes QueueSnapshot from XPC JSON. macOS-only
+                // because WikiFSEngine pulls in the ACP product.
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+            ],
             path: "Sources/WikiCtlCore",
             // Must match WikiFSCore's PODCAST_TRANSCRIPTS flag so conditional
             // API in SourceRefreshService (the podcast refresh branch) compiles
@@ -230,11 +237,17 @@ let package = Package(
         // live wiki registry + store lifecycle, serving clients via XPC. Launchd
         // starts it on-demand when a client connects to the mach service name.
         // The daemon links WikiFSCore (for WikiRegistry, SQLiteWikiStore, the
-        // WikiDaemonProtocol) — not WikiFSEngine (agent execution stays in the
-        // app for now; the daemon grows it in a later phase).
+        // WikiDaemonProtocol) and, on macOS, WikiFSEngine (for the workload host
+        // scaffold — QueueEngine construction. See plans/daemon-workloads.md
+        // Phase 0). On Linux, WikiFSEngine is unavailable (ACP is macOS-only),
+        // so the workload host is compiled out.
         .executableTarget(
             name: "wikid",
-            dependencies: ["WikiFSCore"],
+            dependencies: [
+                "WikiFSCore",
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+            ],
             path: "Sources/wikid",
             swiftSettings: strictSwiftSettings
         ),

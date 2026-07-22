@@ -41,7 +41,7 @@ struct SourceDetailView: View {
     /// Resolves the selected extraction backend (local pdf2md / Claude / Docling
     /// Serve) for the standalone Extract button.
     let extractionCoordinator: ExtractionCoordinator
-    let queueEngine: QueueEngine
+    let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderFacade
     @Bindable var store: WikiStoreModel

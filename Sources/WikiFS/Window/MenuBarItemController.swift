@@ -27,7 +27,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Dependencies
 
-    private let queueEngine: QueueEngine
+    private let queueEngine: any QueueEngineClient
     private let activityTracker: QueueActivityTracker
     private weak var sessionManager: SessionManager?
     private weak var backgroundIngestCoordinator: BackgroundIngestCoordinator?
@@ -61,7 +61,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     // MARK: - Init
 
     init(
-        queueEngine: QueueEngine,
+        queueEngine: any QueueEngineClient,
         activityTracker: QueueActivityTracker,
         sessionManager: SessionManager,
         registry: WikiRegistryClient,
