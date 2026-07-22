@@ -1,0 +1,334 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "youtube-transcript-api>=1.0",
+# ]
+# ///
+"""youtube-transcript — Fetch YouTube video transcripts and output markdown.
+
+Usage:
+    uv run --script youtube-transcript <video-id-or-url> [options]
+    ./youtube-transcript dQw4w9WgXcQ
+
+Options:
+    --lang en          Preferred language code (default: en)
+    --json             Output structured JSON instead of markdown
+    --output file.md   Write output to file (default: stdout)
+    --timestamps       Include [mm:ss] timestamps in markdown output
+
+If uv is not installed, download it first:
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+Exit codes:
+    0   Success
+    1   Network or unknown error
+    2   No transcript available for this video
+    3   Transcripts disabled for this video
+    4   Video unavailable (deleted, private, etc.)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+# ── Video ID extraction ───────────────────────────────────────────────
+
+_VIDEO_ID_RE = re.compile(r"[a-zA-Z0-9_-]{11}")
+_WATCH_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com"}
+_SHORT_HOSTS = {"youtu.be", "www.youtu.be"}
+_PATH_PREFIXES = frozenset(("shorts", "embed"))
+
+
+def _is_valid_video_id(s: str) -> bool:
+    """Check if s is a valid 11-char YouTube video ID."""
+    return _VIDEO_ID_RE.fullmatch(s) is not None
+
+
+def extract_video_id(input_str: str) -> str | None:
+    """Extract an 11-character YouTube video ID from a URL or raw ID string.
+
+    Accepts:
+      - Raw ID:           dQw4w9WgXcQ
+      - Watch URL:        https://www.youtube.com/watch?v=dQw4w9WgXcQ
+      - Short URL:        https://youtu.be/dQw4w9WgXcQ
+      - Shorts URL:       https://www.youtube.com/shorts/dQw4w9WgXcQ
+      - Embed URL:        https://www.youtube.com/embed/dQw4w9WgXcQ
+
+    Returns the 11-char video ID, or None if no valid ID could be extracted.
+    """
+    s = input_str.strip()
+
+    # Bare video ID
+    if _is_valid_video_id(s):
+        return s
+
+    # URL parsing
+    url = s if "://" in s else f"https://{s}"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        pass
+    else:
+        host = (parsed.hostname or "").lower()
+
+        # youtu.be/<id>
+        if host in _SHORT_HOSTS:
+            path = parsed.path.strip("/")
+            if _is_valid_video_id(path):
+                return path
+
+        # youtube.com/watch?v=<id>, /shorts/<id>, /embed/<id>
+        if host in _WATCH_HOSTS:
+            qs = parse_qs(parsed.query)
+            if "v" in qs:
+                vid = qs["v"][0]
+                if _is_valid_video_id(vid):
+                    return vid
+
+            path_parts = parsed.path.strip("/").split("/")
+            if (
+                len(path_parts) >= 2
+                and path_parts[0] in _PATH_PREFIXES
+                and _is_valid_video_id(path_parts[1])
+            ):
+                return path_parts[1]
+
+    # Last resort: find any 11-char [a-zA-Z0-9_-] sequence
+    match = _VIDEO_ID_RE.search(s)
+    return match.group(0) if match else None
+
+
+# ── Language preference ────────────────────────────────────────────────
+
+
+def _build_language_list(lang: str) -> list[str]:
+    """Build a language preference list for YouTubeTranscriptApi.
+
+    Order: requested language, then English variants (manual + ASR).
+    """
+    langs: list[str] = []
+    if lang:
+        langs.append(lang)
+    for v in ("en", "en-US", "en-GB"):
+        if v not in langs:
+            langs.append(v)
+    return langs
+
+
+# ── Custom exception ──────────────────────────────────────────────────
+
+
+class TranscriptFetchError(Exception):
+    """Error fetching transcript, with an associated exit code."""
+
+    def __init__(self, message: str, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+# ── API import (deferred so tests can import the module without the dep) ──
+
+
+def _import_api() -> Any:
+    """Import youtube_transcript_api lazily and return the module."""
+    import youtube_transcript_api as yta
+
+    return yta
+
+
+# ── Fetch ─────────────────────────────────────────────────────────────
+
+
+def _fetch_transcript(
+    video_id: str, lang: str
+) -> tuple[list[dict[str, str | float]], str]:
+    """Fetch transcript with language preference chain.
+
+    Tries the requested language and English fallbacks via get_transcript,
+    then falls back to the first available track of any language.
+
+    Raises TranscriptFetchError with the appropriate exit_code on failure.
+    """
+    yta = _import_api()
+    try:
+        return _try_fetch(yta, video_id, lang)
+    except yta.NoTranscriptFound:
+        raise TranscriptFetchError(
+            f"No transcript available for {video_id}", exit_code=2
+        ) from None
+    except yta.TranscriptsDisabled:
+        raise TranscriptFetchError(
+            f"Transcripts disabled for {video_id}", exit_code=3
+        ) from None
+    except yta.VideoUnavailable:
+        raise TranscriptFetchError(
+            f"Video unavailable: {video_id}", exit_code=4
+        ) from None
+    except Exception as e:
+        raise TranscriptFetchError(str(e), exit_code=1) from e
+
+
+def _try_fetch(
+    yta: Any, video_id: str, lang: str
+) -> tuple[list[dict[str, str | float]], str]:
+    """Try language preference, then first available track.
+
+    Raises youtube_transcript_api exceptions on failure.
+    """
+    langs = _build_language_list(lang)
+    segments: list[dict[str, str | float]] = []
+
+    try:
+        segments = list(
+            yta.YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
+        )
+        if segments:
+            return segments, langs[0]
+    except yta.NoTranscriptFound:
+        pass  # Fall through to first available
+
+    # Fallback: first available track of any language
+    transcript_list = yta.YouTubeTranscriptApi.list_transcripts(video_id)
+    for transcript_obj in transcript_list:
+        segments = list(transcript_obj.fetch())
+        if segments:
+            return segments, transcript_obj.language_code
+
+    # No transcript at all
+    raise yta.NoTranscriptFound(video_id)
+
+
+# ── Output formatting ─────────────────────────────────────────────────
+
+
+def format_timestamp(seconds: float) -> str:
+    """Format seconds as mm:ss or hh:mm:ss."""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def format_markdown(
+    video_id: str,
+    segments: list[dict[str, str | float]],
+    language: str,
+    timestamps: bool = False,
+) -> str:
+    """Format transcript segments as markdown.
+
+    With timestamps=True, each segment is prefixed with [mm:ss].
+    Without, all segment texts are joined into clean text paragraphs.
+    """
+    lines: list[str] = [f"# YouTube Transcript: {video_id}", ""]
+
+    if timestamps:
+        for seg in segments:
+            start = format_timestamp(float(seg.get("start", 0.0)))
+            text = str(seg.get("text", "")).strip()
+            lines.append(f"[{start}] {text}")
+    else:
+        texts = [str(seg.get("text", "")).strip() for seg in segments]
+        body = " ".join(t for t in texts if t)
+        lines.append(body)
+
+    return "\n".join(lines) + "\n"
+
+
+def format_json(
+    video_id: str,
+    segments: list[dict[str, str | float]],
+    language: str,
+    markdown: str,
+) -> str:
+    """Format as structured JSON."""
+    return json.dumps(
+        {
+            "video_id": video_id,
+            "language": language,
+            "segments": segments,
+            "markdown": markdown,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+# ── CLI ────────────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser (extracted for testability)."""
+    parser = argparse.ArgumentParser(
+        description="Fetch a YouTube video transcript and output markdown."
+    )
+    parser.add_argument(
+        "input",
+        help="YouTube video ID or URL (watch, shorts, youtu.be, embed)",
+    )
+    parser.add_argument(
+        "--lang",
+        default="en",
+        help="Preferred language code (default: en)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON instead of markdown",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Write output to file (default: stdout)",
+    )
+    parser.add_argument(
+        "--timestamps",
+        action="store_true",
+        help="Include [mm:ss] timestamps in markdown output",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # Extract video ID
+    video_id = extract_video_id(args.input)
+    if not video_id:
+        print(f"Error: could not extract video ID from: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    # Fetch transcript
+    try:
+        segments, language = _fetch_transcript(video_id, args.lang)
+    except TranscriptFetchError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(e.exit_code)
+
+    # Format output
+    markdown = format_markdown(
+        video_id, segments, language, timestamps=args.timestamps
+    )
+
+    if args.json:
+        sys.stdout.write(format_json(video_id, segments, language, markdown))
+    elif args.output:
+        args.output.write_text(markdown, encoding="utf-8")
+    else:
+        sys.stdout.write(markdown)
+
+
+if __name__ == "__main__":
+    main()
