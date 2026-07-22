@@ -38,6 +38,11 @@ struct ExtractionSettingsView: View {
     @State private var anthropicTest = TestPhase.idle
     @State private var geminiTest = TestPhase.idle
     @State private var doclingTest = TestPhase.idle
+    // Issue #799 PR1: HTML + Podcast backend drafts (optional — nil = no
+    // default yet, user is prompted to pick on first extraction). Seeded from
+    // `ExtractionConfig` in `init`, written back in `writeConfig`.
+    @State private var draftHtmlBackend: HtmlExtractionBackend?
+    @State private var draftPodcastBackend: PodcastTranscriptionBackend?
 
     private enum TestPhase: Equatable {
         case idle
@@ -70,6 +75,8 @@ struct ExtractionSettingsView: View {
         _geminiBaseURLText = State(initialValue: config.geminiBaseURLOverride ?? "")
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
         _doclingTokenText = State(initialValue: credentialStore.secret(.doclingServeToken) ?? "")
+        _draftHtmlBackend = State(initialValue: config.htmlBackend)
+        _draftPodcastBackend = State(initialValue: config.podcastBackend)
     }
 
     var body: some View {
@@ -93,6 +100,43 @@ struct ExtractionSettingsView: View {
                 Text("PDF Extraction")
             } footer: {
                 Text(draftBackend.helpText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Issue #799 PR1: HTML + Podcast backend pickers. These are
+            // scaffolding only — the trigger UI (PR2) and the removal of
+            // auto-extraction at ingest (PR3) land in later PRs. The user
+            // picks a default here so the eventual trigger has a backend
+            // to run without prompting each time; nil = "prompt me".
+            Section {
+                Picker("Backend", selection: htmlBackendBinding) {
+                    Text("Prompt me when extracting").tag(nil as HtmlExtractionBackend?)
+                    ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
+                        Text(backend.displayName).tag(backend as HtmlExtractionBackend?)
+                    }
+                }
+                .onChange(of: draftHtmlBackend) { persistAll() }
+            } header: {
+                Text("HTML Extraction")
+            } footer: {
+                Text("The backend to use when extracting an HTML source to markdown. Defuddle runs the bundled article-extraction binary; tag-based is built-in and always available but lower fidelity. Extraction still runs automatically at ingest for now (PR3 removes that).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Picker("Backend", selection: podcastBackendBinding) {
+                    Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
+                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
+                        Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
+                    }
+                }
+                .onChange(of: draftPodcastBackend) { persistAll() }
+            } header: {
+                Text("Podcast Transcription")
+            } footer: {
+                Text("The backend to use when transcribing a podcast episode. Apple Podcasts transcript fetches the transcript over the network (requires the bundled signing helper — disabled in app-store builds). Transcription still runs automatically at ingest for now (PR4 removes that).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -273,6 +317,23 @@ struct ExtractionSettingsView: View {
         !tracker.extractingSourceIDs.isEmpty
     }
 
+    /// `Picker`'s `selection:` can't bind directly to `@State var x: T?` when
+    /// the option set includes a "no default" nil tag — wrap it so SwiftUI gets
+    /// a plain `Binding<HtmlExtractionBackend?>` it can read/write. Writing
+    /// through the binding updates `draftHtmlBackend`, which `.onChange` watches
+    /// to trigger `persistAll()` — same auto-save flow as every other field.
+    private var htmlBackendBinding: Binding<HtmlExtractionBackend?> {
+        Binding(
+            get: { draftHtmlBackend },
+            set: { draftHtmlBackend = $0 })
+    }
+
+    private var podcastBackendBinding: Binding<PodcastTranscriptionBackend?> {
+        Binding(
+            get: { draftPodcastBackend },
+            set: { draftPodcastBackend = $0 })
+    }
+
     // MARK: - Auto-save
 
     /// Persist every non-secret draft into `ExtractionConfig` and every secret
@@ -302,6 +363,8 @@ struct ExtractionSettingsView: View {
         config.geminiBaseURLOverride = geminiBase.isEmpty ? nil : geminiBase
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.doclingServeEndpoint = endpoint.isEmpty ? nil : endpoint
+        config.htmlBackend = draftHtmlBackend
+        config.podcastBackend = draftPodcastBackend
     }
 
     // MARK: - Test Connection (per backend). Drafts are already persisted by

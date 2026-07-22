@@ -41,6 +41,22 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// `http://localhost:5001`. `nil` until configured.
     public var doclingServeEndpoint: String?
 
+    /// The HTML→Markdown backend to use when the user explicitly extracts an
+    /// HTML source (issue #799 PR1: scaffolding only — extraction still
+    /// auto-runs at ingest with the current method; the trigger wiring lands in
+    /// PR2, the auto-extraction removal in PR3). `nil` = no default chosen:
+    /// the user is prompted to pick a backend before the first extraction.
+    /// Mirrors the typed-backend pattern of `backend` but optional, since HTML
+    /// has no always-available fallback (defuddle binary may be missing).
+    public var htmlBackend: HtmlExtractionBackend?
+
+    /// The podcast→transcript backend to use when the user explicitly
+    /// transcribes a podcast source (issue #799 PR4 — framework only here;
+    /// the Transcribe trigger and `#if PODCAST_TRANSCRIPTS` gating land in
+    /// PR4). `nil` = no default chosen. Currently only `appleTranscript`, with
+    /// Whisper/Rev.ai backends as future follow-ups.
+    public var podcastBackend: PodcastTranscriptionBackend?
+
     /// The config's JSON filename inside the App Group container.
     public static let fileName = "extraction-config.json"
 
@@ -51,7 +67,9 @@ public struct ExtractionConfig: JSONSidecarConfig {
         anthropicBaseURLOverride: String? = nil,
         geminiModel: String = ExtractionConfig.defaultGeminiModel,
         geminiBaseURLOverride: String? = nil,
-        doclingServeEndpoint: String? = nil
+        doclingServeEndpoint: String? = nil,
+        htmlBackend: HtmlExtractionBackend? = nil,
+        podcastBackend: PodcastTranscriptionBackend? = nil
     ) {
         self.backend = backend
         self.acpProviderId = acpProviderId
@@ -60,6 +78,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.geminiModel = geminiModel
         self.geminiBaseURLOverride = geminiBaseURLOverride
         self.doclingServeEndpoint = doclingServeEndpoint
+        self.htmlBackend = htmlBackend
+        self.podcastBackend = podcastBackend
     }
 
     /// The default model id used everywhere a model isn't explicitly set, so the
@@ -95,6 +115,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case anthropicModel, anthropicBaseURLOverride
         case geminiModel, geminiBaseURLOverride
         case doclingServeEndpoint
+        case htmlBackend, podcastBackend
     }
 
     public init(from decoder: Decoder) throws {
@@ -108,6 +129,17 @@ public struct ExtractionConfig: JSONSidecarConfig {
             ?? ExtractionConfig.defaultGeminiModel
         self.geminiBaseURLOverride = try c.decodeIfPresent(String.self, forKey: .geminiBaseURLOverride)
         self.doclingServeEndpoint = try c.decodeIfPresent(String.self, forKey: .doclingServeEndpoint)
+        // Forward-compat for issue #799 PR1: a config file written before
+        // this field shipped (no `htmlBackend`/`podcastBackend` key) decodes
+        // to nil — the user picks a backend on first extraction. Mirrors the
+        // exact pattern `backend` uses below: `try? c.decode(...)` so a missing
+        // key OR an unknown raw value (a future/typo'd backend) degrades
+        // gracefully rather than rejecting the whole file. The "default" for
+        // these optional fields is `nil` (vs `backend`'s `.localPdf2md`), so a
+        // typo silently picks "prompt me" instead of "PDF" — same resilient
+        // decode philosophy as `unknownBackendValueDegradesToLocalPdf2md`.
+        self.htmlBackend = try? c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend)
+        self.podcastBackend = try? c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend)
     }
 
     // MARK: - Persistence (via `JSONSidecarConfig`)

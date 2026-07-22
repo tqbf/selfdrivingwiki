@@ -129,4 +129,85 @@ struct ExtractionConfigTests {
         let loaded = ExtractionConfig.load(from: dir)
         #expect(loaded.acpProviderId == nil)
     }
+
+    // MARK: - Issue #799 PR1: HTML + Podcast backend round-trip
+
+    /// AC.1: `ExtractionConfig` round-trips all three backend fields
+    /// (PDF + HTML + Podcast) via save/load.
+    @Test func htmlAndPodcastBackendsRoundTrip() throws {
+        let dir = tempDirectory()
+        var config = ExtractionConfig()
+        config.backend = .doclingServe
+        config.htmlBackend = .tagBased
+        config.podcastBackend = .appleTranscript
+        try config.save(to: dir)
+
+        let loaded = ExtractionConfig.load(from: dir)
+        #expect(loaded == config)
+        #expect(loaded.backend == .doclingServe)
+        #expect(loaded.htmlBackend == .tagBased)
+        #expect(loaded.podcastBackend == .appleTranscript)
+    }
+
+    /// AC.1 (negative case): both new fields round-trip nil when explicitly
+    /// reset — the "prompt me" state must survive a save/load.
+    @Test func htmlAndPodcastBackendsRoundTripNil() throws {
+        let dir = tempDirectory()
+        let config = ExtractionConfig(
+            backend: .anthropic,
+            htmlBackend: nil,
+            podcastBackend: nil)
+        try config.save(to: dir)
+        let loaded = ExtractionConfig.load(from: dir)
+        #expect(loaded == config)
+        #expect(loaded.htmlBackend == nil)
+        #expect(loaded.podcastBackend == nil)
+    }
+
+    /// AC.2: a legacy config file written before issue #799 PR1 shipped (no
+    /// `htmlBackend` / `podcastBackend` keys) decodes both new fields as nil
+    /// — the user is prompted to pick a backend on first extraction.
+    /// Mirrors `acpProviderIdDecodesAsNilWhenAbsent` forward-compat contract.
+    @Test func htmlAndPodcastBackendsDecodeAsNilWhenAbsent() throws {
+        let json = Data(#"{"backend":"anthropic"}"#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.backend == .anthropic)
+        #expect(config.htmlBackend == nil)
+        #expect(config.podcastBackend == nil)
+    }
+
+    /// Unknown raw values for the new backends degrade silently to nil —
+    /// symmetric with `unknownBackendValueDegradesToLocalPdf2md` for the PDF
+    /// `backend` field (a future/typo'd raw value doesn't crash the decode,
+    /// the whole config still loads, the optional field just ends up nil). A
+    /// typo'd `htmlBackend` therefore picks "prompt me" rather than rejecting
+    /// the entire config — same resilient-decode philosophy as the existing
+    /// fields, and the safer posture for a fresh-install user who hand-edited
+    /// the JSON.
+    @Test func unknownHtmlAndPodcastBackendValuesDegradeToNil() throws {
+        let json = Data(#"""
+        {"backend":"anthropic","htmlBackend":"whisper","podcastBackend":"rev_ai"}
+        """#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.backend == .anthropic)
+        #expect(config.htmlBackend == nil)
+        #expect(config.podcastBackend == nil)
+    }
+
+    /// A config with the new backends also persists the existing PDF backend
+    /// unchanged — the three fields coexist in one file without crosstalk.
+    @Test func pdfBackendSurvivesWhenNewBackendsAreSet() throws {
+        let dir = tempDirectory()
+        var config = ExtractionConfig()
+        config.backend = .acp
+        config.acpProviderId = "claude-acp"
+        config.htmlBackend = .defuddle
+        config.podcastBackend = .appleTranscript
+        try config.save(to: dir)
+        let loaded = ExtractionConfig.load(from: dir)
+        #expect(loaded.backend == .acp)
+        #expect(loaded.acpProviderId == "claude-acp")
+        #expect(loaded.htmlBackend == .defuddle)
+        #expect(loaded.podcastBackend == .appleTranscript)
+    }
 }
