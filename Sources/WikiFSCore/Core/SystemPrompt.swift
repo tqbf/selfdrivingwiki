@@ -1,16 +1,16 @@
 import Foundation
 
-/// The user-editable "system prompt" document — a single, app-wide singleton
-/// (NOT a wiki page). It is the first thing the managing agent reads on every
-/// run: the File Provider projection surfaces its body read-only at the wiki
-/// root as BOTH `CLAUDE.md` and `AGENTS.md` (identical bytes), the two filenames
-/// the common CLI agents look for. The user edits it in the app; the projection
-/// is read-only like everything else.
+/// The system-prompt document — a single, app-wide singleton (NOT a wiki page).
+/// It is the first thing the managing agent reads on every run: the File
+/// Provider projection surfaces its body read-only at the wiki root as BOTH
+/// `CLAUDE.md` and `AGENTS.md` (identical bytes), the two filenames the common
+/// CLI agents look for.
 ///
-/// Persisted as one row in the `system_prompt` table (`id = 1`). Carries a
-/// `version` (bumped on every edit) so it can fold into the whole-database
-/// `changeToken()` sync anchor — editing ONLY the prompt must still advance the
-/// anchor or the projected `CLAUDE.md`/`AGENTS.md` would never refresh.
+/// As of v42, the prompt is **compiled-only** — it always comes from
+/// ``defaultBody`` (which reads ``GeneratedPrompts/systemPromptDefault``).
+/// The user-editable `system_prompt` SQLite table was removed; the prompt is
+/// no longer editable in-app. A stable hash of the body drives the
+/// ``ChangeToken`` fold so recompiles still advance the sync anchor.
 public struct SystemPrompt: Equatable, Sendable {
     public var body: String
     public var updatedAt: Date
@@ -22,8 +22,8 @@ public struct SystemPrompt: Equatable, Sendable {
         self.version = version
     }
 
-    /// Seeded into a fresh DB (the v2→3 migration) and used as the projection's
-    /// fallback when the row/table can't be read (e.g. a read connection opened
-    /// against a not-yet-migrated DB), so `CLAUDE.md`/`AGENTS.md` always exist.
+    /// The compiled default body — the ONLY source of truth for the system
+    /// prompt. Generated from `prompts/system-prompt.md` by `tools/promptgen`
+    /// at build time (`make prompts`).
     public static let defaultBody: String = GeneratedPrompts.systemPromptDefault
 }

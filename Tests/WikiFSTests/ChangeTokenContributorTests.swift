@@ -42,16 +42,17 @@ struct ChangeTokenContributorTests {
     /// positional token byte-for-byte. This is the single assertion that
     /// guards the `rawString` property (replacing the ~20 per-test literal
     /// assertions that previously enforced byte-identity). A fresh DB seeds
-    /// `system_prompt` and `wiki_index` at version 1; everything else is 0.
-    /// If a fold is added/removed/reordered and `rawString` is not updated in
-    /// lockstep, this test fails.
+    /// `wiki_index` at version 1; everything else is 0. The systemPrompt fold
+    /// is now a hash of the compiled default (not 1).
     @Test func rawStringMatchesHistoricalLayout() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let token = try store.changeToken()
-        // 14 fields: pages(c:0,s:0) sourceTable(c:0,s:0) systemPrompt(1)
+        let expectedHash = SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF
+        // 14 fields: pages(c:0,s:0) sourceTable(c:0,s:0) systemPrompt(<hash>)
         // log(0) wikiIndex(1) sourceMarkdownVersions(0)
         // sourceGraph(sv:0,refs:0,act:0) bookmarks(0) chat(c:0,m:0).
-        #expect(token.rawString == "0:0:0:0:1:0:1:0:0:0:0:0:0:0")
+        let expected = "0:0:0:0:\(expectedHash):0:1:0:0:0:0:0:0:0"
+        #expect(token.rawString == expected)
     }
 
     private func tempDatabaseURL() -> URL {

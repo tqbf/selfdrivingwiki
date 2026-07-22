@@ -36,7 +36,6 @@ extension WikiStoreModel {
     public func tabTitle(for selection: WikiSelection) -> String {
         switch selection {
         case .newChat: return "Chat"
-        case .systemPrompt: return "Instructions"
         case .changeLog: return "Activity"
         case .page(let id):
             return summaries.first { $0.id == id }?.title
@@ -55,7 +54,6 @@ extension WikiStoreModel {
     public func tabIcon(for selection: WikiSelection) -> String {
         switch selection {
         case .newChat: return "bubble.left.and.bubble.right"
-        case .systemPrompt: return "sparkles"
         case .changeLog: return "clock.arrow.circlepath"
         case .page: return "doc.text"
         case .source(let id):

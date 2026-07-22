@@ -646,14 +646,12 @@ struct PageVersionTests {
     }
 
     /// AC.8 (migration ladder sanity) — a fresh DB must report the current
-    /// `user_version`. The v38→39 step was a no-op `PRAGMA user_version = 39`
-    /// (the write-path change was the real fix); v39→40 adds the per-message
-    /// summary columns (`plans/chat-summary.md` §3.3).
-    @Test func v39SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 41,
-                "schemaVersion must report 41 after the wikictl-prompt-migration bump")
+    /// `user_version`. The v41→42 step drops the `system_prompt` table.
+    @Test func v42SchemaVersionAfterMigration() throws {
+        #expect(GRDBWikiStore.schemaVersion == 42,
+                "schemaVersion must report 42 after the system_prompt table drop")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "41", "fresh DB stamps user_version = 41 (got \(v))")
+        #expect(v == "42", "fresh DB stamps user_version = 42 (got \(v))")
     }
 }

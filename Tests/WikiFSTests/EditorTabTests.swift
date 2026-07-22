@@ -138,14 +138,6 @@ struct EditorTabTests {
         #expect(model.tabs.count == 3)
     }
 
-    @Test func singletonSystemPromptReusesExistingTab() throws {
-        let (model, _) = try tempModel()
-        model.openTab(.systemPrompt)
-        #expect(model.tabs.count == 1)
-        model.openTab(.systemPrompt)
-        #expect(model.tabs.count == 1)
-    }
-
     @Test func singletonChangeLogReusesExistingTab() throws {
         let (model, _) = try tempModel()
         model.openTab(.changeLog)
@@ -779,7 +771,6 @@ struct EditorTabTests {
     @Test func tabTitleForSpecialSelections() throws {
         let (model, _) = try tempModel()
         #expect(model.tabTitle(for: .newChat) == "Chat")
-        #expect(model.tabTitle(for: .systemPrompt) == "Instructions")
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
@@ -816,7 +807,6 @@ struct EditorTabTests {
     @Test func tabIconReturnsExpectedSymbols() throws {
         let (model, _) = try tempModel()
         #expect(model.tabIcon(for: .newChat) == "bubble.left.and.bubble.right")
-        #expect(model.tabIcon(for: .systemPrompt) == "sparkles")
         #expect(model.tabIcon(for: .changeLog) == "clock.arrow.circlepath")
         #expect(model.tabIcon(for: .page(PageID(rawValue: "any"))) == "doc.text")
     }

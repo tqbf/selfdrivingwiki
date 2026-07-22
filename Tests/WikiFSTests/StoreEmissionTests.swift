@@ -275,12 +275,12 @@ struct StoreEmissionTests {
 
     // MARK: - Singletons + log
 
-    @Test func updateSystemPromptEmitsSystemPromptUpdated() async throws {
+    @Test func updateSystemPromptIsNoOpAndEmitsNothing() async throws {
         let (store, _, rec) = try makeHarness()
         try store.updateSystemPrompt(body: "# new prompt")
         let events = try await awaitEvents(rec)
-        #expect(events.last?.kind == .systemPrompt)
-        #expect(events.last?.change == .updated)
+        // updateSystemPrompt is a no-op (table removed in v42); no event emitted.
+        #expect(events.isEmpty || events.last?.kind != .systemPrompt)
     }
 
     @Test func appendLogEmitsLogCreated() async throws {

@@ -161,9 +161,10 @@ struct LogIndexTests {
 
     @Test func changeTokenAdvancesOnLogOnlyWrite() throws {
         let store = try tempStore()
-        // Fresh DB: no pages/files, system_prompt + wiki_index at v1, no log rows.
+        // Fresh DB: no pages/files, systemPrompt is hash of default, wiki_index at v1, no log rows.
         let token0 = try store.changeToken()
-        #expect(token0.systemPrompt == 1)
+        let expectedHash = SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF
+        #expect(token0.systemPrompt == expectedHash)
         #expect(token0.log == 0)
         #expect(token0.wikiIndex == 1)
         // Appending ONLY a log entry must still advance the token (logCount fold).
@@ -182,7 +183,8 @@ struct LogIndexTests {
         let store = try tempStore()
         let token0 = try store.changeToken()
         #expect(token0.wikiIndex == 1)
-        #expect(token0.systemPrompt == 1)
+        let expectedHash = SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF
+        #expect(token0.systemPrompt == expectedHash)
         // Editing ONLY the index must still advance the token (idxVersion fold).
         try store.updateWikiIndex(body: "edited")
         let token1 = try store.changeToken()
@@ -192,15 +194,15 @@ struct LogIndexTests {
         #expect(token1.log == token0.log)
     }
 
-    // MARK: - v3 → v4 → v5 migration (preserves prior data, seeds index)
+    // MARK: - v3 → v42 migration (preserves prior data, drops system_prompt, seeds index)
 
-    @Test func migratesV3DatabaseToV5PreservingData() throws {
+    @Test func migratesV3DatabaseToV42PreservingData() throws {
         let url = tempDatabaseURL()
 
         // Build a v3-shaped DB by hand: pages + slug index + sources +
         // system_prompt + user_version=3, WITHOUT log / wiki_index. Seed one page,
-        // one file, and a non-default system_prompt body so we can prove all three
-        // ride through the v3→4→5 steps untouched.
+        // one file, and a non-default system_prompt body so we can prove the
+        // migration drops the table and returns the compiled default.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         let v3SQL = """
@@ -229,7 +231,7 @@ struct LogIndexTests {
         #expect(sqlite3_exec(raw, v3SQL, nil, nil, nil) == SQLITE_OK)
         sqlite3_close(raw)
 
-        // Open via the store → runs ONLY the v3→4 + v4→5 steps.
+        // Open via the store → runs the v3→v42 migration ladder.
         let store = try GRDBWikiStore(databaseURL: url)
 
         // wiki_index now exists, seeded with the default; log exists and is empty.
@@ -238,17 +240,19 @@ struct LogIndexTests {
         #expect(index.version == 1)
         #expect(try store.listAllLogEntriesOrderedByID().isEmpty)
 
-        // Pre-existing page, ingested file, AND system_prompt are intact.
+        // Pre-existing page, ingested file are intact.
         let page = try store.getPage(id: PageID(rawValue: "01PRESERVEDPAGE0000000000"))
         #expect(page.title == "Kept")
         let file = try store.getSource(id: PageID(rawValue: "01PRESERVEDFILE0000000000"))
         #expect(file.filename == "keep.txt")
         #expect(try store.sourceContent(id: file.id) == Data("keep".utf8))
-        let prompt = try store.getSystemPrompt()
-        #expect(prompt.body == "kept prompt")
-        #expect(prompt.version == 7)
 
-        // user_version advances through every migration step to head (v9).
+        // system_prompt table was dropped; getSystemPrompt returns compiled default.
+        let prompt = try store.getSystemPrompt()
+        #expect(prompt.body == SystemPrompt.defaultBody)
+        #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
+
+        // user_version advanced to v42.
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }

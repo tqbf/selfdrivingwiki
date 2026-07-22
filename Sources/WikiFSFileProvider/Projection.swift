@@ -440,19 +440,14 @@ struct Projection {
 
     // MARK: - System prompt (CLAUDE.md / AGENTS.md)
 
-    /// The singleton system-prompt document, read live from SQLite. Falls back to
-    /// the seeded default (`version 0`) when the row/table can't be read — e.g. a
-    /// read connection opened against a not-yet-migrated DB — so `CLAUDE.md` and
-    /// `AGENTS.md` ALWAYS exist at the root. Read live in both `node(for:)` (size)
-    /// and `contents(for:)` (bytes), exactly like a page body; the row `version`
-    /// drives the item version so an edit re-fetches.
+    /// The singleton system-prompt document, sourced from the compiled default.
+    /// The system_prompt table was removed in v42, so this always returns the
+    /// compiled `SystemPrompt.defaultBody`. The version is a stable hash of the
+    /// body so the File Provider refreshes when the compiled prompt changes.
     private func systemPromptDocument() -> SystemPrompt {
-        guard let store = openReadStore(),
-              let prompt = try? store.getSystemPrompt() else {
-            return SystemPrompt(body: SystemPrompt.defaultBody,
-                                updatedAt: Date(timeIntervalSince1970: 0), version: 0)
-        }
-        return prompt
+        let version = Int(SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF)
+        return SystemPrompt(body: SystemPrompt.defaultBody,
+                            updatedAt: Date(timeIntervalSince1970: 0), version: version)
     }
 
     /// Build the root-level file node for the system prompt under whichever name

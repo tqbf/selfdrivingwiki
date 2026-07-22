@@ -163,8 +163,6 @@ struct WikiDetailView: View {
                 session: session,
                 fileProvider: fileProvider
             )
-        case .systemPrompt:
-            SystemPromptDetailView(store: store)
         case .changeLog:
             ChangeLogDetailView(store: store)
         case .page:

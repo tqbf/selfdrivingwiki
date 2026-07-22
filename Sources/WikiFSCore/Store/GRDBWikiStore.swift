@@ -58,7 +58,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 41
+    private static let currentSchemaVersion = 42
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1187,6 +1187,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // existing wikis keep their seeded copy forever (`INSERT OR IGNORE`),
         // and `$WIKICTL` doesn't always expand correctly in the agent's
         // subprocess shell. Idempotent: a no-op on already-migrated prompts.
+        // Step 41 → 42: remove the user-editable system_prompt table. The system
+        // prompt is now always the compiled `SystemPrompt.defaultBody`
+        // (`GeneratedPrompts.systemPromptDefault`). The user-editable copy could drift
+        // from the compiled default; removing the table eliminates the drift. The
+        // changeToken's systemPrompt fold now derives from a stable hash of the
+        // compiled body (see SystemPromptTokenContributor).
+        if version < 42 {
+            try db.execute(sql: "DROP TABLE IF EXISTS system_prompt;")
+            try db.execute(sql: "PRAGMA user_version = 42;")
+            version = 42
+        }
+
+        // Step 41 → 42 (was 40 → 41): migrate $WIKICTL → wikictl in the system
+        // prompt body. This migration is no longer active (the table is dropped in
+        // the step above), but is left in place for historical reference.
         if version < 41 {
             if let row = try Row.fetchOne(
                 db,
@@ -2312,14 +2327,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """)
 
         // Singleton documents (seeded) + append-only log.
-        try db.execute(sql: """
-        CREATE TABLE IF NOT EXISTS system_prompt (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            body_markdown TEXT NOT NULL DEFAULT '',
-            updated_at REAL NOT NULL,
-            version INTEGER NOT NULL DEFAULT 1
-        );
-        """)
+        // Note: system_prompt table removed in v42 → always use compiled default.
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS log (
             id TEXT PRIMARY KEY,
@@ -2338,10 +2346,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         // Seed the singletons (guarded so existing rows are untouched).
-        try db.execute(sql: """
-        INSERT OR IGNORE INTO system_prompt (id, body_markdown, updated_at, version)
-        VALUES (1, ?, ?, 1);
-        """, arguments: [SystemPrompt.defaultBody, now])
+        // Note: system_prompt table removed in v42 → always use compiled default.
         try db.execute(sql: """
         INSERT OR IGNORE INTO wiki_index (id, body_markdown, updated_at, version)
         VALUES (1, ?, ?, 1);
@@ -2704,7 +2709,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     internal func systemPromptVersion(on db: Database) -> Int64 {
-        resilientScalar("SELECT COALESCE(version, 0) FROM system_prompt WHERE id = 1;", on: db)
+        // The system_prompt table was removed in v42. Return a stable hash of
+        // the compiled default so the changeToken advances when the prompt changes.
+        Int64(SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF)
     }
     internal func logRowCount(on db: Database) -> Int64 { resilientScalar("SELECT COUNT(*) FROM log;", on: db) }
     internal func wikiIndexVersion(on db: Database) -> Int64 {
@@ -5352,35 +5359,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: System prompt + log + wiki index
 
     public func getSystemPrompt() throws -> SystemPrompt {
-        try dbWriter.read { db in
-            guard let row = try Row.fetchOne(
-                db,
-                sql: "SELECT body_markdown, updated_at, version FROM system_prompt WHERE id = 1;"
-            ) else {
-                return SystemPrompt(body: SystemPrompt.defaultBody,
-                                    updatedAt: Date(timeIntervalSince1970: 0), version: 0)
-            }
-            return SystemPrompt(
-                body: row["body_markdown"],
-                updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
-                version: row["version"]
-            )
-        }
+        // The system_prompt table was removed in v42. Always return the compiled
+        // default. The version is a stable hash of the body so the changeToken
+        // advances when the compiled prompt changes.
+        let version = Int64(SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF)
+        return SystemPrompt(body: SystemPrompt.defaultBody,
+                            updatedAt: Date(timeIntervalSince1970: 0), version: Int(version))
     }
 
     public func updateSystemPrompt(body: String) throws {
-        try mutate(event: { _ in
-            self.localEvent(.systemPrompt, id: "system-prompt", change: .updated)
-        }) { db in
-            try db.execute(sql: """
-            INSERT INTO system_prompt (id, body_markdown, updated_at, version)
-            VALUES (1, ?, ?, 1)
-            ON CONFLICT(id) DO UPDATE SET
-                body_markdown = excluded.body_markdown,
-                updated_at = excluded.updated_at,
-                version = system_prompt.version + 1;
-            """, arguments: [body, Date().timeIntervalSince1970])
-        }
+        // The system_prompt table was removed in v42. This method is a no-op.
+        // The system prompt is now read-only, always sourced from the compiled
+        // SystemPrompt.defaultBody.
     }
 
     public func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry {
