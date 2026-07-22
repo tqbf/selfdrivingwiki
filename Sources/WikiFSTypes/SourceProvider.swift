@@ -27,6 +27,11 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     case markdownFolder  = "markdown-folder"
     /// An Apple Podcasts episode transcript (byteless). Stored as `"apple-podcast"`.
     case applePodcast    = "apple-podcast"
+    /// A byteless generic RSS podcast feed (transcript via `<podcast:transcript>`).
+    /// Stored as `"podcast"`. Unlike `.applePodcast`, this needs no FairPlay
+    /// signing helper — it works on every build (App Store included) since the
+    /// only dependency is the `podcast-transcript` `uv` script.
+    case podcast         = "podcast"
     /// A byteless YouTube embed (synthetic `video/youtube` mime). Stored as `"youtube"`.
     case youtube         = "youtube"
     /// A byteless Vimeo embed. Stored as `"vimeo"`.
@@ -61,6 +66,7 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
         case .zotero:          return "Zotero"
         case .markdownFolder:  return "Folder"
         case .applePodcast:    return "Apple Podcast"
+        case .podcast:         return "Podcast"
         case .youtube:         return "YouTube"
         case .vimeo:           return "Vimeo"
         case .spotify:         return "Spotify"
@@ -80,6 +86,7 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
         case .zotero:          return "books.vertical"
         case .markdownFolder:  return "folder"
         case .applePodcast:    return "waveform"
+        case .podcast:         return "antenna.radiowaves.left.and.right"
         case .youtube:         return "play.rectangle"
         case .vimeo:           return "play.rectangle"
         case .spotify:         return "music.note"
@@ -99,6 +106,7 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
         case .zotero:          return "View in Zotero"
         case .markdownFolder:  return "Reveal original folder"
         case .applePodcast:    return "Open episode"
+        case .podcast:         return "Open feed"
         case .youtube:         return "Open video"
         case .vimeo:           return "Open video"
         case .spotify:         return "Open track"
@@ -117,13 +125,16 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     ///   (single-source refresh would orphan them — D3 guard).
     /// - `applePodcast`: `false` when this build doesn't compile podcast
     ///   support OR the `podcast-token-helper` binary isn't present at runtime.
+    /// - `podcast` (generic RSS): always refreshable on every build — the
+    ///   re-transcribe fetches a fresh `<podcast:transcript>` via the
+    ///   `podcast-transcript` `uv` script (no signing helper).
     ///
     /// Every other provider (local-file / Zotero / folder / YouTube / Vimeo /
     /// Spotify / SoundCloud / remote-media / legacy-import / unknown) is
     /// import-only or byteless-embed-only — there's no URL to re-fetch.
     public var supportsRefresh: Bool {
         switch self {
-        case .website, .applePodcast:
+        case .website, .applePodcast, .podcast:
             return true
         case .localFile, .zotero, .markdownFolder,
              .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia,
@@ -143,6 +154,10 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     ///   signing helper must be present (`ApplePodcastTranscriptService.bundled()`
     ///   != nil) AND this build must compile podcast support
     ///   (`#if PODCAST_TRANSCRIPTS`).
+    /// - `podcast` (generic RSS) — the `podcast-transcript` `uv` script fetches
+    ///   the feed and parses `<podcast:transcript>` tags. No signing helper
+    ///   needed; always available on every build (App Store included). The
+    ///   `transcribeRSSPodcast` helper lives outside `#if PODCAST_TRANSCRIPTS`.
     /// - `youtube` — pure-Swift watch-page → caption track scrape (PR5). No
     ///   signing helper needed; always available when the source has a valid
     ///   11-char video ID in `origin.externalIdentity`.
@@ -154,7 +169,7 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     /// token; #564 Phase 4 follow-up).
     public var supportsTranscription: Bool {
         switch self {
-        case .applePodcast, .youtube:
+        case .applePodcast, .podcast, .youtube:
             return true
         case .localFile, .website, .zotero, .markdownFolder,
              .vimeo, .spotify, .soundcloud, .remoteMedia, .legacyImport:

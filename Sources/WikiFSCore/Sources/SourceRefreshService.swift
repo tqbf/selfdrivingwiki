@@ -11,6 +11,9 @@ import Foundation
 /// - `"website"` → `WebsiteMaterializer` (refresh appends a content version).
 /// - `"apple-podcast"` → `ApplePodcastMaterializer` (refresh appends a derived
 ///   markdown version — byteless sources have no content to refresh).
+/// - `"podcast"` (generic RSS) → `RSSPodcastTranscriptService` (refresh
+///   re-fetches the `<podcast:transcript>` and appends a derived markdown
+///   version — same byteless shape as apple-podcast, but no signing helper).
 /// - Everything else (`local-file`, `zotero`, `markdown-folder`,
 ///   `legacy-import`, `unknown`) → `.notRefreshable` (import-only).
 ///
@@ -91,6 +94,12 @@ public struct SourceRefreshService: Sendable {
             return try await materializeWebsite(origin: origin)
         case .applePodcast:
             return try await materializePodcast(origin: origin)
+        case .podcast:
+            // Generic RSS-feed podcast: re-fetch the transcript via the
+            // `podcast-transcript` script (no FairPlay helper). Mirrors
+            // `.applePodcast`'s refresh → derived-markdown shape. Always
+            // available on every build (the service is always compiled).
+            return try await materializePodcastFeed(origin: origin)
         case .localFile, .zotero, .markdownFolder, .youtube, .vimeo, .spotify,
              .soundcloud, .remoteMedia, .legacyImport, nil:
             throw RefreshError.notRefreshable(origin.agentName)
@@ -143,4 +152,21 @@ public struct SourceRefreshService: Sendable {
         throw RefreshError.notRefreshable(origin.agentName)
     }
     #endif
+
+    // MARK: - Generic RSS Podcast (always compiled — no FairPlay dependency)
+
+    /// Re-fetch the transcript for a generic `.podcast` (any-RSS-feed) source.
+    /// Spawns the `podcast-transcript` script with the feed URL from
+    /// `origin.plan`. Byteless source → only the derived markdown changes on
+    /// refresh. Always available (the service is always compiled). Issue
+    /// podcast-generalize.
+    private func materializePodcastFeed(origin: SourceOrigin) async throws -> RefreshMaterial {
+        guard let urlString = origin.plan, let url = URL(string: urlString) else {
+            throw RefreshError.missingPlan
+        }
+        let svc = RSSPodcastTranscriptService()
+        let transcript = try await svc.transcript(forFeedURL: url)
+        let markdown = transcript.markdown
+        return .derivedMarkdown(content: markdown)
+    }
 }

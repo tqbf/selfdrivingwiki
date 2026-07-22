@@ -157,36 +157,4 @@ public struct TTMLTranscript: Equatable, Sendable {
         }
     }
 }
-
-/// Errors for the URL → transcript pipeline, user-readable so the Add-from-URL
-/// sheet can surface them directly.
-public enum PodcastTranscriptError: Error, LocalizedError, Equatable {
-    /// The private-framework signing helper failed (missing, crashed, or the
-    /// macOS release changed the selectors). Carries the helper's stderr.
-    case signatureUnavailable(String)
-    /// AMP returned 40012 — the token lacks transcript permission even after a
-    /// forced refresh.
-    case insufficientPermissions
-    /// The episode has no Apple-hosted transcript.
-    case noTranscriptAvailable
-    /// An unexpected HTTP status from the AMP or TTML request.
-    case badResponse(Int)
-    /// The TTML bytes didn't parse into any cues.
-    case ttmlParseFailed
-
-    public var errorDescription: String? {
-        switch self {
-        case .signatureUnavailable(let detail):
-            return "Couldn't sign the Apple Podcasts token request: \(detail)"
-        case .insufficientPermissions:
-            return "Apple rejected the transcript request (insufficient permissions)."
-        case .noTranscriptAvailable:
-            return "This episode has no Apple transcript."
-        case .badResponse(let code):
-            return "Apple's transcript service returned HTTP \(code)."
-        case .ttmlParseFailed:
-            return "The transcript file couldn't be parsed."
-        }
-    }
-}
 #endif

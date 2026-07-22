@@ -503,3 +503,138 @@ class TestMainExitCodes:
                 ["https://podcasts.apple.com/us/podcast/test/id1234567890?i=1000123456793"]
             )
         assert exc.value.code == 1
+
+
+# ── Generic-RSS-feed tests (direct feed URL, no iTunes Lookup) ───────────────
+
+
+class TestIsApplePodcastsURL:
+    def test_true_for_apple_host(self) -> None:
+        assert _podcast_transcript._is_apple_podcasts_url(
+            "https://podcasts.apple.com/us/podcast/slug/id123?i=456"
+        ) is True
+
+    def test_true_for_subdomain(self) -> None:
+        assert _podcast_transcript._is_apple_podcasts_url(
+            "https://podcasts.apple.com/podcast/slug/id123"
+        ) is True
+
+    def test_false_for_rss_feed(self) -> None:
+        assert _podcast_transcript._is_apple_podcasts_url(
+            "https://example.com/feed.rss"
+        ) is False
+
+    def test_false_for_other_host(self) -> None:
+        assert _podcast_transcript._is_apple_podcasts_url(
+            "https://shows.acast.com/shows/foo/episodes/bar"
+        ) is False
+
+    def test_false_for_plain_http(self) -> None:
+        assert _podcast_transcript._is_apple_podcasts_url(
+            "https://example.com/ep42"
+        ) is False
+
+
+class TestFindEpisodeLatest:
+    def test_returns_most_recent_by_pubdate(
+        self, multi_item_feed: str, mocker: MockerFixture
+    ) -> None:
+        """episode_id=None → most recent <item> by <pubDate>, NOT document order.
+
+        H4 lock: the feed's newest item is 2nd in document order, so a naive
+        first-match implementation would return the wrong episode.
+        """
+        mock_get = mocker.patch("requests.get")
+        mock_response = mocker.Mock()
+        mock_response.text = multi_item_feed
+        mock_get.return_value = mock_response
+
+        result = _podcast_transcript.find_episode_in_feed(
+            "https://example.com/feed.rss", None
+        )
+        assert result is not None
+        episode_item, transcript_tags = result
+        # The newest episode is "Newest Episode" (2nd in document order).
+        title = episode_item.find("title")
+        assert title is not None and title.text == "Newest Episode"
+        assert len(transcript_tags) == 1
+        assert transcript_tags[0].get("url") == "https://example.com/new.vtt"
+
+
+class TestFindEpisodeSingleItem:
+    def test_single_item_feed_returns_that_item(
+        self, single_item_feed: str, mocker: MockerFixture
+    ) -> None:
+        mock_get = mocker.patch("requests.get")
+        mock_response = mocker.Mock()
+        mock_response.text = single_item_feed
+        mock_get.return_value = mock_response
+
+        result = _podcast_transcript.find_episode_in_feed(
+            "https://example.com/single.rss", None
+        )
+        assert result is not None
+        episode_item, transcript_tags = result
+        title = episode_item.find("title")
+        assert title is not None and title.text == "Only Episode"
+        assert len(transcript_tags) == 1
+
+
+class TestFetchTranscriptRSSFeed:
+    def test_direct_feed_url_skips_itunes_lookup(
+        self,
+        mocker: MockerFixture,
+        multi_item_feed: str,
+        sample_vtt: str,
+    ) -> None:
+        """A direct RSS feed URL fetches the feed + transcript, never iTunes Lookup."""
+        mock_get = mocker.patch("requests.get")
+
+        def mock_get_side_effect(url, **kwargs):
+            response = mocker.Mock()
+            if "feed.rss" in url:
+                response.text = multi_item_feed
+            elif "new.vtt" in url:
+                response.text = sample_vtt
+            response.raise_for_status = mocker.Mock()
+            return response
+
+        mock_get.side_effect = mock_get_side_effect
+
+        result = _podcast_transcript.fetch_transcript("https://example.com/feed.rss")
+
+        # Generic-RSS path: no Apple IDs.
+        assert result["show_id"] is None
+        assert result["episode_id"] is None
+        # No iTunes Lookup call was made.
+        assert not any(
+            "itunes.apple.com" in str(call)
+            for call in mock_get.call_args_list
+        )
+        assert result["format"] == "vtt"
+        assert "first caption" in result["markdown"]
+
+    def test_direct_feed_no_transcript_raises(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """A feed whose latest item has no <podcast:transcript> → ValueError."""
+        no_transcript_feed = """<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>No Transcript Podcast</title>
+    <item>
+      <title>Ep</title>
+      <guid>x</guid>
+      <pubDate>Wed, 03 Jul 2025 12:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+        mock_get = mocker.patch("requests.get")
+        mock_response = mocker.Mock()
+        mock_response.text = no_transcript_feed
+        mock_get.return_value = mock_response
+
+        with pytest.raises(ValueError, match="No transcript available"):
+            _podcast_transcript.fetch_transcript("https://example.com/feed.rss")

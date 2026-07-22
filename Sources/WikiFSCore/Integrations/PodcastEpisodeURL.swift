@@ -1,4 +1,3 @@
-#if PODCAST_TRANSCRIPTS  // Apple Podcasts transcript feature; off for WIKIFS_APP_STORE=1 builds.
 import Foundation
 
 /// Recognizes Apple Podcasts *episode* URLs pasted as sources — PURE, value-in /
@@ -11,6 +10,13 @@ import Foundation
 /// The `/podcast/<slug>/` path segment gives a human-readable stem for the stored
 /// transcript's filename. A show link without `i=` is NOT an episode — `parse`
 /// returns nil and the caller falls through to the normal HTML ingest path.
+///
+/// **Always compiled** (no `#if PODCAST_TRANSCRIPTS` guard) so the generic
+/// `.podcast` path can reach `EpisodeRef` (C1 in `plans/podcast-generalize.md`).
+/// The `parse`/`displayTitle` helpers are Apple-specific but pure + harmless —
+/// they're only CALLED from the gated Apple ingest path, so unguarding them
+/// doesn't enable Apple ingest on App Store builds (the `addURL` overload that
+/// calls them is itself gated).
 ///
 /// See `plans/podcast-transcripts.md`.
 public enum PodcastEpisodeURL {
@@ -112,4 +118,3 @@ public enum PodcastEpisodeURL {
         }
     }
 }
-#endif

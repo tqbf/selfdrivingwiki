@@ -397,6 +397,13 @@ public final class WikiStoreModel {
     /// pre-existing YouTube transcript source from an older build keeps the
     /// same provenance label.
     private static let youtubeCaptionsTechnique = "youtube-captions"
+    /// Technique label for the generic RSS-feed podcast transcript markdown
+    /// written by `transcribeRSSPodcast(sourceID:origin:fetcher:)` (issue
+    /// podcast-generalize). Mirrors the `podcastTtmlTechnique` shape: stamped
+    /// on the `source_markdown_versions` row so the provenance chip reports the
+    /// producer. The generic path fetches the `<podcast:transcript>` tag via
+    /// the `podcast-transcript` `uv` script (no FairPlay helper).
+    private static let rssPodcastTranscriptTechnique = "rss-podcast-transcript"
     /// The synthetic MIME for a byteless Apple Podcasts embed source (issue
     /// #799 PR4). `ExternalEmbed.target(for:)` dispatches on the provider's
     /// `agentName == "apple-podcast"` (NOT the MIME — see the dispatch table
@@ -2238,6 +2245,76 @@ public final class WikiStoreModel {
     }
     #endif
 
+    /// **Generic RSS-feed podcast intake** (podcast-generalize, M3): a dedicated
+    /// entry point for pasting a direct RSS feed URL. Bypasses the generic
+    /// website/byteless-embed fetch chain (the "ambiguity problem" — a feed URL
+    /// can't be distinguished from a webpage by URL sniffing alone). The caller
+    /// invokes this explicitly from an "Add podcast feed" affordance, declaring
+    /// intent, so routing is by caller intent, not content sniffing.
+    ///
+    /// Creates a byteless `.podcast` source (no bytes fetched) with
+    /// `agentName = "podcast"`, `plan` = feed URL. No transcript is written at
+    /// ingest — the user clicks Transcribe in `SourceDetailView` to trigger the
+    /// `podcast-transcript` script fetch (mirrors the Apple PR4 + YouTube PR5
+    /// contract). Always compiled (no `#if PODCAST_TRANSCRIPTS` guard) — the
+    /// generic `.podcast` path needs no FairPlay signing helper.
+    ///
+    /// - Parameter rawInput: the raw RSS feed URL (e.g.
+    ///   `https://feeds.example.com/show.xml`).
+    /// - Returns: the `FetchOutcome` for the created byteless source.
+    /// - Throws: `WikiStoreError` on a store failure (e.g. `.duplicateContent`
+    ///   for a re-paste of the same feed URL).
+    @discardableResult
+    public func addPodcastFeedURL(_ rawInput: String) async throws -> URLFetchService.FetchOutcome {
+        guard let ref = RSSFeedEpisodeURL.parse(rawInput) else {
+            throw WikiStoreError.unexpected("Not a valid podcast feed URL: \(rawInput)")
+        }
+        let feedURLString = ref.feedURL.absoluteString
+        let summary = try store.addBytelessSource(
+            filename: Self.rssPodcastEmbedFilename(for: ref),
+            mimeType: Self.rssPodcastEmbedMIME,
+            provenance: SourceProvenance(
+                agentName: SourceProvider.podcast.rawValue,
+                activityKind: "fetch",
+                plan: feedURLString,
+                externalRef: feedURLString,
+                externalIdentity: ref.episodeGUID ?? feedURLString),
+            role: .primary)
+        // No transcript markdown is written — the source's
+        // `source_markdown_versions` stays empty until the user transcribes.
+        // Mirrors the Apple PR4 + YouTube PR5 byteless-only ingest contract.
+        openTab(.source(summary.id), title: summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: summary.filename,
+            byteSize: 0,
+            kind: .audioEmbed)
+    }
+
+    /// Build the byteless-source filename for a generic RSS podcast feed
+    /// (podcast-generalize). Derives a readable stem from the feed URL's host +
+    /// last path component, prefixed with `podcast-`. Mirrors the YouTube/Vimeo
+    /// `youtube-<id>` / `vimeo-<id>` byteless-source filename convention.
+    private static func rssPodcastEmbedFilename(for ref: RSSFeedEpisodeRef) -> String {
+        let host = (ref.feedURL.host ?? "feed").replacingOccurrences(of: "www.", with: "")
+        let last = ref.feedURL.lastPathComponent.isEmpty
+            ? "feed"
+            : (ref.feedURL.lastPathComponent as NSString).deletingPathExtension
+        let stem = "\(host)-\(last)"
+            .lowercased()
+            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
+            .joined()
+            .repeatingHyphensCollapsed()
+        return FilenameEscaping.escapeTitle("podcast-\(stem)")
+    }
+
+    /// The synthetic MIME for a byteless generic RSS podcast feed source
+    /// (podcast-generalize). `ExternalEmbed.target(for:)` dispatches on
+    /// `agentName == "podcast"` is NOT wired (there's no universal podcast web
+    /// player), so this source is byteless with no embed target — the Transcribe
+    /// button is the sole affordance. The `audio/*` prefix keeps the MIME
+    /// taxonomy consistent with the other byteless audio providers.
+    private static let rssPodcastEmbedMIME = "audio/podcast"
+
     /// Phase 4b: try the byteless external-embed recognizers in fixed precedence
     /// order — provider iframes (YouTube → Vimeo → Spotify → SoundCloud) then
     /// direct-remote media. On a match, create a **byteless** source (no bytes
@@ -2770,6 +2847,12 @@ public final class WikiStoreModel {
             #else
             return false
             #endif
+        case .podcast:
+            // Generic RSS-feed podcast: always refreshable on every build —
+            // the `podcast-transcript` script needs only `uv` (no signing
+            // helper). Mirrors YouTube's "no runtime guard" shape but unlike
+            // YouTube the refresh DOES re-fetch a fresh transcript.
+            return true
         // Exhaustive over the non-refreshable providers — `supportsRefresh`
         // returned false above, so these are unreachable; the compiler still
         // enforces exhaustiveness if a new provider is ever added (it has to
@@ -3085,7 +3168,8 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: PageID,
         podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
+        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3095,6 +3179,9 @@ public final class WikiStoreModel {
         case .applePodcast:
             return try await transcribePodcast(
                 sourceID: sourceID, origin: origin, fetcher: podcastFetcher)
+        case .podcast:
+            return try await transcribeRSSPodcast(
+                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
         case .youtube:
             return try await transcribeYouTube(
                 sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
@@ -3108,7 +3195,8 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: PageID,
         podcastFetcher: Any? = nil,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
+        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3125,6 +3213,12 @@ public final class WikiStoreModel {
             // `transcribePodcast(sourceID:origin:fetcher:)` phase-out arm below.
             _ = podcastFetcher  // unused on the phase-out build
             throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+        case .podcast:
+            // Generic RSS-feed podcast: ALWAYS compiled (no FairPlay dependency).
+            // Works on WIKIFS_APP_STORE=1 builds — the transcript fetch needs
+            // only the `podcast-transcript` `uv` script.
+            return try await transcribeRSSPodcast(
+                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
         case .youtube:
             return try await transcribeYouTube(
                 sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
@@ -3170,7 +3264,7 @@ public final class WikiStoreModel {
         // available). Fall back to the RSS subprocess service — it needs only
         // `uv` (no macOS signing helper), so podcast transcripts work even in
         // builds where `podcast-token-helper` is absent. Issue #812.
-        let svc = fetcher ?? RSSPodcastTranscriptService(episodeURL: pageURL)
+        let svc = fetcher ?? RSSPodcastTranscriptService(sourceURL: pageURL)
         // The materializer runs the transcript fetch (helper subprocess + two
         // HTTP round-trips + TTML parse) off-main in a detached Task; the
         // model never touches the store inside this `await`.
@@ -3263,6 +3357,62 @@ public final class WikiStoreModel {
             // #475/#492: never silently swallow — a transcription failure
             // (after network round-trips) must leave a Console.app trace.
             DebugLog.store("WikiStoreModel.transcribe (youtube) appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Generic RSS-feed podcast arm of the unified dispatch (podcast-generalize).
+    /// Reads `origin.plan` (the feed URL recorded at ingest by
+    /// `addPodcastFeedURL`), calls `RSSPodcastTranscriptService.transcript(forFeedURL:)`
+    /// (spawns the `podcast-transcript` `uv` script → fetches the feed → parses
+    /// `<podcast:transcript>`), and writes via `appendProcessedMarkdown(origin:
+    /// .transcript, technique: "rss-podcast-transcript")`.
+    ///
+    /// **Always compiled** (outside `#if PODCAST_TRANSCRIPTS`) — the generic
+    /// `.podcast` path needs no FairPlay signing helper, only `uv`. So it works
+    /// on `WIKIFS_APP_STORE=1` builds, mirroring how `transcribeYouTube` is
+    /// always compiled.
+    ///
+    /// The injected `fetcher` (H2) lets tests fake the subprocess: pass an
+    /// `RSSFeedTranscriptFetching` conformer returning canned markdown and assert
+    /// the dispatch + append without spawning `uv`. Production defaults to
+    /// `RSSPodcastTranscriptService()` (constructed at the dispatch entry point).
+    ///
+    /// Mirrors `transcribeYouTube`'s error discipline: on a fetch failure the
+    /// error propagates (so `SourceDetailView.runTranscription` surfaces it);
+    /// on a store-write failure, logs + returns nil (the fetch succeeded but
+    /// the write didn't — a Console.app trace is left per #475/#492).
+    private func transcribeRSSPodcast(
+        sourceID: PageID, origin: SourceOrigin,
+        fetcher: (any RSSFeedTranscriptFetching)?
+    ) async throws -> SourceMarkdownVersion? {
+        guard let planURLString = origin.plan,
+              let sourceURL = URL(string: planURLString) else {
+            throw SourceRefreshService.RefreshError.missingPlan
+        }
+        guard let fetcher else {
+            // No fetcher: a test injected nil explicitly. Production's default
+            // (constructed at the dispatch entry point) is a real
+            // RSSPodcastTranscriptService instance, so this branch is unreachable
+            // in production UI; the throw keeps the model honest.
+            throw SourceRefreshService.RefreshError.notRefreshable("podcast")
+        }
+        // The transcript fetch (feed download + <podcast:transcript> parse) runs
+        // off-main via the subprocess; the model never touches the store inside
+        // this `await`.
+        let fetcherCopy = fetcher
+        let urlCopy = sourceURL
+        let transcript = try await Task.detached(priority: .userInitiated) {
+            try await fetcherCopy.transcript(forFeedURL: urlCopy)
+        }.value
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: transcript.markdown,
+                origin: .transcript, note: nil, technique: Self.rssPodcastTranscriptTechnique)
+        } catch {
+            // #475/#492: never silently swallow — a transcription failure
+            // (after a network round-trip) must leave a Console.app trace.
+            DebugLog.store("WikiStoreModel.transcribe (podcast) appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
