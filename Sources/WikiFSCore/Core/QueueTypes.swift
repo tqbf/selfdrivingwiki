@@ -78,16 +78,21 @@ public struct QueueItemPayload: Codable, Sendable {
     /// `nil` means normal ingestion. Ignored for extraction items.
     public var lintPageIDs: [PageID]?
 
+    /// ACP session ID for crash-resume. Set after session start, cleared on completion.
+    public var acpSessionId: String?
+
     public init(
         sourceIDs: [PageID],
         stageRouting: [String: String]? = nil,
         chainedItemID: String? = nil,
-        lintPageIDs: [PageID]? = nil
+        lintPageIDs: [PageID]? = nil,
+        acpSessionId: String? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
         self.chainedItemID = chainedItemID
         self.lintPageIDs = lintPageIDs
+        self.acpSessionId = acpSessionId
     }
 }
 

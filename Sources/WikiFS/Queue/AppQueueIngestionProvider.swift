@@ -26,6 +26,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     private let sessionBox: SessionLookupBox
     private let fileProviderBox: FileProviderBox
     private let wikictlDirectory: String
+    private let queueStore: QueueStore
 
     /// Resolves the selected agent provider (from `agent-providers.json`) for
     /// the readiness probe. Injectable so tests can stub it without touching the
@@ -49,6 +50,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         sessionBox: SessionLookupBox,
         fileProviderBox: FileProviderBox,
         wikictlDirectory: String,
+        queueStore: QueueStore,
         resolveSelectedProvider: @escaping () -> AgentProvider = {
             let dir = (try? DatabaseLocation.appGroupContainerDirectory())
                 ?? FileManager.default.temporaryDirectory
@@ -63,6 +65,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         self.sessionBox = sessionBox
         self.fileProviderBox = fileProviderBox
         self.wikictlDirectory = wikictlDirectory
+        self.queueStore = queueStore
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
     }
@@ -425,6 +428,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
             queueItemID: queueItemID,
+            queueStore: queueStore,
             onEvent: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,
@@ -465,6 +469,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             ingestingSourceIDs: [],
             workspaceID: nil,
             queueItemID: queueItemID,
+            queueStore: queueStore,
             onEvent: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,

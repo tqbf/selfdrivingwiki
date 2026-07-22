@@ -638,6 +638,9 @@ public final class AgentLauncher {
     /// from tearing down the new session. `finish`'s `isRunning` guard alone
     /// can't tell the sessions apart.
     @ObservationIgnored private var currentRunToken: UUID?
+    /// #813 Phase 3: Queue store and item ID for the current run (used for session ID persistence)
+    @ObservationIgnored private var currentQueueStore: QueueStore?
+    @ObservationIgnored private var currentQueueItemID: String?
     /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
     /// Stored so `finish()` — and thus the completion watchdog — can decrement
     /// the run counter even when the process's `terminationHandler` never fires.
@@ -1010,6 +1013,7 @@ public final class AgentLauncher {
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
         queueItemID: String? = nil,
+        queueStore: QueueStore? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
@@ -1045,6 +1049,10 @@ public final class AgentLauncher {
         // fires only on a successful spawn, so a preflight/staging failure
         // does not increment the run counter.
         resetRunArtifacts()
+
+        // #813 Phase 3: Store queue store and item ID for session ID cleanup on completion
+        currentQueueStore = queueStore
+        currentQueueItemID = queueItemID
 
         // Install the per-run transcript callback AFTER the reset (which nils
         // the property to keep a stale callback from receiving a new run's
@@ -1166,6 +1174,42 @@ public final class AgentLauncher {
             return
         }
 
+        // #813 Phase 3: Attempt to resume from a previous ACP session if available
+        var resumedSession: SessionHandle? = nil
+        if let queueStore = queueStore,
+           let queueItemID = queueItemID,
+           let item = try? queueStore.getItem(queueItemID),
+           let sessionId = item.payload.acpSessionId {
+            // Create a temporary backend to attempt resume
+            let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
+            if let acpBackend = tempBackend as? ACPBackend {
+                DebugLog.agent("run: attempting to resume ACP session \(sessionId) for queue item \(queueItemID)")
+                do {
+                    if let handle = try await acpBackend.resume(sessionID: sessionId, profile: BackendProfile(
+                    providerHints: [:],
+                    scratchDirectory: scratch,
+                    isReadOnly: false,
+                    cli: CLIProfile(
+                        operation: operation,
+                        wikiRoot: wikiRoot,
+                        wikiID: wikiID,
+                        wikictlDirectory: wikictlDirectory,
+                        onStdoutChunk: { _ in },
+                        onStderrChunk: { _ in }
+                    ),
+                        debugLogURL: nil
+                    )) {
+                        resumedSession = handle
+                        DebugLog.agent("run: successfully resumed ACP session \(sessionId)")
+                    } else {
+                        DebugLog.agent("run: resume failed for session \(sessionId), will start fresh")
+                    }
+                } catch {
+                    DebugLog.agent("run: resume threw error for session \(sessionId): \(error), will start fresh")
+                }
+            }
+        }
+
         let pdf2mdScriptPath = resolvePdf2mdScriptPath()
         let sandbox = resolveSandboxInvocation(
             wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
@@ -1264,18 +1308,26 @@ public final class AgentLauncher {
         do {
             DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
             let runToken = UUID()
-            let session = try await backend.start(
-                profile: profile,
-                systemPrompt: systemPrompt,
-                onExit: { [weak self] status in
-                    Task { @MainActor [weak self] in
-                        // Only finish if THIS session is still current — a stale
-                        // onExit (a prior session terminating after a new one
-                        // started) must not tear down the new session.
-                        guard let self, self.currentRunToken == runToken else { return }
-                        self.finish(status: Int32(status))
-                    }
-                })
+            let session: SessionHandle
+
+            // #813 Phase 3: Use resumed session if available, otherwise start fresh
+            if let resumed = resumedSession {
+                session = resumed
+                DebugLog.agent("run: using resumed ACP session")
+            } else {
+                session = try await backend.start(
+                    profile: profile,
+                    systemPrompt: systemPrompt,
+                    onExit: { [weak self] status in
+                        Task { @MainActor [weak self] in
+                            // Only finish if THIS session is still current — a stale
+                            // onExit (a prior session terminating after a new one
+                            // started) must not tear down the new session.
+                            guard let self, self.currentRunToken == runToken else { return }
+                            self.finish(status: Int32(status))
+                        }
+                    })
+            }
             sessionHandle = session
             currentRunToken = runToken
             // #329: cache the agent's advertised models per-provider for the
@@ -1283,6 +1335,24 @@ public final class AgentLauncher {
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
             startCompletionWatchdog()
+
+            // #813 Phase 3: Persist ACP session ID for crash resume
+            if let queueStore = queueStore,
+               let queueItemID = queueItemID,
+               let acpBackend = backend as? ACPBackend {
+                if let sessionId = await acpBackend.currentResumableSessionId() {
+                    do {
+                        if let item = try queueStore.getItem(queueItemID) {
+                            var updatedPayload = item.payload
+                            updatedPayload.acpSessionId = sessionId.value
+                            try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
+                            DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID)")
+                        }
+                    } catch {
+                        DebugLog.agent("run: failed to persist ACP session ID for queue item \(queueItemID): \(error)")
+                    }
+                }
+            }
 
             // Consume the per-turn stream INLINE so run() does not return until
             // the turn completes. The queue worker awaits run() to decide when
@@ -3471,6 +3541,24 @@ public final class AgentLauncher {
         // in-flight always-ask continuations.
         stopPendingPermissionPoller()
         pendingPermissions = []
+
+        // #813 Phase 3: Clear ACP session ID on successful completion
+        if status == 0,
+           let queueStore = currentQueueStore,
+           let queueItemID = currentQueueItemID {
+            do {
+                if let item = try queueStore.getItem(queueItemID),
+                   item.payload.acpSessionId != nil {
+                    var updatedPayload = item.payload
+                    updatedPayload.acpSessionId = nil
+                    try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
+                    DebugLog.agent("finish: cleared ACP session ID for queue item \(queueItemID)")
+                }
+            } catch {
+                DebugLog.agent("finish: failed to clear ACP session ID for queue item \(queueItemID): \(error)")
+            }
+        }
+
         // Release the agent-run lifecycle (decrement `store.agentRunCount`)
         // from here — NOT from the `onExit` callback — so EVERY completion
         // path decrements it.

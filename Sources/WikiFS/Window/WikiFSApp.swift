@@ -159,7 +159,8 @@ struct WikiFSApp: App {
         let ingestionProvider = AppQueueIngestionProvider(
             sessionBox: sessionBox,
             fileProviderBox: fileProviderBox,
-            wikictlDirectory: HelpersLocation.wikictlDirectory)
+            wikictlDirectory: HelpersLocation.wikictlDirectory,
+            queueStore: queueStore)
         // Create a progress-emit box — the closure starts as a no-op and is
         // replaced with the engine's continuation after the engine is
         // constructed (breaking the circular dependency: factory needs the
