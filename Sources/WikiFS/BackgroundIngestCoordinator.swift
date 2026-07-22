@@ -51,6 +51,107 @@ final class BackgroundIngestCoordinator {
             await scanWiki(session: session)
         }
     }
+
+    // MARK: - Per-source ingestion decision (testable seam, §11-C2)
+
+    /// The result of evaluating one un-ingested source against the
+    /// auto-ingest gates (the registry's markdown-path check, then the
+    /// byteless guard). Used by `scanWiki` to route each source and by
+    /// tests to assert per-source behavior without standing up a scan task.
+    ///
+    /// Marked `internal` so `@testable import WikiFS` can reach it from
+    /// `Tests/WikiFSAppTests/BackgroundIngestCoordinatorTests.swift`. The
+    /// type itself is `Sendable` so it can cross actor boundaries when
+    /// needed (the decision is computed on `@MainActor` since `WikiStoreModel`
+    /// is main-actor-isolated).
+    enum IngestionDecision: Sendable, Equatable {
+        /// Enqueue this source for ingestion — passes both gates.
+        case enqueue
+        /// The content TYPE has no markdown path (PNG → `.image`, XML →
+        /// `.binary`, etc.). Pin backoff so the source is not re-resolved
+        /// every scan cycle.
+        case skipNonIngestible(kind: ContentKind)
+        /// The kind HAS a markdown path (e.g. `.youtubeTranscript`) but
+        /// there's no content to stage right now (byteless + no transcript
+        /// arrived yet). Stays skipped until something changes (e.g. the
+        /// transcript arrives, marking `hasProcessedMarkdown == true`).
+        case skipByteless
+    }
+
+    /// Per-source decision: given a source that has ALREADY passed the
+    /// `isSourceIngested` pre-filter and the backoff guard, should it be
+    /// enqueued for auto-ingestion?
+    ///
+    /// Two gates, in order:
+    /// 1. **Registry gate (`shouldAutoIngest`)** — the content-type fix
+    ///    for the PR1 bug. A PNG (`image/png` → `.image`) and an XML
+    ///    (`application/xml` → `.binary`) return `.skipNonIngestible` here,
+    ///    BEFORE the byte gate even runs. Both have bytes, so the previous
+    ///    byte-only predicate let them through — wasted agent runs.
+    /// 2. **Byteless guard (`canIngest`)** — defense-in-depth kept from
+    ///    the original code. A `.youtubeTranscript` source whose transcript
+    ///    never arrived has neither bytes nor markdown; `.skipByteless`
+    ///    halts enqueue until the transcript lands.
+    /// Provider-aware (uses `ContentKind.resolve(mimeType:provider:ext:)`)
+    /// so byteless `.youtube` / `.podcast` sources WITH transcripts classify
+    /// as `.youtubeTranscript` / `.podcastTranscript` and pass — their
+    /// synthetic `video/youtube` MIME alone would classify as `.binary`
+    /// (the §11-C1 regression). Passes `source.ext` for the legacy-mime
+    /// fallback (§11-C4/C9).
+    ///
+    /// `@MainActor` because `WikiStoreModel.sourceOrigin(for:)` /
+    /// `canIngest(_:)` are main-actor-isolated. Marked `internal` + `static`
+    /// so tests can call `BackgroundIngestCoordinator.ingestionDecision(...)`
+    /// directly without instantiating a full coordinator (which would
+    /// require a `SessionManager` + `QueueEngineClient`).
+    @MainActor
+    internal static func ingestionDecision(
+        for source: SourceSummary,
+        store: WikiStoreModel
+    ) -> IngestionDecision {
+        // 1. Registry gate — PNG/XML/etc. are filtered HERE, before the
+        //    byte guard runs.
+        let origin = store.sourceOrigin(for: source.id)
+        let kind = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: origin?.provider,
+            ext: source.ext)
+        if !kind.capabilities.shouldAutoIngest {
+            return .skipNonIngestible(kind: kind)
+        }
+        // 2. Byteless guard — a markdown-path kind with no content to stage
+        //    (e.g. YouTube before the transcript arrives) stays skipped.
+        if !store.canIngest(source) {
+            return .skipByteless
+        }
+        return .enqueue
+    }
+
+    /// Convenience batch filter: returns the source IDs to enqueue after
+    /// applying both gates to every source. Used by `scanWiki` indirectly
+    /// (the loop consults `ingestionDecision` per-source so it can also
+    /// update `backoffCount` per-skip-reason) and by tests for compact
+    /// batch assertions.
+    ///
+    /// Pure with respect to external side effects — no enqueue, no backoff
+    /// mutation. Callers that need backoff bookkeeping should iterate
+    /// `ingestionDecision` themselves; this helper is for "what would be
+    /// enqueued" questions.
+    @MainActor
+    internal static func filterIngestibleSources(
+        _ sources: [SourceSummary],
+        store: WikiStoreModel
+    ) -> [PageID] {
+        sources.compactMap { source in
+            if ingestionDecision(for: source, store: store) == .enqueue {
+                return source.id
+            }
+            return nil
+        }
+    }
+
+    // MARK: - Per-wiki scan
+
     
     private func scanWiki(session: WikiSession) async {
         let wikiID = session.wikiID
@@ -64,6 +165,7 @@ final class BackgroundIngestCoordinator {
         var skippedCount = 0
         var backoffSkippedCount = 0
         var bytelessSkippedCount = 0
+        var nonIngestibleSkippedCount = 0
         var sourceIDsToEnqueue: [PageID] = []
         
         for source in sources {
@@ -82,14 +184,23 @@ final class BackgroundIngestCoordinator {
                 continue
             }
             
-            if !store.canIngest(source) {
+            // Per-source decision: content-type registry gate (PNG/XML/etc.
+            // have no markdown path) THEN byteless guard (YouTube without
+            // transcript). Extracted as `ingestionDecision(for:store:)` so
+            // tests can exercise the registry-keyed filter directly without
+            // standing up a scan task (§11-C2).
+            switch Self.ingestionDecision(for: source, store: store) {
+            case .enqueue:
+                sourceIDsToEnqueue.append(source.id)
+            case .skipNonIngestible(let kind):
+                nonIngestibleSkippedCount += 1
+                DebugLog.ingest("BackgroundIngestCoordinator: skipping \(source.id.rawValue) — \(kind) has no markdown path")
+                backoffCount[source.id] = maxBackoffCycles
+            case .skipByteless:
                 bytelessSkippedCount += 1
                 DebugLog.ingest("BackgroundIngestCoordinator: skipping byteless source \(source.id.rawValue) (no content to ingest)")
                 backoffCount[source.id] = maxBackoffCycles
-                continue
             }
-            
-            sourceIDsToEnqueue.append(source.id)
         }
         
         if !sourceIDsToEnqueue.isEmpty && !Task.isCancelled {
@@ -108,8 +219,8 @@ final class BackgroundIngestCoordinator {
             }
         }
         
-        skippedCount = backoffSkippedCount + bytelessSkippedCount
-        DebugLog.ingest("BackgroundIngestCoordinator: scan complete for wiki \(wikiID) - found \(foundCount), enqueued \(enqueuedCount), skipped \(skippedCount)")
+        skippedCount = backoffSkippedCount + bytelessSkippedCount + nonIngestibleSkippedCount
+        DebugLog.ingest("BackgroundIngestCoordinator: scan complete for wiki \(wikiID) - found \(foundCount), enqueued \(enqueuedCount), skipped \(skippedCount) (backoff \(backoffSkippedCount), byteless \(bytelessSkippedCount), non-ingestible \(nonIngestibleSkippedCount))")
         
         decayBackoffCounts()
     }
