@@ -64,6 +64,13 @@ BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
 TEAM_ID="${TEAM_ID:-KK7E9G89GW}"
+# Shared keychain access group (app + wikid daemon). Same formula the keychain
+# codegen (tools/keychaingen) derives from signing/local.config: the App Group
+# minus its "group." prefix, team-prefixed (keychain-access-groups REQUIRES the
+# Team ID prefix). Matches the literal suffix in signing/wikid.entitlements
+# ($(AppIdentifierPrefix)com.willsargent.wiki, which codesign resolves to
+# <TEAM_ID>.com.willsargent.wiki). See plans/keychain-sharing.md.
+KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-${TEAM_ID}.${APP_GROUP#group.}}"
 MIN_MACOS="14.0"
 
 APP_PROFILE="signing/WikiFS.provisionprofile"
@@ -442,6 +449,17 @@ if [ "${REAL_SIGNING}" = "1" ]; then
 	<array>
 		<string>${APP_GROUP}</string>
 	</array>
+	<!-- Shared keychain access group so the un-sandboxed wikid daemon (bundled
+	     at Contents/Helpers/wikid) can read the ACP/Extraction/Zotero secrets
+	     this app wrote. The access group MUST begin with the Team ID prefix;
+	     the provisioning profile authorizes the <TEAM_ID>.* wildcard. The same
+	     group string is baked into KeychainSecretStore at build time
+	     (tools/keychaingen → GeneratedKeychain.swift) and into the daemon's
+	     signing/wikid.entitlements. See plans/keychain-sharing.md. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>${KEYCHAIN_ACCESS_GROUP}</string>
+	</array>
 </dict>
 </plist>
 PLIST
@@ -474,11 +492,15 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
-  # wikid daemon — same inside-out signing as wikictl. No entitlements needed
-  # (un-sandboxed helper, inherits the app's TCC trust by being inside the bundle).
+  # wikid daemon — signs WITH signing/wikid.entitlements (carries the shared
+  # keychain-access-groups entry, verified by the R1 spike) so the daemon can
+  # read the ACP/Extraction/Zotero secrets the app wrote under that group.
+  # Without --entitlements the keychain-access-groups entry is ignored in
+  # shipped builds and the daemon reads nil keys. See plans/keychain-sharing.md.
   echo "→ codesign wikid daemon (${IDENTITY})"
   codesign --force --timestamp=none \
     --identifier com.selfdrivingwiki.wikid \
+    --entitlements signing/wikid.entitlements \
     --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${DAEMON_NAME}"
   # pdf2md is a plain script bundled in Helpers/ — must also be signed, or the

@@ -1,5 +1,68 @@
 # Progress log
 
+## feat: Keychain sharing — shared access group for app + `wikid` daemon (unblocks daemon Phase B/C)
+
+**Goal:** let the `wikid` daemon read the ACP/Extraction/Zotero API keys the app
+wrote to the Keychain — the #1 real-world snag risk for the daemon migration.
+Moves `KeychainSecretStore` to the DataProtection keychain under a shared
+`keychain-access-groups` access group; signs the daemon with the entitlement it
+needs. The R1 spike (daemon launches with `keychain-access-groups`) already
+PASSED; this is the code + build wiring. See `plans/keychain-sharing.md`.
+
+**What changed:**
+- **Compile-time access group (no runtime `Bundle.main` lookup):** new codegen
+  `tools/keychaingen/main.swift` (mirrors `tools/versiongen`) reads
+  `signing/local.config` (`TEAM_ID` + `APP_GROUP`) and writes the gitignored
+  `Sources/WikiFSCore/GeneratedKeychain.swift` with
+  `public static let accessGroup = "<TEAM_ID>.<APP_GROUP without 'group.'>"`.
+  Same constant reaches the app AND the daemon via the `WikiFSCore` dependency.
+  Empty when `signing/local.config` is absent (fresh clones / CI / `swift test`)
+  → "no group" → legacy file-keychain behavior preserved, so the un-entitled test
+  runner round-trips without `errSecMissingEntitlement`. New `make keychain` target
+  (prereq of build/check/test, alongside `version`/`prompts`); CI runs
+  `make version prompts keychain`; `.gitignore` excludes the generated file.
+- **`KeychainSecretStore`** (`Sources/WikiFSCore/Core/KeychainSecretStore.swift`):
+  made `public enum` (mirrors `public enum DatabaseLocation`); a shared internal
+  `baseQuery(service:account:useDP:accessGroup:)` conditionally adds
+  `kSecUseDataProtectionKeychain: true` (when `useDP`) and `kSecAttrAccessGroup`
+  (when non-empty) to EVERY read/delete/update/add query. Public
+  `read`/`write` route to an internal primitive using the resolved group; the
+  three `Keychain*CredentialStore` conformers are unchanged (same public API).
+  One-shot, idempotent `migrateLegacyItemsToDataProtection()` (called from
+  `WikiFSApp` launch, next to `DatabaseLocation.migrateFromApplicationSupportIfNeeded`)
+  copies legacy file-keychain items (service prefix `org.sockpuppet.WikiFS.`)
+  onto the DP keychain under the shared group, then deletes the legacy original —
+  best-effort, never loses a key, a no-op when no group is configured.
+- **`build.sh`:** derives `KEYCHAIN_ACCESS_GROUP="${TEAM_ID}.${APP_GROUP#group.}"`
+  (same formula the codegen uses); adds `keychain-access-groups` to the **app**
+  entitlements heredoc; and — the load-bearing build fix — signs `wikid` WITH
+  `--entitlements signing/wikid.entitlements` (production previously signed the
+  daemon with no entitlements, so the operator-verified access-group entry was
+  silently ignored in shipped builds). The FileProvider extension is NOT given
+  the entitlement (it doesn't touch the Keychain; adding it would risk AMFI
+  killing the sandboxed extension if its profile lacks the capability).
+- **`signing/wikid.entitlements`:** the operator already added the
+  `keychain-access-groups` entry (`$(AppIdentifierPrefix)com.willsargent.wiki`,
+  which codesign resolves to the builder's `<TEAM_ID>.com.willsargent.wiki` —
+  matching the codegen constant); now actually applied in production signing.
+
+**Evidence:** `swift build` (full, all targets incl. app + MLX + `wikid`) clean;
+`swift test` — 3668 tests in 304 suites passed. New
+`Tests/WikiFSTests/KeychainSecretStoreTests.swift` (3 tests, `#if os(macOS)`)
+asserts the `baseQuery` shape (DP flag + access group present when configured,
+absent in the legacy path) — deterministic and non-polluting, matching the
+sibling `*CredentialStoreTests` convention (real-Keychain + access-group behavior
++ the migration are documented as a manual integration runbook in
+`plans/keychain-sharing.md §5.2`; they need a real entitled signed build and
+can't round-trip in `swift test`).
+
+**Not done (manual, human-only):** the §5.2 integration runbook — `make build`
+(real signing), enter an ACP key, confirm the item's `agrp` via `security
+find-generic-password`, run a daemon ACP workload end-to-end, and the negative
+control (drop the daemon entitlement → `errSecMissingEntitlement`). Portal
+"Keychain Sharing" capability is optional (the `<TEAM_ID>.*` profile wildcard
+already authorizes it; R1 spike passed).
+
 ## feat: Route transcription through queue PR2: reveal-job navigation (#842)
 
 **Goal:** when a transcription is running/queued for a source, clicking

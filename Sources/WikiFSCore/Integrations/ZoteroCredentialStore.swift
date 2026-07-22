@@ -23,9 +23,9 @@ public struct ZoteroKeychainError: Error, Equatable {
 }
 
 /// The production `ZoteroCredentialStore`: a generic-password Keychain item.
-/// `WikiFS.entitlements` has no App Sandbox, so this needs no
-/// keychain-access-group entitlement — same un-sandboxed access `URLSession`
-/// already has for outbound network calls.
+/// `KeychainSecretStore` (the shared helper) writes items to the DataProtection
+/// keychain under a shared `keychain-access-groups` access group so the
+/// un-sandboxed `wikid` daemon can read them — see `plans/keychain-sharing.md`.
 public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.zotero"
     private static let account = "zotero-api-key"
