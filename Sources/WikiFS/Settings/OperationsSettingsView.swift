@@ -61,7 +61,7 @@ struct OperationsSettingsView: View {
                     stageKey: "chat",
                     config: $config,
                     containerDirectory: containerDirectory,
-                    label: "Chat Model")
+                    label: "Chat")
             } header: {
                 Text("Chat Model")
             } footer: {
@@ -97,7 +97,7 @@ struct OperationsSettingsView: View {
                     stageKey: "lint",
                     config: $config,
                     containerDirectory: containerDirectory,
-                    label: "Lint Model")
+                    label: "Lint")
             } header: {
                 Text("Lint Model")
             } footer: {
@@ -111,7 +111,7 @@ struct OperationsSettingsView: View {
                     stageKey: "summarizer",
                     config: $config,
                     containerDirectory: containerDirectory,
-                    label: "Summary Model",
+                    label: "Summary",
                     defaultOptionLabel: "Default (first few sentences)")
             } header: {
                 Text("Message Summary")
