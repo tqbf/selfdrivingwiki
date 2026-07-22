@@ -1,0 +1,38 @@
+# swift-mutation-testing configuration
+# All settings are optional. CLI flags override file values.
+
+# Available test targets: WikiFSCoreTests, WikiFSAppTests
+# Limit test execution to a specific target
+test-target: WikiFSCoreTests
+
+# Per-mutant test timeout in seconds (default: 30 for SPM)
+timeout: 30
+
+# Disable result cache (re-runs all mutants on every execution)
+# no-cache: true
+
+# Report output paths
+output: mutation-report.json
+# html-output: mutation-report.html
+# sonar-output: sonar-mutation-report.json
+
+# Source file glob patterns to exclude from mutation
+exclude:
+  - "/WikiFSCoreTests/"
+
+# Mutation operators
+mutators:
+  - name: RelationalOperatorReplacement
+    active: true
+  - name: BooleanLiteralReplacement
+    active: true
+  - name: LogicalOperatorReplacement
+    active: true
+  - name: ArithmeticOperatorReplacement
+    active: true
+  - name: NegateConditional
+    active: true
+  - name: SwapTernary
+    active: true
+  - name: RemoveSideEffects
+    active: true
