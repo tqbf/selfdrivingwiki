@@ -7,10 +7,9 @@ import SQLite3
 import Testing
 @testable import WikiFSCore
 
-/// System-prompt singleton tests (v3): the document is seeded on a fresh DB,
-/// edits bump the version and advance the change token (so the projected
-/// `CLAUDE.md`/`AGENTS.md` refresh), and the v2→3 migration adds + seeds the
-/// table while preserving existing pages and ingested files.
+/// System-prompt tests (v42): the prompt is now read-only and always sourced
+/// from the compiled `SystemPrompt.defaultBody`. The version is a stable hash
+/// of the body so recompiles advance the changeToken.
 struct SystemPromptTests {
 
     private func tempDatabaseURL() -> URL {
@@ -24,16 +23,16 @@ struct SystemPromptTests {
         try GRDBWikiStore(databaseURL: tempDatabaseURL())
     }
 
-    // MARK: - Seeded default on a fresh DB
+    // MARK: - Compiled default is always returned
 
-    @Test func freshDatabaseSeedsDefaultPrompt() throws {
+    @Test func getSystemPromptReturnsCompiledDefault() throws {
         let store = try tempStore()
         let prompt = try store.getSystemPrompt()
         #expect(prompt.body == SystemPrompt.defaultBody)
-        #expect(prompt.version == 1)
+        #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
     }
 
-    // MARK: - The seeded schema documents the maintainer contract (Phase D)
+    // MARK: - The compiled default documents the maintainer contract (Phase D)
 
     /// The Phase-D gate requires a fresh agent to read the seeded schema as
     /// its system prompt and be able to NAME the `wikictl` commands, the layout,
@@ -103,149 +102,82 @@ struct SystemPromptTests {
         #expect(body.contains("wikictl page add"))
     }
 
-    // MARK: - Update persists + bumps version
+    // MARK: - Update is a no-op (read-only)
 
-    @Test func updatePersistsBodyAndBumpsVersion() throws {
-        let url = tempDatabaseURL()
-        do {
-            let store = try GRDBWikiStore(databaseURL: url)
-            try store.updateSystemPrompt(body: "Be concise.")
-            let after = try store.getSystemPrompt()
-            #expect(after.body == "Be concise.")
-            #expect(after.version == 2)   // seeded at 1, +1 on edit
-        }
-        // Persists across reopen (a new connection).
-        let reopened = try GRDBWikiStore(databaseURL: url)
-        let prompt = try reopened.getSystemPrompt()
-        #expect(prompt.body == "Be concise.")
-        #expect(prompt.version == 2)
+    @Test func updateSystemPromptIsANoOp() throws {
+        let store = try tempStore()
+        let before = try store.getSystemPrompt()
+        try store.updateSystemPrompt(body: "Be concise.")
+        let after = try store.getSystemPrompt()
+        // Update is a no-op - always returns the compiled default
+        #expect(after.body == before.body)
+        #expect(after.version == before.version)
     }
 
-    @Test func repeatedEditsKeepBumpingVersion() throws {
+    @Test func compiledDefaultIsImmutable() throws {
         let store = try tempStore()
         try store.updateSystemPrompt(body: "one")
         try store.updateSystemPrompt(body: "two")
         try store.updateSystemPrompt(body: "three")
         let prompt = try store.getSystemPrompt()
-        #expect(prompt.body == "three")
-        #expect(prompt.version == 4)   // 1 (seed) + 3 edits
+        // Always returns the compiled default, ignores all updates
+        #expect(prompt.body == SystemPrompt.defaultBody)
+        #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
     }
 
-    /// Phase-D migration invariant: changing the `defaultBody` constant seeds NEW
-    /// wikis with the new schema but must NEVER rewrite an EXISTING wiki's row. A
-    /// pre-existing body (e.g. the prior schema, or a user's co-evolved version)
-    /// rides through reopen untouched — the seed runs only when the table is first
-    /// created, never on a subsequent open.
-    @Test func existingSystemPromptRowIsNotOverwrittenOnReopen() throws {
+    /// The compiled default is stable: reopening a store returns the same body.
+    @Test func compiledDefaultPersistsAcrossReopen() throws {
         let url = tempDatabaseURL()
-        // First open seeds the row with the current defaultBody.
-        do {
-            let store = try GRDBWikiStore(databaseURL: url)
-            #expect(try store.getSystemPrompt().body == SystemPrompt.defaultBody)
-        }
-        // Simulate a wiki carrying a DIFFERENT body than today's default (an older
-        // seed, or the user's edits).
-        let preExisting = "# My co-evolved schema\n\nDo not clobber me.\n"
-        do {
-            let store = try GRDBWikiStore(databaseURL: url)
-            try store.updateSystemPrompt(body: preExisting)
-        }
-        // Reopening must NOT reset it back to defaultBody — the seed is create-only.
-        let reopened = try GRDBWikiStore(databaseURL: url)
-        let prompt = try reopened.getSystemPrompt()
-        #expect(prompt.body == preExisting)
-        #expect(prompt.body != SystemPrompt.defaultBody)
+        let before = try GRDBWikiStore(databaseURL: url).getSystemPrompt()
+        let after = try GRDBWikiStore(databaseURL: url).getSystemPrompt()
+        #expect(before.body == after.body)
+        #expect(before.version == after.version)
     }
 
-    // MARK: - v40→v41 migration: $WIKICTL → bare wikictl
+    // MARK: - changeToken advances with compiled hash
 
-    /// The v40→v41 migration replaces `$WIKICTL` with bare `wikictl` and
-    /// `$WIKICTL page upsert` → `wikictl page add` in stored system prompts.
-    /// Existing wikis seeded under the old default still carry `$WIKICTL`
-    /// instructions; the migration fixes them on next open.
-    @Test func v40ToV41MigratesDollarWikictlToBare() throws {
+    @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
+        let url = tempDatabaseURL()
+        let store0 = try GRDBWikiStore(databaseURL: url)
+        let token0 = try store0.changeToken()
+        // The systemPrompt fold is the hash of the compiled default
+        #expect(token0.systemPrompt > 0)
+
+        // Reopening returns the same hash (same compiled body)
+        let store1 = try GRDBWikiStore(databaseURL: url)
+        let token1 = try store1.changeToken()
+        #expect(token1.systemPrompt == token0.systemPrompt)
+    }
+
+    // MARK: - v40 → v42 migration drops the table
+
+    @Test func v40ToV42MigrationDropsSystemPromptTable() throws {
         let url = tempDatabaseURL()
 
-        // 1. Create a fresh DB at the current schema (v41). Then stamp it
-        //    back to v40 and inject an old $WIKICTL-era prompt body.
+        // Build a v40-shaped DB with a system_prompt table.
         do {
             let store = try GRDBWikiStore(databaseURL: url)
             _ = try store.getSystemPrompt()
         }
 
+        // Stamp it back to v40.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         defer { sqlite3_close(raw) }
-        let oldBody = """
-        # System Prompt (v40-era)
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 40;", nil, nil, nil) == SQLITE_OK)
 
-        Always invoke it as `$WIKICTL`.
-
-        ## Commands
-
-        - `$WIKICTL page list`
-        - `$WIKICTL page upsert`
-        - `$WIKICTL page get`
-        - `$WIKICTL page delete`
-
-        Read back what you just wrote.
-        """
-        let sql = """
-        UPDATE system_prompt SET body_markdown = '\(oldBody.replacingOccurrences(of: "'", with: "''"))' WHERE id = 1;
-        PRAGMA user_version = 40;
-        """
-        #expect(sqlite3_exec(raw, sql, nil, nil, nil) == SQLITE_OK)
-
-        // 2. Reopen — the v40→v41 migration should fire.
+        // Reopen — the migration ladder runs through v40→v41→v42, dropping the table.
         let store = try GRDBWikiStore(databaseURL: url)
         let prompt = try store.getSystemPrompt()
 
-        // 3. $WIKICTL is gone; bare wikictl is in its place.
-        #expect(!prompt.body.contains("$WIKICTL"),
-               "migration must replace all $WIKICTL references; body still contains it")
-        #expect(prompt.body.contains("wikictl page list"))
-        // page upsert → page add.
-        #expect(!prompt.body.contains("page upsert"),
-               "migration must replace 'page upsert' with 'page add'")
-        #expect(prompt.body.contains("wikictl page add"))
-        // Non-command content rides through.
-        #expect(prompt.body.contains("Read back what you just wrote."))
-        // user_version advanced to 41.
-        #expect(Int(store.pragmaValue("user_version")) == 41)
+        // Returns the compiled default (not the old table row).
+        #expect(prompt.body == SystemPrompt.defaultBody)
+        #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
+
+        // user_version advanced to 42.
+        #expect(Int(store.pragmaValue("user_version")) == 42)
     }
 
-    /// The v40→v41 migration is idempotent: re-opening an already-migrated
-    /// DB is a no-op (the `$WIKICTL` guard prevents double-processing).
-    @Test func v40ToV41MigrationIsIdempotent() throws {
-        let url = tempDatabaseURL()
-
-        // Same setup: stamp to v40 with an old $WIKICTL body.
-        do {
-            let store = try GRDBWikiStore(databaseURL: url)
-            _ = try store.getSystemPrompt()
-        }
-        var raw: OpaquePointer?
-        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
-        defer { sqlite3_close(raw) }
-        #expect(sqlite3_exec(raw, """
-        UPDATE system_prompt SET body_markdown = 'Use $WIKICTL page upsert' WHERE id = 1;
-        PRAGMA user_version = 40;
-        """, nil, nil, nil) == SQLITE_OK)
-
-        // First open runs the migration.
-        let store1 = try GRDBWikiStore(databaseURL: url)
-        let prompt1 = try store1.getSystemPrompt()
-        #expect(!prompt1.body.contains("$WIKICTL"))
-        #expect(prompt1.body.contains("wikictl page add"))
-
-        // Second open: already at v41, migration is a no-op. Body unchanged.
-        let store2 = try GRDBWikiStore(databaseURL: url)
-        let prompt2 = try store2.getSystemPrompt()
-        #expect(prompt2.body == prompt1.body)
-    }
-
-    /// A v40 DB whose prompt does NOT contain `$WIKICTL` (user edited away
-    /// from the default) is untouched by the migration.
     @Test func v40ToV41MigrationSkipsPromptWithoutDollarWikictl() throws {
         let url = tempDatabaseURL()
         let customBody = "# My custom prompt\n\nNo wikictl references here.\n"
@@ -262,64 +194,13 @@ struct SystemPromptTests {
 
         let store = try GRDBWikiStore(databaseURL: url)
         let prompt = try store.getSystemPrompt()
-        #expect(prompt.body == customBody,
-               "migration must not touch a prompt that has no $WIKICTL")
+        // The table no longer exists; always returns compiled default
+        #expect(prompt.body == SystemPrompt.defaultBody)
     }
 
-    // MARK: - Change token advances on a prompt-only edit
+    // MARK: - v2 → v3 migration no longer creates the table
 
-    @Test func changeTokenAdvancesOnSystemPromptEdit() throws {
-        let store = try tempStore()
-        // No pages, no sources: only the system-prompt version moves.
-        let token0 = try store.changeToken()
-        #expect(token0.pages == .init(count: 0, versionSum: 0))
-        #expect(token0.sourceTable == .init(count: 0, versionSum: 0))
-        #expect(token0.systemPrompt == 1)
-        #expect(token0.log == 0)
-        #expect(token0.wikiIndex == 1)
-        #expect(token0.sourceMarkdownVersions == 0)
-        #expect(token0.sourceGraph == .init())
-        #expect(token0.bookmarks == 0)
-        #expect(token0.chat == .init())
-        try store.updateSystemPrompt(body: "edited")
-        let token1 = try store.changeToken()
-        #expect(token1.systemPrompt == 2)
-        // No other fold moved.
-        #expect(token1.pages == token0.pages)
-        #expect(token1.sourceTable == token0.sourceTable)
-        #expect(token1.log == token0.log)
-        #expect(token1.wikiIndex == token0.wikiIndex)
-        #expect(token1.sourceMarkdownVersions == token0.sourceMarkdownVersions)
-        #expect(token1.sourceGraph == token0.sourceGraph)
-        #expect(token1.bookmarks == token0.bookmarks)
-        #expect(token1.chat == token0.chat)
-    }
-
-    // MARK: - UPSERT recreates a missing singleton row (defensive)
-
-    @Test func updateRecreatesRowIfDeleted() throws {
-        let url = tempDatabaseURL()
-        let store = try GRDBWikiStore(databaseURL: url)
-
-        // Hard-delete the seeded row via a raw connection.
-        var raw: OpaquePointer?
-        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
-        #expect(sqlite3_exec(raw, "DELETE FROM system_prompt;", nil, nil, nil) == SQLITE_OK)
-        sqlite3_close(raw)
-
-        // With no row, getSystemPrompt falls back to the default (version 0).
-        #expect(try store.getSystemPrompt().version == 0)
-
-        // UPSERT recreates it at version 1.
-        try store.updateSystemPrompt(body: "rebuilt")
-        let prompt = try store.getSystemPrompt()
-        #expect(prompt.body == "rebuilt")
-        #expect(prompt.version == 1)
-    }
-
-    // MARK: - v2 → v3 migration (table added + seeded, data preserved)
-
-    @Test func migratesV2DatabaseToV3PreservingData() throws {
+    @Test func migratesV2DatabaseToV42PreservingData() throws {
         let url = tempDatabaseURL()
 
         // Build a v2-shaped DB by hand: pages + slug index + sources +
@@ -347,14 +228,13 @@ struct SystemPromptTests {
         #expect(sqlite3_exec(raw, v2SQL, nil, nil, nil) == SQLITE_OK)
         sqlite3_close(raw)
 
-        // Open via the store → runs the v2→3 step (and the later v3→4 + v4→5
-        // steps up to head).
+        // Open via the store → runs the v2→v42 migration ladder.
         let store = try GRDBWikiStore(databaseURL: url)
 
-        // system_prompt now exists, seeded with the default.
+        // system_prompt no longer exists; always returns compiled default.
         let prompt = try store.getSystemPrompt()
         #expect(prompt.body == SystemPrompt.defaultBody)
-        #expect(prompt.version == 1)
+        #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
 
         // Pre-existing page + ingested file are intact.
         let page = try store.getPage(id: PageID(rawValue: "01PRESERVEDPAGE0000000000"))
@@ -363,7 +243,7 @@ struct SystemPromptTests {
         #expect(file.filename == "keep.txt")
         #expect(try store.sourceContent(id: file.id) == Data("keep".utf8))
 
-        // user_version advances through every migration step to head (v9).
+        // user_version advances through every migration step to head (v42).
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }

@@ -224,13 +224,6 @@ public final class WikiStoreModel {
         didSet { if draftBody != oldValue { isDraftDirty = true } }
     }
 
-    /// Live editing buffer for the system-prompt document (the singleton
-    /// `CLAUDE.md`/`AGENTS.md`). Separate track from the page drafts above so the
-    /// well-tested page autosave path is untouched.
-    public var draftSystemPrompt: String = "" {
-        didSet { if draftSystemPrompt != oldValue { isSystemPromptDirty = true } }
-    }
-
     /// Live chat composer buffer — the single source of in-flight chat text.
     /// Stashed per-tab via `EditorTab.pendingChatDraft` (like draftTitle/draftBody
     /// for pages) so switching tabs and back preserves unsent composer text
@@ -341,7 +334,6 @@ public final class WikiStoreModel {
     /// `WikiFSEngine`).
     @ObservationIgnored public var podcastBackend: PodcastTranscriptionBackend?
     private var autosaveTask: Task<Void, Never>?
-    private var systemPromptAutosaveTask: Task<Void, Never>?
 
     deinit {
         // Cancel pending debounced search tasks so they don't fire after the
@@ -353,7 +345,6 @@ public final class WikiStoreModel {
             sourceSearchTask?.cancel()
             chatSearchTask?.cancel()
             autosaveTask?.cancel()
-            systemPromptAutosaveTask?.cancel()
         }
     }
     /// The page whose text currently lives in the draft buffers.
@@ -376,8 +367,6 @@ public final class WikiStoreModel {
     /// save and on load. Prevents `flushPendingSaves()` from bumping `updated_at`
     /// on a tab switch when the user only viewed a page without editing.
     private var isDraftDirty = false
-    /// Same for the system prompt draft (separate track).
-    private var isSystemPromptDirty = false
     /// Suppresses double-processing in `handleSelectionChange` while a tab switch
     /// is mid-flight (`setActiveTab` assigns `selection`, which fires the view's
     /// `onChange(of: selection)` bridge). Set in exactly one place —
@@ -424,9 +413,6 @@ public final class WikiStoreModel {
         reloadSources()
         reloadBookmarkNodes()
         reloadChats()
-        // Preload the system-prompt draft so its editor has content immediately;
-        // selecting it later reloads fresh from the store.
-        draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
         subscribeToChanges()
     }
 
@@ -1036,7 +1022,7 @@ public final class WikiStoreModel {
     /// Open the tab for `selection`: if one is already open, focus it (reuse,
     /// never duplicate); otherwise create a new tab and focus it. This holds for
     /// every selection type — pages and files reuse just like the singletons
-    /// (.newChat, .systemPrompt, .changeLog) — so clicking a page or a
+    /// (.newChat, .changeLog) — so clicking a page or a
     /// `[[wiki-link]]` that's already open returns to its tab instead of spawning
     /// a copy.
     public func openTab(_ selection: WikiSelection, title: String? = nil) {
@@ -1296,15 +1282,11 @@ public final class WikiStoreModel {
             if let tabID = activeTabID,
                let i = tabs.firstIndex(where: { $0.id == tabID }),
                let pendingTitle = tabs[i].pendingDraftTitle,
-               let pendingBody = tabs[i].pendingDraftBody {
+                let pendingBody = tabs[i].pendingDraftBody {
                 draftTitle = pendingTitle
                 draftBody = pendingBody
                 restoredFromPendingDraft = true
             }
-        case .systemPrompt:
-            draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
-            loadedPage = nil
-            loadedPageHeadVersionID = nil
         case .changeLog:
             draftTitle = ""
             draftBody = ""
@@ -1332,7 +1314,6 @@ public final class WikiStoreModel {
             draftChatMessage = ""
         }
         isDraftDirty = restoredFromPendingDraft
-        isSystemPromptDirty = false
     }
 
     private func recordHistoryTransition(from oldValue: WikiSelection?, to newValue: WikiSelection?) {
@@ -1664,51 +1645,9 @@ public final class WikiStoreModel {
         }
     }
 
-    // MARK: - System prompt editing (singleton document)
-
-    /// Called on each keystroke in the system-prompt editor; debounced like the
-    /// page editor (separate task so the two tracks don't cancel each other).
-    public func systemPromptChanged() {
-        // No edit-lock pause — CAS prevents data races (same as page autosave).
-        isSystemPromptDirty = true
-        systemPromptAutosaveTask?.cancel()
-        systemPromptAutosaveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            self?.saveSystemPrompt()
-        }
-    }
-
-    /// Persist the system-prompt draft. Guarded on `loadedSelection` so a flush
-    /// triggered once selection has moved off the prompt doesn't clobber it with
-    /// stale text (mirrors `save()`'s `loadedPage` guard). No-op when the draft
-    /// hasn't been modified (prevents bumping the row version on a tab switch
-    /// when the user only viewed the Instructions page).
-    public func saveSystemPrompt() {
-        guard loadedSelection == .systemPrompt else { return }
-        do {
-            try store.updateSystemPrompt(body: draftSystemPrompt)
-            isSystemPromptDirty = false
-        } catch {
-            DebugLog.store("WikiStoreModel.saveSystemPrompt failed: \(error)")
-        }
-    }
-
-    /// Cancel the system-prompt debounce and save synchronously.
-    /// No-op when the draft hasn't been modified (prevents bumping the row
-    /// version on a tab switch when the user only viewed the Instructions page).
-    public func flushPendingSystemPromptSave() {
-        systemPromptAutosaveTask?.cancel()
-        systemPromptAutosaveTask = nil
-        guard isSystemPromptDirty else { return }
-        saveSystemPrompt()
-    }
-
-    /// Flush BOTH editing tracks. Used on selection switch and app backgrounding
-    /// so neither a page edit nor a system-prompt edit is lost.
+    /// Flush pending page edits. Used on selection switch and app backgrounding.
     public func flushPendingSaves() {
         flushPendingSave()
-        flushPendingSystemPromptSave()
     }
 
     // MARK: - Blob GC (#253)
@@ -2713,12 +2652,11 @@ public final class WikiStoreModel {
         }
     }
 
-    /// The current `system_prompt` singleton body from the store (the seeded
-    /// default if absent) — the agent run passes this verbatim via
-    /// `--append-system-prompt`. Read fresh from the store, not from the draft, so
-    /// it reflects the last persisted edit even if the prompt editor isn't open.
+    /// The current `system_prompt` singleton body — the agent run passes this
+    /// verbatim via `--append-system-prompt`. The system prompt is now read-only,
+    /// always sourced from the compiled `SystemPrompt.defaultBody`.
     public func currentSystemPromptBody() -> String {
-        (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
+        SystemPrompt.defaultBody
     }
 
     /// A LIVE snapshot of THIS wiki's current state — page titles, the `index.md`
@@ -3943,7 +3881,7 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .newChat, .systemPrompt, .changeLog, .bookmark:
+        case .newChat, .changeLog, .bookmark:
             true
         }
     }

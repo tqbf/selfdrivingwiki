@@ -259,8 +259,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         let maintenanceMenu = NSMenu()
         maintenanceMenu.addItem(withTitle: "Vacuum All…",
             action: #selector(vacuumAll(_:)), keyEquivalent: "").target = self
-        maintenanceMenu.addItem(withTitle: "Agent Instructions",
-            action: #selector(openAgentInstructions(_:)), keyEquivalent: "").target = self
         maintenanceItem.submenu = maintenanceMenu
         menu.addItem(maintenanceItem)
 
@@ -345,11 +343,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     @objc private func vacuumAll(_ sender: NSMenuItem?) {
         targetSession?.previewVacuumAll()
-        activateWikiWindow()
-    }
-
-    @objc private func openAgentInstructions(_ sender: NSMenuItem?) {
-        targetSession?.store.openTab(.systemPrompt)
         activateWikiWindow()
     }
 

@@ -341,8 +341,6 @@ struct AddressBarView: View {
         case .source(let id):
             let name = store.sources.first { $0.id == id }?.effectiveName ?? ""
             return name.isEmpty ? "" : "[[source:\(name)]]"
-        case .systemPrompt:
-            return "[[system-prompt]]"
         case .changeLog:
             return "[[log]]"
         case .newChat:

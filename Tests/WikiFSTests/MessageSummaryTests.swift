@@ -255,11 +255,11 @@ struct MessageSummaryTests {
 
     // MARK: - Store round-trip (AC.1 + AC.6, integration)
 
-    @Test func freshDB_isAtSchemaVersion41() throws {
-        // AC.1: a fresh DB is at user_version = 41.
+    @Test func freshDB_isAtSchemaVersion42() throws {
+        // AC.1: a fresh DB is at user_version = 42.
         let store = try TestStoreFactory.inMemory()
         let version = Int(store.pragmaValue("user_version")) ?? 0
-        #expect(version == 41)
+        #expect(version == 42)
     }
 
     @Test func summaryNullForNewMessages() throws {

@@ -1,12 +1,10 @@
 /// What the sidebar currently has selected. The sidebar is a single
 /// `List(selection:)`, so its selection must be ONE `Hashable` type — this enum
-/// unifies the singleton system-prompt document, wiki pages, and ingested files.
+/// unifies wiki pages and ingested files.
 public enum WikiSelection: Hashable, Sendable {
     /// A new-chat composer with no persisted chat id yet (the draft tab state).
     /// The first send retargets the tab in place to `.chat(id)`.
     case newChat
-    /// The user-editable system-prompt document (`CLAUDE.md` / `AGENTS.md`).
-    case systemPrompt
     /// The append-only operation log (`log.md`).
     case changeLog
     /// A wiki page, by id.

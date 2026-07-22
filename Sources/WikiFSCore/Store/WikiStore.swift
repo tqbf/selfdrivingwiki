@@ -515,15 +515,6 @@ public protocol WikiStore: Sendable {
     /// crashed/abandoned runs. Returns the number of workspaces reaped.
     func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int
 
-    // MARK: - System prompt (singleton document, v3)
-
-    /// Read the user-editable singleton system-prompt document (projected at the
-    /// root as `CLAUDE.md` / `AGENTS.md`). Returns the seeded default if absent.
-    func getSystemPrompt() throws -> SystemPrompt
-
-    /// Replace the system-prompt body, bumping its version + `updated_at`.
-    func updateSystemPrompt(body: String) throws
-
     // MARK: - Log + wiki index (Phase B)
     //
     // The append-only `log` write and the singleton `wiki_index` read/write live
