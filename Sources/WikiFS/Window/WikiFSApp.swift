@@ -527,6 +527,17 @@ struct WikiFSApp: App {
         .defaultSize(width: 1080, height: 740)
         .windowResizability(.contentMinSize)
 
+        // Page versions: a real, resizable, non-modal window (one per page +
+        // wiki, opened via `openWindow(value:)` from `PageDetailView`'s
+        // inspector). Browse/diff/restore the page's version history (#817).
+        // Mirrors the "Compare Extractions" group above.
+        WindowGroup("Compare Versions", for: PageVersionCompareContext.self) { $context in
+            PageVersionCompareWindow(sessionManager: sessionManager, context: context)
+                .preferredColorScheme(appearanceColorScheme)
+        }
+        .defaultSize(width: 1080, height: 740)
+        .windowResizability(.contentMinSize)
+
         Settings {
             TabView(selection: settingsSelectedTab) {
                 ZoteroSettingsView(containerDirectory: containerDirectory)

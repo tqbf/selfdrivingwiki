@@ -654,4 +654,123 @@ struct PageVersionTests {
         let v = store.pragmaValue("user_version")
         #expect(v == "42", "fresh DB stamps user_version = 42 (got \(v))")
     }
+
+    // MARK: - #817: pageVersionBody (read arbitrary version body)
+
+    /// AC.1 — `pageVersionBody` reads the full blob-decoded body of the HEAD.
+    @Test func pageVersionBodyReadsFullBodyOfHead() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Body Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Body Page", body: "head body content",
+            expectedHeadVersionID: nil)
+        let head = try store.pageHeadVersionID(pageID: page.id)
+        let body = try store.pageVersionBody(versionID: head!)
+        #expect(body == "head body content")
+    }
+
+    /// AC.1 — `pageVersionBody` reads an ARBITRARY (non-head) historical version,
+    /// not just the current HEAD. This is the read that powers read-only
+    /// time-travel viewing + diffing in the Versions window.
+    @Test func pageVersionBodyReadsArbitraryOldVersion() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Old Body Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Old Body Page", body: "v1 original",
+            expectedHeadVersionID: nil)
+        let v1 = try store.pageHeadVersionID(pageID: page.id)!
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Old Body Page", body: "v2 changed",
+            expectedHeadVersionID: v1)
+        // v1 is no longer HEAD, but its body must still be readable.
+        let body = try store.pageVersionBody(versionID: v1)
+        #expect(body == "v1 original")
+        // And the HEAD body is distinct.
+        let head = try store.pageHeadVersionID(pageID: page.id)!
+        #expect(try store.pageVersionBody(versionID: head) == "v2 changed")
+    }
+
+    /// AC.1 — `pageVersionBody` returns nil for an unknown version id (no row).
+    @Test func pageVersionBodyReturnsNilForUnknownID() throws {
+        let store = try tempStore()
+        #expect(try store.pageVersionBody(versionID: "01JNONEXISTENT00000") == nil)
+    }
+
+    /// AC.2 — the `WikiStoreModel.pageVersionBody(for:)` wrapper returns the
+    /// resolved body (swallows errors → nil on failure). Proves the model-level
+    /// read the Versions window binds to.
+    @Test func pageVersionBodyModelWrapperReturnsBody() throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let page = try store.createPage(title: "Model Body Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Model Body Page", body: "via model",
+            expectedHeadVersionID: nil)
+        let head = try store.pageHeadVersionID(pageID: page.id)!
+        #expect(model.pageVersionBody(for: head) == "via model")
+        #expect(model.pageVersionBody(for: "01JBOGUS00000000000") == nil)
+    }
+
+    // MARK: - #817: restorePage (append-only restore)
+
+    /// AC.3 — `restorePage` APPENDS a new version node (history count +1), the
+    /// new node's content matches the target, and the existing v1/v2 nodes are
+    /// left untouched (history is never mutated).
+    @Test func restorePageAppendsNewNodeMatchingTarget() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Restore Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Restore Page", body: "v1 original",
+            expectedHeadVersionID: nil)
+        let v1 = try store.pageHeadVersionID(pageID: page.id)!
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Restore Page", body: "v2 changed",
+            expectedHeadVersionID: v1)
+        let v2 = try store.pageHeadVersionID(pageID: page.id)!
+
+        let countBefore = try store.pageVersionHistory(pageID: page.id).count
+        // Restore to v1 — appends a NEW node (does NOT mutate v1/v2).
+        let newNode = try store.restorePage(pageID: page.id, to: v1)
+        let countAfter = try store.pageVersionHistory(pageID: page.id).count
+        #expect(countAfter == countBefore + 1, "restore appends exactly one node")
+        #expect(newNode != v1 && newNode != v2, "the restore node is a brand-new id")
+        #expect(try store.pageVersionBody(versionID: newNode) == "v1 original",
+                "new node's content matches the target version")
+        // The original v1 + v2 nodes are untouched (history preserved).
+        #expect(try store.pageVersionBody(versionID: v1) == "v1 original")
+        #expect(try store.pageVersionBody(versionID: v2) == "v2 changed")
+    }
+
+    /// AC.3 — after restore, HEAD points at the NEW node (not the target), the
+    /// denormalized `pages` mirror reflects the restored body, and the new
+    /// node's activity is badged `'restore'`.
+    @Test func restorePageHeadPointsAtNewNodeAndBadgesRestore() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Head Restore Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Head Restore Page", body: "v1",
+            expectedHeadVersionID: nil)
+        let v1 = try store.pageHeadVersionID(pageID: page.id)!
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Head Restore Page", body: "v2",
+            expectedHeadVersionID: v1)
+
+        let newNode = try store.restorePage(pageID: page.id, to: v1)
+        let head = try store.pageHeadVersionID(pageID: page.id)
+        #expect(head == newNode, "HEAD is the new restore node, not the target v1")
+        #expect(head != v1, "HEAD is not the original target (a new node was appended)")
+
+        // The pages mirror reflects the restored body.
+        let pageRow = try store.getPage(id: page.id)
+        #expect(pageRow.bodyMarkdown == "v1", "pages mirror holds the restored body")
+
+        // The new node's activity is badged 'restore'.
+        let activityKind = store.scalarText("""
+        SELECT act.kind FROM page_versions pv
+        JOIN activities act ON act.id = pv.activity_id
+        WHERE pv.id = '\(newNode)';
+        """)
+        #expect(activityKind == "restore",
+                "restore node's activity kind is 'restore' (got \(activityKind))")
+    }
 }

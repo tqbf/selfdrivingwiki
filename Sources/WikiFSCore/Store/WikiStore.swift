@@ -428,10 +428,26 @@ public protocol WikiStore: Sendable {
     /// requirement (no default — mirrors `pageOrigin`/`sourceOrigin`).
     func pageEditHistory(pageID: PageID) throws -> [PageOrigin]
 
+    /// Read the full blob-decoded body of an arbitrary page version by its id
+    /// (the read-side counterpart of `revertPage`'s internal `page_versions →
+    /// blobs` join). Returns `nil` when no row matches. READ-ONLY: routes
+    /// through `dbWriter.read` and emits no `ResourceChangeEvent`. Used by the
+    /// Versions window to view/diff a historical version without restoring it.
+    func pageVersionBody(versionID: String) throws -> String?
+
     /// Revert a page to a specific version: repoint the `page-content` ref to
     /// `versionID` and update the denormalized `pages.body_markdown` from the
     /// version's blob. Emits a `.page .updated` change event.
     func revertPage(pageID: PageID, to versionID: String) throws
+
+    /// Restore a page to a previous version by **appending a new version node**
+    /// (mirrors `revertProcessedMarkdown` for sources). The new row reuses the
+    /// target's `blob_hash` (CAS dedup — zero new blob bytes), records a
+    /// `'restore'` PROV activity so the restore is auditable in history, and
+    /// becomes the new HEAD (ref repointed to the NEW node). History is never
+    /// mutated. Returns the new version's id. Emits a `.page .updated` event.
+    @discardableResult
+    func restorePage(pageID: PageID, to versionID: String) throws -> String
 
     // MARK: - Workspaces (W1, PR #312)
 

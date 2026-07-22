@@ -24,6 +24,14 @@ struct ProvenancePanel: View {
     /// Weak-ish: the parent detail view owns a `@Bindable` reference,
     /// so this never outlives the view.
     var store: WikiStoreModel?
+    /// Optional entry to the Versions window (#817). Injected by
+    /// `PageDetailView` (page-only — sources keep their own
+    /// `ExtractionCompareSheet`). When non-nil, a "Compare Versions…" button
+    /// appears under the timeline header; `nil` hides it (the source inspector
+    /// passes nothing). Keeps this shared panel kind-agnostic: the restore /
+    /// compare affordances are page-specific and live in the dedicated window,
+    /// not here.
+    var onCompareVersions: (() -> Void)? = nil
     @Environment(\.openActivityWindow) private var openActivityWindow
 
     var body: some View {
@@ -34,6 +42,16 @@ struct ProvenancePanel: View {
                     .font(.callout)
             } else {
                 sectionHeader("History")
+                if let onCompareVersions {
+                    Button {
+                        onCompareVersions()
+                    } label: {
+                        Label("Compare Versions…", systemImage: "arrow.left.and.right.square")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.bottom, 2)
+                }
                 ForEach(history) { entry in
                     // A single timeline (newest-first). The version the page
                     // currently points at — `origin` — is tagged "Current"
@@ -176,19 +194,20 @@ struct ProvenancePanel: View {
     }
 
     /// A compact colored badge for the provenance activity kind
-    /// (`import` → blue, `edit` → green, others → gray). Makes the
-    /// operation scannable in the history list.
+    /// (`import` → blue, `edit` → green, `restore` → orange, others → gray).
+    /// Makes the operation scannable in the history list.
     @ViewBuilder
     private func operationBadge(_ kind: String) -> some View {
         let color: Color = switch kind {
-        case "import": .blue
-        case "edit":   .green
-        default:       .secondary
+        case "import":  .blue
+        case "edit":    .green
+        case "restore": .orange
+        default:        .secondary
         }
         Text(kind.capitalized)
             .font(.caption.weight(.medium))
             .lineLimit(1)
-            .frame(width: 56)
+            .frame(width: 64)
             .padding(.vertical, 2)
             .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(color)

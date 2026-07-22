@@ -132,6 +132,28 @@ struct StoreEmissionTests {
         #expect(events.last?.id == page.id.rawValue)
     }
 
+    /// #817 — `restorePage` (append-only restore) emits exactly one
+    /// `.page .updated` event (routed through `mutate()`). Mirrors the
+    /// `revertProcessedMarkdown` emission posture on the source side.
+    @Test func restorePageEmitsPageUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let page = try store.createPage(title: "Restore Emit")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Restore Emit", body: "v1",
+            expectedHeadVersionID: nil)
+        let v1 = try store.pageHeadVersionID(pageID: page.id)!
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "Restore Emit", body: "v2",
+            expectedHeadVersionID: v1)
+        try await drain(rec)
+
+        try store.restorePage(pageID: page.id, to: v1)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .page)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == page.id.rawValue)
+    }
+
     // MARK: - Sources
 
     @Test func addSourceEmitsSourceCreated() async throws {

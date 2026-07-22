@@ -419,12 +419,16 @@ text in §1–§11 or the original directive.
 
 ## Plan-review decisions (R1–R9, authoritative)
 
-- **R1 — Restore semantics:** the existing `store.revertPage`
-  (`GRDBWikiStore.swift:4642`) **repoints the `page-content` ref** to the old
-  version and routes through `mutate()` to emit a `ResourceChangeEvent`. It does
-  **NOT** append a new `page_versions` row. That shipped behavior is **correct
-  and preserved** — do NOT change it to append (the "append on revert" model is
-  the *source* side, `revertProcessedMarkdown`; pages use ref-repoint).
+- **R1 — Restore semantics (OPERATOR OVERRIDE):** restore must **APPEND a new
+  `page_versions` node**, NOT repoint the ref. This mirrors the source-side
+  `revertProcessedMarkdown` (INSERT a new row reusing the target blob). The
+  existing `store.revertPage` (repoint) is left AS-IS for `wikictl page revert`
+  backward-compat (it has another caller in `WikiCtlCore/PageCommand.swift` + 3
+  tests encoding repoint). A NEW method `restorePage(pageID:to:)` performs the
+  append-only restore: (1) read target blob+title; (2) create a `'restore'`
+  PROV activity; (3) INSERT a new `page_versions` row (parent=current HEAD,
+  reusing the target `blob_hash`); (4) repoint HEAD to the NEW row; (5) route
+  through `mutate()` to emit. The chain stays append-only and auditable.
 - **R2 — `pageVersionBody` is a READ:** implement with `dbWriter.read`
   (mirror `processedMarkdownVersion(id:)`), NOT `mutate()`. Reads emit no
   `ResourceChangeEvent`. No `StoreEmissionExhaustivenessTests` guard exists
@@ -456,7 +460,7 @@ text in §1–§11 or the original directive.
 |----|-------------|---------|
 | **AC.1** | `pageVersionBody(versionID:)` on `GRDBWikiStore` + `WikiStore` protocol: returns the full blob-decoded body for any `page_versions` row by id; `nil` when not found; uses `dbWriter.read` (no mutate, no emit). | `PageVersionTests.pageVersionBodyReadsFullBodyOfHead`, `.pageVersionBodyReturnsNilForUnknownID`, `.pageVersionBodyReadsArbitraryOldVersion` |
 | **AC.2** | `WikiStoreModel.pageVersionBody(for:)` wrapper returns `String?` (swallows errors per the model pattern). | `PageVersionTests.pageVersionBodyModelWrapperReturnsBody` (model-level) |
-| **AC.3** | Restore preserves existing semantics: `WikiStoreModel.revertPage(for:to:)` wraps `store.revertPage` AS-IS — repoints ref, **no new version row** (history length unchanged), body restored, emits `ResourceChangeEvent`. | `PageVersionTests.modelRevertPageRepointsRefAndEmits`, `.modelRevertPageDoesNotAppendVersionRow` |
+| **AC.3** | Restore is append-only: `WikiStoreModel.restorePage(for:to:)` wraps a NEW `store.restorePage` — appends a new `page_versions` node (history +1), reuses target blob, HEAD → new node, records a `'restore'` PROV activity, emits `ResourceChangeEvent`. Existing `revertPage` (repoint) left for wikictl. | `PageVersionTests.restorePageAppendsNewNode`, `.restorePageHeadPointsAtNewNode`, `.restorePageEmitsResourceChangeEvent` |
 | **AC.4** | A dedicated `WindowGroup(for: PageVersionCompareContext.self)` opens a resizable, non-modal window (mirrors `ExtractionCompareContext`). Entry from `PageDetailView`. | `PageVersionCompareContext` Hashable/Codable round-trip; window resolves the correct wiki session (structural, mirrors ExtractionCompareWindow). |
 | **AC.5** | Version list sidebar: page versions newest-first (date + agent badge + current marker), reusing `ProvenancePanel` row styling. Selecting a row loads its body via `pageVersionBody`. | `PageVersionSelectionTests` (pure selection model: default base/compare, current-marker, single-vs-two-pick). |
 | **AC.6** | Rendered pane: `WikiReaderView(markdown: selectedBody, store: liveStore)` shows the historical version read-only (time-travel). Live store passed (R8). | Wiring covered by AC.1 (body read) + AC.5 (selection); structural. |
