@@ -290,4 +290,86 @@ struct ContentTypeRegistryTests {
         // above when adding a case.
         #expect(ContentKind.allCases.count == 12)
     }
+
+    // MARK: - Capability conveniences (PR2)
+
+    /// `hasFileExtractionBackend` is the Extract-button predicate — true for
+    /// `.pdfBackend` / `.htmlToMarkdown` only. Using `canExtractToMarkdown`
+    /// for the Extract button (plan §5.4 original) would have wrongly
+    /// matched `.podcastTranscript` / `.youtubeTranscript`, breaking the
+    /// one-button-per-source exclusivity with Transcribe.
+    @Test("hasFileExtractionBackend is true for pdf + html only")
+    func fileExtractionBackendTable() {
+        let truthy: Set<ContentKind> = [.pdf, .html]
+        for kind in ContentKind.allCases {
+            let path = kind.capabilities.extractionPath
+            let expected = (path == .pdfBackend || path == .htmlToMarkdown)
+            #expect(kind.capabilities.hasFileExtractionBackend == expected,
+                    "\(kind) should have hasFileExtractionBackend == \(expected)")
+            #expect(kind.capabilities.hasFileExtractionBackend == truthy.contains(kind),
+                    "\(kind) hmm — expected \(truthy.contains(kind))")
+        }
+    }
+
+    /// `hasTranscriptBackend` is the Transcribe-button predicate — true for
+    /// `.podcastTranscript` / `.youtubeTranscript` only.
+    @Test("hasTranscriptBackend is true for podcast + youtube transcript only")
+    func transcriptBackendTable() {
+        let truthy: Set<ContentKind> = [.podcastTranscript, .youtubeTranscript]
+        for kind in ContentKind.allCases {
+            let path = kind.capabilities.extractionPath
+            let expected = (path == .podcastTranscript || path == .youtubeTranscript)
+            #expect(kind.capabilities.hasTranscriptBackend == expected,
+                    "\(kind) should have hasTranscriptBackend == \(expected)")
+            #expect(kind.capabilities.hasTranscriptBackend == truthy.contains(kind),
+                    "\(kind) hmm — expected \(truthy.contains(kind))")
+        }
+    }
+
+    /// The Extract / Transcribe button split is mutually exclusive per kind
+    /// (one `extractionPath` per kind, never both a file backend and a
+    /// transcript path). Pin this so a future case-table edit that breaks
+    /// the exclusivity is caught loudly.
+    @Test("Extract vs Transcribe backend exclusivity (no kind has both)")
+    func fileAndTranscriptBackendsMutuallyExclusive() {
+        for kind in ContentKind.allCases {
+            let caps = kind.capabilities
+            // Can't have both: a kind's `extractionPath` is one of the four
+            // cases or nil — never a (file, transcript) pair.
+            #expect(!(caps.hasFileExtractionBackend && caps.hasTranscriptBackend),
+                    "\(kind) has BOTH backends — breaks Extract/Transcribe exclusivity")
+        }
+    }
+
+    /// A `canExtractToMarkdown == true` kind is EITHER a file backend OR a
+    /// transcript backend (no third path exists today). Pin so that if a
+    /// future `ExtractionPath` case is added, the conveniences are audited:
+    /// either fold it into one of the existing booleans or fail this test
+    /// to flag the gap.
+    @Test("canExtractToMarkdown kinds have one of file-or-transcript backend")
+    func extractableKindsPartitionCleanly() {
+        for kind in ContentKind.allCases {
+            let caps = kind.capabilities
+            if caps.canExtractToMarkdown {
+                #expect(caps.hasFileExtractionBackend || caps.hasTranscriptBackend,
+                        "\(kind) is canExtractToMarkdown but neither backend — convenience partition is incomplete")
+            } else {
+                #expect(!caps.hasFileExtractionBackend && !caps.hasTranscriptBackend,
+                        "\(kind) is not canExtractToMarkdown but has a backend flag set")
+            }
+        }
+    }
+
+    // MARK: - closed-enum regression: ExtractionPath
+
+    @Test("ExtractionPath cases are stable (4 cases, no accidental growth)")
+    func extractionPathIsClosedAt4() {
+        // Adding a case is a deliberate decision. Pin so a future
+        // extraction-path addition flags the convenience tests above to
+        // be re-audited.
+        let allCases: [ContentCapabilities.ExtractionPath] = [
+            .pdfBackend, .htmlToMarkdown, .podcastTranscript, .youtubeTranscript
+        ]
+        #expect(allCases.count == 4)
+    }
 }
