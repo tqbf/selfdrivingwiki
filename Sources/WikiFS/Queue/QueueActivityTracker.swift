@@ -107,6 +107,28 @@ final class QueueActivityTracker {
     /// lint on one wiki doesn't mark another wiki's pages as linting.
     private(set) var wholeWikiLintingWikiIDs: Set<String> = []
 
+    /// Maps a lint item ID → the page IDs it lints (empty = whole-wiki).
+    /// Used by ``lintItemID(for:wikiID:)`` to resolve which running lint job
+    /// covers a given page, so the Lint button can navigate to that specific
+    /// job in the Activity window (#837). Mirrors the `itemToSourceIDs`
+    /// mapping that exists for extraction items.
+    private var itemToLintPageIDs: [QueueItem.ID: [PageID]] = [:]
+
+    /// Maps a lint item ID → its wiki ID. Needed so
+    /// ``lintItemID(for:wikiID:)`` can distinguish a whole-wiki lint (empty
+    /// `lintPageIDs`) that covers EVERY page in its wiki from a page-level
+    /// lint in a different wiki. Whole-wiki lints match by wiki ID; page-level
+    /// lints match by page ID (ULIDs are globally unique across wikis).
+    private var itemToLintWikiID: [QueueItem.ID: String] = [:]
+
+    /// A pending item selection requested from outside the Activity window —
+    /// e.g. PageDetailView's "View Lint" button (#837). Set before calling the
+    /// `openActivityWindow` environment closure; consumed by
+    /// `ActivityWindowView` on appear / change, which sets `selectedItemID`
+    /// and clears this back to nil. Drives "open Activity window focused on a
+    /// SPECIFIC queue item" without changing the closure's no-arg signature.
+    var pendingSelectionItemID: QueueItem.ID? = nil
+
     /// True while any extraction is running. Drives the sidebar spinner.
     var isExtracting: Bool { !extractingSourceIDs.isEmpty }
 
@@ -120,6 +142,26 @@ final class QueueActivityTracker {
     /// unique), so the page-level branch needs no wiki check.
     func isLinting(pageID: PageID, wikiID: String) -> Bool {
         lintingPageIDs.contains(pageID) || wholeWikiLintingWikiIDs.contains(wikiID)
+    }
+
+    /// Returns the queue item ID of the lint job (page-level or whole-wiki)
+    /// currently running for `pageID` in `wikiID`, or `nil` if no lint is in
+    /// flight. Used by `PageDetailView`'s Lint button to navigate to the
+    /// specific job in the Activity window when a lint is already running
+    /// (#837). Page-level lints match by page ID (ULIDs are globally unique);
+    /// whole-wiki lints match by wiki ID (empty `lintPageIDs` covers every
+    /// page in that wiki).
+    func lintItemID(for pageID: PageID, wikiID: String) -> QueueItem.ID? {
+        for (itemID, lintPageIDs) in itemToLintPageIDs {
+            guard itemToLintWikiID[itemID] == wikiID else { continue }
+            if lintPageIDs.isEmpty {
+                return itemID
+            }
+            if lintPageIDs.contains(pageID) {
+                return itemID
+            }
+        }
+        return nil
     }
 
     /// Per-item typed agent events, for the Activity window's transcript view.
@@ -281,6 +323,9 @@ final class QueueActivityTracker {
         lintingItemIDs = []
         lintingPageIDs = []
         wholeWikiLintingWikiIDs = []
+        itemToLintPageIDs.removeAll()
+        itemToLintWikiID.removeAll()
+        pendingSelectionItemID = nil
         extractionLog = ""
         extractionPID = nil
         currentExtractionItemID = nil
@@ -483,6 +528,10 @@ final class QueueActivityTracker {
                 if let pageIDs = item.payload.lintPageIDs {
                     // Lint item — track separately (empty sourceIDs).
                     lintingItemIDs.insert(item.id)
+                    // Track the lint scope so `lintItemID(for:wikiID:)` can
+                    // resolve which running job covers a given page (#837).
+                    itemToLintPageIDs[item.id] = pageIDs
+                    itemToLintWikiID[item.id] = item.wikiID
                     if pageIDs.isEmpty {
                         // Whole-wiki lint: covers every page in this wiki.
                         wholeWikiLintingWikiIDs.insert(item.wikiID)
@@ -619,6 +668,8 @@ final class QueueActivityTracker {
         }
         // Lint items are tracked separately — always remove on terminal state.
         lintingItemIDs.remove(item.id)
+        itemToLintPageIDs.removeValue(forKey: item.id)
+        itemToLintWikiID.removeValue(forKey: item.id)
         if let pageIDs = item.payload.lintPageIDs {
             if pageIDs.isEmpty {
                 // Whole-wiki lint. Safe to remove by wiki ID: the `.ingest`

@@ -639,7 +639,8 @@ public actor ACPBackend: AgentBackend {
             selectedModelId: profile.providerHints[HintKey.acpSelectedModelId.rawValue],
             stage: nil,  // createSession is also used by chat/lint — no stage label
             baselineCurrentModelId: modelsInfo?.currentModelId,
-            advertisedModelIds: modelsInfo?.availableModels.map(\.modelId) ?? [])
+            advertisedModelIds: modelsInfo?.availableModels.map(\.modelId) ?? [],
+            configOptions: configOptions)
 
         // Rebind onExit so the latest caller's callback fires on process exit.
         // With a warm subprocess, multiple sessions share one permission delegate;
@@ -680,19 +681,111 @@ public actor ACPBackend: AgentBackend {
     /// inline catch at this site — the agent may still work on its default
     /// model; a clearer error surfaces from the prompt if not. Mirrors
     /// `ACPBackend.createSession`'s pre-refactor catch block).
+    ///
+    /// #834: this method tries the config-option model-selection path FIRST
+    /// (via `ACPModelSelectionResolver.resolveConfigOptionModel`), for agents
+    /// that advertise model selection as a `"model"` config option
+    /// (`session/set_config_option`) rather than via `ModelsInfo.availableModels`
+    /// (e.g. claude-acp). When `configOptions` carries a `"model"` select, the
+    /// selection is validated against its advertised `options` and applied via
+    /// `session/set_config_option`; otherwise it returns `nil` and this method
+    /// falls through to the unchanged `setModel` path. The two paths are
+    /// mutually exclusive per-agent; the config-option path takes precedence.
     func applyModelIfNeeded(
         session sessionHandle: SessionHandle,
         selectedModelId: String?,
         stage: ACPIngestStage?,
         baselineCurrentModelId: String?,
-        advertisedModelIds: [String]
+        advertisedModelIds: [String],
+        configOptions: [SessionConfigOption]?
     ) async {
+        // #834: claude-acp and other config-option agents advertise model
+        // selection via a "model" SessionConfigOption
+        // (session/set_config_option), NOT via ModelsInfo.availableModels. Try
+        // that path FIRST: if the agent advertises a "model" select, resolve
+        // against its own options and apply via setConfigOption. Returns nil
+        // when there's no "model" option → fall through to the unchanged setModel
+        // path below (agents that advertise availableModels, e.g. GLM, keep
+        // working exactly as before).
+        let stageLabel = stage?.label ?? "session"
+        if let configOptions,
+           let coDecision = ACPModelSelectionResolver.resolveConfigOptionModel(
+               selectedModelId: selectedModelId, configOptions: configOptions) {
+            switch coDecision {
+            case .useAgentDefault:
+                if let session = sessions[sessionHandle.id] {
+                    debugLogger?.logSessionSetModel(
+                        sessionId: session.sessionId,
+                        stage: stageLabel,
+                        decision: "useAgentDefault(configOption)",
+                        baselineCurrentModelId: baselineCurrentModelId,
+                        appliedModelId: nil,
+                        setModelError: nil)
+                }
+                DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) keeping agent default (configOption selected=\(selectedModelId ?? "nil") baseline=\(baselineCurrentModelId ?? "nil"))")
+                return
+            case .applyViaModelConfigOption(let value):
+                DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setConfigOption model=\(value) (baseline=\(baselineCurrentModelId ?? "nil"))")
+                guard var session = sessions[sessionHandle.id] else {
+                    DebugLog.agent("ACPBackend.applyModelIfNeeded: no session for handle \(sessionHandle.id) — setConfigOption model skipped")
+                    debugLogger?.logSessionSetModel(
+                        sessionId: SessionId("(unknown)"),
+                        stage: stageLabel,
+                        decision: "applyConfigOption(\(value))",
+                        baselineCurrentModelId: baselineCurrentModelId,
+                        appliedModelId: nil,
+                        setModelError: "no session for handle \(sessionHandle.id)")
+                    return
+                }
+                do {
+                    _ = try await session.client.setConfigOption(
+                        sessionId: session.sessionId,
+                        configId: SessionConfigId("model"),
+                        value: SessionConfigValueId(value))
+                    // Optimistically patch the stored config option's currentValue
+                    // so downstream reads (the usage tracker, the toolbar) reflect
+                    // the applied model — mirrors the setModel path's refresh of
+                    // modelsInfo.currentModelId + the public setConfigOption's local
+                    // flip.
+                    session.configOptions = patchConfigOption(
+                        in: session.configOptions ?? [],
+                        configId: "model",
+                        newValue: value)
+                    sessions[sessionHandle.id] = session
+                    debugLogger?.logSessionSetModel(
+                        sessionId: session.sessionId,
+                        stage: stageLabel,
+                        decision: "applyConfigOption(\(value))",
+                        baselineCurrentModelId: baselineCurrentModelId,
+                        appliedModelId: value,
+                        setModelError: nil)
+                    DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setConfigOption model OK applied=\(value) baseline=\(baselineCurrentModelId ?? "nil"))")
+                } catch {
+                    // Non-fatal (mirrors the setModel error path): the agent's
+                    // default may still work; a clearer error surfaces from the
+                    // prompt if not. Still write the debug artifact.
+                    DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setConfigOption model=\(value) failed: \(error.localizedDescription)")
+                    debugLogger?.logSessionSetModel(
+                        sessionId: session.sessionId,
+                        stage: stageLabel,
+                        decision: "applyConfigOption(\(value))",
+                        baselineCurrentModelId: baselineCurrentModelId,
+                        appliedModelId: nil,
+                        setModelError: error.localizedDescription)
+                }
+                return
+            case .apply:
+                // Won't happen from resolveConfigOptionModel (it only returns
+                // .useAgentDefault / .applyViaModelConfigOption / nil). Exhaustive;
+                // fall through to the setModel path below.
+                break
+            }
+        }
         // Resolve: validate + decide whether to call setModel at all.
         let decision = ACPModelSelectionResolver.resolve(
             selectedModelId: selectedModelId,
             currentModelId: baselineCurrentModelId,
             advertisedModelIds: advertisedModelIds)
-        let stageLabel = stage?.label ?? "session"
         switch decision {
         case .apply(let appliedId):
             DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) setModel \(appliedId) (baseline=\(baselineCurrentModelId ?? "nil"))")
@@ -766,6 +859,20 @@ public actor ACPBackend: AgentBackend {
                     setModelError: nil)
             }
             DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) keeping agent default (selected=\(selectedModelId ?? "nil") decision=\(decision) baseline=\(baselineCurrentModelId ?? "nil"))")
+        case .applyViaModelConfigOption:
+            // Unreachable from `resolve(...)` (it only returns .useAgentDefault /
+            // .apply); the config-option path above handles .applyViaModelConfigOption
+            // and returns. Present only for switch exhaustiveness — defensive no-op.
+            DebugLog.agent("ACPBackend.applyModelIfNeeded: \(stageLabel) unexpected .applyViaModelConfigOption in setModel path — no-op")
+            if let session = sessions[sessionHandle.id] {
+                debugLogger?.logSessionSetModel(
+                    sessionId: session.sessionId,
+                    stage: stageLabel,
+                    decision: "useAgentDefault(unexpectedConfigOption)",
+                    baselineCurrentModelId: baselineCurrentModelId,
+                    appliedModelId: nil,
+                    setModelError: nil)
+            }
         }
     }
 
@@ -1545,7 +1652,7 @@ public actor ACPBackend: AgentBackend {
         guard let session = sessions[sessionHandle.id] else {
             throw ACPBackendError.noAgentConfigured
         }
-        let configIdValue = SessionConfigId(value)
+        let configIdValue = SessionConfigId(configId)
         let valueId = SessionConfigValueId(value)
         DebugLog.agent("ACPBackend.setConfigOption: configId=\(configId) value=\(value) session=\(session.sessionId.value)")
         _ = try await session.client.setConfigOption(

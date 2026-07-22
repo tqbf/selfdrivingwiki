@@ -4,9 +4,11 @@
 
 **Symptom:** the Agent Queue / Extraction Queue window's sidebar `List`
 rendered its first rows up into the title bar, behind the red/yellow/green
-traffic-light buttons.
+traffic-light buttons. The sidebar `List` also extends edge-to-edge under
+the title bar — the hand-built `NSWindow` didn't provide the correct
+title-bar inset.
 
-**Root cause:** the Activity window is a hand-built `NSWindow`
+**Root cause:** the Activity window was a hand-built `NSWindow`
 (`MenuBarItemController.showQueueWindow`) with `toolbarStyle = .unified` +
 `titleVisibility = .hidden`, hosting a `NavigationSplitView` whose `.toolbar`
 carries only a trailing `.primaryAction` item. `.listStyle(.sidebar)` was
@@ -17,17 +19,119 @@ idle) and no leading/principal toolbar content, SwiftUI treated the toolbar as
 floating/transparent, reserved no toolbar region, and the sidebar `List`
 started at the very top of the window — behind the traffic lights. The main
 wiki window (`ContentView`) avoids this implicitly via its `.navigation` +
-`.principal` toolbar items and explicitly calls `titleVisibility = .hidden` a
-"fragile hack" (ContentView.swift:281).
+`.principal` toolbar items.
 
-**Fix:** one modifier on the `NavigationSplitView` in
-`ActivityWindowView.swift` — `.toolbarBackground(.visible, for:
-.windowToolbar)`. Pinning the window-toolbar background to `.visible` makes
-SwiftUI treat the unified toolbar as a reserved (non-floating) region, so the
-sidebar `List` content is inset below it and the first rows clear the
-traffic-light buttons. Minimal, no redesign. PR #839.
+**Fix (two-part):** (1) `.toolbarBackground(.visible, for: .windowToolbar)` on
+the `NavigationSplitView` in `ActivityWindowView.swift` — pins the toolbar
+background so SwiftUI reserves the toolbar region and insets the sidebar
+below it. (2) Migrated the queue window from a hand-built `NSWindow` to a
+scene-managed `WindowGroup(for: QueueKind.self)` in `WikiFSApp`, matching the
+pattern already used for the compare windows. The system now owns the window
+— title-bar inset, traffic-light clearance, frame persistence, and state
+restoration all come for free. Eliminated ~120 lines of manual `NSWindow`
+lifecycle code (#635's frame-autosave validation/repair machinery). PR #839.
 
-**Verified:** `make build` ✓ + `swift test` ✓ (3503 tests, 295 suites).
+**Verified:** `make build` ✓ + `swift test` ✓ (3499 tests, 295 suites).
+
+## fix: Config-option model selection for claude-acp (#834)
+
+**Goal:** claude-acp exposes model selection via a `"model"` config option
+(`session/set_config_option`), not via `ModelsInfo.availableModels`
+(`session/set_model`). The app only implemented the `availableModels` path, so a
+pinned model (e.g. `"haiku"`) was silently dropped — the resolver hit the
+empty-list guard and skipped `setModel`. This adds a config-option-aware
+model-selection path, trying it FIRST and falling through to the unchanged
+`setModel` path. Same bug class as Zed #41578.
+
+**Investigation → plan:** `plans/haiku-configoption-fix.md`.
+
+**Architecture deviation from the original plan:** the plan placed
+`resolveConfigOptionModel` in `WikiFSCore/Core/AgentProviderModelCache.swift`,
+but `WikiFSCore` does NOT depend on `ACPModel` (kept ACP-free for Linux
+portability, #754/#780). The new enum **case** (`applyViaModelConfigOption`,
+pure `String`) went in `WikiFSCore`; the resolver **method** + helper (touching
+`ACPModel.SessionConfigOption`) went in a new
+`Sources/WikiFSEngine/ACPModelConfigOptionResolver.swift` as a `public`
+extension on `ACPModelSelectionResolver` — mirroring the `ThinkingEffortOption`
+precedent of ACPModel-touching pure logic living in `WikiFSEngine`.
+
+**Plan-review correction applied:** the pre-existing public
+`setConfigOption(sessionHandle:configId:value:)` wrapper had a bug — it
+constructed `SessionConfigId(value)` (using the VALUE as the config id) instead
+of `SessionConfigId(configId)`, breaking the `thought_level` path too. Fixed
+(`ACPBackend.swift:1655`). The new config-option model path bypasses the
+wrapper entirely, calling `session.client.setConfigOption(...)` directly with
+`SessionConfigId("model")`.
+
+**Files touched:**
+- **Edit (resolver enum):** `Sources/WikiFSCore/Core/AgentProviderModelCache.swift`
+  — added `case applyViaModelConfigOption(selectedValue: String)` to
+  `ACPModelSelectionDecision` (no `ACPModel` types, stays in `WikiFSCore`).
+- **New (resolver method):** `Sources/WikiFSEngine/ACPModelConfigOptionResolver.swift`
+  — `public extension ACPModelSelectionResolver` with
+  `resolveConfigOptionModel(selectedModelId:configOptions:)` (detect the
+  `"model"` select by id OR category, validate the value against the advertised
+  `options`, decide) + `configOptionValues(from:)` (flatten
+  ungrouped/grouped). Mirrors `ThinkingEffortOption` patterns.
+- **Edit (routing):** `Sources/WikiFSEngine/ACPBackend.swift` —
+  `applyModelIfNeeded` gained a `configOptions` param; tries the config-option
+  path FIRST (returning non-nil = agent advertises a `"model"` config option),
+  applies via `session.client.setConfigOption(configId:"model", value:)` +
+  `patchConfigOption` to refresh stored `configOptions`, then falls through to
+  the UNCHANGED `setModel` path when `nil`. Added exhaustive
+  `.applyViaModelConfigOption` case to the setModel `switch` (unreachable there,
+  defensive no-op). Fixed the `setConfigOption` wrapper's
+  `SessionConfigId(value)` → `SessionConfigId(configId)` bug.
+- **Edit (call sites):** `Sources/WikiFSEngine/ACPBackend.swift` (`createSession`
+  passes the local `configOptions`) + `Sources/WikiFSEngine/AgentLauncher.swift`
+  (both fork paths fetch `await acp.sessionConfigOptions(for: session)` —
+  forkSession inherits the parent's configOptions).
+- **Edit (tests):** `Tests/WikiFSAppTests/AgentProviderModelPickerTests.swift`
+  — 8 `resolveConfigOptionModel` cases (apply/already-current/stale/nil/empty
+  selection, no-model-option→nil, empty→nil, category-match) + 2
+  `configOptionValues` flatten tests (ungrouped/grouped) + 1 setModel-path
+  regression guard.
+
+**Evidence:** `swift build` clean (warnings-as-errors on WikiFSEngine);
+`swift test` full suite — 3514 tests in 295 suites passed; the 11 new
+config-option tests pass via `swift test --filter "configOptionModel|configOptionValues|setModelPathStillApplies"`.
+## feat: Lint button navigates to lint job in Activity window (#837)
+
+**Goal:** when a lint job is running/queued for a page, the Lint button in
+PageDetailView navig to the specific lint job in the Activity window instead
+of showing a static alert.
+
+**Approach:**
+- Added `lintItemID(for:wikiID:)` to `QueueActivityTracker` that resolves the
+  running lint item for a given page (page-level match by page ID, whole-wiki
+  match by wiki ID). Backed by two new tracking dicts (`itemToLintPageIDs`,
+  `itemToLintWikiID`) populated on `.started` and cleaned up on terminal state.
+- Added `pendingSelectionItemID` property to the tracker — a shared
+  `@Observable` "pending selection" that `PageDetailView` sets before opening
+  the Activity window. `ActivityWindowView` consumes it on appear + onChange,
+  setting `selectedItemID` and clearing the pending value.
+- `PageDetailView.lintButton`: when linting, the button swaps to "View Lint"
+  with `checkmark.seal.fill`, stays enabled, and taps resolve the lint item ID
+  → set pending selection → call `openActivityWindow?()`. Removed the old
+  `.disabled` + alert behavior entirely.
+- `ActivityWindowView`: added `consumePendingSelectionIfNeeded()` called from
+  `.onAppear` + `.onChange(of: activityTracker.pendingSelectionItemID)`, plus
+  a safety-net comment on the existing `autoSelectIfNeeded` onChange handlers.
+- 9 new tests covering page-level resolution, whole-wiki resolution, cross-wiki
+  scoping, unlisted-page nil, mapping cleanup on completion/cancellation, and
+  pending selection default/stop behavior.
+
+**Files touched:**
+- `Sources/WikiFS/Queue/QueueActivityTracker.swift` — new tracking dicts +
+  `lintItemID(for:wikiID:)` + `pendingSelectionItemID` + cleanup in
+  `.started`/`removeItem`/`stop()`
+- `Sources/WikiFS/Queue/ActivityWindowView.swift` —
+  `consumePendingSelectionIfNeeded()` + `.onChange(of: pendingSelectionItemID)`
+  + `.onAppear` call
+- `Sources/WikiFS/Pages/PageDetailView.swift` — `openActivityWindow` env,
+  removed alert + `.disabled`, new navigation action
+- `Tests/WikiFSAppTests/QueueIngestionTests.swift` — 9 tests in
+  `QueueActivityTrackerLintItemIDTests`
 
 ## feat: Versions tab — browse/diff/restore page history (#817)
 

@@ -299,6 +299,7 @@ mutate-scope: deps prompts version
 # code-generated GeneratedPrompts.swift.
 .PHONY: prompts
 prompts:
+	@rm -f Sources/WikiFSCore/GeneratedPrompts.swift
 	@mkdir -p Sources/WikiFSCore/Resources/Prompts
 	@for f in prompts/*.md; do \
 		dest="Sources/WikiFSCore/Resources/Prompts/$$(basename $$f)"; \

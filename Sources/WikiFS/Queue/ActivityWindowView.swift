@@ -75,10 +75,23 @@ struct ActivityWindowView: View {
         // visibly established for the inset to apply (the main wiki window gets
         // this implicitly via its `.navigation` + `.principal` toolbar items).
         .toolbarBackground(.visible, for: .windowToolbar)
-        .onAppear { viewModel.attach(engine: queueEngine) }
+        .onAppear {
+            viewModel.attach(engine: queueEngine)
+            consumePendingSelectionIfNeeded()
+        }
         .onDisappear { viewModel.detach() }
+        // #837: when a specific item selection is requested from outside the
+        // Activity window (e.g. PageDetailView's "View Lint" button), consume
+        // it immediately so an already-open window switches selection without
+        // needing an onAppear (which only fires once per window lifecycle).
+        .onChange(of: activityTracker.pendingSelectionItemID) { _, _ in
+            consumePendingSelectionIfNeeded()
+        }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
+        // Also a safety net for #837: if the pending selection was consumed
+        // in onAppear before the snapshot arrived, the item is already
+        // selected; autoSelectIfNeeded is a no-op when selectedItemID != nil.
         .onChange(of: activeItems.map(\.id)) { _, _ in
             autoSelectIfNeeded()
         }
@@ -101,6 +114,19 @@ struct ActivityWindowView: View {
             selectedItemID = first.id
             didAutoSelect = true
         }
+    }
+
+    /// Consume a pending item selection requested from outside the Activity
+    /// window (#837). Set on `activityTracker.pendingSelectionItemID` before
+    /// the window-opening closure fires; read here and cleared. Overrides
+    /// the current selection — the user explicitly asked to see this item.
+    /// Marks `didAutoSelect` so `autoSelectIfNeeded` won't override it back
+    /// when the first snapshot lands.
+    private func consumePendingSelectionIfNeeded() {
+        guard let pending = activityTracker.pendingSelectionItemID else { return }
+        activityTracker.pendingSelectionItemID = nil
+        selectedItemID = pending
+        didAutoSelect = true
     }
 
     // MARK: - Reorder
