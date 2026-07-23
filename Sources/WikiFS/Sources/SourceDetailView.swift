@@ -1912,13 +1912,19 @@ struct SourceDetailView: View {
         // Don't disable during an active ingestion or extraction — the queue
         // engine serializes both (ingestion maxConcurrent=1 per provider;
         // extraction limit 1 for local pdf2md). A second tap just appends to
-        // the queue. `isRunning` (the ingest/lint launcher — NOT the separate
-        // chat launcher) blocks only when a lint is mid-run with no ingest
-        // active, to avoid a launcher preflight refusal; a chat run leaves this
-        // launcher idle, so it does not block.
-        .disabled((isRunning && !isAnySourceIngesting)
-                  || isEditLockedExternally
-                  || !canIngest)
+        // the queue, and `enqueueIngestion` dedupes a source already active.
+        //
+        // #867: before the Phase C4 flip this ALSO gated on
+        // `launcher.isRunning` to avoid a preflight refusal when a lint was
+        // mid-run in-process. After C4, ingest AND lint are enqueued to the
+        // daemon queue — the local `agentLauncher` is no longer on either
+        // path, so its `isRunning` flag is disconnected from ingest/lint state
+        // and must NOT gate the button (a stale/stuck flag permanently wedged
+        // it). The predicate lives in the pure, tested
+        // `ingestButtonDisabled(...)` seam so the regression is pinned.
+        .disabled(Self.ingestButtonDisabled(
+            isEditLockedExternally: isEditLockedExternally,
+            canIngest: canIngest))
         .confirmationDialog(
             "Ingest Again?",
             isPresented: $showReingestConfirmation,
@@ -2061,5 +2067,25 @@ extension SourceDetailView {
         case .podcastTranscript, .youtubeTranscript:   return .transcribe
         case nil:                                       return .none
         }
+    }
+
+    /// The Ingest button's disabled predicate, extracted as a pure,
+    /// `internal static` seam (mirrors `extractionAffordance`) so the
+    /// regression suite can pin it without instantiating a `SourceDetailView`.
+    ///
+    /// #867 (Phase C4): ingest and lint are enqueued to the daemon queue, not
+    /// run through the in-process `agentLauncher`. The button therefore MUST
+    /// NOT consult `launcher.isRunning` — that flag is disconnected from
+    /// ingest/lint state (and a stale/stuck value permanently wedged the
+    /// button). The queue engine serializes ingestion/extraction and
+    /// `enqueueIngestion` dedupes a source already active in the queue, so a
+    /// re-tap is safe and requires no launcher-level gating. The only real
+    /// gates left are "another agent holds the edit lock" and "this source has
+    /// no ingestible content".
+    nonisolated static func ingestButtonDisabled(
+        isEditLockedExternally: Bool,
+        canIngest: Bool
+    ) -> Bool {
+        isEditLockedExternally || !canIngest
     }
 }
