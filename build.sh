@@ -76,6 +76,7 @@ MIN_MACOS="14.0"
 
 APP_PROFILE="signing/WikiFS.provisionprofile"
 EXT_PROFILE="signing/WikiFSFileProvider.provisionprofile"
+DAEMON_PROFILE="signing/wikid.provisionprofile"
 APP_ICON="build/AppIcon.icns"
 
 BUILD_DIR="build"

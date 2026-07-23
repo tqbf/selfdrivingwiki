@@ -88,7 +88,10 @@ func enqueueIngestion(
                 payload: QueueItemPayload(sourceIDs: [sourceID]))
             do {
                 let itemID = try await queueEngine.enqueue(request)
-                _ = await queueEngine.waitForCompletion(of: itemID)
+                let result = await queueEngine.waitForCompletion(of: itemID)
+                if case .failure(let error) = result {
+                    DebugLog.ingest("enqueueIngestion: extraction waitForCompletion failed for \(sourceID.rawValue): \(error.localizedDescription)")
+                }
             } catch {
                 DebugLog.ingest("enqueueIngestion: extraction failed for \(sourceID.rawValue) — \(error.localizedDescription)")
             }
