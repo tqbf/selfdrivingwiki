@@ -8,7 +8,7 @@
     <array>
         <string>/bin/zsh</string>
         <string>-c</string>
-        <string>exec "$HOME/Library/Group Containers/group.com.willsargent.wiki/wikid" || exec "/Applications/Self Driving Wiki.app/Contents/Helpers/wikid"</string>
+        <string>DAEMON="${HOME}/Library/Group Containers/group.com.willsargent.wiki/wikid"; [ -x "$DAEMON" ] || DAEMON="/Applications/Self Driving Wiki.app/Contents/Helpers/wikid"; exec "$DAEMON"</string>
     </array>
     <key>MachServices</key>
     <dict>
