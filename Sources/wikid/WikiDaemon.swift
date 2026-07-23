@@ -272,9 +272,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// `WikiDaemonExporter.registerEventSink`.
     #if os(macOS)
     func registerEventSink(_ sink: WikiDaemonEventSink) {
-        queue.sync {
+        let total = queue.sync { () -> Int in
             eventSinks.append(sink)
+            return eventSinks.count
         }
+        DebugLog.store("wikid: event sink registered, total=\(total)")
     }
 
     /// All currently-registered event-sink proxies. Used by future phases to
@@ -575,8 +577,17 @@ final class WikiDaemon: @unchecked Sendable {
     /// the sole path by which engine events reach the app over XPC.
     func pushQueueEvent(_ event: QueueEvent) {
         #if canImport(WikiFSEngine)
-        guard let envelope = QueueEventEnvelope(from: event) else { return }
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        guard let envelope = QueueEventEnvelope(from: event) else {
+            DebugLog.store("wikid: pushQueueEvent — failed to create envelope")
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            DebugLog.store("wikid: pushQueueEvent — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
+            return
+        }
         let sinks = queue.sync { eventSinks }
         // The empty-sinks case is the diagnostic that matters (the #871 symptom:
         // events produced with nowhere to go) — keep it unconditional. The
@@ -598,14 +609,22 @@ final class WikiDaemon: @unchecked Sendable {
     /// on all registered event sinks. The sole path by which chat events
     /// reach the app over XPC.
     func pushChatEnvelope(_ envelope: QueueEventEnvelope) {
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            DebugLog.store("wikid: pushChatEnvelope — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
+            return
+        }
         let sinks = queue.sync { eventSinks }
         // Same split as `pushQueueEvent`: empty-sinks drop is unconditional
         // (signal-worthy — chat events lost), success is verbose-only (#872).
+        // `chatID` is included because chat envelopes are per-conversation and
+        // correlating a drop to its chat is the whole point of this diagnostic.
         if sinks.isEmpty {
-            DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) — no sinks registered (drop)")
+            DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") — no sinks registered (drop)")
         } else {
-            DebugLog.verbose("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) sinks=\(sinks.count)")
+            DebugLog.verbose("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") sinks=\(sinks.count)")
         }
         for sink in sinks {
             sink.deliverEvent(data)
