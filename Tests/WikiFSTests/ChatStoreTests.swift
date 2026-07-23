@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 43)
+        #expect(GRDBWikiStore.schemaVersion == 44)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -271,11 +271,13 @@ import SQLite3
     }
 
     /// AC.1: migration v42→v43 adds the `acp_session_id` column to a DB
-    /// that was at v42 without it.
+    /// that was at v42 without it. After the full ladder, the DB should be at
+    /// version 44 (v43→v44 adds is_draft/draft_handle to chat_messages).
     @Test func chatAcpSessionIdMigrationAddsColumn() throws {
         let url = tempDatabaseURL()
 
-        // Build a v42 DB by hand: chats table WITHOUT acp_session_id, user_version=42.
+        // Build a v42 DB by hand: chats + chat_messages tables WITHOUT
+        // acp_session_id / is_draft / draft_handle, user_version=42.
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         defer { sqlite3_close(raw) }
@@ -283,15 +285,23 @@ import SQLite3
         CREATE TABLE chats (id TEXT PRIMARY KEY, kind TEXT, title TEXT,
             created_at REAL, updated_at REAL, summary TEXT, summary_at REAL);
         """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chat_messages (id TEXT PRIMARY KEY, chat_id TEXT, seq INTEGER,
+            role TEXT, event_json TEXT, text TEXT, created_at REAL,
+            summary TEXT, summary_kind TEXT, summary_at REAL);
+        """, nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
 
-        // Open via GRDBWikiStore — triggers the migration ladder.
+        // Open via GRDBWikiStore — triggers the migration ladder (v42→v43→v44).
         let store = try GRDBWikiStore(databaseURL: url)
 
-        // The column exists and the version is 43.
-        #expect(store.pragmaValue("user_version") == "43")
+        // After the full ladder, version is 44 and both migration steps ran.
+        #expect(store.pragmaValue("user_version") == "44")
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
+        let hasDraftCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chat_messages') WHERE name='is_draft';")
+        #expect(hasDraftCol == "1")
     }
 }

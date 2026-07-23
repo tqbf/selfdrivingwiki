@@ -99,5 +99,99 @@ struct ChatPersistenceTests {
     // private `ingestStdout`, driven by a `Process`'s stdout pipe). Per the task's
     // instruction, an end-to-end "sink receives flushed events from a live session"
     // test is skipped rather than spawning a real process in unit tests.
+
+    // MARK: - In-flight checkpoint cursor interactions (#826)
+
+    // The streaming checkpoint advances `persistedEventCount` to
+    // `streamingRowIndex + 1` (NOT `events.count`) on success — marking ONLY the
+    // streamed row as persisted. Any post-streaming events (tool calls, results)
+    // remain in the `flushTranscript` tail and append normally. These tests
+    // verify that pure cursor arithmetic via `unflushedTail`.
+
+    @Test func checkpoint_excludes_streamed_row_from_turn_end_tail() {
+        // AC.3: after a checkpoint, the turn-end flushTranscript tail contains
+        // only post-streaming events, not the already-checkpointed row.
+        // events = [user(0), assistant_partial(1), toolResult(2)]
+        // checkpoint sets persistedCount to idx+1 = 2 (only the streamed row)
+        var events: [AgentEvent] = [
+            .userText("hello"),
+            .assistantText("partial response"),
+        ]
+        let persistedAfterCheckpoint = 2  // streamingRowIndex+1
+        events.append(.toolResult(isError: false, summary: "done"))
+        // flushTranscript picks up only the tail
+        let tail = AgentLauncher.unflushedTail(events: events, persistedCount: persistedAfterCheckpoint)
+        #expect(tail.count == 1)
+        #expect(tail.first == .toolResult(isError: false, summary: "done"))
+    }
+
+    @Test func checkpoint_grown_in_place_still_excludes_streamed_row() {
+        // The streamed row grows in place (same index) — the cursor stays at
+        // idx+1, so subsequent in-place growth doesn't reopen the flush window.
+        let events: [AgentEvent] = [
+            .userText("hello"),
+            .assistantText("Hello world this is a longer response"),
+            .toolResult(isError: false, summary: "computed"),
+        ]
+        // After checkpointing at idx=1, persistedCount=2. More deltas grew the
+        // row in place (events.count stayed 3), and a toolResult was appended.
+        let tail = AgentLauncher.unflushedTail(events: events, persistedCount: 2)
+        #expect(tail.count == 1)
+        #expect(tail.first == .toolResult(isError: false, summary: "computed"))
+    }
+
+    @Test func finalize_is_noop_without_handle() {
+        // AC: tool-only turn → no streamingDraftHandle → checkpointStreamingRow
+        // is a no-op. The cursor is unchanged, so flushTranscript picks up the
+        // whole tail as before.
+        let events: [AgentEvent] = [
+            .userText("run a tool"),
+            .toolUse(name: "Bash", inputSummary: "ls"),
+            .toolResult(isError: false, summary: "file.txt"),
+        ]
+        // No checkpoint happened (handle was nil), so persistedCount stays at 1
+        // (user pre-persisted). flushTranscript picks up everything after.
+        let tail = AgentLauncher.unflushedTail(events: events, persistedCount: 1)
+        #expect(tail.count == 2)
+        #expect(tail[0] == .toolUse(name: "Bash", inputSummary: "ls"))
+        #expect(tail[1] == .toolResult(isError: false, summary: "file.txt"))
+    }
+
+    @Test func multi_block_turn_finalizes_each_streamed_row() {
+        // AC.5: a multi-block turn (assistant → tool → assistant) checkpoints
+        // each block's row independently. Block 1 at idx=1 (persistedCount=2);
+        // block 2 at idx=3 (persistedCount=4). The tool result at idx=2 is in
+        // the tail for the final flushTranscript.
+        let events: [AgentEvent] = [
+            .userText("do two things"),
+            .assistantText("first block"),      // idx=1, checkpointed: persisted=2
+            .toolResult(isError: false, summary: "first"),  // idx=2
+            .assistantText("second block"),     // idx=3, checkpointed: persisted=4
+        ]
+        // After block 1 is finalized (persistedCount=2) and block 2 is
+        // checkpointed (persistedCount=4), the tool result at idx=2 should be
+        // in the tail when a final .toolResult arrives at idx=4.
+        var grown = events
+        grown.append(.toolResult(isError: false, summary: "second"))  // idx=4
+        // Block 2's checkpoint advanced persistedCount to idx3+1 = 4
+        let tail = AgentLauncher.unflushedTail(events: grown, persistedCount: 4)
+        #expect(tail.count == 1)
+        #expect(tail.first == .toolResult(isError: false, summary: "second"))
+    }
+
+    @Test func checkpoint_failure_keeps_row_in_tail() {
+        // AC.4: if the checkpoint FAILS (C2), the cursor is NOT advanced — the
+        // streamed row stays in the tail so flushTranscript persists it via the
+        // normal append path (no silent data loss).
+        let events: [AgentEvent] = [
+            .userText("hello"),
+            .assistantText("partial response"),
+        ]
+        // Checkpoint failed → persistedCount NOT advanced → stays at 1 (user
+        // pre-persisted). flushTranscript tail includes the streamed row.
+        let tail = AgentLauncher.unflushedTail(events: events, persistedCount: 1)
+        #expect(tail.count == 1)
+        #expect(tail.first == .assistantText("partial response"))
+    }
 }
 #endif

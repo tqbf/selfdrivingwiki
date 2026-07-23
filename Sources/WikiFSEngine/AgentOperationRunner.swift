@@ -114,6 +114,10 @@ public enum AgentOperationRunner {
                 return { [weak store] id in
                     Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
                 }
+            },
+            onStreamingCheckpoint: { [weak store] chatID, handle, event, isDraft in
+                store?.checkpointStreamingMessage(
+                    chatID: chatID, handle: handle, event: event, isDraft: isDraft) ?? false
             }
         )
 
@@ -358,6 +362,12 @@ public enum AgentOperationRunner {
         let root = changeSignaler.path ?? ""
         DebugLog.agent("continueChat: chatID=\(chatID.rawValue) wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
 
+        // C8 (#826): finalize any stale draft rows from an interrupted turn
+        // (hard kill before finalize ran). Cheap single UPDATE → is_draft=0 so
+        // the draft flag stays meaningful over time. Must run BEFORE
+        // chatMessages so the seed reflects finalized state.
+        store.finalizeStaleDrafts(forChat: chatID)
+
         // Build the condensed transcript + new message as the first prompt.
         let history = store.chatMessages(chatID: chatID)
         let firstMessage = continuationPreamble(from: history, newMessage: trimmed)
@@ -396,6 +406,10 @@ public enum AgentOperationRunner {
             },
             onMessageSummary: { [weak store] id in
                 Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
+            },
+            onStreamingCheckpoint: { [weak store] chatID, handle, event, isDraft in
+                store?.checkpointStreamingMessage(
+                    chatID: chatID, handle: handle, event: event, isDraft: isDraft) ?? false
             })
     }
 

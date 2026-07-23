@@ -672,10 +672,39 @@ public final class AgentLauncher {
     /// runs) or the caller didn't wire the sink. Cleared in `finish()` and
     /// `resetRunArtifacts()` for hygiene.
     @ObservationIgnored private var messageSummarySink: (@MainActor (PageID) -> Void)?
+    /// Mid-generation streaming-checkpoint sink (#826). Called by the periodic
+    /// checkpoint timer and at turn-end finalize with (chatID, draftHandle,
+    /// event, isDraft). Returns `true` on success so the launcher advances its
+    /// cursor only when the row was actually persisted (C2 — on failure the
+    /// dirty flag stays set so the next checkpoint retries; no silent data
+    /// loss). `nil` for one-shot runs and when no chat is active (one-shot runs
+    /// don't persist). Cleared in `finish()` and `resetRunArtifacts()`.
+    @ObservationIgnored private var streamingCheckpointSink:
+        (@MainActor (PageID, String, AgentEvent, Bool) -> Bool)?
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
     private var persistedEventCount = 0
+    /// True while the last row is an in-progress streamed `.assistantText` row
+    /// that has grown since the last checkpoint (#826). The count cursor
+    /// (`persistedEventCount`) can't see in-place growth; this is the
+    /// content-aware dirty signal that drives `checkpointStreamingRow`.
+    private var streamingRowDirty = false
+    /// Stable ULID identity for the in-progress streamed row, used as the store
+    /// upsert key (#826). `nil` until the first `.assistantTextDelta` of a new
+    /// streaming block assigns one; cleared when the row is finalized at turn
+    /// end or when a subsequent streaming block replaces it (C3).
+    private var streamingDraftHandle: String?
+    /// The index in `events` where the draft handle's row lives. Needed because
+    /// the row may not be `events.last` when a finalize is needed — a tool-use
+    /// can land after the streamed block (C3 multi-block turn). Paired with
+    /// `streamingDraftHandle`; set/cleared together.
+    private var streamingRowIndex: Int?
+    /// Periodic checkpoint timer during generation (~2s cadence, rearmed on
+    /// each delta). Cancelled at turn end (`setGenerating(false)`), `finish()`,
+    /// and `resetRunArtifacts()`. Each fire writes the partial streamed text to
+    /// the store so a hard kill loses at most ~2s of tokens (#826).
+    @ObservationIgnored private var checkpointTimer: Task<Void, Never>?
     /// One-shot: true when the first user message of this session was already
     /// persisted at chat-creation time (by `WikiStoreModel.startChat`). The first
     /// `sendInteractiveMessage` consumes it — after appending `.userText` to
@@ -758,9 +787,12 @@ public final class AgentLauncher {
             // (issue #405).
             runStartedAt = Date()
             startPendingPermissionPoller()
+            scheduleCheckpoint()
         } else {
             runStartedAt = nil
             stopPendingPermissionPoller()
+            checkpointTimer?.cancel()
+            checkpointTimer = nil
         }
     }
 
@@ -2798,7 +2830,8 @@ public final class AgentLauncher {
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
         onSummary: (@MainActor (PageID, String) -> Void)? = nil,
-        onMessageSummary: (@MainActor (PageID) -> Void)? = nil
+        onMessageSummary: (@MainActor (PageID) -> Void)? = nil,
+        onStreamingCheckpoint: (@MainActor (PageID, String, AgentEvent, Bool) -> Bool)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -2930,6 +2963,7 @@ public final class AgentLauncher {
         transcriptSink = onTranscript
         summarySink = onSummary
         messageSummarySink = onMessageSummary
+        streamingCheckpointSink = onStreamingCheckpoint
         // D2: record the chat row this live session is writing to. This is the
         // source-of-truth switch for ChatDetailView — when it matches a tab's
         // chatID, that tab renders `launcher.events` (streaming) instead of the
@@ -3198,6 +3232,17 @@ public final class AgentLauncher {
                 self.mergeOrAppend(event)
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
+                    // #826: finalize the in-flight streaming checkpoint before
+                    // flushTranscript so the final text (is_draft=0) lands on
+                    // the same draft row. Always clear the handle/index here
+                    // (the turn is over). On failure the draft row stays
+                    // is_draft=1 and is cleaned up by finalizeStaleDrafts on
+                    // reopen (C8).
+                    self.checkpointStreamingRow(finalize: true)
+                    self.streamingDraftHandle = nil
+                    self.streamingRowIndex = nil
+                    self.checkpointTimer?.cancel()
+                    self.checkpointTimer = nil
                     self.flushTranscript()
                     self.generateChatSummary()
                     // Fire per-message summarization on the turn boundary — not
@@ -3316,7 +3361,13 @@ public final class AgentLauncher {
         exitStatus = nil
         preflightError = nil
         transcriptSink = nil
+        streamingCheckpointSink = nil
         persistedEventCount = 0
+        streamingRowDirty = false
+        streamingDraftHandle = nil
+        streamingRowIndex = nil
+        checkpointTimer?.cancel()
+        checkpointTimer = nil
         // state (.newChat draft → .chat(id)) is handled by the caller (ChatDetailView)
         // via store.retargetTab, since the launcher does not
         // know which tab it lives in.
@@ -3423,6 +3474,52 @@ public final class AgentLauncher {
         transcriptSink?(tail)
     }
 
+    // MARK: - In-flight checkpoint (#826)
+
+    /// Arm the periodic checkpoint timer (~2s cadence). Each fire writes the
+    /// partial streamed text to the store so a hard kill loses at most ~2s.
+    /// Rearms itself while `isGenerating` is true; cancelled at turn end,
+    /// `finish()`, and `resetRunArtifacts()`.
+    private func scheduleCheckpoint() {
+        checkpointTimer?.cancel()
+        checkpointTimer = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self else { return }
+            self.checkpointStreamingRow(finalize: false)
+            if self.isGenerating { self.scheduleCheckpoint() }
+        }
+    }
+
+    /// Checkpoint the in-progress streamed row to the store via the draft-handle
+    /// upsert (#826). Called by the periodic timer (`finalize: false`) and at
+    /// turn-end / `finish()` (`finalize: true`).
+    ///
+    /// **C2 (critical):** the cursor (`persistedEventCount`) is advanced to
+    /// `streamingRowIndex + 1` ONLY on store-write success. On failure,
+    /// `streamingRowDirty` stays `true` so the next checkpoint retries — no
+    /// silent data loss.
+    ///
+    /// **Cursor interaction:** advancing to `streamingRowIndex + 1` (NOT
+    /// `events.count`) marks ONLY the streamed row as persisted. Any
+    /// post-streaming events (tool calls, results) remain in the `flushTranscript`
+    /// tail and append normally at turn end.
+    private func checkpointStreamingRow(finalize: Bool) {
+        guard let chatID = activeChatID,
+              let sink = streamingCheckpointSink,
+              let handle = streamingDraftHandle,
+              let idx = streamingRowIndex,
+              idx < events.count,
+              case .assistantText = events[idx],
+              streamingRowDirty || finalize else { return }
+        let isDraft = !finalize
+        let ok = sink(PageID(rawValue: chatID), handle, events[idx], isDraft)
+        if ok {
+            streamingRowDirty = false
+            persistedEventCount = max(persistedEventCount, idx + 1)
+        }
+        DebugLog.agent("checkpointStreamingRow: finalize=\(finalize) ok=\(ok) idx=\(idx) handle=\(handle.prefix(8))")
+    }
+
     // MARK: - Stream ingestion (main actor)
 
     /// Mirror a raw stdout chunk to `rawTranscript` + `run.jsonl`. Called from
@@ -3447,10 +3544,21 @@ public final class AgentLauncher {
             if isStreamingAssistantRow, case .assistantText(let existing) = events.last {
                 events[events.count - 1] = .assistantText(existing + delta)
                 // Keep the original timestamp — the row's "first seen" time.
+                streamingRowDirty = true
             } else {
+                // C3 (multi-block turn): if a prior streaming block's handle is
+                // still open (not yet finalized), finalize it before starting a
+                // new one. The old row may not be `events.last` (a tool-use can
+                // land between blocks), so we rely on `streamingRowIndex`.
+                if streamingDraftHandle != nil {
+                    checkpointStreamingRow(finalize: true)
+                }
                 events.append(.assistantText(delta))
                 eventTimestamps.append(now)
                 isStreamingAssistantRow = true
+                streamingDraftHandle = ULID.generate()
+                streamingRowIndex = events.count - 1
+                streamingRowDirty = true
             }
 
         case .assistantText:
@@ -3468,6 +3576,9 @@ public final class AgentLauncher {
                 eventTimestamps.append(now)
             }
             isStreamingAssistantRow = false
+            // The authoritative final text differs from the last checkpoint.
+            // Keep the handle so the final update lands on the same row (#826).
+            streamingRowDirty = true
 
         case .thinkingDelta(let delta):
             // Streamed reasoning chunk — coalesce into the in-progress `.thinking`
@@ -3538,6 +3649,15 @@ public final class AgentLauncher {
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasWarned = false
+        // #826: finalize the in-flight streaming checkpoint before
+        // flushTranscript so the final streamed text survives even when the
+        // session ends without a clean `.messageStop` (process died, killed by
+        // watchdog). Always clear the handle/index + cancel the timer.
+        checkpointStreamingRow(finalize: true)
+        streamingDraftHandle = nil
+        streamingRowIndex = nil
+        checkpointTimer?.cancel()
+        checkpointTimer = nil
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
         flushTranscript()
@@ -3555,6 +3675,7 @@ public final class AgentLauncher {
         transcriptSink = nil
         summarySink = nil
         messageSummarySink = nil
+        streamingCheckpointSink = nil
         onAgentEvent = nil
         // #544 live progress: detach the live-usage callback after the run ends,
         // mirroring onAgentEvent. The Activity window stops receiving updates
@@ -3690,6 +3811,7 @@ public final class AgentLauncher {
         transcriptSink = nil
         summarySink = nil
         messageSummarySink = nil
+        streamingCheckpointSink = nil
         onAgentEvent = nil
         // #544 live progress: clear the live-usage callback + provider label so
         // a stale callback from a prior run never receives a new run's updates.
@@ -3707,6 +3829,11 @@ public final class AgentLauncher {
         onPendingPermission = nil
         summaryGenerated = false
         persistedEventCount = 0
+        streamingRowDirty = false
+        streamingDraftHandle = nil
+        streamingRowIndex = nil
+        checkpointTimer?.cancel()
+        checkpointTimer = nil
         firstMessagePrePersisted = false
         firstMessagePreDisplayed = false
         // D2: a stale active chat association must never survive into a new run.

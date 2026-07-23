@@ -460,6 +460,41 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    /// Incremental in-flight checkpoint (#826). The `checkpointStreamingMessage`
+    /// mutator MUST route through `mutate()` and emit a `.chat .updated` event
+    /// — it is a real content mutation (writes `event_json`, `text`), not
+    /// derived data. Modeled on `appendChatMessagesEmitsChatUpdated`.
+    @Test func checkpointStreamingMessageEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.appendChatMessages(
+            chatID: chat.id, events: [AgentEvent.userText("hello")])
+        try await drain(rec)
+        try store.checkpointStreamingMessage(
+            chatID: chat.id, handle: "draft-1",
+            event: .assistantText("partial"), isDraft: true)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    /// Finalize stale drafts on reopen (C8, #826). The `finalizeStaleDrafts`
+    /// mutator MUST route through `mutate()` and emit a `.chat .updated` event.
+    @Test func finalizeStaleDraftsEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try store.checkpointStreamingMessage(
+            chatID: chat.id, handle: "draft-1",
+            event: .assistantText("partial"), isDraft: true)
+        try await drain(rec)
+        try store.finalizeStaleDrafts(forChat: chat.id)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     // MARK: - Nil-bus store (wikictl path)
 
     @Test func nilBusStoreEmitsSilently() throws {

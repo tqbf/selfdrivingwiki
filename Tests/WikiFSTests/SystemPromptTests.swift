@@ -174,8 +174,8 @@ struct SystemPromptTests {
         #expect(prompt.body == SystemPrompt.defaultBody)
         #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
 
-        // user_version advanced to 43.
-        #expect(Int(store.pragmaValue("user_version")) == 43)
+        // user_version advanced to 44.
+        #expect(Int(store.pragmaValue("user_version")) == 44)
     }
 
     @Test func v40ToV41MigrationSkipsPromptWithoutDollarWikictl() throws {
@@ -243,7 +243,7 @@ struct SystemPromptTests {
         #expect(file.filename == "keep.txt")
         #expect(try store.sourceContent(id: file.id) == Data("keep".utf8))
 
-        // user_version advances through every migration step to head (v43).
+        // user_version advances through every migration step to head (v44).
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }
