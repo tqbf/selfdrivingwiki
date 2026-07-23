@@ -7,13 +7,13 @@ import WikiFSCore
 /// selected document/source surface.
 struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
-    @Bindable var launcher: AgentLauncher       // ingest/lint + chat launcher
-    @Bindable var chatLauncher: AgentLauncher   // chat launcher (write-capable)
-    /// The per-active-wiki session (store + launchers + descriptor).
+    @Bindable var launcher: AgentLauncher       // ingest/lint launcher (chat is daemon-hosted after Phase C4)
+    /// The per-active-wiki session (store + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
     let extractionCoordinator: ExtractionCoordinator
     @Environment(QueueActivityTracker.self) private var tracker
+    @Environment(\.chatDaemonCoordinator) private var chatDaemon
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let runIngest: (PageID) -> Void
@@ -154,15 +154,12 @@ struct WikiDetailView: View {
                     .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
             }
         case .newChat:
-            // D2: draft state — empty composer until the first send retargets the
-            // tab to .chat(id). chatID == nil signals the draft state.
-            ChatDetailView(
-                chatID: nil,
-                store: store,
-                launcher: chatLauncher,
-                session: session,
-                fileProvider: fileProvider
-            )
+            // D2: draft state — empty composer until the first send retargets
+            // the tab to .chat(id). chatID == nil signals the draft state.
+            // Phase C4: chat is daemon-hosted; the coordinator owns the
+            // RemoteChatSession. When the daemon is unavailable, render an
+            // explanatory unavailable state instead of the composer.
+            chatSurface(chatID: nil)
         case .changeLog:
             ChangeLogDetailView(store: store)
         case .page:
@@ -211,14 +208,41 @@ struct WikiDetailView: View {
             }
         case .chat(let id):
             // D2: unified surface. Chats are always write-capable, so the single
-            // chat launcher is bound directly.
+            // chat launcher was bound directly; after Phase C4 the daemon-hosted
+            // RemoteChatSession (via the coordinator) replaces it.
+            chatSurface(chatID: id)
+        }
+    }
+
+    /// Renders the chat detail surface for a draft (`chatID == nil`) or a
+    /// persisted chat. Phase C4: the daemon owns chat sessions, so when the
+    /// coordinator is absent (daemon down) we render an unavailable state
+    /// rather than the composer — there is no local chat fallback.
+    @ViewBuilder
+    private func chatSurface(chatID: PageID?) -> some View {
+        if let chatDaemon {
             ChatDetailView(
-                chatID: id,
+                chatID: chatID,
                 store: store,
-                launcher: chatLauncher,
+                remoteSession: chatDaemon.session(for: chatID?.rawValue),
+                coordinator: chatDaemon,
                 session: session,
                 fileProvider: fileProvider
             )
+        } else {
+            chatDaemonUnavailable
+        }
+    }
+
+    /// Shown when the wikid daemon is unavailable — chat is daemon-hosted
+    /// after Phase C4, so there is no local fallback. The queue/extraction
+    /// surface still works (it has a local fallback), but interactive chat
+    /// requires the daemon.
+    private var chatDaemonUnavailable: some View {
+        ContentUnavailableView {
+            Label("Chat Unavailable", systemImage: "bubble.left.and.bubble.right.slash")
+        } description: {
+            Text("Interactive chat requires the wikid daemon. Run “make install-daemon” and relaunch.")
         }
     }
 

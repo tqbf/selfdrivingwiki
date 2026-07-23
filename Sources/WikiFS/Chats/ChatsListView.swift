@@ -14,21 +14,23 @@ import WikiFSCore
 /// reconciled into the highlight on every SwiftUI update (mirrors Pages).
 struct ChatsListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
-    /// The chat launcher — drives the live "responding…" indicator on rows.
-    let chatLauncher: AgentLauncher
+    /// The chat daemon coordinator — drives the live "responding…" indicator
+    /// on rows (Phase C4: chat is daemon-hosted). `nil` when the daemon is
+    /// unavailable; rows then never show the live badge.
+    let chatDaemon: ChatDaemonCoordinator?
     let callbacks: ChatsListCallbacks
 
     func makeNSViewController(context: Context) -> ChatsListViewController {
         let vc = ChatsListViewController()
         vc.store = store
-        vc.chatLauncher = chatLauncher
+        vc.chatDaemon = chatDaemon
         vc.callbacks = callbacks
         return vc
     }
 
     func updateNSViewController(_ vc: ChatsListViewController, context: Context) {
         vc.store = store
-        vc.chatLauncher = chatLauncher
+        vc.chatDaemon = chatDaemon
         vc.callbacks = callbacks
         let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
         let needs = vc.needsReload(visible)
@@ -67,7 +69,9 @@ final class ChatsListViewController: NSViewController {
     var scrollView: NSScrollView!
     var tableView: ChatsNSTableView!
     var store: WikiStoreModel?
-    var chatLauncher: AgentLauncher?
+    /// The daemon coordinator (Phase C4) — drives the per-row live indicator
+    /// via `isChatRunning(_:)`.
+    var chatDaemon: ChatDaemonCoordinator?
     var callbacks: ChatsListCallbacks?
 
     private var items: [ChatSummary] = []
@@ -179,16 +183,12 @@ final class ChatsListViewController: NSViewController {
 
     // MARK: - Live indicator
 
-    /// A row is live when it is the active session of the chat launcher AND that
-    /// launcher is mid-generation. Delegates to the pure static predicate
-    /// (`AgentToolsView.isLiveRow`) so the rule has one unit-tested source.
+    /// A row is live when the daemon reports its chat as running/generating
+    /// (Phase C4: replaces the single chatLauncher activeChatID/isGenerating
+    /// check with the coordinator's per-chat aggregate, which also covers chats
+    /// the daemon is running that the app hasn't opened).
     private func isLive(_ chat: ChatSummary) -> Bool {
-        guard let launcher = chatLauncher else { return false }
-        return AgentToolsView.isLiveRow(
-            activeChatID: launcher.activeChatID,
-            isGenerating: launcher.isGenerating,
-            chatID: chat.id
-        )
+        chatDaemon?.isChatRunning(chat.id.rawValue) ?? false
     }
 }
 

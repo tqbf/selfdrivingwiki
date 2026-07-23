@@ -20,17 +20,21 @@ import WikiFSEngine
 /// Mirrors `ProviderSelector`'s trigger styling (.callout font, secondary
 /// foreground, tertiary chevron) so the two chips read as siblings.
 struct ThinkingEffortSelector: View {
-    @Bindable var launcher: AgentLauncher
+    /// The daemon-mirrored chat session. `thinkingOption` is mirrored from the
+    /// daemon's launcher via chat-state envelopes; `setThinkingEffort` flips
+    /// the chip locally (daemon-side apply is deferred — no chat-config XPC
+    /// method in Phase C4). Replaces the chat `AgentLauncher` binding.
+    var remoteSession: RemoteChatSession
 
     var body: some View {
         // Capability gate: render nothing when the agent advertises no
         // `thought_level`. This keeps the toolbar uncluttered for agents that
         // don't support thinking-effort switching.
-        if let option = launcher.thinkingOption {
+        if let option = remoteSession.thinkingOption {
             Menu {
                 ForEach(option.choices) { choice in
                     Button {
-                        launcher.setThinkingEffort(choice.value)
+                        remoteSession.setThinkingEffort(choice.value)
                     } label: {
                         if choice.value == option.currentValue {
                             Label(choice.label, systemImage: "checkmark")

@@ -1,12 +1,17 @@
 import SwiftUI
 import WikiFSEngine
 
+/// Renders the run-status row for `AgentQueueView`'s internals mode. After
+/// Phase C4 it binds a `RemoteChatSession` (the daemon mirror); the
+/// process-level fields (`lastActivityAt`, `currentProcessID`) are not carried
+/// by the chat envelope protocol today, so they stay nil and the view degrades
+/// gracefully ("unknown" / no pid).
 struct AgentRunStatusView: View {
-    @Bindable var launcher: AgentLauncher
+    var remoteSession: RemoteChatSession
     let now: Date
 
     var body: some View {
-        if launcher.isRunning, let startedAt = launcher.runStartedAt {
+        if remoteSession.isRunning, let startedAt = remoteSession.runStartedAt {
             HStack(spacing: 6) {
                 Image(systemName: isQuiet ? "hourglass" : "waveform.path")
                     .font(.caption)
@@ -23,14 +28,14 @@ struct AgentRunStatusView: View {
     }
 
     private var isQuiet: Bool {
-        guard let lastActivityAt = launcher.lastActivityAt else { return false }
+        guard let lastActivityAt = remoteSession.lastActivityAt else { return false }
         return now.timeIntervalSince(lastActivityAt) >= Self.quietThreshold
     }
 
     private func statusText(startedAt: Date) -> String {
         let elapsed = durationString(now.timeIntervalSince(startedAt))
-        let lastOutput = launcher.lastActivityAt.map { durationString(now.timeIntervalSince($0)) } ?? "unknown"
-        let pid = launcher.currentProcessID.map { " · pid \($0)" } ?? ""
+        let lastOutput = remoteSession.lastActivityAt.map { durationString(now.timeIntervalSince($0)) } ?? "unknown"
+        let pid = remoteSession.currentProcessID.map { " · pid \($0)" } ?? ""
         if isQuiet {
             return "Still running · no output for \(lastOutput) · elapsed \(elapsed)\(pid)"
         }

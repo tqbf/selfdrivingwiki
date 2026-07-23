@@ -22,7 +22,8 @@ import WikiFSCore
 /// The `extractionCoordinator` is **shared** (created once at app scope and
 /// passed into each session) — it carries no per-wiki state, so sharing avoids
 /// re-reading the same config file per session. `agentLauncher` /
-/// `chatLauncher` / `generationGate` are per-session instances.
+/// `generationGate` are per-session instances. (Chat is daemon-hosted after
+/// Phase C4 — there is no per-session chat launcher.)
 ///
 /// See `plans/dissolve-wikimanager.md` for the full dissolution rationale.
 @MainActor
@@ -52,12 +53,6 @@ public final class WikiSession {
     /// settings-only launcher — the resolver is a pure function, safe to
     /// share across sessions.
     public let agentLauncher: AgentLauncher
-
-    /// Per-session chat launcher. Mirrors `agentLauncher` — paired with it on
-    /// one shared per-session gate so chat turns and ingest runs in the SAME
-    /// wiki still coordinate, while a different wiki's session runs
-    /// independently.
-    public let chatLauncher: AgentLauncher
 
     /// Shared, app-wide extraction backend resolver (local pdf2md / Claude /
     /// Docling Serve). Passed in from the app; carries no per-wiki state, so
@@ -296,20 +291,16 @@ public final class WikiSession {
         let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
         self.generationGate = gate
 
-        // Per-session launchers — both pair on this session's gate so ingest
-        // and chat-turn generations in the SAME wiki coordinate, while a
-        // different wiki's session runs independently.
+        // Per-session launcher — pairs on this session's gate so ingest and
+        // agent-query generations in the SAME wiki coordinate, while a
+        // different wiki's session runs independently. (Chat is daemon-hosted
+        // after Phase C4 — no per-session chat launcher here.)
         let agent = AgentLauncher(generationGate: gate, extractionCoordinator: extractionCoordinator)
         agent.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         // Interactive (non-queue) query runs via `agentLauncher` also report
         // their per-turn usage delta to the menu bar tracker when wired.
         agent.onInteractiveUsage = interactiveUsageRecorder
         self.agentLauncher = agent
-
-        let chat = AgentLauncher(generationGate: gate, extractionCoordinator: extractionCoordinator)
-        chat.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
-        chat.onInteractiveUsage = interactiveUsageRecorder
-        self.chatLauncher = chat
     }
 
     // MARK: - Descriptor updates

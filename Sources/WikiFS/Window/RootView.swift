@@ -31,7 +31,6 @@ struct RootView: View {
             registry: registry,
             fileProvider: fileProvider,
             agentLauncher: session.agentLauncher,
-            chatLauncher: session.chatLauncher,
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: session.queueEngine,
             extractionProvider: session.extractionProvider

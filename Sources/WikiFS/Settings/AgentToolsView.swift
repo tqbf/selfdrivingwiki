@@ -11,9 +11,10 @@ import WikiFSEngine
 /// Instructions, Activity) moved to the app's maintenance menu (issue #282).
 struct AgentToolsView: View {
     @Bindable var store: WikiStoreModel
-    /// The chat launcher — backs the live "responding…" indicator on rows.
-    /// Chats are always write-capable (the read-only Ask mode was removed).
-    @Bindable var chatLauncher: AgentLauncher
+    /// The chat daemon coordinator — backs the live "responding…" indicator on
+    /// rows (Phase C4: chat is daemon-hosted). `nil` when the daemon is down;
+    /// rows then never show the live badge.
+    @Environment(\.chatDaemonCoordinator) private var chatDaemon
 
     /// The chat being renamed, if any. Non-nil presents the rename alert. The
     /// draft text is tracked separately so the rename can be committed on
@@ -27,7 +28,7 @@ struct AgentToolsView: View {
             chatSearchBar
             Divider()
             ZStack(alignment: .topLeading) {
-                ChatsListView(store: store, chatLauncher: chatLauncher,
+                ChatsListView(store: store, chatDaemon: chatDaemon,
                               callbacks: callbacks)
                 if visibleChats.isEmpty && !store.chatSearchQuery.isEmpty {
                     Text("No matching chats")

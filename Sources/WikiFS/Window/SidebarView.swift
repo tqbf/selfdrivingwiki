@@ -19,9 +19,6 @@ struct SidebarView: View {
     let fileProvider: FileProviderFacade
     /// Required to launch the LLM lint from the sidebar context menu.
     @Bindable var launcher: AgentLauncher
-    /// The chat launcher — drives the live indicator on recent-chat rows (D4).
-    /// Chats are always write-capable (the read-only Ask mode was removed).
-    @Bindable var chatLauncher: AgentLauncher
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
     var ingestingSourceIDs: Set<PageID> = []
@@ -193,7 +190,7 @@ struct SidebarView: View {
                     newBookmarkFolderName = ""
                 })
         case .chats:
-            AgentToolsView(store: store, chatLauncher: chatLauncher)
+            AgentToolsView(store: store)
         }
     }
 
