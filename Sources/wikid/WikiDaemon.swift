@@ -83,7 +83,12 @@ final class WikiDaemon: @unchecked Sendable {
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
                 let store = try makeStore(dbURL) as? GRDBWikiStore
-                openStores[descriptor.id] = store
+                if let store {
+                    wireEventBus(on: store, wikiID: descriptor.id)
+                    cacheStore(store, wikiID: descriptor.id)
+                } else {
+                    openStores[descriptor.id] = nil
+                }
             } catch {
                 DebugLog.store("wikid: createWiki failed for \(descriptor.id): \(error)")
                 return nil
@@ -171,7 +176,8 @@ final class WikiDaemon: @unchecked Sendable {
             do {
                 // Read-write open (runs bootstrap ladder on first open)
                 let store = try GRDBWikiStore(databaseURL: dbURL)
-                openStores[wikiID] = store
+                wireEventBus(on: store, wikiID: wikiID)
+                cacheStore(store, wikiID: wikiID)
                 return true
             } catch {
                 DebugLog.store("wikid: openStore failed for \(wikiID): \(error)")
@@ -206,7 +212,8 @@ final class WikiDaemon: @unchecked Sendable {
             let dbURL = databaseURL(forWikiID: wikiID)
             do {
                 let store = try GRDBWikiStore(databaseURL: dbURL)
-                openStores[wikiID] = store
+                wireEventBus(on: store, wikiID: wikiID)
+                cacheStore(store, wikiID: wikiID)
                 DebugLog.store("wikid: store lazily opened for \(wikiID)")
                 return store
             } catch {
@@ -263,6 +270,55 @@ final class WikiDaemon: @unchecked Sendable {
 
     private func databaseURL(forWikiID id: String) -> URL {
         containerDirectory.appendingPathComponent("\(id).sqlite", isDirectory: false)
+    }
+
+    /// Attach a per-wiki `WikiEventBus` to `store` whose all-events listener
+    /// forwards every committed mutation to a Darwin change notification.
+    ///
+    /// The daemon's stores live in a separate process from the app, so the
+    /// store's own `ResourceChangeEvent` emissions (from `mutate()`) can't
+    /// reach the app directly. This wiring bridges them: each event →
+    /// `DarwinNotifier.postChange(forWikiID:)` → the app's `WikiChangeBridge`
+    /// receives the cross-process Darwin notification → coalesces → reloads.
+    ///
+    /// Without it, daemon-only writes that never pass through an agent
+    /// `onUnlock` callback (summarizer writes, queue-extraction completion,
+    /// chat-message appends) emit into a nil bus and the app never learns about
+    /// them (#871 follow-up): persisted chat summaries stayed invisible and
+    /// completed queue items never refreshed the Activity window. Idempotent —
+    /// a no-op if the store already carries a bus.
+    ///
+    /// `eventBus` stays optional on `GRDBWikiStore` itself because `wikictl`
+    /// and the File Provider's read-only open intentionally run busless. The
+    /// daemon, however, treats a busless store as a programming error: the
+    /// trailing `assert` is the **mandatory-bus invariant** — it fires in debug
+    /// builds if wiring was skipped or the assignment didn't stick.
+    private func wireEventBus(on store: GRDBWikiStore, wikiID: String) {
+        if store.eventBus == nil {
+            let bus = WikiEventBus(wikiID: wikiID)
+            bus.subscribe(nil) { event in
+                DarwinNotifier.postChange(forWikiID: event.wikiID)
+            }
+            store.eventBus = bus
+        }
+        assert(
+            store.eventBus != nil,
+            "Daemon store must have a WikiEventBus attached — DarwinNotifier will never fire without it")
+    }
+
+    /// Cache `store` under `wikiID` in `openStores`. The **sole sanctioned
+    /// insertion point** — enforces the daemon invariant that every held store
+    /// carries a change bus (#871 follow-up), so a future store-creation path
+    /// that forgets to call `wireEventBus` still trips the assert the moment it
+    /// tries to cache the store. Removals (`closeStore`/`deleteWiki`) bypass
+    /// this. Do NOT assign `openStores[...] = ...` directly elsewhere.
+    @discardableResult
+    private func cacheStore(_ store: GRDBWikiStore, wikiID: String) -> GRDBWikiStore {
+        assert(
+            store.eventBus != nil,
+            "Daemon store must have a WikiEventBus attached — DarwinNotifier will never fire without it")
+        openStores[wikiID] = store
+        return store
     }
 
     // MARK: - Event sink management (Phase 0)
