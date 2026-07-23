@@ -11,10 +11,16 @@ import WikiFSCore
 /// so the subprocess PID the static `convert` reports via `onStart` is funneled
 /// through `onProgress`. The ingest-path download UI keeps using
 /// `PdfExtractionService.preDownload` directly.
-struct LocalPdf2MarkdownExtractor: MarkdownExtractor {
-    let displayName = "Local pdf2md"
+///
+/// Moved from the app target (`Sources/WikiFS/`) to `WikiFSEngine` so the
+/// `wikid` daemon can use the same local pdf2md extractor — it only depends on
+/// Foundation + WikiFSCore (PdfExtractionService is now also in WikiFSEngine).
+public struct LocalPdf2MarkdownExtractor: MarkdownExtractor {
+    public let displayName = "Local pdf2md"
 
-    func readiness() async -> ExtractionReadiness {
+    public init() {}
+
+    public func readiness() async -> ExtractionReadiness {
         if await PdfExtractionService.checkReady() {
             return .ready
         }
@@ -22,7 +28,7 @@ struct LocalPdf2MarkdownExtractor: MarkdownExtractor {
             "Local pdf2md dependencies aren't installed. Use the Download button for the one-time ~2 GB setup (docling, granite model, torch).")
     }
 
-    func convert(
+    public func convert(
         pdfData: Data,
         filename: String,
         onProgress: (@Sendable (String) -> Void)?

@@ -8,11 +8,14 @@ import Foundation
 /// `Self Driving Wiki.app/Contents/Helpers/wikictl` and ALSO drops a copy at
 /// `build/wikictl` next to the dev binaries. We resolve the directory in priority
 /// order so it works both from the signed bundle and from a `swift run` dev launch.
-enum HelpersLocation {
+///
+/// Moved from the app target to `WikiFSCore` so both the daemon and
+/// `PdfExtractionService` (now in `WikiFSEngine`) can resolve helper paths.
+public enum HelpersLocation {
     /// The directory that should be prepended to the agent's PATH so `wikictl`
     /// resolves. Returns the first directory that actually contains an executable
     /// `wikictl`, or the bundle Helpers dir as a best-effort fallback.
-    static var wikictlDirectory: String {
+    public static var wikictlDirectory: String {
         for candidate in candidateDirectories() {
             let binary = candidate.appendingPathComponent("wikictl", isDirectory: false)
             if FileManager.default.isExecutableFile(atPath: binary.path) {

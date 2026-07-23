@@ -10,7 +10,7 @@ import WikiFSCore
 /// If `uv` is not installed, the subprocess fails and the caller falls back
 /// to passing the raw PDF to the agent.
 @MainActor
-enum PdfExtractionService {
+public enum PdfExtractionService {
     /// Process registry — non-isolated so termination handlers (which fire on
     /// background threads) can call track/untrack without crossing actor isolation.
     final class ProcessRegistry: @unchecked Sendable {
@@ -69,7 +69,7 @@ enum PdfExtractionService {
     /// (Homebrew on Apple silicon), and `/usr/local/bin` (Homebrew on Intel).
     /// A Finder-launched app inherits the bare system PATH
     /// (`/usr/bin:/bin:…`), so these cover every place uv actually lands.
-    static nonisolated var uvSearchPATH: String {
+    public static nonisolated var uvSearchPATH: String {
         let helpersDir = HelpersLocation.wikictlDirectory
         let localBin = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/bin", isDirectory: true).path
@@ -93,7 +93,7 @@ enum PdfExtractionService {
     /// Whether `pdf2md` + its uv-managed dependencies are ready to use.
     /// Runs `pdf2md --help` as a lightweight probe — if the venv is cached
     /// this returns in under a second; if not, it can take minutes.
-    static func checkReady() async -> Bool {
+    public static func checkReady() async -> Bool {
         guard let script = resolveScript() else {
             DebugLog.extraction("[pdf2md] checkReady: script not found at any candidate location")
             return false
@@ -136,7 +136,7 @@ enum PdfExtractionService {
     /// reaches the network, so a complete install runs `--help` and exits 0 in well
     /// under a second, while any missing distribution fails fast (non-zero). The
     /// timeout is only a safety net — offline mode can't hang waiting on a download.
-    static func probeReady(timeout: Duration = .seconds(20)) async -> Bool {
+    public static func probeReady(timeout: Duration = .seconds(20)) async -> Bool {
         guard let script = resolveScript() else { return false }
 
         let process = Process()
@@ -190,7 +190,7 @@ enum PdfExtractionService {
     /// is a separate ~hundreds-MB download, so we look for `model.safetensors` in
     /// any snapshot of the repo's cache dir. `fileExists` follows the
     /// snapshot→blob symlink, so a half-written or absent blob reads as missing.
-    static func modelWeightsPresent() -> Bool {
+    public static func modelWeightsPresent() -> Bool {
         let dirName = "models--" + graniteModelRepoID.replacingOccurrences(of: "/", with: "--")
         let snapshots = huggingFaceHubDirectory()
             .appendingPathComponent(dirName, isDirectory: true)
@@ -232,7 +232,7 @@ enum PdfExtractionService {
     /// docling would otherwise fetch lazily on the first conversion. Both are
     /// idempotent — fast no-ops when already cached. May take several minutes on a
     /// cold run (~2 GB total).
-    static func preDownload(onProgress: @escaping @Sendable (String) -> Void) async throws {
+    public static func preDownload(onProgress: @escaping @Sendable (String) -> Void) async throws {
         guard let script = resolveScript() else {
             throw ExtractionError.scriptNotFound
         }
@@ -259,7 +259,7 @@ enum PdfExtractionService {
 
     /// Run a process to completion, forwarding its stderr to `onProgress` line by
     /// line and throwing on non-zero exit. Shared by both `preDownload` phases.
-    static func streamProcess(
+    public static func streamProcess(
         executable: URL,
         arguments: [String],
         extraPATH: String,
@@ -322,7 +322,7 @@ enum PdfExtractionService {
 
     /// Resolve the `pdf2md` script, mirroring `HelpersLocation.wikictlDirectory`
     /// priority order: bundled → dev build → executable sibling → repo tools.
-    static func resolveScript() -> URL? {
+    public static func resolveScript() -> URL? {
         for candidate in candidateLocations() {
             let script = candidate.appendingPathComponent("pdf2md", isDirectory: false)
             let exists = FileManager.default.isExecutableFile(atPath: script.path)
@@ -335,7 +335,7 @@ enum PdfExtractionService {
 
     /// Convert PDF bytes to Markdown.  Throws on any failure — the caller is
     /// expected to catch, print the message, and fall back to raw PDF.
-    static func convert(
+    public static func convert(
         pdfData: Data,
         filename: String,
         onProgress: (@Sendable (String) -> Void)? = nil,
@@ -499,14 +499,14 @@ enum PdfExtractionService {
         return dirs
     }
 
-    enum ExtractionError: LocalizedError {
+    public enum ExtractionError: LocalizedError {
         case scriptNotFound
         case timedOut
         case conversionFailed(status: Int32, message: String)
         case emptyOutput
         case processFailed(Error)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .scriptNotFound:
                 return "pdf2md script not found (PATH=\(ProcessInfo.processInfo.environment["PATH"] ?? "")). PDF will be sent to the agent directly."
