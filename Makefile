@@ -357,6 +357,34 @@ print-version:
 run: install
 	open "$(INSTALLED_APP)"
 
+# `debug-run` — installs + launches the app under lldb with breakpoints on
+# silent-exit paths (exit, abort, __assert_rtn, Swift runtime traps, Obj-C
+# throws). Catches the class of crash that produces no .ips report — a
+# deliberate exit()/abort() from a C/C++ dependency or a Swift runtime assertion.
+# The wait-for-attach (-w) flag grabs the process before any code runs.
+# Output goes to tmp/lldb_out.txt (gitignored). When lldb catches the death,
+# the stack at the moment of exit is the answer.
+#
+# See docs/skills/debugging-with-lldb/SKILL.md for the full procedure.
+debug-run: install
+	@mkdir -p tmp
+	@echo "→ launching under lldb (output: tmp/lldb_out.txt)"
+	@nohup lldb \
+	  -o "process attach -n '$(APP_NAME)' -w" \
+	  -o "breakpoint set -n exit -n _exit -n abort -n __assert_rtn --shlib libsystem_c.dylib" \
+	  -o "breakpoint set -n swift_runtime_on_report" \
+	  -o "breakpoint set -n objc_exception_throw" \
+	  -o "continue" \
+	  -o "process status" \
+	  -o "bt" \
+	  -o "thread backtrace all" \
+	  -o "quit" \
+	  > tmp/lldb_out.txt 2>&1 &
+	@sleep 2
+	@echo "→ lldb armed (wait-for-attach), launching app"
+	@open "$(INSTALLED_APP)"
+	@echo "→ app launched under lldb. Reproduce the crash, then read tmp/lldb_out.txt"
+
 # `reload` — like `run`, but forces every registered File Provider domain to be
 # removed and re-added before it mounts again.
 #
