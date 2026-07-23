@@ -1,6 +1,9 @@
 import Foundation
 import WikiCtlCore
 import WikiFSCore
+#if canImport(WikiFSEngine)
+import WikiFSEngine
+#endif
 
 /// `wikictl` — the agent's write path into a wiki (`plans/llm-wiki.md` Phase A).
 ///
@@ -56,6 +59,17 @@ func run() async -> Int32 {
     }
     if case .wikiRename(let id, let name) = invocation.command {
         return await runWikiRename(id: id, name: name)
+    }
+
+    // Phase C: daemon-XPC chat commands.
+    if case .daemonChatNew(let message) = invocation.command {
+        return await runDaemonChatNew(wikiSelector: invocation.wikiSelector, message: message)
+    }
+    if case .daemonChatSend(let chatID, let message) = invocation.command {
+        return await runDaemonChatSend(wikiSelector: invocation.wikiSelector, chatID: chatID, message: message)
+    }
+    if case .daemonChatStop(let chatID) = invocation.command {
+        return await runDaemonChatStop(wikiSelector: invocation.wikiSelector, chatID: chatID)
     }
 
     // Phase 7: WIKI_WORKSPACE env var. When set by an isolated ingest run,
@@ -197,6 +211,9 @@ func execute(
         return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .wikiList, .wikiCreate, .wikiDelete, .wikiRename:
         // Handled before wiki resolution in `run()` — unreachable here.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
+    case .daemonChatNew, .daemonChatSend, .daemonChatStop:
+        // Phase C: handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
     }
 }
@@ -343,3 +360,55 @@ func runWikiRename(id: String, name: String) async -> Int32 {
 
 // `run()` is async — boot a top-level task and wait for it.
 exit(await run())
+
+// MARK: - daemon chat subcommands (Phase C)
+
+/// `wikictl chat new "<message>"` — start a chat on the daemon.
+func runDaemonChatNew(wikiSelector: String, message: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        guard let descriptor = try await daemon.resolveWiki(selector: wikiSelector) else {
+            FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
+            return 1
+        }
+        let workload = DaemonWorkloadClient(connection: daemon)
+        let chatID = try await workload.startChat(
+            ChatStartRequest(wikiID: descriptor.id, firstMessage: message))
+        print(chatID)
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+/// `wikictl chat send <chatID> "<message>"` — continue a chat on the daemon.
+func runDaemonChatSend(wikiSelector: String, chatID: String, message: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        guard let descriptor = try await daemon.resolveWiki(selector: wikiSelector) else {
+            FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
+            return 1
+        }
+        let workload = DaemonWorkloadClient(connection: daemon)
+        try await workload.continueChat(
+            ChatContinueRequest(wikiID: descriptor.id, chatID: chatID, message: message))
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
+
+/// `wikictl chat stop <chatID>` — stop a chat on the daemon.
+func runDaemonChatStop(wikiSelector: String, chatID: String) async -> Int32 {
+    do {
+        let daemon = try WikiDaemonConnection.connect()
+        let workload = DaemonWorkloadClient(connection: daemon)
+        try await workload.stopChat(chatID)
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        return 1
+    }
+}
