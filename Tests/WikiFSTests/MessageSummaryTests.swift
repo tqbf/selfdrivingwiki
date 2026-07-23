@@ -373,5 +373,65 @@ struct MessageSummaryTests {
         let pending = messages.filter { $0.summary == nil }
         #expect(pending.isEmpty, "already-summarized message should be filtered out")
     }
+
+    // MARK: - Model-level messageVersion (#858)
+
+    /// The core bug: `ChatSummary` has no per-message fields, so writing a
+    /// `chat_messages.summary` leaves the `chats` array `==` after
+    /// `reloadChats()`. `.onChange(of: chats)` would never fire. The
+    /// `messageVersion` counter fixes this — it bumps unconditionally in
+    /// `reloadChats()`, giving SwiftUI an always-changing observable.
+    @Test @MainActor func messageVersion_bumpsEvenWhenChatsUnchanged() throws {
+        let store = try TestStoreFactory.inMemory()
+        let model = WikiStoreModel(store: store)
+        let chat = try store.createChat(kind: .edit, title: "Chat")
+        let inserted = try store.appendChatMessages(
+            chatID: chat.id, events: [.assistantText("Long answer.")])
+        let target = try #require(inserted.first)
+
+        model.reloadChats()
+        let chatsBefore = model.chats
+        let versionBefore = model.messageVersion
+
+        // Write a per-message summary — changes `chat_messages` but NOT any
+        // `ChatSummary` field (summary is per-message, not per-chat).
+        try store.updateMessageSummary(
+            chatID: chat.id, messageID: target.id,
+            summary: "Cached.", kind: .model)
+
+        model.reloadChats()
+
+        // Root cause: chats array is structurally identical.
+        #expect(model.chats == chatsBefore,
+                "chats array must be unchanged — ChatSummary has no per-message fields")
+        // Fix: messageVersion bumped anyway.
+        #expect(model.messageVersion > versionBefore,
+                "messageVersion must bump even when chats is ==")
+
+        // The summary IS in the DB — readable via chatMessages.
+        let msgs = model.chatMessages(chatID: chat.id)
+        let updated = try #require(msgs.first { $0.id == target.id })
+        #expect(updated.summary == "Cached.")
+        #expect(updated.summaryKind == .model)
+    }
+
+    /// `messageVersion` bumps on every `reloadChats()` call, even back-to-back
+    /// with no store change at all. This guarantees `.onChange` fires after
+    /// every mutation that routes through `reloadFromStore()` → `reloadChats()`.
+    @Test @MainActor func messageVersion_bumpsOnEveryReloadChats() throws {
+        let store = try TestStoreFactory.inMemory()
+        let model = WikiStoreModel(store: store)
+        _ = try store.createChat(kind: .edit, title: "Chat")
+
+        model.reloadChats()
+        let v0 = model.messageVersion
+        model.reloadChats()
+        let v1 = model.messageVersion
+        model.reloadChats()
+        let v2 = model.messageVersion
+
+        #expect(v1 > v0)
+        #expect(v2 > v1)
+    }
 }
 #endif // os(macOS)

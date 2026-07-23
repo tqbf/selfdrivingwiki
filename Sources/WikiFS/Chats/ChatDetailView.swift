@@ -220,7 +220,11 @@ struct ChatDetailView: View {
         // Reload persisted messages when the store changes (e.g. a new message
         // appended to a persisted chat — D3 continues append here, and this keeps
         // the persisted view live for renames/count updates when not live).
-        .onChange(of: store.chats) { _, _ in
+        // Keyed on `messageVersion` (not `chats`) because `ChatSummary` doesn't
+        // carry per-message fields — a `chat_messages.summary` write leaves the
+        // `chats` array `==`, so `.onChange(of: chats)` would miss it (#858).
+        // `messageVersion` bumps unconditionally in `reloadChats()`.
+        .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
@@ -630,9 +634,9 @@ struct ChatDetailView: View {
                     let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
                     let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
                     if cached != nil {
-                        DebugLog.debug("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
+                        DebugLog.ingest("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
                     } else {
-                        DebugLog.debug("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
+                        DebugLog.ingest("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
                     }
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
@@ -644,9 +648,9 @@ struct ChatDetailView: View {
                     let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
                     let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
                     if cached != nil {
-                        DebugLog.debug("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
+                        DebugLog.ingest("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
                     } else {
-                        DebugLog.debug("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
+                        DebugLog.ingest("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
                     }
                     entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
                                                     questionTimestamp: pendingQuestionTS, responseTimestamp: ts))

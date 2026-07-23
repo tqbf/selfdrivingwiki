@@ -194,6 +194,17 @@ public final class WikiStoreModel {
     /// like `bookmarkNodes`.
     public private(set) var chats: [ChatSummary] = []
 
+    /// Monotonic counter bumped on every `reloadChats()`. `ChatSummary` (the
+    /// chat-list model) doesn't carry per-message fields, so a
+    /// `chat_messages.summary` write produces an `==` `chats` array and
+    /// `.onChange(of: chats)` never fires — leaving the outline on a stale nil
+    /// summary (#858). This counter always changes, so views observe it via
+    /// `.onChange(of: messageVersion)` to reload per-message state after any
+    /// store mutation (local writes self-manage through `reloadChats()`;
+    /// external writes arrive via the `WikiEventBus` → `reloadFromStore()` →
+    /// `reloadChats()`).
+    public private(set) var messageVersion: Int = 0
+
     /// A pending question to pre-fill the chat composer, set by the omnibox
     /// "Ask" action (#288). Consumed by `ChatDetailView` on first appearance, then
     /// cleared. `nil` means no pre-fill is waiting.
@@ -203,6 +214,7 @@ public final class WikiStoreModel {
     /// degrading to empty on a store hiccup must never crash the sidebar.
     public func reloadChats() {
         chats = (try? store.listChats()) ?? []
+        messageVersion &+= 1
     }
 
     /// Computed tree for the Bookmarks section.
