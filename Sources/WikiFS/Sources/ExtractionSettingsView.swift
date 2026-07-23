@@ -18,10 +18,8 @@ struct ExtractionSettingsView: View {
     let containerDirectory: URL
     let credentialStore: any ExtractionCredentialStore
     let fetcher: any HTTPRequestFetcher
-    /// Observed so the panel can lock itself while a PDF extraction is running —
-    /// changing the backend or keys mid-conversion is unsafe.
+    /// Provides the enabled-provider list for the ACP backend picker.
     let launcher: AgentLauncher
-    @Environment(QueueActivityTracker.self) private var tracker
 
     // Drafts initialized from config + Keychain in `init`; every change is
     // written straight back by `persistAll()`.
@@ -81,14 +79,6 @@ struct ExtractionSettingsView: View {
 
     var body: some View {
         Form {
-            if extractionInProgress {
-                Section {
-                    Label("PDF extraction is in progress. Extraction settings are locked until it finishes or is cancelled.", systemImage: "lock.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
             Section {
                 Picker("Backend", selection: $draftBackend) {
                     ForEach(ExtractionBackend.allCases, id: \.self) { backend in
@@ -146,7 +136,6 @@ struct ExtractionSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
-        .disabled(extractionInProgress)
         .alert("Couldn't Connect to Claude", isPresented: anthropicErrorBinding,
                presenting: anthropicErrorMessage) { _ in
             Button("OK", role: .cancel) {}
@@ -171,22 +160,11 @@ struct ExtractionSettingsView: View {
 
     @ViewBuilder private var backendConfigSection: some View {
         switch draftBackend {
-        case .localPdf2md: localSection
+        case .localPdf2md: EmptyView()
         case .acp: acpSection
         case .anthropic: claudeSection
         case .gemini: geminiSection
         case .doclingServe: doclingSection
-        }
-    }
-
-    @ViewBuilder private var localSection: some View {
-        Section {
-            Text("Local pdf2md runs on-device via the bundled docling + granite VLM. It needs a one-time ~2 GB dependency download, triggered from the ingest flow the first time you extract a PDF. There's nothing to configure here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        } header: {
-            Text("Local pdf2md")
         }
     }
 
@@ -308,13 +286,6 @@ struct ExtractionSettingsView: View {
     }
     private var doclingErrorMessage: String? {
         if case .failed(let m) = doclingTest { return m }; return nil
-    }
-
-    /// True while a PDF extraction holds the slot (ingest-path or standalone).
-    /// While busy the whole panel is disabled so a mid-extraction backend or key
-    /// change can't derail the running conversion.
-    private var extractionInProgress: Bool {
-        !tracker.extractingSourceIDs.isEmpty
     }
 
     /// `Picker`'s `selection:` can't bind directly to `@State var x: T?` when
