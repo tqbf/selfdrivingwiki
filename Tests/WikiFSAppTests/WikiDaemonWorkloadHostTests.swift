@@ -26,14 +26,14 @@ struct WikiDaemonWorkloadHostTests {
 
     // MARK: - Workload host scaffold
 
-    @Test func daemonCanConstructQueueEngine() throws {
+    @Test func daemonCanConstructQueueEngine() async throws {
         let dir = makeTempDir()
         let daemon = WikiDaemon(containerDirectory: dir)
 
         #expect(daemon.canHostWorkloads)
 
         // First call constructs the engine.
-        let engine = try daemon.ensureQueueEngine()
+        let engine = try await daemon.ensureQueueEngine()
 
         // Second call is idempotent — returns the same engine (no throw,
         // no new queue.sqlite created). We verify by checking the
@@ -41,7 +41,7 @@ struct WikiDaemonWorkloadHostTests {
         let queueDB = dir.appendingPathComponent("queue.sqlite")
         #expect(FileManager.default.fileExists(atPath: queueDB.path))
 
-        _ = try daemon.ensureQueueEngine()
+        _ = try await daemon.ensureQueueEngine()
         // Still exists (no error, no duplicate).
         #expect(FileManager.default.fileExists(atPath: queueDB.path))
         // Silence unused-var warning.

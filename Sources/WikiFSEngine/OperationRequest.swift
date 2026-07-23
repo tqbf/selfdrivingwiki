@@ -11,7 +11,7 @@ import WikiFSCore
 /// `WIKI_STATE.md` rendering (`WikiStateSnapshot.renderStateFile`), the staged leaf
 /// names (`AgentStaging`), the tiny-vs-non-tiny decision (`IngestPlan.decide`), and
 /// the prompts (`WikiOperation`) — are all unit-tested in the core.
-public enum OperationRequest {
+public enum OperationRequest: Sendable {
   /// One source for ingest: raw bytes + extension + mount-relative display path
   /// + provenance for the staged-leaf stem. `name` drives the shell-safe stem
   /// (`source.effectiveName`); `sourceID` is the full ULID disambiguator

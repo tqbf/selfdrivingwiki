@@ -56,13 +56,52 @@ import Foundation
     /// See `plans/daemon-workloads.md` §3 + §5.2.
     func registerEventSink(_ sink: WikiDaemonEventSink)
 
-    // MARK: - Workload: queue engine (Phase 0 — scaffold)
+    // MARK: - Workload: queue engine (Phase A+B)
 
     /// Full snapshot of all queue items (JSON-encoded `QueueSnapshot`). The app
     /// calls this on launch to rehydrate the Activity window / menu-bar state
     /// after a reconnect. In Phase 0 the daemon serves an empty snapshot (the
     /// engine is constructed but not wired to real workers).
     func queueSnapshot(reply: @escaping (Data) -> Void)
+
+    /// Enqueue a queue item. `request` is JSON-encoded `QueueItemRequest`;
+    /// reply is JSON `{"id": "<itemID>", "error": null}`.
+    func enqueueItem(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Cancel a specific item. Reply is always called.
+    func cancelItem(id: String, reply: @escaping () -> Void)
+
+    /// Cancel all in-flight items. Reply with the count.
+    func cancelAllInFlight(reply: @escaping (Int) -> Void)
+
+    /// Retry a failed item. Reply is JSON `{"error": null}`.
+    func retryItem(id: String, reply: @escaping (Data) -> Void)
+
+    /// Pause a queue. Reply always called.
+    func pauseQueue(queue: String, reply: @escaping () -> Void)
+
+    /// Resume a queue. Reply always called.
+    func resumeQueue(queue: String, reply: @escaping () -> Void)
+
+    /// Halt a queue. Reply always called.
+    func haltQueue(queue: String, reply: @escaping () -> Void)
+
+    /// Reorder an item. Reply always called.
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void)
+
+    /// Check if a wiki has active work. Reply with Bool.
+    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void)
+
+    /// Await completion of an item. Reply is JSON `{"success": true}` or
+    /// `{"success": false, "error": "..."}`.
+    func waitForCompletion(id: String, reply: @escaping (Data) -> Void)
+
+    /// Load transcript events for an item. Reply is JSON-encoded `[AgentEvent]`.
+    func loadTranscript(itemID: String, reply: @escaping (Data) -> Void)
+
+    /// Load all activity snapshots. Reply is JSON-encoded
+    /// `[String: ActivitySnapshotData]`.
+    func loadAllActivitySnapshots(reply: @escaping (Data) -> Void)
 }
 
 /// The reverse-channel protocol the app implements so the daemon can push

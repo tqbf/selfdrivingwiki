@@ -498,6 +498,23 @@ public actor QueueEngine {
         }
     }
 
+    /// Codable XPC-boundary mirror of ``ActivitySnapshot``. The concrete
+    /// snapshot is only `Sendable`; this wrapper adds `Codable` so snapshots
+    /// can be JSON-encoded for transport over XPC.
+    public struct ActivitySnapshotData: Codable, Sendable {
+        public let usage: SessionUsage?
+        public let logURL: URL?
+        public let debugURL: URL?
+        public let progressLog: String
+
+        public init(from snapshot: ActivitySnapshot) {
+            self.usage = snapshot.usage
+            self.logURL = snapshot.logURL
+            self.debugURL = snapshot.debugURL
+            self.progressLog = snapshot.progressLog
+        }
+    }
+
     /// Load persisted activity metadata for all items with recorded activity,
     /// decoded into typed values. Used by the Activity tracker to rehydrate
     /// `itemUsage` / `itemLogURLs` / `itemDebugURLs` / `progressLogs` after an

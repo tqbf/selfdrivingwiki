@@ -199,6 +199,9 @@ let package = Package(
                 "WikiFSCore",
                 // WikiFS (the app) is macOS-only — links WebKit, MLX, etc.
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
+                // WikiCtlCore provides DaemonWorkloadClient + WikiDaemonConnection
+                // for the app's XPC proxy to the wikid daemon (Phase A+B).
+                .target(name: "WikiCtlCore", condition: .when(platforms: [.macOS])),
                 "WikiFSMLX",
                 .product(name: "Markdown", package: "swift-markdown"),
             ],

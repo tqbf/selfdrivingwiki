@@ -41,7 +41,10 @@ public final class SessionManager {
     public let extractionCoordinator: ExtractionCoordinator
 
     /// Shared, app-wide queue engine. One instance serves every session.
-    public let queueEngine: QueueEngine
+    /// Widened to `any QueueEngineClient` (Phase 0) so the source can flip
+    /// from in-process `QueueEngine` to an `XPCQueueEngineProxy` without
+    /// rewriting call sites.
+    public let queueEngine: any QueueEngineClient
 
     /// Shared, app-wide extraction provider. The app-layer bridge from the
     /// headless queue engine to `@MainActor` types.
@@ -87,7 +90,7 @@ public final class SessionManager {
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
-        queueEngine: QueueEngine,
+        queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
         pdf2mdScriptPathResolver: @escaping () -> String?,
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
