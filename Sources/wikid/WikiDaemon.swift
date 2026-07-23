@@ -188,6 +188,34 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    /// Lazily resolve (and cache) the `GRDBWikiStore` for `wikiID`.
+    ///
+    /// Backs the queue-engine and chat-host `storeResolver` closures so a
+    /// workload for a wiki the daemon hasn't explicitly opened still resolves:
+    /// if the store isn't already cached in `openStores` but the wiki is
+    /// registered, open it read-write (running the bootstrap ladder on first
+    /// open) and cache it. Returns `nil` for an unregistered wikiID or if the
+    /// open throws. Same lazy-open pattern as `openStore(wikiID:)`, but returns
+    /// the store instead of a `Bool` (#867).
+    func resolveStoreLazily(wikiID: String) -> GRDBWikiStore? {
+        queue.sync { () -> GRDBWikiStore? in
+            if let store = openStores[wikiID] {
+                return store
+            }
+            guard registry.descriptor(id: wikiID) != nil else { return nil }
+            let dbURL = databaseURL(forWikiID: wikiID)
+            do {
+                let store = try GRDBWikiStore(databaseURL: dbURL)
+                openStores[wikiID] = store
+                DebugLog.store("wikid: store lazily opened for \(wikiID)")
+                return store
+            } catch {
+                DebugLog.store("wikid: lazy openStore failed for \(wikiID): \(error)")
+                return nil
+            }
+        }
+    }
+
     /// Sentinel returned by ``changeToken(wikiID:)`` when reading the store's
     /// change token throws. A genuine change token is always colon-joined
     /// integers (e.g. `"0:0:0:…"`), so this is syntactically distinguishable
@@ -282,8 +310,7 @@ final class WikiDaemon: @unchecked Sendable {
         }
 
         let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
-            guard let self else { return nil }
-            return self.queue.sync { self.openStores[wikiID] }
+            self?.resolveStoreLazily(wikiID: wikiID)
         }
 
         let queueStore = try QueueStore(databaseURL: queueDatabaseURL)
@@ -392,8 +419,7 @@ final class WikiDaemon: @unchecked Sendable {
         }
 
         let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
-            guard let self else { return nil }
-            return self.queue.sync { self.openStores[wikiID] }
+            self?.resolveStoreLazily(wikiID: wikiID)
         }
 
         let dir = containerDirectory

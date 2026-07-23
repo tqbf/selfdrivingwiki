@@ -19,6 +19,12 @@ import WikiFSEngine
 /// RC3: pure pass-through — every call goes to the daemon's `QueueEngine`.
 /// RC4: all XPC calls go through `DaemonWorkloadClient` which adds a 30s
 /// timeout + error envelope.
+///
+/// Error visibility: no call swallows XPC failures silently. Every `try?`
+/// that previously fell back to an empty/default value is now a `do/catch`
+/// that logs the failure via `DebugLog.ingest` before returning the fallback,
+/// so a daemon-side error (timeout, connection drop, decode failure) is always
+/// visible in Console.app instead of looking like an empty queue (#867).
 final class XPCQueueEngineProxy: QueueEngineClient {
     private let workloadClient: DaemonWorkloadClient
     private let eventSink: DaemonQueueEventSink
@@ -36,12 +42,21 @@ final class XPCQueueEngineProxy: QueueEngineClient {
     }
 
     func cancelItem(_ id: QueueItem.ID) async {
-        try? await workloadClient.cancelItem(id)
+        do {
+            try await workloadClient.cancelItem(id)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.cancelItem failed for \(id): \(error.localizedDescription)")
+        }
     }
 
     @discardableResult
     func cancelAllInFlight() async -> Int {
-        (try? await workloadClient.cancelAllInFlight()) ?? 0
+        do {
+            return try await workloadClient.cancelAllInFlight()
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.cancelAllInFlight failed: \(error.localizedDescription)")
+            return 0
+        }
     }
 
     func retryItem(_ id: QueueItem.ID) async throws {
@@ -49,27 +64,53 @@ final class XPCQueueEngineProxy: QueueEngineClient {
     }
 
     func pause(_ queue: QueueKind) async {
-        try? await workloadClient.pause(queue)
+        do {
+            try await workloadClient.pause(queue)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.pause(\(queue)) failed: \(error.localizedDescription)")
+        }
     }
 
     func resume(_ queue: QueueKind) async {
-        try? await workloadClient.resume(queue)
+        do {
+            try await workloadClient.resume(queue)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.resume(\(queue)) failed: \(error.localizedDescription)")
+        }
     }
 
     func halt(_ queue: QueueKind) async {
-        try? await workloadClient.halt(queue)
+        do {
+            try await workloadClient.halt(queue)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.halt(\(queue)) failed: \(error.localizedDescription)")
+        }
     }
 
     func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {
-        try? await workloadClient.reorderItem(id: id, beforeItemID: beforeItemID)
+        do {
+            try await workloadClient.reorderItem(id: id, beforeItemID: beforeItemID)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.reorderItem failed for \(id): \(error.localizedDescription)")
+        }
     }
 
     func snapshot() async -> QueueSnapshot {
-        (try? await workloadClient.queueSnapshot()) ?? QueueSnapshot()
+        do {
+            return try await workloadClient.queueSnapshot()
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.snapshot failed: \(error.localizedDescription)")
+            return QueueSnapshot()
+        }
     }
 
     func hasActiveWork(for wikiID: String) async -> Bool {
-        (try? await workloadClient.hasActiveWork(for: wikiID)) ?? false
+        do {
+            return try await workloadClient.hasActiveWork(for: wikiID)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.hasActiveWork failed for \(wikiID): \(error.localizedDescription)")
+            return false
+        }
     }
 
     func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
@@ -82,11 +123,22 @@ final class XPCQueueEngineProxy: QueueEngineClient {
     }
 
     func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
-        (try? await workloadClient.loadTranscript(for: itemID)) ?? []
+        do {
+            return try await workloadClient.loadTranscript(for: itemID)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.loadTranscript failed for \(itemID): \(error.localizedDescription)")
+            return []
+        }
     }
 
     func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] {
-        let data = (try? await workloadClient.loadAllActivitySnapshots()) ?? [:]
+        let data: [String: QueueEngine.ActivitySnapshotData]
+        do {
+            data = try await workloadClient.loadAllActivitySnapshots()
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.loadAllActivitySnapshots failed: \(error.localizedDescription)")
+            data = [:]
+        }
         var result: [QueueItem.ID: QueueEngine.ActivitySnapshot] = [:]
         for (id, snapshot) in data {
             result[id] = QueueEngine.ActivitySnapshot(

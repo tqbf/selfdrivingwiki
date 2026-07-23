@@ -76,6 +76,7 @@ MIN_MACOS="14.0"
 
 APP_PROFILE="signing/WikiFS.provisionprofile"
 EXT_PROFILE="signing/WikiFSFileProvider.provisionprofile"
+DAEMON_PROFILE="signing/wikid.provisionprofile"
 APP_ICON="build/AppIcon.icns"
 
 BUILD_DIR="build"
@@ -487,10 +488,13 @@ PLIST
 </plist>
 PLIST
   # wikid daemon entitlements — per-developer, generated (no committed static
-  # file: keychain-access-groups needs the builder's real Team ID + App Group,
-  # which come from signing/local.config). The FileProvider extension does NOT
-  # get keychain-access-groups (it never touches the Keychain; adding it would
-  # risk AMFI killing the sandboxed extension if its profile lacks the cap).
+  # file: application-groups needs the builder's real App Group, which comes
+  # from signing/local.config). The daemon does NOT get keychain-access-groups:
+  # it is a bare Mach-O (no bundle), so codesign can't embed a provisioning
+  # profile in it, and without an embedded profile AMFI can't authorize a
+  # team-prefixed keychain group — the entitlement would risk a SIGKILL at exec
+  # (or be silently ignored). The FileProvider extension likewise gets no
+  # keychain-access-groups (it never touches the Keychain).
   cat > "${WIKID_ENTITLEMENTS}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -499,10 +503,6 @@ PLIST
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>${APP_GROUP}</string>
-	</array>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>${KEYCHAIN_ACCESS_GROUP}</string>
 	</array>
 </dict>
 </plist>
@@ -519,11 +519,11 @@ PLIST
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
   # wikid daemon — signs WITH the per-developer generated entitlements
-  # (${WIKID_ENTITLEMENTS}, carrying the shared keychain-access-groups entry
-  # verified by the R1 spike) so the daemon can read the ACP/Extraction/Zotero
-  # secrets the app wrote under that group. Without --entitlements the
-  # keychain-access-groups entry is ignored in shipped builds and the daemon
-  # reads nil keys. See plans/keychain-sharing.md.
+  # (${WIKID_ENTITLEMENTS}, carrying only application-groups). It does NOT get
+  # keychain-access-groups: as a bare Mach-O it can't carry an embedded
+  # provisioning profile, so AMFI can't authorize a team-prefixed keychain
+  # group — the entitlement is dropped to avoid an exec-time SIGKILL.
+  # See plans/keychain-sharing.md.
   echo "→ codesign wikid daemon (${IDENTITY})"
   codesign --force --timestamp=none \
     --identifier com.selfdrivingwiki.wikid \
