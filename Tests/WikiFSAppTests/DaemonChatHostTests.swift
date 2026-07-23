@@ -378,6 +378,87 @@ struct DaemonChatHostTests {
         #expect(decoded.thinkingOption?.choices.count == 1)
         #expect(decoded.runKindRaw == "queryChat")
     }
+
+    // MARK: - Phase C4 follow-up: setChatConfigOption XPC round-trip
+
+    @Test func daemonSetChatConfigOptionRoundTrip() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let exporter = WikiDaemonExporter(daemon: daemon)
+
+        let listener = NSXPCListener.anonymous()
+        let delegate = ChatTestListenerDelegate(exporter: exporter)
+        listener.delegate = delegate
+        listener.resume()
+        let endpoint = listener.endpoint
+        defer { listener.invalidate() }
+
+        let connection = NSXPCConnection(listenerEndpoint: endpoint)
+        let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        connection.remoteObjectInterface = daemonInterface
+        connection.resume()
+        defer { connection.invalidate() }
+
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
+
+        // setChatConfigOption on a non-existent chat → error reply, no crash.
+        let request = ChatConfigOptionRequest(
+            chatID: "nonexistent", option: "thought_level", value: "high")
+        let requestData = try JSONEncoder().encode(request)
+
+        let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+            proxy.setChatConfigOption(request: requestData) { data in
+                cont.resume(returning: data)
+            }
+        }
+
+        // The reply should be valid JSON with an error (no session) — not a crash.
+        let replyDict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any]
+        #expect(replyDict != nil)
+        // No live session → "No live chat session for nonexistent"
+        let error = replyDict?["error"] as? String
+        #expect(error != nil && !error!.isEmpty)
+    }
+
+    @Test func chatConfigOptionRequestEncodingDecoding() throws {
+        // Verify the request type round-trips cleanly.
+        let request = ChatConfigOptionRequest(
+            chatID: "chat-xyz", option: "thought_level", value: "medium")
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: data)
+
+        #expect(decoded.chatID == "chat-xyz")
+        #expect(decoded.option == "thought_level")
+        #expect(decoded.value == "medium")
+    }
+
+    @Test func chatSessionStateRoundTripsNewEnvelopeFields() throws {
+        // Verify the three new fields (stderr, lastActivityAt, currentProcessID)
+        // survive JSON encode/decode through the XPC envelope.
+        let state = ChatSessionState(
+            chatID: "chat-fields",
+            events: [],
+            isRunning: true,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil,
+            stderr: "stderr capture",
+            lastActivityAt: Date(timeIntervalSince1970: 3333),
+            currentProcessID: 6789)
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(ChatSessionState.self, from: data)
+
+        #expect(decoded.stderr == "stderr capture")
+        #expect(decoded.lastActivityAt?.timeIntervalSince1970 == 3333)
+        #expect(decoded.currentProcessID == 6789)
+    }
 }
 
 // MARK: - Test helpers

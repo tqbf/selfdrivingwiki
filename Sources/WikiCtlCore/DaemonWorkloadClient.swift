@@ -350,6 +350,22 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    /// Set a config option (e.g. thinking effort) on a live chat session.
+    public func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws {
+        let requestData = try JSONEncoder().encode(request)
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.setChatConfigOption(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
+               let error = dict["error"] as? String, !error.isEmpty {
+                throw DaemonXPCError.failure(error)
+            }
+        }
+    }
+
     #endif // canImport(WikiFSEngine)
 }
 #endif

@@ -515,6 +515,25 @@ final class WikiDaemon: @unchecked Sendable {
         }
         #endif
     }
+
+    /// Set a chat config option. Returns JSON `ChatErrorReply`.
+    func setChatConfigOptionData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: request)
+            try await host.setChatConfigOption(
+                chatID: req.chatID, option: req.option, value: req.value)
+            let reply = ChatErrorReply(error: nil)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        } catch {
+            let reply = ChatErrorReply(error: error.localizedDescription)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
     #else
     /// On Linux (no WikiFSEngine), returns an empty JSON snapshot.
     func queueSnapshotData() async -> Data {

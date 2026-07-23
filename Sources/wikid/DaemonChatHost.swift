@@ -359,7 +359,10 @@ final class DaemonChatHost: @unchecked Sendable {
                 logFileURL: launcher.logFileURL(forChat: chatID),
                 debugFolderURL: launcher.debugFolderURL(forChat: chatID),
                 runKindRaw: launcher.runningKind.map { "\($0)" },
-                runStartedAt: launcher.runStartedAt)
+                runStartedAt: launcher.runStartedAt,
+                stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
+                lastActivityAt: launcher.lastActivityAt,
+                currentProcessID: launcher.currentProcessID.map(Int.init))
         }
     }
 
@@ -371,6 +374,23 @@ final class DaemonChatHost: @unchecked Sendable {
         guard let session else { return }
         DebugLog.agent("DaemonChatHost.resolvePermission: chat=\(chatID) option=\(optionId) approve=\(approve)")
         await session.launcher.resolvePendingPermission(optionId: optionId)
+    }
+
+    // MARK: - Set a config option (C4 follow-up)
+
+    /// Set a config option (e.g. `thought_level`) on the live ACP session for
+    /// `chatID`, without restarting it. Forwards to the launcher's generic
+    /// `setConfigOption(configId:value:)`, which calls the ACP backend's
+    /// `session/set_config_option`. Throws if no live session is held.
+    func setChatConfigOption(chatID: String, option: String, value: String) async throws {
+        let session = queue.sync { sessions[chatID] }
+        guard let session else {
+            throw DaemonChatError.noSession(chatID)
+        }
+        DebugLog.agent("DaemonChatHost.setChatConfigOption: chat=\(chatID) option=\(option) value=\(value)")
+        await MainActor.run {
+            session.launcher.setConfigOption(configId: option, value: value)
+        }
     }
 
     // MARK: - Test accessors
@@ -455,7 +475,10 @@ final class DaemonChatHost: @unchecked Sendable {
             logFileURL: launcher.logFileURL(forChat: chatID),
             debugFolderURL: launcher.debugFolderURL(forChat: chatID),
             runKindRaw: launcher.runningKind.map { "\($0)" },
-            runStartedAt: launcher.runStartedAt)
+            runStartedAt: launcher.runStartedAt,
+            stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
+            lastActivityAt: launcher.lastActivityAt,
+            currentProcessID: launcher.currentProcessID.map(Int.init))
         pushEvent(.chatState(chatID: chatID, update: update))
     }
 

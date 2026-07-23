@@ -245,6 +245,9 @@ public struct ChatStateUpdate: Codable, Sendable {
     public let debugFolderURL: URL?
     public let runKindRaw: String?
     public let runStartedAt: Date?
+    public let stderr: String?
+    public let lastActivityAt: Date?
+    public let currentProcessID: Int?
 
     public init(
         isRunning: Bool,
@@ -256,7 +259,10 @@ public struct ChatStateUpdate: Codable, Sendable {
         logFileURL: URL?,
         debugFolderURL: URL?,
         runKindRaw: String?,
-        runStartedAt: Date?
+        runStartedAt: Date?,
+        stderr: String? = nil,
+        lastActivityAt: Date? = nil,
+        currentProcessID: Int? = nil
     ) {
         self.isRunning = isRunning
         self.isGenerating = isGenerating
@@ -268,5 +274,8 @@ public struct ChatStateUpdate: Codable, Sendable {
         self.debugFolderURL = debugFolderURL
         self.runKindRaw = runKindRaw
         self.runStartedAt = runStartedAt
+        self.stderr = stderr
+        self.lastActivityAt = lastActivityAt
+        self.currentProcessID = currentProcessID
     }
 }

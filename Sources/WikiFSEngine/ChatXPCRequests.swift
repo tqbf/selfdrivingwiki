@@ -70,6 +70,23 @@ public struct ChatPermissionResolveRequest: Codable, Sendable {
     }
 }
 
+/// Set a config option (e.g. `thought_level`) on a live chat session without
+/// restarting it. Sent by the client; the daemon forwards to the launcher's
+/// ACP backend (`session/set_config_option`). Reply is `ChatErrorReply`.
+public struct ChatConfigOptionRequest: Codable, Sendable {
+    public let chatID: String
+    /// The ACP config option id (e.g. `"thought_level"`).
+    public let option: String
+    /// The value id to set (e.g. `"high"`).
+    public let value: String
+
+    public init(chatID: String, option: String, value: String) {
+        self.chatID = chatID
+        self.option = option
+        self.value = value
+    }
+}
+
 /// Rehydrate a chat's live state after (re)connect. Returned by
 /// `chatSessionState(chatID:)` so the client can rebuild its `RemoteChatSession`
 /// from the daemon's held-alive launcher (or from the persisted store if the
@@ -97,6 +114,14 @@ public struct ChatSessionState: Codable, Sendable {
     public let runKindRaw: String?
     /// The wall-clock start time of the current/last run.
     public let runStartedAt: Date?
+    /// The agent's stderr capture (diagnostics), if any. Read from the
+    /// launcher's `stderr` buffer. `nil` when empty or no session exists.
+    public let stderr: String?
+    /// When the session last had activity (stdout/stderr bytes or a state
+    /// change). `nil` when no run has started.
+    public let lastActivityAt: Date?
+    /// The ACP subprocess PID, if a process is/was spawned.
+    public let currentProcessID: Int?
 
     public init(
         chatID: String,
@@ -110,7 +135,10 @@ public struct ChatSessionState: Codable, Sendable {
         logFileURL: URL?,
         debugFolderURL: URL?,
         runKindRaw: String?,
-        runStartedAt: Date?
+        runStartedAt: Date?,
+        stderr: String? = nil,
+        lastActivityAt: Date? = nil,
+        currentProcessID: Int? = nil
     ) {
         self.chatID = chatID
         self.events = events
@@ -124,6 +152,9 @@ public struct ChatSessionState: Codable, Sendable {
         self.debugFolderURL = debugFolderURL
         self.runKindRaw = runKindRaw
         self.runStartedAt = runStartedAt
+        self.stderr = stderr
+        self.lastActivityAt = lastActivityAt
+        self.currentProcessID = currentProcessID
     }
 
     /// Decoded `SessionUsage` from `usageData`, or nil.

@@ -22,8 +22,8 @@ import WikiFSEngine
 struct ThinkingEffortSelector: View {
     /// The daemon-mirrored chat session. `thinkingOption` is mirrored from the
     /// daemon's launcher via chat-state envelopes; `setThinkingEffort` flips
-    /// the chip locally (daemon-side apply is deferred — no chat-config XPC
-    /// method in Phase C4). Replaces the chat `AgentLauncher` binding.
+    /// the chip optimistically and fires `setChatConfigOption` on the daemon's
+    /// live session. Replaces the chat `AgentLauncher` binding.
     var remoteSession: RemoteChatSession
 
     var body: some View {
