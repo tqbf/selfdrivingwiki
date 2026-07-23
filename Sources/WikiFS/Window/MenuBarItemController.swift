@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import WikiFSCore
 import WikiFSEngine
@@ -276,6 +277,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         let maintenanceMenu = NSMenu()
         maintenanceMenu.addItem(withTitle: "Vacuum All…",
             action: #selector(vacuumAll(_:)), keyEquivalent: "").target = self
+        maintenanceMenu.addItem(withTitle: "Restart Daemon",
+            action: #selector(restartDaemon(_:)), keyEquivalent: "").target = self
         maintenanceItem.submenu = maintenanceMenu
         menu.addItem(maintenanceItem)
 
@@ -374,6 +377,27 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func vacuumAll(_ sender: NSMenuItem?) {
         targetSession?.previewVacuumAll()
         activateWikiWindow()
+    }
+
+    /// Restart the wikid launchd daemon by unregistering + re-registering its
+    /// SMAppService. Used when the daemon is stale (running an old binary
+    /// after the app was rebuilt) — avoids a full app restart. Best-effort:
+    /// errors are logged, not fatal (in dev mode `unregister`/`register` may
+    /// no-op or throw if the service was never registered).
+    @objc private func restartDaemon(_ sender: NSMenuItem?) {
+        DebugLog.store("wikid: restart requested")
+        let daemonService = SMAppService.agent(plistName: "com.selfdrivingwiki.wikid.plist")
+        do {
+            try daemonService.unregister()
+        } catch {
+            DebugLog.store("wikid: unregister failed during restart: \(error)")
+        }
+        do {
+            try daemonService.register()
+            DebugLog.store("wikid: re-registered, status=\(daemonService.status.rawValue)")
+        } catch {
+            DebugLog.store("wikid: re-register failed during restart: \(error)")
+        }
     }
 
     /// Open the Settings window. Calls the `OpenWindowBridge`'s
