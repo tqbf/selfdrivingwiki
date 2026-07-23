@@ -51,6 +51,9 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             backendOverride: override
         ) else { return nil }
 
+        // Transcript sources get their own capacity bucket.
+        if resolved.transcriptFetch != nil { return "transcript" }
+
         // Map the backend to a provider ID that the engine's capacity config
         // can route: local → "local-pdf2md", remote → backend-specific.
         switch resolved.backend {
@@ -99,35 +102,50 @@ struct QueueExtractionWorker: QueueWorker {
             ExtractionBackend(rawValue: $0)
         }
 
-        // Resolve the extractor + PDF bytes (main-actor hop in the app impl).
+        // Resolve the extractor + PDF bytes, OR a transcript fetch closure
+        // (main-actor hop in the app impl).
         guard let resolved = try await provider.resolveExtraction(
             wikiID: item.wikiID,
             sourceID: sourceID,
             backendOverride: backendOverride
         ) else {
-            // No PDF bytes — non-PDF source or already extracted. Skip
-            // extraction (the worker returns normally → item .completed).
+            // No PDF bytes and not a transcript source — skip extraction
+            // (the worker returns normally → item .completed).
             return
         }
 
-        // Readiness check — preserve graceful fallback.
-        let readiness = await resolved.extractor.readiness()
-        guard readiness.isReady else {
-            let message: String
-            switch readiness {
-            case .needsSetup(let msg): message = msg
-            case .notInstalled(let msg): message = msg
-            case .ready: message = ""  // unreachable
-            }
-            throw QueueExtractionError.notReady(message)
-        }
+        let markdown: String
 
-        // Convert (off-main — MarkdownExtractor is Sendable).
-        let markdown = try await resolved.extractor.convert(
-            pdfData: resolved.pdfData,
-            filename: resolved.filename
-        ) { [itemID = item.id] line in
-            emitProgress(itemID, line)
+        if let fetch = resolved.transcriptFetch {
+            // Transcript extraction: network/subprocess fetch (no local bytes).
+            emitProgress(item.id, "Fetching transcript…")
+            markdown = try await fetch()
+        } else {
+            // Bytes-based extraction: readiness check + convert.
+            guard let extractor = resolved.extractor,
+                  let pdfData = resolved.pdfData else {
+                throw QueueExtractionError.missingSourceID
+            }
+
+            // Readiness check — preserve graceful fallback.
+            let readiness = await extractor.readiness()
+            guard readiness.isReady else {
+                let message: String
+                switch readiness {
+                case .needsSetup(let msg): message = msg
+                case .notInstalled(let msg): message = msg
+                case .ready: message = ""  // unreachable
+                }
+                throw QueueExtractionError.notReady(message)
+            }
+
+            // Convert (off-main — MarkdownExtractor is Sendable).
+            markdown = try await extractor.convert(
+                pdfData: pdfData,
+                filename: resolved.filename
+            ) { [itemID = item.id] line in
+                emitProgress(itemID, line)
+            }
         }
 
         // Persist (main-actor hop in the app impl). Carries backend +
@@ -137,7 +155,8 @@ struct QueueExtractionWorker: QueueWorker {
             sourceID: sourceID,
             markdown: markdown,
             backend: resolved.backend,
-            modelVersion: resolved.modelVersion
+            modelVersion: resolved.modelVersion,
+            technique: resolved.technique
         )
     }
 }

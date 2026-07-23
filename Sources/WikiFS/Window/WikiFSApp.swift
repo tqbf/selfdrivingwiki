@@ -40,14 +40,14 @@ struct WikiFSApp: App {
     /// sessions via `WikiSession`.
     @State private var queueEngine: QueueEngine
     /// App-wide extraction provider. Bridges the headless queue engine to the
-    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
+    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
+    /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
+    /// captions, podcast feeds) — transcript sources resolve to a
+    /// `transcriptFetch` closure in the `ExtractionResolution`.
     @State private var extractionProvider: any QueueExtractionProvider
     /// App-wide ingestion provider. Bridges the headless queue engine to the
     /// `@MainActor` `AgentLauncher` + `WikiStoreModel` for ingestion.
     @State private var ingestionProvider: any QueueIngestionProvider
-    /// App-wide transcription provider. Bridges the headless queue engine to
-    /// the `@MainActor` `WikiStoreModel` for YouTube/podcast transcription.
-    @State private var transcriptionProvider: any QueueTranscriptionProvider
     /// Mutable box for the file provider reference — the ingestion provider
     /// uses it to access the `FileProviderFacade` which is only available
     /// after the `@State` property is initialized by SwiftUI.
@@ -184,10 +184,6 @@ struct WikiFSApp: App {
         let extractionFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) })
-        let transcriptionProvider = AppQueueTranscriptionProvider(sessionBox: sessionBox)
-        let transcriptionFactory = QueueTranscriptionWorkerFactory(
-            provider: transcriptionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
         let ingestionFactory = QueueIngestionWorkerFactory(
             provider: ingestionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) },
@@ -199,7 +195,6 @@ struct WikiFSApp: App {
         let workerFactory = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory,
-            .transcription: transcriptionFactory,
         ])
         let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
         // Wire the progress emit box to the engine's event continuation.
@@ -230,7 +225,6 @@ struct WikiFSApp: App {
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
         _ingestionProvider = State(initialValue: ingestionProvider)
-        _transcriptionProvider = State(initialValue: transcriptionProvider)
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 

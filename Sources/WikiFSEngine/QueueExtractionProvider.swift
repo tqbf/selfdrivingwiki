@@ -24,12 +24,34 @@ public enum QueueExtractionError: Error, LocalizedError {
 /// The result of resolving an extraction request: a `Sendable` extractor +
 /// the PDF bytes + filename + backend/modelVersion for PROV tracking.
 /// Returned by `QueueExtractionProvider.resolveExtraction`.
+///
+/// Supports two modes:
+/// - **Bytes-based extraction** (PDF, HTML, etc.): `extractor` + `pdfData`
+///   are non-nil; the worker calls `extractor.convert(pdfData:…)`.
+/// - **Transcript extraction** (YouTube captions, podcast feeds): no local
+///   bytes — `transcriptFetch` is non-nil and `extractor` + `pdfData` are nil;
+///   the worker calls the closure instead. The `technique` tag records HOW the
+///   markdown was produced for PROV tracking (e.g. `"youtube-captions"`).
 public struct ExtractionResolution: Sendable {
-    public let extractor: any MarkdownExtractor
-    public let pdfData: Data
+    /// The extractor for bytes-based extraction. Nil for transcript-only
+    /// extraction (no local bytes — the markdown comes from `transcriptFetch`).
+    public let extractor: (any MarkdownExtractor)?
+    /// The source bytes to convert. Nil for transcript-only extraction.
+    public let pdfData: Data?
     public let filename: String
     public let backend: ExtractionBackend
     public let modelVersion: String?
+
+    /// Non-nil when this is a transcript extraction: no local bytes, the
+    /// markdown comes from a network/subprocess fetch. When non-nil,
+    /// `extractor` + `pdfData` are nil and the worker calls this closure
+    /// instead of `extractor.convert(...)`.
+    public let transcriptFetch: (@Sendable () async throws -> String)?
+
+    /// PROV technique tag for the processed-markdown version row.
+    /// For regular extraction: nil (the backend IS the technique).
+    /// For transcript extraction: e.g. `"youtube-captions"`.
+    public let technique: String?
 
     public init(
         extractor: any MarkdownExtractor,
@@ -43,6 +65,25 @@ public struct ExtractionResolution: Sendable {
         self.filename = filename
         self.backend = backend
         self.modelVersion = modelVersion
+        self.transcriptFetch = nil
+        self.technique = nil
+    }
+
+    /// Transcript-only initializer: no local bytes, the markdown comes from
+    /// the `fetch` closure. The `technique` tag records the provenance.
+    public init(
+        transcriptFetch: @escaping @Sendable () async throws -> String,
+        technique: String,
+        filename: String,
+        backend: ExtractionBackend = .localPdf2md
+    ) {
+        self.extractor = nil
+        self.pdfData = nil
+        self.filename = filename
+        self.backend = backend
+        self.modelVersion = nil
+        self.transcriptFetch = transcriptFetch
+        self.technique = technique
     }
 }
 
@@ -75,12 +116,19 @@ public protocol QueueExtractionProvider: Sendable {
     /// Persist extracted markdown into the store. Carries `backend` +
     /// `modelVersion` for PROV tracking (`source_markdown_versions` origin,
     /// `agents.name`).
+    ///
+    /// When `technique` is non-nil, this is a transcript extraction (YouTube
+    /// captions, podcast feed) — the provider writes it as a `.transcript`
+    /// origin processed-markdown version with the technique tag. When nil,
+    /// it's a regular bytes-based extraction written via
+    /// `recordMarkdownExtraction`.
     func persistExtraction(
         wikiID: String,
         sourceID: PageID,
         markdown: String,
         backend: ExtractionBackend,
-        modelVersion: String?
+        modelVersion: String?,
+        technique: String?
     ) async throws
 }
 

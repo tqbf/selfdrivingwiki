@@ -87,8 +87,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // job. Routes through `openQueueWindow` (the scene-managed
         // `WindowGroup(for: QueueKind.self)` in `WikiFSApp`). PR2 (#842):
         // the closure takes a `QueueKind` so callers open the correct window
-        // (ingestion, extraction, or transcription) — the Provenance panel
-        // passes `.ingestion`, SourceDetailView passes `.transcription`.
+        // (extraction or ingestion) — the Provenance panel
+        // passes `.ingestion`, SourceDetailView passes `.extraction`.
         openWindowBridge.openActivityWindow = { [weak self] queue in
             NSApplication.shared.activate(ignoringOtherApps: true)
             self?.openWindowBridge.openQueueWindow?(queue)
@@ -223,13 +223,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             keyEquivalent: "e")
         extractionItem.target = self
         menu.addItem(extractionItem)
-
-        let transcriptionItem = NSMenuItem(
-            title: "Transcription Queue…",
-            action: #selector(openTranscriptionWindow(_:)),
-            keyEquivalent: "")
-        transcriptionItem.target = self
-        menu.addItem(transcriptionItem)
 
         menu.addItem(.separator())
 
@@ -368,11 +361,6 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     @objc private func openExtractionWindow(_ sender: NSMenuItem?) {
         NSApplication.shared.activate(ignoringOtherApps: true)
         openWindowBridge.openQueueWindow?(.extraction)
-    }
-
-    @objc private func openTranscriptionWindow(_ sender: NSMenuItem?) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        openWindowBridge.openQueueWindow?(.transcription)
     }
 
     /// The session menu actions target: the frontmost wiki window's session,

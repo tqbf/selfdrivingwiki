@@ -65,9 +65,9 @@ import WikiFSCore
     }
 
     @Test func kindTranscription() {
-        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let item = makeItem(queue: .extraction, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
         let kind = OperationNotifier.operationKind(for: item)
-        #expect(kind == .transcription(sourceCount: 2))
+        #expect(kind == .extraction(sourceCount: 2))
     }
 
     // MARK: - Completed summaries
@@ -119,16 +119,16 @@ import WikiFSCore
     }
 
     @Test func completedTranscription() {
-        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let item = makeItem(queue: .extraction, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
         let s = OperationNotifier.summary(for: item, outcome: .completed)
-        #expect(s?.title == "Transcription Complete")
-        #expect(s?.body == "2 transcripts fetched")
+        #expect(s?.title == "Extraction Complete")
+        #expect(s?.body == "2 files processed")
     }
 
     @Test func completedTranscriptionSingle() {
-        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1")])
+        let item = makeItem(queue: .extraction, sourceIDs: [.init(rawValue: "S1")])
         let s = OperationNotifier.summary(for: item, outcome: .completed)
-        #expect(s?.body == "1 transcript fetched")
+        #expect(s?.body == "1 file processed")
     }
 
     // MARK: - Failed summaries
@@ -162,10 +162,10 @@ import WikiFSCore
     }
 
     @Test func failedTranscription() {
-        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1")])
+        let item = makeItem(queue: .extraction, sourceIDs: [.init(rawValue: "S1")])
         let s = OperationNotifier.summary(for: item, outcome: .failed("No captions"))
-        #expect(s?.title == "Transcription Failed")
-        #expect(s?.body == "1 transcript: No captions")
+        #expect(s?.title == "Extraction Failed")
+        #expect(s?.body == "1 file: No captions")
     }
 
     @Test func failedEmptyErrorFallsBackToUnknown() {
@@ -209,10 +209,10 @@ import WikiFSCore
     }
 
     @Test func cancelledTranscription() {
-        let item = makeItem(queue: .transcription, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
+        let item = makeItem(queue: .extraction, sourceIDs: [.init(rawValue: "S1"), .init(rawValue: "S2")])
         let s = OperationNotifier.summary(for: item, outcome: .cancelled)
-        #expect(s?.title == "Transcription Cancelled")
-        #expect(s?.body == "2 transcripts \u{2014} cancelled")
+        #expect(s?.title == "Extraction Cancelled")
+        #expect(s?.body == "2 files \u{2014} cancelled")
     }
 
     // MARK: - Outcome identifier

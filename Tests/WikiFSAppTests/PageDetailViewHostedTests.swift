@@ -161,7 +161,7 @@ private final class StubExtractor: MarkdownExtractor {
 
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
-    func persistExtraction(wikiID: String, sourceID: PageID, markdown: String, backend: ExtractionBackend, modelVersion: String?) async throws {}
+    func persistExtraction(wikiID: String, sourceID: PageID, markdown: String, backend: ExtractionBackend, modelVersion: String?, technique: String?) async throws {}
 }
 
 private func makeTestQueueEngine() throws -> QueueEngine {

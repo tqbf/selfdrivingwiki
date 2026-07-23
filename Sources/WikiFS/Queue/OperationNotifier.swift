@@ -146,7 +146,6 @@ final class OperationNotifier {
     enum OperationKind: Sendable, Equatable {
         case extraction(sourceCount: Int)
         case ingestion(sourceCount: Int)
-        case transcription(sourceCount: Int)
         /// `pageCount` is `nil` for whole-wiki lint (empty `lintPageIDs` array).
         case lint(pageCount: Int?)
     }
@@ -161,8 +160,6 @@ final class OperationNotifier {
                 return .lint(pageCount: lintPageIDs.isEmpty ? nil : lintPageIDs.count)
             }
             return .ingestion(sourceCount: item.payload.sourceIDs.count)
-        case .transcription:
-            return .transcription(sourceCount: item.payload.sourceIDs.count)
         }
     }
 
@@ -174,7 +171,6 @@ final class OperationNotifier {
         switch kind {
         case .extraction: label = "Extraction"
         case .ingestion:  label = "Ingestion"
-        case .transcription: label = "Transcription"
         case .lint:       label = "Lint"
         }
 
@@ -206,8 +202,6 @@ final class OperationNotifier {
             return "\(count) file\(count == 1 ? "" : "s") processed"
         case .ingestion(let count):
             return "\(count) source\(count == 1 ? "" : "s") ingested"
-        case .transcription(let count):
-            return "\(count) transcript\(count == 1 ? "" : "s") fetched"
         case .lint(let pageCount):
             if let pageCount {
                 return "\(pageCount) page\(pageCount == 1 ? "" : "s") linted"
@@ -226,8 +220,6 @@ final class OperationNotifier {
             subject = "\(count) file\(count == 1 ? "" : "s")"
         case .ingestion(let count):
             subject = "\(count) source\(count == 1 ? "" : "s")"
-        case .transcription(let count):
-            subject = "\(count) transcript\(count == 1 ? "" : "s")"
         case .lint(let pageCount):
             if let pageCount {
                 subject = "\(pageCount) page\(pageCount == 1 ? "" : "s")"
@@ -256,8 +248,6 @@ final class OperationNotifier {
             return "\(count) file\(count == 1 ? "" : "s") \u{2014} cancelled"
         case .ingestion(let count):
             return "\(count) source\(count == 1 ? "" : "s") \u{2014} cancelled"
-        case .transcription(let count):
-            return "\(count) transcript\(count == 1 ? "" : "s") \u{2014} cancelled"
         case .lint(let pageCount):
             if let pageCount {
                 return "\(pageCount) page\(pageCount == 1 ? "" : "s") \u{2014} cancelled"
