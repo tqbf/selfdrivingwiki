@@ -194,7 +194,7 @@ struct WikiFSApp: App {
             chatDaemonCoordinator = ChatDaemonCoordinator(
                 client: workloadClient, eventSink: eventSink)
         } else {
-            DebugLog.store("WikiFSApp: daemon not available — falling back to local QueueEngine")
+            DebugLog.store("wikid: daemon not responding to health check — using local QueueEngine fallback")
             let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
                 ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
             let queueStore: QueueStore

@@ -1,5 +1,48 @@
 # Progress log
 
+## fix: Health-check daemon connection + log XPC failures (#878)
+
+**Goal:** The app falsely logged "connected to wikid daemon" even when the
+daemon wasn't running. `NSXPCConnection` is lazy — `connect()`/`resume()`
+always succeeds regardless of whether anything is listening — so the app
+believed it had a live daemon, then every XPC call failed or hung, with no
+fallback to the local `QueueEngine`.
+
+**What changed:**
+- **`WikiDaemonConnection.connect()`** — now runs a **health check** after
+  `resume()`: a trivial read-only `listWikis` call through a proxy carrying an
+  error handler, bounded by a 5s timeout (bridged async→sync via
+  `DispatchSemaphore`, matching the codebase's existing semaphore pattern in
+  `CLITantivyLegResolver`). If the daemon doesn't reply, `connect()` throws and
+  callers fall back. On failure the half-open connection is invalidated (no
+  leak). `connect()` stays synchronous because all call sites are sync
+  (`WikiFSApp.init`, `wikictl` main); the XPC reply dispatches on an internal
+  queue so there's no self-deadlock.
+- **`invalidationHandler`** — installed on the connection; logs
+  "daemon connection invalidated — XPC calls will fail until restart" when the
+  daemon dies mid-session. `[weak self]` avoids a connection→handler→self
+  retain cycle. An `internal var onInvalidation` test seam lets tests observe
+  the fire.
+- **Test seams** — `internal connect(serviceName:healthCheckTimeout:)` (point at
+  a non-existent mach service to assert failure) and `connect(endpoint:)`
+  (in-process anonymous-listener round-trip, no launchd) + `invalidate()`.
+- **`WikiFSApp.swift`** — fallback log now says "daemon not responding to health
+  check — using local QueueEngine fallback" (the existing `try?` already
+  triggers the local `QueueEngine` path; only the message changed).
+- **`XPCQueueEngineProxy`** — already converted (prior #867): every former
+  silent `try?` is a `do/catch` + `DebugLog.ingest`. No change needed here.
+
+**Tests:** `WikiDaemonConnectionHealthCheckTests` (3 tests) — `connect()`
+throws for a non-existent mach service; `connect()` succeeds + is usable
+against a live in-process daemon; the `invalidationHandler` fires on
+invalidate. Full suite (3831 tests) passes.
+
+**Files touched:**
+- `Sources/WikiCtlCore/WikiDaemonConnection.swift` — health check +
+  invalidation handler + test seams.
+- `Sources/WikiFS/Window/WikiFSApp.swift` — fallback log message.
+- `Tests/WikiFSAppTests/WikiDaemonConnectionHealthCheckTests.swift` — new.
+
 ## fix: Switch wikid daemon from SMAppService + entitlements to plain LaunchAgent
 
 **Goal:** AMFI killed the wikid daemon at launch because the bare Mach-O had
