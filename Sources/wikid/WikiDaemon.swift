@@ -272,9 +272,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// `WikiDaemonExporter.registerEventSink`.
     #if os(macOS)
     func registerEventSink(_ sink: WikiDaemonEventSink) {
-        queue.sync {
+        let total = queue.sync { () -> Int in
             eventSinks.append(sink)
+            return eventSinks.count
         }
+        DebugLog.store("wikid: event sink registered, total=\(total)")
     }
 
     /// All currently-registered event-sink proxies. Used by future phases to
@@ -575,9 +577,19 @@ final class WikiDaemon: @unchecked Sendable {
     /// the sole path by which engine events reach the app over XPC.
     func pushQueueEvent(_ event: QueueEvent) {
         #if canImport(WikiFSEngine)
-        guard let envelope = QueueEventEnvelope(from: event) else { return }
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        guard let envelope = QueueEventEnvelope(from: event) else {
+            DebugLog.store("wikid: pushQueueEvent — failed to create envelope")
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            DebugLog.store("wikid: pushQueueEvent — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
+            return
+        }
         let sinks = queue.sync { eventSinks }
+        DebugLog.store("wikid: pushQueueEvent kind=\(envelope.kind.rawValue) sinks=\(sinks.count)")
         for sink in sinks {
             sink.deliverEvent(data)
         }
@@ -588,8 +600,15 @@ final class WikiDaemon: @unchecked Sendable {
     /// on all registered event sinks. The sole path by which chat events
     /// reach the app over XPC.
     func pushChatEnvelope(_ envelope: QueueEventEnvelope) {
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            DebugLog.store("wikid: pushChatEnvelope — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
+            return
+        }
         let sinks = queue.sync { eventSinks }
+        DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") sinks=\(sinks.count)")
         for sink in sinks {
             sink.deliverEvent(data)
         }

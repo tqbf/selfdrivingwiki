@@ -97,6 +97,95 @@ struct WikiDaemonEventSinkTests {
         #expect(daemon.registeredEventSinks.count == 2)
     }
 
+    // MARK: - Event delivery (#871): events must reach registered sinks
+
+    /// Regression for #871: `pushQueueEvent` must deliver every lifecycle
+    /// event to a registered sink, encoded as a decodable envelope. The bug
+    /// was that failures in envelope construction / JSON encoding were
+    /// swallowed by silent `guard`/`try?` with no logging, so the app spun
+    /// forever with no diagnostic.
+    @Test func pushQueueEventDeliversLifecycleEventsToRegisteredSink() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let sink = TestEventSink()
+        daemon.registerEventSink(sink)
+
+        let item = makeItem()
+        let events: [QueueEvent] = [
+            .enqueued(item),
+            .started(item),
+            .completed(item),
+            .failed(item, error: "boom"),
+            .cancelled(item),
+        ]
+        for event in events {
+            daemon.pushQueueEvent(event)
+        }
+
+        #expect(sink.receivedPayloads.count == events.count)
+
+        let decodedKinds = try sink.receivedPayloads.map {
+            try JSONDecoder().decode(QueueEventEnvelope.self, from: $0).kind
+        }
+        #expect(decodedKinds == [.enqueued, .started, .completed, .failed, .cancelled])
+
+        // Each envelope must round-trip back to a QueueEvent carrying the
+        // original item (decode succeeds, item id survives).
+        for payload in sink.receivedPayloads {
+            let envelope = try JSONDecoder().decode(QueueEventEnvelope.self, from: payload)
+            let reconstructed = try #require(envelope.toQueueEvent())
+            #expect(reconstructed.item?.id == item.id)
+        }
+    }
+
+    /// Regression for #871: with no sinks registered, `pushQueueEvent` must
+    /// not crash (it logs the empty-sink count and returns). This is the
+    /// silent-drop condition where the app's sink never reached the daemon.
+    @Test func pushQueueEventIsSafeWithNoRegisteredSinks() {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+
+        // No sinks registered — must not crash, must not deliver.
+        daemon.pushQueueEvent(.enqueued(makeItem()))
+    }
+
+    /// Regression for #871: an event must be fanned out to EVERY registered
+    /// sink (multiple app connections / windows).
+    @Test func pushQueueEventFansOutToAllSinks() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let sink1 = TestEventSink()
+        let sink2 = TestEventSink()
+        daemon.registerEventSink(sink1)
+        daemon.registerEventSink(sink2)
+
+        daemon.pushQueueEvent(.started(makeItem()))
+
+        #expect(sink1.receivedPayloads.count == 1)
+        #expect(sink2.receivedPayloads.count == 1)
+        let env1 = try JSONDecoder().decode(QueueEventEnvelope.self, from: sink1.receivedPayloads[0])
+        let env2 = try JSONDecoder().decode(QueueEventEnvelope.self, from: sink2.receivedPayloads[0])
+        #expect(env1.kind == .started)
+        #expect(env2.kind == .started)
+    }
+
+    /// Regression for #871: `pushChatEnvelope` must deliver chat envelopes to
+    /// registered sinks (the chat event stream — same silent-drop surface).
+    @Test func pushChatEnvelopeDeliversToRegisteredSink() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let sink = TestEventSink()
+        daemon.registerEventSink(sink)
+
+        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: "chat-1")
+        daemon.pushChatEnvelope(envelope)
+
+        #expect(sink.receivedPayloads.count == 1)
+        let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: sink.receivedPayloads[0])
+        #expect(decoded.kind == .chatEvent)
+        #expect(decoded.chatID == "chat-1")
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() -> URL {
@@ -104,6 +193,13 @@ struct WikiDaemonEventSinkTests {
             .appendingPathComponent("wikid-sink-tests-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    private func makeItem() -> QueueItem {
+        QueueItem(
+            id: "01ABCDEF", queue: .extraction, wikiID: "wiki1",
+            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
     }
 }
 
