@@ -97,6 +97,41 @@ struct WikiDaemonEventSinkTests {
         #expect(daemon.registeredEventSinks.count == 2)
     }
 
+    // MARK: - pushChatEnvelope logging paths (#872)
+
+    /// With no sinks registered, `pushChatEnvelope` hits the unconditional
+    /// "no sinks registered (drop)" `DebugLog.store` path and must not crash.
+    /// This is the #871 diagnostic — events produced with nowhere to go — and
+    /// it stays unconditional precisely so it surfaces in Console.app.
+    @Test func pushChatEnvelopeWithNoSinksDoesNotCrash() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: "chat-1")
+
+        daemon.pushChatEnvelope(envelope)
+        // No crash / no throw => the empty-sinks drop path executed cleanly.
+    }
+
+    /// With a sink registered, `pushChatEnvelope` takes the success path
+    /// (verbose-only log) and actually delivers the JSON payload. Verifying
+    /// delivery confirms we didn't accidentally regress the forward path while
+    /// re-routing its log line.
+    @Test func pushChatEnvelopeDeliversToRegisteredSink() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let sink = TestEventSink()
+        daemon.registerEventSink(sink)
+
+        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: "chat-2")
+        daemon.pushChatEnvelope(envelope)
+
+        #expect(sink.receivedPayloads.count == 1)
+        let decoded = try JSONDecoder().decode(
+            QueueEventEnvelope.self, from: sink.receivedPayloads[0])
+        #expect(decoded.kind == .chatEvent)
+        #expect(decoded.chatID == "chat-2")
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() -> URL {
