@@ -15,7 +15,6 @@ struct ContentView: View {
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade
     @Bindable var agentLauncher: AgentLauncher
-    let chatLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
@@ -141,7 +140,6 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store, registry: registry, session: session, fileProvider: fileProvider,
                         launcher: agentLauncher,
-                        chatLauncher: chatLauncher,
                         ingestingSourceIDs: tracker.ingestingSourceIDs,
                         showingAddFromZotero: $showingAddFromZotero,
                         showingImportMarkdown: $showingImportMarkdown,
@@ -289,7 +287,6 @@ struct ContentView: View {
         WikiDetailView(
             store: store,
             launcher: agentLauncher,
-            chatLauncher: chatLauncher,
             session: session,
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,

@@ -280,5 +280,90 @@ struct RemoteChatSessionTests {
         #expect(!decoded.isChatEnvelope)
         #expect(decoded.toQueueEvent() != nil)
     }
+
+    // MARK: - Phase C4: source-of-truth activeChatID tracking
+
+    @Test @MainActor func activeChatIDSetToChatIDWhenHydratedRunning() {
+        // Hydrating with isRunning=true marks this mirror as the live session
+        // (activeChatID == chatID) so ChatDetailView's source-of-truth rule
+        // renders the streaming path.
+        let session = RemoteChatSession(chatID: "chat-live")
+        let state = ChatSessionState(
+            chatID: "chat-live", events: [],
+            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        session.hydrate(from: state)
+        #expect(session.activeChatID == "chat-live")
+        #expect(session.isInteractiveSession == true)
+    }
+
+    @Test @MainActor func activeChatIDNilWhenHydratedIdle() {
+        // An idle persisted chat is NOT live — activeChatID clears so the view
+        // renders the persisted rows instead of an empty live stream.
+        let session = RemoteChatSession(chatID: "chat-idle")
+        let state = ChatSessionState(
+            chatID: "chat-idle", events: [.userText("old")],
+            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        session.hydrate(from: state)
+        #expect(session.activeChatID == nil)
+        #expect(session.isInteractiveSession == false)
+    }
+
+    @Test @MainActor func chatStateEnvelopeFlipsActiveChatIDWithRunFlag() {
+        // A chatState envelope with isGenerating=true flips the mirror live;
+        // a later one with both flags false flips it back to persisted.
+        let session = RemoteChatSession(chatID: "chat-flip")
+        session.ingest(.chatState(chatID: "chat-flip", update: ChatStateUpdate(
+            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(session.activeChatID == "chat-flip")
+
+        session.ingest(.chatState(chatID: "chat-flip", update: ChatStateUpdate(
+            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(session.activeChatID == nil)
+    }
+
+    // MARK: - Phase C4: mid-session thinking + reset
+
+    @Test @MainActor func setThinkingEffortOptimisticallyFlipsCurrentValue() {
+        let session = RemoteChatSession(chatID: "chat-think")
+        session.thinkingOption = ThinkingEffortOption(
+            configId: "thought_level", currentValue: "low",
+            choices: [
+                ThinkingEffortOption.Choice(value: "low", label: "Low"),
+                ThinkingEffortOption.Choice(value: "high", label: "High"),
+            ])
+        session.setThinkingEffort("high")
+        #expect(session.thinkingOption?.currentValue == "high")
+    }
+
+    @Test @MainActor func setThinkingEffortNoOpWhenNoOptionAdvertised() {
+        let session = RemoteChatSession(chatID: "chat-think")
+        // thinkingOption is nil by default (agent advertises no thought_level).
+        session.setThinkingEffort("high")
+        #expect(session.thinkingOption == nil)
+    }
+
+    @Test @MainActor func startNewChatClearsStateAndActiveChatID() {
+        let session = RemoteChatSession(chatID: "chat-reset")
+        session.ingest(.chatEvent(chatID: "chat-reset", event: .assistantText("hi")))
+        session.ingest(.chatState(chatID: "chat-reset", update: ChatStateUpdate(
+            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(session.activeChatID == "chat-reset")
+        #expect(session.events.count == 1)
+
+        session.startNewChat()
+        #expect(session.events.isEmpty)
+        #expect(session.activeChatID == nil)
+        #expect(session.isRunning == false)
+    }
 }
 #endif

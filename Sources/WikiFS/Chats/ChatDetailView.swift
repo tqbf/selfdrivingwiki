@@ -9,7 +9,7 @@ import WikiFSCore
 /// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
 /// transcript depends on the **source-of-truth rule**: if this chat is the
 /// launcher's active live session (`activeChatID == chatID`), render
-/// `launcher.events` (in-memory, streaming). Otherwise render the persisted
+/// `remoteSession.events` (in-memory, streaming). Otherwise render the persisted
 /// `store.chatMessages(chatID:)`.
 ///
 /// The `.newChat` draft state also routes here (with `chatID == nil`),
@@ -18,12 +18,20 @@ import WikiFSCore
 /// Chats are always write-capable (the read-only Ask mode was removed).
 struct ChatDetailView: View {
     /// The persisted chat id, or `nil` for the draft state (.newChat). When
-    /// non-nil AND equal to `launcher.activeChatID`, the view renders live.
+    /// non-nil AND equal to `remoteSession.activeChatID`, the view renders live.
     let chatID: PageID?
 
     @Bindable var store: WikiStoreModel
-    @Bindable var launcher: AgentLauncher
-    /// The per-active-wiki session (store + launchers + descriptor).
+    /// The daemon-mirrored chat session (replaces the in-process chat
+    /// `AgentLauncher` after Phase C4). Run state is sourced from the daemon's
+    /// live launcher via chat envelopes (`DaemonQueueEventSink`) + rehydration
+    /// (`ChatDaemonCoordinator.rehydrate`); commands route through
+    /// `coordinator` → `DaemonWorkloadClient` → XPC.
+    var remoteSession: RemoteChatSession
+    /// The app-wide chat daemon coordinator — owns the per-chat
+    /// `RemoteChatSession` registry + wraps the 6 chat XPC commands.
+    var coordinator: ChatDaemonCoordinator
+    /// The per-active-wiki session (store + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
 
@@ -66,15 +74,15 @@ struct ChatDetailView: View {
     @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     /// True when this surface is rendering the active live session (D2
-    /// source-of-truth rule). The view sources from `launcher.events`; when
+    /// source-of-truth rule). The view sources from `remoteSession.events`; when
     /// false, it sources from the persisted `store.chatMessages(chatID:)`.
     private var isLiveChat: Bool {
         guard let chatID else { return false }
-        return launcher.activeChatID == chatID.rawValue
+        return remoteSession.activeChatID == chatID.rawValue
     }
 
     /// Pure source-of-truth selector (D2): the live session streams from
-    /// `launcher.events`; everything else renders the persisted rows. Both are
+    /// `remoteSession.events`; everything else renders the persisted rows. Both are
     /// `transcriptVisible`-filtered. Extracted as a static func so the selection
     /// logic is unit-testable without a SwiftUI view tree.
     ///
@@ -88,18 +96,18 @@ struct ChatDetailView: View {
         (isLiveChat ? launcherEvents : persistedEvents).transcriptVisible
     }
 
-    /// The transcript-visible events this surface renders — `launcher.events`
+    /// The transcript-visible events this surface renders — `remoteSession.events`
     /// when live, the persisted rows otherwise. Fed to the single
     /// `ChatTranscriptView` (replacing the old live/persisted dual render sites).
     private var displayMessages: [AgentEvent] {
         Self.displayMessages(
             isLiveChat: isLiveChat,
-            launcherEvents: launcher.events,
+            launcherEvents: remoteSession.events,
             persistedEvents: persistedMessages.map(\.event))
     }
 
     /// Wall-clock timestamps parallel to `displayMessages`. Live path:
-    /// `launcher.eventTimestamps` (same indices as `launcher.events`); persisted
+    /// `remoteSession.eventTimestamps` (same indices as `remoteSession.events`); persisted
     /// path: `persistedMessages.map(\.createdAt)`. Filtered through
     /// `transcriptVisibleIndices` to stay parallel after tool-call/etc.
     /// filtering. `nil` entries (misaligned arrays from test setups or partial
@@ -107,10 +115,10 @@ struct ChatDetailView: View {
     private var displayTimestamps: [Date?] {
         let indices: [Int]
         if isLiveChat {
-            let events = launcher.events
+            let events = remoteSession.events
             indices = events.transcriptVisibleIndices
             return indices.map { idx in
-                idx < launcher.eventTimestamps.count ? launcher.eventTimestamps[idx] : nil
+                idx < remoteSession.eventTimestamps.count ? remoteSession.eventTimestamps[idx] : nil
             }
         } else {
             let events = persistedMessages.map(\.event)
@@ -135,7 +143,7 @@ struct ChatDetailView: View {
     /// chat never shows the "Waiting for the Agent…" placeholder even while its
     /// launcher is generating a different chat.
     private var transcriptIsRunning: Bool {
-        isLiveChat && launcher.isRunning
+        isLiveChat && remoteSession.isRunning
     }
 
     var body: some View {
@@ -156,7 +164,7 @@ struct ChatDetailView: View {
         .onChange(of: chatZoom) { _, _ in
             composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
-        .onChange(of: launcher.isRunning) { _, isRunning in
+        .onChange(of: remoteSession.isRunning) { _, isRunning in
             // Belt-and-suspenders: clear the internals toggle when a run ends so a
             // later ingest/lint run doesn't inherit it and strand the view on
             // `AgentQueueView`. (AC.1)
@@ -181,13 +189,13 @@ struct ChatDetailView: View {
         // first queued message there, one per turn. Only fires what was explicitly
         // queued via the Queue button / Return-during-generation — a half-typed draft
         // stays in the composer untouched (it isn't part of `queuedMessages`).
-        .onChange(of: launcher.isGenerating) { _, isGenerating in
+        .onChange(of: remoteSession.isGenerating) { _, isGenerating in
             guard !isGenerating else { return }
             // Skip the initial "not generating" state and any transition that isn't
             // a turn boundary: only fire while the session is still alive. (When the
             // process dies, `isRunning` goes false too and the observer above handles
             // delivery — this guard avoids a redundant dispatch on that path.)
-            guard launcher.isRunning, !queuedMessages.isEmpty else { return }
+            guard remoteSession.isRunning, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
         .task(id: chatID) {
@@ -197,6 +205,12 @@ struct ChatDetailView: View {
             // the committed transcript.
             if let chatID {
                 persistedMessages = store.chatMessages(chatID: chatID)
+                // Phase C4: hydrate the RemoteChatSession from the daemon's live
+                // state on appear / chat change so the mirror reflects the
+                // daemon's held-alive launcher (or the persisted rows once the
+                // launcher was evicted). Best-effort — a rehydrate failure
+                // leaves the session on its last-known state.
+                await coordinator.rehydrate(chatID: chatID.rawValue)
             } else {
                 persistedMessages = []
                 // Omnibox "Ask" action (#288): if a pending question was set
@@ -212,7 +226,7 @@ struct ChatDetailView: View {
         // store so the view flips source WITHOUT a visible change (the final
         // flush has already committed by the time activeChatID clears — see the
         // flip-timing gate in AgentLauncher.finish).
-        .onChange(of: launcher.activeChatID) { _, _ in
+        .onChange(of: remoteSession.activeChatID) { _, _ in
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
@@ -258,17 +272,17 @@ struct ChatDetailView: View {
         // A persisted non-live chat is read-only — no controls.
         HStack(spacing: 8) {
             if showsDebugControls {
-                if launcher.isGenerating {
+                if remoteSession.isGenerating {
                     ProgressView()
                         .controlSize(.small)
                 }
                 Menu {
                     Toggle("Show internals", isOn: $showsInternals)
                     Toggle("Hide tool calls", isOn: $hideToolCalls)
-                    if let status = launcher.exitStatus {
+                    if let status = remoteSession.exitStatus {
                         Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
                     }
-                    if let debugURL = launcher.debugFolderURL {
+                    if let debugURL = remoteSession.debugFolderURL {
                         Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
                             NSWorkspace.shared.activateFileViewerSelecting([debugURL])
                         }
@@ -285,8 +299,8 @@ struct ChatDetailView: View {
     }
 
     private var showsDebugControls: Bool {
-        (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
-            && launcher.runningKind == .query
+        (remoteSession.isGenerating || remoteSession.isAwaitingGenerationSlot)
+            && remoteSession.runningKind == .query
     }
 
     /// The pending permission to surface as an inline Approve/Reject affordance,
@@ -294,7 +308,7 @@ struct ChatDetailView: View {
     /// (a persisted chat can't resolve a request); the first pending request is
     /// shown — ACP agents gate one write at a time, so there is at most one.
     private var livePendingPermission: PendingPermission? {
-        guard isLiveChat, let first = launcher.pendingPermissions.first else { return nil }
+        guard isLiveChat, let first = remoteSession.pendingPermissions.first else { return nil }
         return first
     }
 
@@ -308,7 +322,7 @@ struct ChatDetailView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                if let startedAt = launcher.runStartedAt {
+                if let startedAt = remoteSession.runStartedAt {
                     Text("Thinking… \(durationString(context.date.timeIntervalSince(startedAt)))")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -343,8 +357,8 @@ struct ChatDetailView: View {
 
     @ViewBuilder
     private var content: some View {
-        if showsInternals && launcher.isRunning && launcher.runningKind == .query {
-            AgentQueueView(launcher: launcher, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
+        if showsInternals && remoteSession.isRunning && remoteSession.runningKind == .query {
+            AgentQueueView(remoteSession: remoteSession, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(ChatMetrics.contentInset)
         } else if chatID != nil && !isLiveChat && chatSummary == nil {
@@ -356,7 +370,7 @@ struct ChatDetailView: View {
             }
         } else {
             // Live, persisted, or draft (.newChat) chat: one transcript + one
-            // composer (the D2 source-of-truth rule selects launcher.events vs
+            // composer (the D2 source-of-truth rule selects remoteSession.events vs
             // persisted rows). The draft state shows the empty-transcript
             // placeholder + composer at the bottom (no centered "Ask X" page).
             chatSurface
@@ -400,7 +414,7 @@ struct ChatDetailView: View {
             withChatOutline {
                 VStack(spacing: 0) {
                     // Pre-spawn failure banner (#613): surfaces a previously
-                    // captured `launcher.preflightError` so a rolled-back chat
+                    // captured `remoteSession.preflightError` so a rolled-back chat
                     // doesn't silently revert to the empty draft composer. The
                     // rollback (deleting the dead chat row) still happens — this
                     // only explains WHY the draft is visible. Mirrors the amber
@@ -429,14 +443,26 @@ struct ChatDetailView: View {
                         .padding(.top, preflightBannerMessage == nil
                             ? (chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
                             : 0)
-                    if transcriptIsRunning && launcher.isGenerating {
+                    if transcriptIsRunning && remoteSession.isGenerating {
                         thinkingIndicator
                             .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                             .padding(.bottom, ChatMetrics.sectionSpacing / 2)
                     }
-                    if let pending = livePendingPermission {
+                    if let pending = livePendingPermission, let chatID {
                         PermissionApprovalView(permission: pending) { optionId in
-                            Task { await launcher.resolvePendingPermission(optionId: optionId) }
+                            // The chosen optionId encodes approve/reject: an
+                            // `allow_*` option is an approve; anything else is
+                            // a reject. The daemon currently resolves on
+                            // optionId alone but we pass the correct intent.
+                            let approve = pending.options
+                                .first { $0.optionId == optionId }?
+                                .kind.hasPrefix("allow") ?? false
+                            Task {
+                                await coordinator.resolvePermission(
+                                    chatID: chatID.rawValue,
+                                    optionId: optionId,
+                                    approve: approve)
+                            }
                         }
                         .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.bottom, ChatMetrics.sectionSpacing / 2)
@@ -564,8 +590,8 @@ struct ChatDetailView: View {
             }
             // Inside ContentView the session is always non-nil (a wiki is
             // open), so the provider/model chips are always shown.
-            ProviderSelector(launcher: launcher)
-            ThinkingEffortSelector(launcher: launcher)
+            ProviderSelector(remoteSession: remoteSession)
+            ThinkingEffortSelector(remoteSession: remoteSession)
             PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
             if showsStopButton {
@@ -671,7 +697,7 @@ struct ChatDetailView: View {
     /// The `.transcriptVisible` subset of `persistedMessages`, aligned with
     /// `displayMessages` for the persisted path (chat-summary plan §6.3). Used
     /// to read cached per-message summaries. Empty on the live path (no row
-    /// exists yet — the view sources from `launcher.events`).
+    /// exists yet — the view sources from `remoteSession.events`).
     private var visiblePersistedMessages: [ChatMessage] {
         guard !isLiveChat else { return [] }
         let indices = persistedMessages.map(\.event).transcriptVisibleIndices
@@ -792,7 +818,7 @@ struct ChatDetailView: View {
 
     /// The "Reveal Debug Folder" button. ALWAYS rendered when there is a
     /// `chatID` — previously the button was gated on
-    /// `launcher.debugFolderURL(forChat:) ?? launcher.debugFolderURL`,
+    /// `remoteSession.debugFolderURL(forChat:) ?? remoteSession.debugFolderURL`,
     /// which read from an in-memory map populated only at spawn commit. A
     /// persisted chat reopened from history (that ran in a previous app
     /// session) had no entry, so the button never appeared — the operator
@@ -817,8 +843,8 @@ struct ChatDetailView: View {
         if let chatID {
             revealDebugFolderButton(
                 chatID: chatID,
-                debugURL: launcher.debugFolderURL(forChat: chatID.rawValue)
-                    ?? (isLiveChat ? launcher.debugFolderURL : nil))
+                debugURL: remoteSession.debugFolderURL(forChat: chatID.rawValue)
+                    ?? (isLiveChat ? remoteSession.debugFolderURL : nil))
         }
     }
 
@@ -859,7 +885,7 @@ struct ChatDetailView: View {
     // MARK: - Preflight-error banner (issue #613)
 
     /// Pure predicate for whether the chat surface should render a preflight-error
-    /// banner. Returns true when `launcher.preflightError` is non-empty AND the
+    /// banner. Returns true when `remoteSession.preflightError` is non-empty AND the
     /// surface is NOT the active live session — i.e. the chat reverted to the
     /// draft composer after `AgentOperationRunner.startChat` rolled back a dead
     /// chat row. A live chat never shows a preflight banner because a live
@@ -901,7 +927,7 @@ struct ChatDetailView: View {
     /// The instance-level read of the banner message used by `chatSurface`.
     private var preflightBannerMessage: String? {
         Self.preflightBannerMessage(
-            preflightError: launcher.preflightError,
+            preflightError: remoteSession.preflightError,
             chatID: chatID,
             isLiveChat: isLiveChat)
     }
@@ -1102,15 +1128,19 @@ struct ChatDetailView: View {
     /// True while the agent is actively generating or queued for the generation
     /// slot — the stop button replaces the send button in the composer toolbar.
     private var showsStopButton: Bool {
-        (launcher.isGenerating || launcher.isAwaitingGenerationSlot)
-            && launcher.runningKind == .query
+        (remoteSession.isGenerating || remoteSession.isAwaitingGenerationSlot)
+            && remoteSession.runningKind == .query
     }
 
     /// The stop button shown in the composer toolbar while the agent is
     /// responding. Sits in the same position as the send button (trailing edge
     /// of the composer's bottom toolbar row).
     private var stopButton: some View {
-        Button(action: { launcher.stopAgent() }) {
+        Button(action: {
+            if let chatID {
+                Task { await coordinator.stop(chatID: chatID.rawValue) }
+            }
+        }) {
             Image(systemName: "stop.circle.fill")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
@@ -1126,8 +1156,8 @@ struct ChatDetailView: View {
     /// merely awaiting a generation slot — that's another session's turn) and
     /// only when nothing is already queued.
     private var showsQueueButton: Bool {
-        launcher.isGenerating
-            && launcher.runningKind == .query
+        remoteSession.isGenerating
+            && remoteSession.runningKind == .query
             && queuedMessages.isEmpty
     }
 
@@ -1221,7 +1251,7 @@ struct ChatDetailView: View {
         // being a silent no-op — the user types + hits Enter, the message is
         // queued for delivery when the turn completes. The guard below still
         // protects the non-generating send path (issue #380).
-        if launcher.isGenerating {
+        if remoteSession.isGenerating {
             queueMessage()
             return
         }
@@ -1242,13 +1272,13 @@ struct ChatDetailView: View {
 
     /// #740: stash the composer's current draft as the queued message — fires
     /// automatically when the active turn completes (see the
-    /// `launcher.isRunning` observer). Clears the draft + attachments exactly
+    /// `remoteSession.isRunning` observer). Clears the draft + attachments exactly
     /// like `sendMessage` would at send time, so the composer is free for the
     /// user to draft a *different* follow-up while the queued one waits. Only
     /// valid during THIS chat's generation (see `showsQueueButton`); the
     /// `guard` here defends against an out-of-band invocation.
     private func queueMessage() {
-        guard launcher.isGenerating else { return }
+        guard remoteSession.isGenerating else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         // Append to the playlist — the first item fires when the current turn
@@ -1310,35 +1340,49 @@ struct ChatDetailView: View {
     /// and `firePendingQueuedMessage` (#740 auto-fire), so the queued deliver
     /// path is identical to a manual send — only the *timing* differs.
     private func submitMessage(_ wireMessage: String) {
-        if launcher.isInteractiveSession {
-            // Live chat mid-session: append a turn to the existing session.
-            launcher.sendInteractiveMessage(wireMessage)
+        if remoteSession.isInteractiveSession {
+            // Live chat mid-session: append a turn to the existing daemon
+            // session via the sendChatMessage XPC.
+            if let chatID {
+                Task {
+                    do {
+                        try await coordinator.sendMessage(
+                            chatID: chatID.rawValue, message: wireMessage)
+                    } catch {
+                        DebugLog.agent("ChatDetailView.sendMessage failed: \(error)")
+                    }
+                }
+            }
         } else if let chatID {
-            // D3: a persisted (non-live) chat — start a fresh session that
-            // continues this chat (seeded-fallback), streaming into the
-            // SAME chat row. activeChatID = chat.id flips this view to live.
+            // D3: a persisted (non-live) chat — continue it on the daemon.
+            // The daemon reads history + acpSessionId, builds the adaptive
+            // preamble (or resumes), and streams into the SAME chat row.
             Task {
-                await AgentOperationRunner.continueChat(
-                    chatID: chatID,
-                    message: wireMessage,
-                    store: store,
-                    launcher: launcher,
-                    wikiID: session.wikiID,
-                    changeSignaler: fileProvider,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory
-                )
+                do {
+                    try await coordinator.continueChat(
+                        wikiID: session.wikiID,
+                        chatID: chatID.rawValue,
+                        message: wireMessage)
+                } catch {
+                    DebugLog.agent("ChatDetailView.continueChat failed: \(error)")
+                    remoteSession.preflightError = error.localizedDescription
+                }
             }
         } else {
-            // Draft state (.newChat): start a NEW chat.
+            // Draft state (.newChat): start a NEW chat on the daemon. The
+            // daemon creates the chat row + seeds the first message, then
+            // returns the chat ULID; we retarget the active tab to it (mirrors
+            // the old AgentOperationRunner.startChat → retargetActiveTabToChat
+            // path, but the row now lives in the daemon-owned store).
             Task {
-                await AgentOperationRunner.startChat(
-                    firstMessage: wireMessage,
-                    launcher: launcher,
-                    store: store,
-                    wikiID: session.wikiID,
-                    changeSignaler: fileProvider,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory
-                )
+                do {
+                    let newChatID = try await coordinator.startChat(
+                        wikiID: session.wikiID, firstMessage: wireMessage)
+                    store.retargetActiveTabToChat(chatID: PageID(rawValue: newChatID))
+                } catch {
+                    DebugLog.agent("ChatDetailView.startChat failed: \(error)")
+                    remoteSession.preflightError = error.localizedDescription
+                }
             }
         }
     }
@@ -1353,7 +1397,10 @@ struct ChatDetailView: View {
         if let chatID {
             store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
         }
-        launcher.startNewChat()
+        // Reset the app-side draft mirror (the daemon's old session is
+        // unaffected). The next send from the draft composer starts a fresh
+        // chat on the daemon.
+        coordinator.resetDraft()
         // D2 retarget-back: morph the active tab from .chat(id) back to the draft
         // state so the user sees a fresh composer.
         if let activeID = store.activeTabID {
@@ -1374,15 +1421,15 @@ struct ChatDetailView: View {
         guard chatID != nil else {
             // #740: allow drafting the first question even while some (unlikely)
             // non-interactive generation is in flight.
-            return launcher.isInteractiveSession || !launcher.isRunning
-                || launcher.isGenerating
+            return remoteSession.isInteractiveSession || !remoteSession.isRunning
+                || remoteSession.isGenerating
         }
         // The active live chat: #740 — editable during THIS chat's generation so
         // the user can draft the next message; the Send button queues instead of
         // firing immediately while `isGenerating` (see `composerToolbar`).
         if isLiveChat {
-            return launcher.isInteractiveSession || !launcher.isRunning
-                || launcher.isGenerating
+            return remoteSession.isInteractiveSession || !remoteSession.isRunning
+                || remoteSession.isGenerating
         }
         // D3: a persisted (non-live) chat is continuable when its kind's launcher
         // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
@@ -1390,8 +1437,8 @@ struct ChatDetailView: View {
         // disabled — `continueChat`'s takeover guard would refuse anyway.
         // (A session is only alive when a wiki is open, so the activeWikiID
         // check the old code had is always true here.)
-        return !launcher.isGenerating
-            && !launcher.isAwaitingGenerationSlot
+        return !remoteSession.isGenerating
+            && !remoteSession.isAwaitingGenerationSlot
     }
 
     /// Visible caption shown under the composer when the session is waiting or
@@ -1400,10 +1447,10 @@ struct ChatDetailView: View {
     /// when the composer is enabled and nothing is queued (issue #235).
     private var composerCaption: String? {
         Self.composerCaptionText(
-            isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot,
+            isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
             hasChatID: chatID != nil,
             isLiveChat: isLiveChat,
-            isGenerating: launcher.isGenerating)
+            isGenerating: remoteSession.isGenerating)
     }
 
     private var canType: Bool {
@@ -1414,16 +1461,16 @@ struct ChatDetailView: View {
         // compose the next message while the agent responds. Sending during
         // generation is still gated by `canSendPredicate` (via `!isGenerating`),
         // so this only enables drafting — the Send button routes to Queue.
-        launcher.isInteractiveSession || !launcher.isRunning
-            || launcher.isGenerating
+        remoteSession.isInteractiveSession || !remoteSession.isRunning
+            || remoteSession.isGenerating
     }
 
     private var canSend: Bool {
         Self.canSendPredicate(
             hasMount: fileProvider.path != nil,
             canType: canType,
-            isGenerating: launcher.isGenerating,
-            isAwaitingSlot: launcher.isAwaitingGenerationSlot,
+            isGenerating: remoteSession.isGenerating,
+            isAwaitingSlot: remoteSession.isAwaitingGenerationSlot,
             hasDraftText: !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
@@ -1447,18 +1494,18 @@ struct ChatDetailView: View {
     }
 
     private var sendButtonTitle: String {
-        if launcher.isAwaitingGenerationSlot {
+        if remoteSession.isAwaitingGenerationSlot {
             return "Waiting for the other session to finish before sending…"
         }
         // #740: the send button (Queue) is now actionable during generation —
         // it queues the draft for delivery when the turn completes. The tooltip
         // reflects that rather than telling the user to wait.
-        if launcher.isGenerating {
+        if remoteSession.isGenerating {
             return queuedMessages.isEmpty
                 ? "Queue for when the response finishes"
                 : "Queued — will send when the response finishes"
         }
-        return launcher.isInteractiveSession ? "Send" : "Start Query"
+        return remoteSession.isInteractiveSession ? "Send" : "Start Query"
     }
 }
 

@@ -77,7 +77,7 @@ struct WikiSessionTests {
 
         // Two sessions have distinct AgentLauncher instances.
         #expect(sessionA.agentLauncher !== sessionB.agentLauncher)
-        #expect(sessionA.chatLauncher !== sessionB.chatLauncher)
+        // (Chat is daemon-hosted after Phase C4 — no per-session chat launcher.)
         // Two sessions have distinct GenerationGate instances.
         #expect(sessionA.generationGate !== sessionB.generationGate)
     }

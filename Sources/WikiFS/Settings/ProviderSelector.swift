@@ -32,7 +32,10 @@ import WikiFSEngine
 /// **Default = agent default by default:** a provider with no model selected
 /// uses the agent's advertised default. Existing users see zero behavior change.
 struct ProviderSelector: View {
-    @Bindable var launcher: AgentLauncher
+    /// The daemon-mirrored chat session — backs provider-config reads/writes
+    /// (the same shared config file the daemon reads at spawn). Replaces the
+    /// chat `AgentLauncher` after Phase C4.
+    var remoteSession: RemoteChatSession
 
     /// The selector's view of the config. Refreshed from the persisted file on
     /// appear + after each selection, so a change made in Settings is visible
@@ -53,11 +56,11 @@ struct ProviderSelector: View {
 
     @Environment(\.openSettings) private var openSettings
 
-    init(launcher: AgentLauncher) {
-        self.launcher = launcher
-        // Seed off-main via the launcher's accessor so the composer never
+    init(remoteSession: RemoteChatSession) {
+        self.remoteSession = remoteSession
+        // Seed off-main via the session's accessor so the composer never
         // blocks on file I/O at first paint.
-        _config = State(initialValue: launcher.providersConfig())
+        _config = State(initialValue: remoteSession.providersConfig())
     }
 
     /// The providers the selector surfaces (enabled only). The launcher's
@@ -98,7 +101,7 @@ struct ProviderSelector: View {
         .onAppear { refresh() }
         // Keep in sync if a session flips (the composer is rebuilt when a chat
         // becomes live). Cheap: it's a single file read.
-        .onChange(of: launcher.activeChatID) { _, _ in refresh() }
+        .onChange(of: remoteSession.activeChatID) { _, _ in refresh() }
     }
 
     // MARK: - Popover content (search + gear + flat list)
@@ -224,7 +227,7 @@ struct ProviderSelector: View {
     /// NOT change the selection or close the popover.
     private func toggleFavorite(_ row: SelectorRow) {
         guard let modelId = row.modelId else { return }
-        config = launcher.toggleFavoriteModel(modelId, forProvider: row.provider.id)
+        config = remoteSession.toggleFavoriteModel(modelId, forProvider: row.provider.id)
     }
 
     // MARK: - Row model (flat, searchable)
@@ -389,13 +392,13 @@ struct ProviderSelector: View {
         guard parts.count == 2, let provider = config.provider(id: String(parts[0])) else { return }
         let modelId: String? = parts[1] == "default" ? nil : String(parts[1])
         DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
-        config = launcher.setSelectedModelAndDefault(modelId, provider: provider)
+        config = remoteSession.setSelectedModelAndDefault(modelId, provider: provider)
         isPresented = false
         searchText = ""
     }
 
     private func refresh() {
-        config = launcher.providersConfig()
+        config = remoteSession.providersConfig()
     }
 
     // MARK: - Glyphs

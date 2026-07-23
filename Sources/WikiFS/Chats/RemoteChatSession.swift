@@ -29,6 +29,11 @@ public final class RemoteChatSession {
     public private(set) var isGenerating = false
     public private(set) var isAwaitingGenerationSlot = false
     public private(set) var isInteractiveSession = false
+    /// The chat id this mirror currently reflects as the LIVE session, or nil
+    /// when this chat is not the daemon's active session (persisted/idle).
+    /// Managed by `hydrate`/`applyStateUpdate` from the daemon's run flags so
+    /// the `ChatDetailView` source-of-truth rule (`activeChatID == chatID`)
+    /// flips a chat live precisely when the daemon is running it.
     public var activeChatID: String?
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
@@ -36,6 +41,21 @@ public final class RemoteChatSession {
     public var preflightError: String?
     public var pendingPermissions: [PendingPermission] = []
     public var thinkingOption: ThinkingEffortOption?
+
+    /// stderr mirror (best-effort). The daemon does not stream per-chat stderr
+    /// over the chat envelope channel today; this stays empty unless a future
+    /// envelope kind populates it. `AgentQueueView` reads it for the internals
+    /// banner, same as the launcher path.
+    public var stderr: String = ""
+
+    /// Last-activity timestamp mirror. Not carried by the chat envelope
+    /// protocol today, so this stays nil unless a future envelope populates
+    /// it. `AgentRunStatusView` degrades gracefully when nil.
+    public var lastActivityAt: Date?
+
+    /// Spawned process id mirror. Not carried by the chat envelope protocol
+    /// today, so this stays nil unless a future envelope populates it.
+    public var currentProcessID: Int32?
 
     /// Cumulative usage for this chat (mirrors AgentLauncher.runTotalUsage).
     public private(set) var runTotalUsage: SessionUsage?
@@ -121,6 +141,9 @@ public final class RemoteChatSession {
         }
         runStartedAt = state.runStartedAt
         isInteractiveSession = state.isRunning || state.isGenerating
+        // Source-of-truth rule: this mirror is "live" (activeChatID set)
+        // exactly while the daemon reports the session interactive.
+        activeChatID = isInteractiveSession ? chatID : nil
     }
 
     // MARK: - Private: event merge logic
@@ -175,9 +198,113 @@ public final class RemoteChatSession {
         }
         runStartedAt = update.runStartedAt
         isInteractiveSession = update.isRunning || update.isGenerating
+        // Source-of-truth rule: keep activeChatID in sync with interactivity.
+        activeChatID = isInteractiveSession ? chatID : nil
+    }
+
+    // MARK: - Provider config surface (shared file, same as the daemon reads)
+
+    /// The App Group container the provider config is loaded from + saved to.
+    /// Same resolution the daemon's chat launcher uses, so an app-side write
+    /// is visible to the next `startChat` / `continueChat` on the daemon.
+    public func resolveProvidersContainerDirectory() -> URL {
+        (try? DatabaseLocation.appGroupContainerDirectory())
+            ?? FileManager.default.temporaryDirectory
+    }
+
+    /// Read the persisted provider config (loads + seeds on first run). The
+    /// composer's provider selector binds to this — refreshed on demand so a
+    /// fresh selection (Settings OR composer) is visible next read. Mirrors
+    /// `AgentLauncher.providersConfig()`.
+    public func providersConfig() -> AgentProvidersConfig {
+        AgentProvidersConfig.loadOrSeed(from: resolveProvidersContainerDirectory())
+    }
+
+    /// The provider this chat will use, resolved fresh from the config file.
+    /// Mirrors `AgentLauncher.resolveSelectedProvider()`.
+    public func resolveSelectedProvider() -> AgentProvider {
+        providersConfig().selectedProvider()
+    }
+
+    /// Atomically set the default provider AND a per-provider model selection
+    /// in one load→mutate→save cycle. Choosing a model implies choosing its
+    /// provider (paseo two-step); both land together. Mirrors
+    /// `AgentLauncher.setSelectedModelAndDefault(_:provider:)`.
+    @discardableResult
+    public func setSelectedModelAndDefault(
+        _ modelId: String?, provider: AgentProvider
+    ) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        DebugLog.store("RemoteChatSession.setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save")
+        let updated = providersConfig()
+            .settingDefault(id: provider.id)
+            .settingSelectedModel(modelId, forProvider: provider.id)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            DebugLog.store("RemoteChatSession.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId ?? "nil")): \(error)")
+        }
+        return updated
+    }
+
+    /// The user's persisted model selection for `providerId` (nil = agent
+    /// default). Mirrors `AgentLauncher.selectedModelId(forProvider:)`.
+    public func selectedModelId(forProvider providerId: String) -> String? {
+        providersConfig().selectedModelId(forProvider: providerId)
+    }
+
+    /// Toggle + persist a model's favorite state. Display-only (favorites sort
+    /// to the top of the picker). Mirrors
+    /// `AgentLauncher.toggleFavoriteModel(_:forProvider:)`.
+    @discardableResult
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+        let dir = resolveProvidersContainerDirectory()
+        let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
+        do {
+            try updated.save(to: dir)
+        } catch {
+            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+        }
+        return updated
+    }
+
+    // MARK: - Mid-session thinking effort (best-effort)
+
+    /// Optimistically flip the thinking-effort chip. The daemon-side apply
+    /// (a live `session/set_config_option`) needs a chat XPC method not in
+    /// the Phase C 6-method protocol, so C4 flips the UI locally and the next
+    /// `chatState` envelope from the daemon reconciles to its truth. A future
+    /// XPC method (`setChatConfigOption`) will make this authoritative.
+    public func setThinkingEffort(_ value: String) {
+        guard let option = thinkingOption else { return }
+        DebugLog.agent("RemoteChatSession.setThinkingEffort: value=\(value) (daemon apply deferred — no chat-config XPC method in C4)")
+        thinkingOption = option.withCurrentValue(value)
+    }
+
+    // MARK: - Per-chat debug/log URL resolution (instance companions)
+
+    /// Resolve the chat's most-recent run debug-folder URL from disk. Mirrors
+    /// `AgentLauncher.debugFolderURL(forChat:)` (pure disk resolve).
+    public func debugFolderURL(forChat id: String) -> URL? {
+        AgentLauncher.debugFolderURLStatic(forChat: id)
+    }
+
+    /// Resolve the chat's most-recent run log file URL from disk. Mirrors
+    /// `AgentLauncher.logFileURL(forChat:)` (pure disk resolve).
+    public func logFileURL(forChat id: String) -> URL? {
+        AgentLauncher.logFileURLStatic(forChat: id)
     }
 
     // MARK: - Reset (for new chat / teardown)
+
+    /// Local reset used when retargeting the tab to a fresh draft. The
+    /// daemon's own session is unaffected; this only clears the app-side
+    /// mirror so the draft composer starts empty. Clears `activeChatID` so the
+    /// source-of-truth rule no longer treats this mirror as live.
+    func startNewChat() {
+        reset()
+        activeChatID = nil
+    }
 
     func reset() {
         events = []

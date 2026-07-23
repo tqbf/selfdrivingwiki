@@ -7,7 +7,11 @@ import WikiFSEngine
 /// Shows a real-time transcript of agent tool calls, diagnostics, and results
 /// as the agent executes, with an optional internals toggle for verbose output.
 struct AgentQueueView: View {
-    @Bindable var launcher: AgentLauncher
+    /// The daemon-mirrored chat session (replaces the in-process chat
+    /// `AgentLauncher` after Phase C4). Run-state reads (`events`,
+    /// `preflightError`, `stderr`, `isRunning`, `runningKind`) come from the
+    /// daemon's live launcher via chat envelopes.
+    var remoteSession: RemoteChatSession
     let showsResultEvents: Bool
     let showsInternals: Bool
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
@@ -15,8 +19,8 @@ struct AgentQueueView: View {
     /// impossible (links still render, just don't navigate).
     var onWikiLink: ((URL, Bool) -> Void)? = nil
 
-    init(launcher: AgentLauncher, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
-        self.launcher = launcher
+    init(remoteSession: RemoteChatSession, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
+        self.remoteSession = remoteSession
         self.showsResultEvents = showsResultEvents
         self.showsInternals = showsInternals
         self.onWikiLink = onWikiLink
@@ -25,18 +29,18 @@ struct AgentQueueView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if let error = launcher.preflightError {
+            if let error = remoteSession.preflightError {
                 preflightBanner(error)
             }
             if showsInternals {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    AgentRunStatusView(launcher: launcher, now: context.date)
+                    AgentRunStatusView(remoteSession: remoteSession, now: context.date)
                         .padding(.horizontal, ActivityMetrics.padding)
                         .padding(.top, ActivityMetrics.padding)
                 }
             }
             activityFeed
-            if showsInternals && !launcher.stderr.isEmpty {
+            if showsInternals && !remoteSession.stderr.isEmpty {
                 stderrBanner
             }
         }
@@ -60,11 +64,11 @@ struct AgentQueueView: View {
     }
 
     private var showsPlaceholder: Bool {
-        renderedEvents.isEmpty && launcher.preflightError == nil
+        renderedEvents.isEmpty && remoteSession.preflightError == nil
     }
 
     private var renderedEvents: [AgentEvent] {
-        launcher.events.filter { event in
+        remoteSession.events.filter { event in
             if !showsInternals && event.isInternalTranscriptEvent {
                 return false
             }
@@ -77,10 +81,10 @@ struct AgentQueueView: View {
 
     @ViewBuilder
     private var placeholder: some View {
-        if launcher.isRunning {
+        if remoteSession.isRunning {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(showsInternals ? (launcher.runningKind.map { "Starting \($0.title)…" } ?? "Starting…") : "Waiting for output…")
+                Text(showsInternals ? (remoteSession.runningKind.map { "Starting \($0.title)…" } ?? "Starting…") : "Waiting for output…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -119,7 +123,7 @@ struct AgentQueueView: View {
                 .font(.caption)
                 .fontWeight(.medium)
                 .foregroundStyle(.orange)
-            Text(launcher.stderr)
+            Text(remoteSession.stderr)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

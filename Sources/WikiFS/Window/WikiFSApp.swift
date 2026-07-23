@@ -77,6 +77,12 @@ struct WikiFSApp: App {
     /// Owns the open-windows list for the standard Window menu (issue #567).
     @State private var windowTracker: WindowListTracker
 
+    /// App-wide chat daemon coordinator (Phase C4). Owns the per-chat
+    /// `RemoteChatSession` registry + wraps the 6 chat XPC commands. `nil`
+    /// when the daemon is unavailable — chat surfaces then render an
+    /// unavailable state (no local fallback; the daemon owns chat).
+    @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
+
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
     // causes only one to win the NSApplication.shared.delegate slot; accessing the
@@ -171,6 +177,12 @@ struct WikiFSApp: App {
                 workloadClient: workloadClient, eventSink: eventSink)
             activityTracker.attach(engine: queueEngine)
             Task { await activityTracker.rehydrate(from: queueEngine) }
+            // Phase C4: the coordinator owns chat sessions over the same
+            // connection + event sink (chat envelopes are demuxed alongside
+            // queue events). Routes envelopes per chatID + wraps the 6 chat
+            // XPC commands.
+            chatDaemonCoordinator = ChatDaemonCoordinator(
+                client: workloadClient, eventSink: eventSink)
         } else {
             DebugLog.store("WikiFSApp: daemon not available — falling back to local QueueEngine")
             let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
@@ -396,10 +408,12 @@ struct WikiFSApp: App {
                     if session.agentLauncher.isRunning {
                         return "An agent operation"
                     }
-                    if session.chatLauncher.isRunning {
-                        return "A chat session"
-                    }
                 }
+            }
+            // Phase C4: chat runs on the daemon — check the coordinator's
+            // aggregate rather than a per-wiki chat launcher.
+            if chatDaemonCoordinator?.anyChatRunning == true {
+                return "A chat session"
             }
             return nil
         }
@@ -437,7 +451,8 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) })
+                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
+                chatDaemon: chatDaemonCoordinator)
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",
@@ -511,7 +526,8 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) })
+                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
+                chatDaemon: chatDaemonCoordinator)
             .preferredColorScheme(appearanceColorScheme)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
@@ -945,11 +961,13 @@ extension View {
     @MainActor
     func appEnvironment(
         tracker: QueueActivityTracker,
-        openActivityWindow: ((QueueKind) -> Void)? = nil
+        openActivityWindow: ((QueueKind) -> Void)? = nil,
+        chatDaemon: ChatDaemonCoordinator? = nil
     ) -> some View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self
             .environment(tracker)
             .environment(\.openActivityWindow, openActivityWindow)
+            .environment(\.chatDaemonCoordinator, chatDaemon)
     }
 }

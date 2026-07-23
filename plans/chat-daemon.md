@@ -1,6 +1,8 @@
 # Chat Daemon (Phase C) — Architecture
 
-> **Status:** Daemon infrastructure implemented (C1-C3, C5). ChatDetailView flip (C4) is the next-step follow-up.
+> **Status:** Complete. Daemon infrastructure (C1-C3, C5) + the ChatDetailView
+> flip (C4) are merged. The daemon owns chat sessions end-to-end; the app,
+> `wikictl`, and future MCP adapters are thin clients.
 
 ## Overview
 
@@ -49,9 +51,13 @@ clients.
 
 ## What's next: C4 (ChatDetailView flip)
 
-The UI flip replaces `@Bindable var launcher: AgentLauncher` with
-`var remoteSession: RemoteChatSession` + `DaemonWorkloadClient` in
-`ChatDetailView`. Key changes needed:
+> **Shipped.** The UI flip replaced `@Bindable var launcher: AgentLauncher`
+> with `var remoteSession: RemoteChatSession` + `var coordinator:
+> ChatDaemonCoordinator` across `ChatDetailView` and every chat surface. The
+> app no longer constructs a local `AgentLauncher` for chat — it creates a
+> `RemoteChatSession` connected to the daemon. The chat `AgentLauncher` was
+> removed from `WikiSession` entirely (the ingest/lint `agentLauncher`
+> remains). Key changes that landed:
 
 1. **App session wiring:** Create `RemoteChatSession` instances per chat tab,
    subscribe to `DaemonQueueEventSink.chatEnvelopes`, route envelopes by chatID.
