@@ -288,6 +288,13 @@ final class QueueActivityTracker {
     /// extractions.
     private var itemToSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
 
+    /// Maps queue item ID → its `QueueKind`. Populated on `.enqueued`/`.started`
+    /// so snapshot reconciliation (#871 self-heal) can clear the correct
+    /// running-state set when a terminal event never arrived: a source ID may
+    /// be tracked under both extraction and ingestion by different items, so
+    /// the queue kind is needed to avoid subtracting from the wrong set.
+    private var itemToQueue: [QueueItem.ID: QueueKind] = [:]
+
     /// Items whose transcript's last row is an in-progress streamed assistant
     /// reply — the next `.assistantTextDelta` grows that row in place instead
     /// of appending a new one (mirrors `AgentLauncher.mergeOrAppend`; without
@@ -309,6 +316,11 @@ final class QueueActivityTracker {
 
     /// The stream consumer task.
     private var streamTask: Task<Void, Never>?
+
+    /// The periodic snapshot-reconciliation watchdog (#871 self-heal). Polls
+    /// the daemon's snapshot and clears running-state for items the daemon no
+    /// longer considers active, so a broken event stream can't pin the spinner.
+    private var watchdogTask: Task<Void, Never>?
 
     // MARK: - Lifecycle
 
@@ -343,6 +355,58 @@ final class QueueActivityTracker {
         }
     }
 
+    /// Reconcile the tracker's notion of "running" against the daemon's
+    /// ground-truth snapshot. Any item the tracker treats as active that is
+    /// NOT in `snapshot.activeItems` is cleared from the running-state sets —
+    /// the daemon finished (or never had) it, but the terminal event was lost.
+    ///
+    /// This is the #871 self-heal: when the event stream from daemon → app is
+    /// broken (sink invalidated, envelope dropped), `isExtracting` /
+    /// `isIngesting` would stay `true` forever. A periodic snapshot poll feeds
+    /// this method so the spinner clears once the daemon reports the item gone.
+    ///
+    /// Removal-only — it never adds running state, so a transient snapshot read
+    /// can't fabricate activity. Items still active on the daemon are left
+    /// untouched; their terminal event (or a later reconcile) clears them.
+    func reconcile(with snapshot: QueueSnapshot) {
+        let activeIDs = Set(snapshot.activeItems.map { $0.id })
+        let recentByID = Dictionary(
+            snapshot.recentItems.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+
+        // Consider every item the tracker currently believes is running.
+        let trackedIDs = Set(itemToSourceIDs.keys).union(lintingItemIDs)
+        for id in trackedIDs where !activeIDs.contains(id) {
+            if let item = recentByID[id] {
+                // The daemon has it as terminal — clean up via the proven
+                // `removeItem` path (uses the item's own queue + payload).
+                removeItem(item)
+            } else {
+                // Not active AND not in recent history (pruned / unknown).
+                // Fall back to the ID-only cleanup using stored maps.
+                forgetRunningItem(id)
+            }
+        }
+    }
+
+    /// Start a low-frequency watchdog that polls the daemon's snapshot and
+    /// reconciles, so a broken event stream can't pin the spinner forever
+    /// (#871). Idempotent — calling again replaces the prior watchdog.
+    /// Cancels automatically if the engine is released (the weak ref goes nil).
+    func startSnapshotWatchdog(engine: any QueueEngineClient, interval: Duration = .seconds(5)) {
+        watchdogTask?.cancel()
+        watchdogTask = Task { @MainActor [weak self, weak engine] in
+            while !Task.isCancelled {
+                if Task.isCancelled { return }
+                guard let self, let engine else { return }
+                let snapshot = await engine.snapshot()
+                if Task.isCancelled { return }
+                self.reconcile(with: snapshot)
+                try? await Task.sleep(for: interval)
+            }
+        }
+    }
+
     /// Start consuming `events`. Spawns a `@MainActor` Task that iterates the
     /// stream and dispatches each event to `handle(_:)`.
     func start(events: AsyncStream<QueueEvent>) {
@@ -359,6 +423,8 @@ final class QueueActivityTracker {
     func stop() {
         streamTask?.cancel()
         streamTask = nil
+        watchdogTask?.cancel()
+        watchdogTask = nil
         queueEngine = nil
         extractingSourceIDs = []
         ingestingSourceIDs = []
@@ -373,6 +439,7 @@ final class QueueActivityTracker {
         extractionPID = nil
         currentExtractionItemID = nil
         itemToSourceIDs.removeAll()
+        itemToQueue.removeAll()
         transcripts.removeAll()
         progressLogs.removeAll()
         itemUsage.removeAll()
@@ -490,6 +557,7 @@ final class QueueActivityTracker {
         itemLogURLs.removeValue(forKey: itemID)
         itemDebugURLs.removeValue(forKey: itemID)
         pendingPermissions.removeValue(forKey: itemID)
+        itemToQueue.removeValue(forKey: itemID)
         streamingTranscriptItemIDs.remove(itemID)
         streamingThinkingItemIDs.remove(itemID)
     }
@@ -556,10 +624,12 @@ final class QueueActivityTracker {
             // Track the mapping so we can clean up on completion.
             let sourceIDs = Set(item.payload.sourceIDs)
             itemToSourceIDs[item.id] = sourceIDs
+            itemToQueue[item.id] = item.queue
 
         case .started(let item):
             let sourceIDs = Set(item.payload.sourceIDs)
             itemToSourceIDs[item.id] = sourceIDs
+            itemToQueue[item.id] = item.queue
             switch item.queue {
             case .extraction:
                 extractingSourceIDs.formUnion(sourceIDs)
@@ -701,43 +771,68 @@ final class QueueActivityTracker {
 
     /// Remove an item from the active set and clean up its mapping.
     private func removeItem(_ item: QueueItem) {
-        if let sourceIDs = itemToSourceIDs.removeValue(forKey: item.id) {
-            switch item.queue {
+        // Ensure the per-item maps are populated even if `.started` was the
+        // event that got dropped (#871) — `forgetRunningItem` reads them.
+        itemToQueue[item.id] = item.queue
+        if item.queue == .ingestion, let pageIDs = item.payload.lintPageIDs {
+            itemToLintPageIDs[item.id] = pageIDs
+            itemToLintWikiID[item.id] = item.wikiID
+        }
+        forgetRunningItem(item.id)
+    }
+
+    /// Clear ALL running-state for an item ID using the tracker's stored maps.
+    /// Shared by terminal-event handling (via `removeItem`) and by snapshot
+    /// reconciliation (#871 self-heal), which calls it directly when the daemon
+    /// reports an item is no longer active but no terminal event arrived.
+    ///
+    /// Queue-kind aware: a source ID can be tracked under both extraction and
+    /// ingestion by different items, so `itemToQueue` selects the correct set.
+    /// When the queue kind is unknown (an item we never saw `.started` for),
+    /// source IDs are left untouched to avoid clearing a sibling item's spinner.
+    private func forgetRunningItem(_ id: QueueItem.ID) {
+        let queue = itemToQueue.removeValue(forKey: id)
+        if let sourceIDs = itemToSourceIDs.removeValue(forKey: id) {
+            switch queue {
             case .extraction:
                 extractingSourceIDs.subtract(sourceIDs)
             case .ingestion:
                 ingestingSourceIDs.subtract(sourceIDs)
+            case .none:
+                // Unknown queue — leave the running sets alone; a sibling item
+                // owning the same source ID will clear it on its own terminal
+                // event / reconciliation.
+                break
             }
         }
         // Lint items are tracked separately — always remove on terminal state.
-        lintingItemIDs.remove(item.id)
-        itemToLintPageIDs.removeValue(forKey: item.id)
-        itemToLintWikiID.removeValue(forKey: item.id)
-        if let pageIDs = item.payload.lintPageIDs {
+        lintingItemIDs.remove(id)
+        if let pageIDs = itemToLintPageIDs.removeValue(forKey: id) {
+            let wikiID = itemToLintWikiID.removeValue(forKey: id)
             if pageIDs.isEmpty {
                 // Whole-wiki lint. Safe to remove by wiki ID: the `.ingest`
                 // lane limit is 1 per session, so at most one whole-wiki lint
                 // runs per wiki at a time — this item was the only one.
-                wholeWikiLintingWikiIDs.remove(item.wikiID)
+                if let wikiID { wholeWikiLintingWikiIDs.remove(wikiID) }
             } else {
                 for pageID in pageIDs { lintingPageIDs.remove(pageID) }
             }
         }
-        if currentExtractionItemID == item.id {
+        if currentExtractionItemID == id {
             currentExtractionItemID = nil
         }
         // #544: drop the in-progress usage snapshot on terminal state. Failed
         // and cancelled items never emit a `.usage` event, so without this the
         // live snapshot would linger. Completed items have already dropped it
         // in the `.usage` handler (this is a redundant-clear safety net then).
-        liveUsage.removeValue(forKey: item.id)
+        liveUsage.removeValue(forKey: id)
         // #608: clear any surfaced pending permission on terminal state. The
         // launcher's poller is torn down in `finish()` — a resolved/rejected/
         // auto-rejected request would already have cleared this via the
         // `.pendingPermission(_, nil)` event, but a terminal state arriving
         // first (e.g. cancelled mid-prompt) needs this safety net so the
         // yellow row doesn't linger on a completed/failed/cancelled row.
-        pendingPermissions.removeValue(forKey: item.id)
+        pendingPermissions.removeValue(forKey: id)
     }
 
     /// Parse a PID from a progress line if the local backend reports one.

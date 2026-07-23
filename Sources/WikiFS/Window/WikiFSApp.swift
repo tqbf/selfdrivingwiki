@@ -183,6 +183,10 @@ struct WikiFSApp: App {
                 workloadClient: workloadClient, eventSink: eventSink)
             activityTracker.attach(engine: queueEngine)
             Task { await activityTracker.rehydrate(from: queueEngine) }
+            // #871 self-heal: if the daemon → app event stream breaks (sink
+            // invalidated, envelope dropped), poll the snapshot so a finished
+            // item still clears the spinner instead of spinning forever.
+            activityTracker.startSnapshotWatchdog(engine: queueEngine)
             // Phase C4: the coordinator owns chat sessions over the same
             // connection + event sink (chat envelopes are demuxed alongside
             // queue events). Routes envelopes per chatID + wraps the 6 chat
