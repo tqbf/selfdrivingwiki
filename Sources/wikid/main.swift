@@ -1,5 +1,8 @@
 import Foundation
 import WikiFSCore
+#if canImport(WikiFSEngine)
+import WikiFSEngine
+#endif
 
 /// The mach service name registered with launchd. Must match the `Label` in the
 /// launchd plist and the `WikiDaemonConnection.serviceName` in the client.
@@ -99,6 +102,208 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             sendableReply.reply(data)
         }
     }
+
+    // MARK: - Workload: queue engine (Phase A+B)
+
+    #if canImport(WikiFSEngine)
+    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            do {
+                let engine = try await daemon.ensureQueueEngine()
+                let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
+                let id = try await engine.enqueue(req)
+                let envelope: [String: String?] = ["id": id, "error": nil]
+                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                sendableReply.reply(data)
+            } catch {
+                let envelope: [String: String?] = ["id": nil, "error": error.localizedDescription]
+                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                sendableReply.reply(data)
+            }
+        }
+    }
+
+    func cancelItem(id: String, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                await engine.cancelItem(id)
+            }
+            sendableReply.reply()
+        }
+    }
+
+    func cancelAllInFlight(reply: @escaping (Int) -> Void) {
+        let sendableReply = SendableIntReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                let count = await engine.cancelAllInFlight()
+                sendableReply.reply(count)
+            } else {
+                sendableReply.reply(0)
+            }
+        }
+    }
+
+    func retryItem(id: String, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            do {
+                let engine = try await daemon.ensureQueueEngine()
+                try await engine.retryItem(id)
+                let envelope: [String: String?] = ["error": nil]
+                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                sendableReply.reply(data)
+            } catch {
+                let envelope: [String: String?] = ["error": error.localizedDescription]
+                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                sendableReply.reply(data)
+            }
+        }
+    }
+
+    func pauseQueue(queue: String, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine(),
+               let queueKind = QueueKind(rawValue: queue) {
+                await engine.pause(queueKind)
+            }
+            sendableReply.reply()
+        }
+    }
+
+    func resumeQueue(queue: String, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine(),
+               let queueKind = QueueKind(rawValue: queue) {
+                await engine.resume(queueKind)
+            }
+            sendableReply.reply()
+        }
+    }
+
+    func haltQueue(queue: String, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine(),
+               let queueKind = QueueKind(rawValue: queue) {
+                await engine.halt(queueKind)
+            }
+            sendableReply.reply()
+        }
+    }
+
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                await engine.reorderItem(id: id, beforeItemID: beforeItemID)
+            }
+            sendableReply.reply()
+        }
+    }
+
+    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) {
+        let sendableReply = SendableBoolReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                let result = await engine.hasActiveWork(for: wikiID)
+                sendableReply.reply(result)
+            } else {
+                sendableReply.reply(false)
+            }
+        }
+    }
+
+    func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            guard let engine = try? await daemon.ensureQueueEngine() else {
+                let envelope: [String: Any] = ["success": false,
+                                               "error": "daemon queue engine unavailable"]
+                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                sendableReply.reply(data)
+                return
+            }
+            let result = await engine.waitForCompletion(of: id)
+            switch result {
+            case .success:
+                let envelope: [String: Any] = ["success": true]
+                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                sendableReply.reply(data)
+            case .failure(let error):
+                let envelope: [String: Any] = ["success": false,
+                                               "error": error.localizedDescription]
+                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                sendableReply.reply(data)
+            }
+        }
+    }
+
+    func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                let events = await engine.loadTranscript(for: itemID)
+                let data = (try? JSONEncoder().encode(events)) ?? Data()
+                sendableReply.reply(data)
+            } else {
+                sendableReply.reply(Data())
+            }
+        }
+    }
+
+    func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            if let engine = try? await daemon.ensureQueueEngine() {
+                let snapshots = await engine.loadAllActivitySnapshots()
+                var data: [String: QueueEngine.ActivitySnapshotData] = [:]
+                for (id, snapshot) in snapshots {
+                    data[id] = QueueEngine.ActivitySnapshotData(from: snapshot)
+                }
+                let result = (try? JSONEncoder().encode(data)) ?? Data()
+                sendableReply.reply(result)
+            } else {
+                sendableReply.reply(Data())
+            }
+        }
+    }
+    #else
+    // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
+    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["id": nil, "error": "queue engine unavailable on Linux"]
+        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        reply(data)
+    }
+
+    func cancelItem(id: String, reply: @escaping () -> Void) { reply() }
+    func cancelAllInFlight(reply: @escaping (Int) -> Void) { reply(0) }
+
+    func retryItem(id: String, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["error": "queue engine unavailable on Linux"]
+        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        reply(data)
+    }
+
+    func pauseQueue(queue: String, reply: @escaping () -> Void) { reply() }
+    func resumeQueue(queue: String, reply: @escaping () -> Void) { reply() }
+    func haltQueue(queue: String, reply: @escaping () -> Void) { reply() }
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) { reply() }
+    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) { reply(false) }
+
+    func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
+        let envelope: [String: Any] = ["success": false, "error": "queue engine unavailable on Linux"]
+        let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+        reply(data)
+    }
+
+    func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) { reply(Data()) }
+    #endif
 }
 
 /// Wraps an XPC `@escaping (Data) -> Void` reply in a `@unchecked Sendable`
@@ -106,6 +311,22 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 /// this satisfies Swift 6 strict-concurrency without changing semantics.
 private struct SendableDataReply: @unchecked Sendable {
     let reply: (Data) -> Void
+}
+
+/// Wraps an XPC `@escaping () -> Void` reply (same rationale as
+/// ``SendableDataReply``).
+private struct SendableVoidReply: @unchecked Sendable {
+    let reply: () -> Void
+}
+
+/// Wraps an XPC `@escaping (Int) -> Void` reply.
+private struct SendableIntReply: @unchecked Sendable {
+    let reply: (Int) -> Void
+}
+
+/// Wraps an XPC `@escaping (Bool) -> Void` reply.
+private struct SendableBoolReply: @unchecked Sendable {
+    let reply: (Bool) -> Void
 }
 
 // MARK: - Main

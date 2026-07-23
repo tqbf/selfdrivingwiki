@@ -118,7 +118,7 @@ public actor QueueEngine {
         await rebuildInMemoryState()
 
         // Load run states.
-        for queue in [QueueKind.extraction, QueueKind.ingestion, QueueKind.transcription] {
+        for queue in [QueueKind.extraction, QueueKind.ingestion] {
             runStates[queue] = (try? store.queueRunState(for: queue)) ?? .running
         }
 
@@ -206,7 +206,7 @@ public actor QueueEngine {
     @discardableResult
     public func cancelAllInFlight() async -> Int {
         var count = 0
-        for queue in [QueueKind.extraction, QueueKind.ingestion, QueueKind.transcription] {
+        for queue in [QueueKind.extraction, QueueKind.ingestion] {
             let active = (try? store.loadActive(for: queue)) ?? []
             for item in active where item.state == .running {
                 await cancelItem(item.id)
@@ -321,7 +321,6 @@ public actor QueueEngine {
         let qs: [QueueKind: QueueRunState] = [
             .extraction: runStates[.extraction] ?? .running,
             .ingestion: runStates[.ingestion] ?? .running,
-            .transcription: runStates[.transcription] ?? .running,
         ]
         return QueueSnapshot(
             activeItems: activeItems,
@@ -499,6 +498,23 @@ public actor QueueEngine {
         }
     }
 
+    /// Codable XPC-boundary mirror of ``ActivitySnapshot``. The concrete
+    /// snapshot is only `Sendable`; this wrapper adds `Codable` so snapshots
+    /// can be JSON-encoded for transport over XPC.
+    public struct ActivitySnapshotData: Codable, Sendable {
+        public let usage: SessionUsage?
+        public let logURL: URL?
+        public let debugURL: URL?
+        public let progressLog: String
+
+        public init(from snapshot: ActivitySnapshot) {
+            self.usage = snapshot.usage
+            self.logURL = snapshot.logURL
+            self.debugURL = snapshot.debugURL
+            self.progressLog = snapshot.progressLog
+        }
+    }
+
     /// Load persisted activity metadata for all items with recorded activity,
     /// decoded into typed values. Used by the Activity tracker to rehydrate
     /// `itemUsage` / `itemLogURLs` / `itemDebugURLs` / `progressLogs` after an
@@ -552,7 +568,7 @@ public actor QueueEngine {
     /// resolves the provider ID. No `await` separates the check from the set.
     private func dispatchScan() async {
         // For each queue kind that is `.running`, try to dispatch items.
-        for queue in [QueueKind.extraction, QueueKind.ingestion, QueueKind.transcription] {
+        for queue in [QueueKind.extraction, QueueKind.ingestion] {
             guard runStates[queue] == .running else { continue }
 
             let active = (try? store.loadActive(for: queue)) ?? []
@@ -574,8 +590,6 @@ public actor QueueEngine {
                     limit = config.extractionLimit(for: providerID)
                 case .ingestion:
                     limit = config.ingestionLimit(for: providerID)
-                case .transcription:
-                    limit = config.transcriptionLimit
                 }
 
                 // Per-provider capacity check.

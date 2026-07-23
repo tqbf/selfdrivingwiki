@@ -443,7 +443,7 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     func persistExtraction(
         wikiID: String, sourceID: PageID,
         markdown: String, backend: ExtractionBackend,
-        modelVersion: String?
+        modelVersion: String?, technique: String?
     ) async throws {
         lock.withLock { state in
             state.callLog.append("persist(wikiID:\(wikiID), sourceID:\(sourceID.rawValue), backend:\(backend.rawValue))")

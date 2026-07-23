@@ -758,7 +758,7 @@ public final class QueueStore: @unchecked Sendable {
         try Self.wrap {
             let queue = try self.queue()
             try queue.write { db in
-                for kind in [QueueKind.extraction, QueueKind.ingestion, QueueKind.transcription] {
+                for kind in [QueueKind.extraction, QueueKind.ingestion] {
                     try db.execute(
                         sql: """
                         DELETE FROM queue_items

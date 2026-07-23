@@ -2,6 +2,7 @@ import SwiftUI
 import ServiceManagement
 import WikiFSEngine
 import WikiFSCore
+import WikiCtlCore
 import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
@@ -38,16 +39,13 @@ struct WikiFSApp: App {
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
-    @State private var queueEngine: QueueEngine
+    @State private var queueEngine: any QueueEngineClient
     /// App-wide extraction provider. Bridges the headless queue engine to the
-    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`.
+    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
+    /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
+    /// captions, podcast feeds) — transcript sources resolve to a
+    /// `transcriptFetch` closure in the `ExtractionResolution`.
     @State private var extractionProvider: any QueueExtractionProvider
-    /// App-wide ingestion provider. Bridges the headless queue engine to the
-    /// `@MainActor` `AgentLauncher` + `WikiStoreModel` for ingestion.
-    @State private var ingestionProvider: any QueueIngestionProvider
-    /// App-wide transcription provider. Bridges the headless queue engine to
-    /// the `@MainActor` `WikiStoreModel` for YouTube/podcast transcription.
-    @State private var transcriptionProvider: any QueueTranscriptionProvider
     /// Mutable box for the file provider reference — the ingestion provider
     /// uses it to access the `FileProviderFacade` which is only available
     /// after the `@State` property is initialized by SwiftUI.
@@ -147,90 +145,85 @@ struct WikiFSApp: App {
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
 
-        // Queue engine construction. Order matters (factory needs provider;
-        // provider needs a session-lookup box; session manager needs engine +
-        // provider). The box starts returning nil (no sessions yet) and is
-        // wired to the real session manager after construction.
-        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
-            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
-        let queueStore: QueueStore
-        do {
-            queueStore = try QueueStore(databaseURL: queueDBURL)
-        } catch {
-            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
-            // swiftlint:disable:next force_try
-            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-        }
+        // Queue engine: connect to the wikid daemon via XPC (Phase A+B).
+        // The daemon owns the ENTIRE queue (extraction + ingestion). The app
+        // is a pure XPC client — all 13 QueueEngineClient methods proxy to
+        // the daemon. One DB, one engine, one owner.
+        //
+        // Fallback: if the daemon isn't running (dev mode without
+        // `make install-daemon`), construct a local QueueEngine so the app
+        // stays functional.
         let sessionBox = SessionLookupBox()
         let extractionProvider = AppQueueExtractionProvider(
             extractionCoordinator: coordinator,
             sessionBox: sessionBox)
         let fileProviderBox = FileProviderBox()
-        let ingestionProvider = AppQueueIngestionProvider(
-            sessionBox: sessionBox,
-            fileProviderBox: fileProviderBox,
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            queueStore: queueStore)
-        // Create a progress-emit box — the closure starts as a no-op and is
-        // replaced with the engine's continuation after the engine is
-        // constructed (breaking the circular dependency: factory needs the
-        // closure, engine needs the factory).
-        let progressBox = ProgressEmitBox()
-        let transcriptBox = TranscriptEmitBox()
-        let usageBox = UsageEmitBox()
-        let liveUsageBox = LiveUsageEmitBox()
-        let logPathsBox = LogPathsEmitBox()
-        let pendingPermissionBox = PendingPermissionEmitBox()
-        let extractionFactory = QueueExtractionWorkerFactory(
-            provider: extractionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
-        let transcriptionProvider = AppQueueTranscriptionProvider(sessionBox: sessionBox)
-        let transcriptionFactory = QueueTranscriptionWorkerFactory(
-            provider: transcriptionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
-        let ingestionFactory = QueueIngestionWorkerFactory(
-            provider: ingestionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) },
-            emitTranscript: { id, event in transcriptBox.emit?(id, event) },
-            emitUsage: { id, usage in usageBox.emit?(id, usage) },
-            emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
-            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
-            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
-        let workerFactory = CompositeWorkerFactory(factories: [
-            .extraction: extractionFactory,
-            .ingestion: ingestionFactory,
-            .transcription: transcriptionFactory,
-        ])
-        let queueEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
-        // Wire the progress emit box to the engine's event continuation.
-        // This is an actor-isolated call — use `await` to hop to the actor.
-        // The box starts with a nil emit (no-op), so workers spawned before
-        // this resolves simply drop progress lines (rare — the engine hasn't
-        // dispatched yet at this point in init).
-        Task { progressBox.emit = await queueEngine.makeEmitProgress() }
-        Task { transcriptBox.emit = await queueEngine.makeEmitTranscript() }
-        Task { usageBox.emit = await queueEngine.makeEmitUsage() }
-        Task { liveUsageBox.emit = await queueEngine.makeEmitLiveUsage() }
-        Task { logPathsBox.emit = await queueEngine.makeEmitLogPaths() }
-        Task { pendingPermissionBox.emit = await queueEngine.makeEmitPendingPermission() }
-        // Start the engine (rehydrate + crash recovery + initial dispatch).
-        // Detached so the app's init isn't blocked; the engine is an actor so
-        // `start()` is safe to call concurrently.
-        Task { await queueEngine.start() }
-        // Create the activity tracker and attach it to the engine's event
-        // stream. The tracker is @Observable @MainActor so views can read
-        // extraction state directly via @Environment.
+
+        let queueEngine: any QueueEngineClient
         let activityTracker = QueueActivityTracker()
-        activityTracker.attach(engine: queueEngine)
-        // Rehydrate persisted activity metadata (usage, log/debug URLs, progress
-        // logs) so the Activity window shows completed/failed/cancelled
-        // ingestion + lint runs immediately after launch — before any new
-        // events arrive. Transcripts lazy-load from the DB on detail-view open.
-        Task { await activityTracker.rehydrate(from: queueEngine) }
+
+        if let daemonConnection = try? WikiDaemonConnection.connect() {
+            DebugLog.store("WikiFSApp: connected to wikid daemon — using XPC proxy")
+            let workloadClient = DaemonWorkloadClient(connection: daemonConnection)
+            let eventSink = DaemonQueueEventSink()
+            workloadClient.registerEventSink(eventSink)
+            queueEngine = XPCQueueEngineProxy(
+                workloadClient: workloadClient, eventSink: eventSink)
+            activityTracker.attach(engine: queueEngine)
+            Task { await activityTracker.rehydrate(from: queueEngine) }
+        } else {
+            DebugLog.store("WikiFSApp: daemon not available — falling back to local QueueEngine")
+            let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+                ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
+            let queueStore: QueueStore
+            do {
+                queueStore = try QueueStore(databaseURL: queueDBURL)
+            } catch {
+                DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
+                // swiftlint:disable:next force_try
+                queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            }
+            let ingestionProvider = AppQueueIngestionProvider(
+                sessionBox: sessionBox,
+                fileProviderBox: fileProviderBox,
+                wikictlDirectory: HelpersLocation.wikictlDirectory,
+                queueStore: queueStore)
+            let progressBox = ProgressEmitBox()
+            let transcriptBox = TranscriptEmitBox()
+            let usageBox = UsageEmitBox()
+            let liveUsageBox = LiveUsageEmitBox()
+            let logPathsBox = LogPathsEmitBox()
+            let pendingPermissionBox = PendingPermissionEmitBox()
+            let extractionFactory = QueueExtractionWorkerFactory(
+                provider: extractionProvider,
+                emitProgress: { id, line in progressBox.emit?(id, line) })
+            let ingestionFactory = QueueIngestionWorkerFactory(
+                provider: ingestionProvider,
+                emitProgress: { id, line in progressBox.emit?(id, line) },
+                emitTranscript: { id, event in transcriptBox.emit?(id, event) },
+                emitUsage: { id, usage in usageBox.emit?(id, usage) },
+                emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
+                emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
+                emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
+            let workerFactory = CompositeWorkerFactory(factories: [
+                .extraction: extractionFactory,
+                .ingestion: ingestionFactory,
+            ])
+            let localEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+            Task { progressBox.emit = await localEngine.makeEmitProgress() }
+            Task { transcriptBox.emit = await localEngine.makeEmitTranscript() }
+            Task { usageBox.emit = await localEngine.makeEmitUsage() }
+            Task { liveUsageBox.emit = await localEngine.makeEmitLiveUsage() }
+            Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
+            Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
+            Task { await localEngine.start() }
+            queueEngine = localEngine
+            activityTracker.attach(engine: localEngine)
+            Task { await activityTracker.rehydrate(from: localEngine) }
+        }
+
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
-        _ingestionProvider = State(initialValue: ingestionProvider)
-        _transcriptionProvider = State(initialValue: transcriptionProvider)
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
@@ -410,8 +403,11 @@ struct WikiFSApp: App {
             }
             return nil
         }
-        appDelegate.cancelInFlightForQuit = { [weak queueEngine] in
-            await queueEngine?.cancelAllInFlight()
+        appDelegate.cancelInFlightForQuit = {
+            // Phase A+B: the daemon owns the queue. We do NOT cancel daemon
+            // items on ⌘Q — extraction/ingestion survives the app quitting,
+            // which is the whole point of the daemon architecture. The daemon
+            // re-dispatches on its own when the app reconnects.
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {

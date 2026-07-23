@@ -62,25 +62,23 @@ struct CompositeWorkerFactoryTests {
         #expect(providerID == "default-ingest")
     }
 
-    @Test("Routes transcription items to transcription factory")
+    @Test("Routes extraction items to extraction factory")
     func routesTranscriptionItems() async throws {
         let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
         let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
-        let transcriptionFactory = FakeFactory(providerIDValue: "transcription")
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
-            .ingestion: ingestionFactory,
-            .transcription: transcriptionFactory
+            .ingestion: ingestionFactory
         ])
 
         let item = QueueItem(
-            id: "tr1", queue: .transcription, wikiID: "wiki1",
+            id: "tr1", queue: .extraction, wikiID: "wiki1",
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "transcription")
+        #expect(providerID == "local-pdf2md")
     }
 
     @Test("Missing factory returns nil provider ID")
@@ -374,12 +372,12 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker tracks transcription source IDs on started")
     func transcriptionStartedAddsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.transcribingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
+        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == true)
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src2")) == true)
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "other")) == false)
@@ -390,40 +388,39 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker clears transcription source IDs on completed")
     func transcriptionCompletedClearsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
         tracker.handleForTesting(.started(item))
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")))
 
-        let completed = makeItem(id: item.id, queue: .transcription, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
+        let completed = makeItem(id: item.id, queue: .extraction, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
         tracker.handleForTesting(.completed(completed))
-        #expect(tracker.transcribingSourceIDs.isEmpty)
+        #expect(tracker.extractingSourceIDs.isEmpty)
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == false)
         #expect(tracker.isTranscribingAny == false)
     }
 
     @MainActor
-    @Test("Tracker does not conflate transcription with extraction")
+    @Test("Tracker tracks merged extraction+transcription source IDs")
     func noTranscriptionConflation() async {
         let tracker = QueueActivityTracker()
         let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
-        let transcriptionItem = makeItem(id: "tr1", queue: .transcription, sourceIDs: [PageID(rawValue: "src2")])
+        let transcriptionItem = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src2")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
 
         tracker.handleForTesting(.started(extractionItem))
         tracker.handleForTesting(.started(transcriptionItem))
 
-        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
-        #expect(tracker.transcribingSourceIDs == Set([PageID(rawValue: "src2")]))
+        // Both items are .extraction — both sources appear in extractingSourceIDs
+        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
 
-        // Complete transcription → only transcription clears
+        // Complete the second extraction item → only src2 clears
         tracker.handleForTesting(.completed(transcriptionItem))
-        #expect(tracker.transcribingSourceIDs.isEmpty)
         #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
 
-        // Complete extraction → both clear
+        // Complete the first extraction item → both clear
         tracker.handleForTesting(.completed(extractionItem))
         #expect(tracker.extractingSourceIDs.isEmpty)
     }
@@ -1154,7 +1151,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("pendingSelectionQueue cleared by stop()")
     func pendingSelectionQueueClearedByStop() {
         let tracker = QueueActivityTracker()
-        tracker.pendingSelectionQueue = .transcription
+        tracker.pendingSelectionQueue = .extraction
         tracker.stop()
         #expect(tracker.pendingSelectionQueue == nil)
     }
@@ -1167,7 +1164,7 @@ struct QueueActivityTrackerLintItemIDTests {
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: .transcription, wikiID: "w1",
+            id: id, queue: .extraction, wikiID: "w1",
             payload: QueueItemPayload(sourceIDs: sourceIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -1197,8 +1194,8 @@ struct QueueActivityTrackerLintItemIDTests {
     }
 
     @MainActor
-    @Test("Transcription item ID does not resolve via extraction items")
-    func transcriptionItemIDDoesNotResolveExtractionItems() {
+    @Test("Transcription item ID resolves via extraction items (merged)")
+    func transcriptionItemIDResolvesExtractionItems() {
         let tracker = QueueActivityTracker()
         let src = PageID(rawValue: "src1")
         let extractionItem = QueueItem(
@@ -1209,9 +1206,9 @@ struct QueueActivityTrackerLintItemIDTests {
 
         tracker.handleForTesting(.started(extractionItem))
 
-        // An extraction item tracking the same source should NOT resolve
-        // via transcriptionItemID — the mapping is queue-kind-specific.
-        #expect(tracker.transcriptionItemID(for: src) == nil)
+        // Since transcription merged into .extraction, transcriptionItemID
+        // resolves via the extraction item tracking (itemToSourceIDs).
+        #expect(tracker.transcriptionItemID(for: src) == "ext-1")
     }
 
     @MainActor
@@ -1247,7 +1244,7 @@ struct QueueActivityTrackerLintItemIDTests {
     }
 
     @MainActor
-    @Test("Transcription does not conflate with extraction for item ID resolution")
+    @Test("Transcription resolves correctly alongside extraction items (merged)")
     func transcriptionItemIDNoCrossKindConflation() {
         let tracker = QueueActivityTracker()
         let src1 = PageID(rawValue: "src1")
@@ -1262,12 +1259,14 @@ struct QueueActivityTrackerLintItemIDTests {
         tracker.handleForTesting(.started(extractionItem))
         tracker.handleForTesting(.started(transcriptionItem))
 
-        #expect(tracker.transcriptionItemID(for: src1) == nil)
+        // Both resolve via itemToSourceIDs (merged into .extraction)
+        #expect(tracker.transcriptionItemID(for: src1) == "ext-1")
         #expect(tracker.transcriptionItemID(for: src2) == "tr-1")
 
-        // Complete transcription → only transcription clears
+        // Complete the second item → only src2 clears
         tracker.handleForTesting(.completed(transcriptionItem))
         #expect(tracker.transcriptionItemID(for: src2) == nil)
+        #expect(tracker.transcriptionItemID(for: src1) == "ext-1")
     }
 }
 #endif

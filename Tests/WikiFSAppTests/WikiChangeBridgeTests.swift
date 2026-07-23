@@ -197,7 +197,8 @@ private struct StubExtractionProvider: QueueExtractionProvider {
     ) async throws -> ExtractionResolution? { nil }
     func persistExtraction(
         wikiID: String, sourceID: PageID, markdown: String,
-        backend: ExtractionBackend, modelVersion: String?
+        backend: ExtractionBackend, modelVersion: String?,
+        technique: String?
     ) async throws {}
 }
 

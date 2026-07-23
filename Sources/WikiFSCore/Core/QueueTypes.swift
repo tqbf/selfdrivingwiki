@@ -15,16 +15,15 @@ public enum StageRoutingKey: String, Sendable {
 /// one queue, and each queue has its own independent run state (running /
 /// paused) and ordering-key sequence.
 public enum QueueKind: String, Hashable, Codable, Sendable {
-    /// PDF / document extraction (source → extracted markdown).
+    /// Extraction (source → extracted markdown). Covers PDF/document
+    /// extraction AND transcript fetching (YouTube captions, podcast feeds) —
+    /// transcript sources resolve to a `transcriptFetch` closure in the
+    /// `ExtractionResolution` instead of bytes-based extraction.
     case extraction
     /// Content ingestion (extracted markdown → wiki pages). Also covers
     /// lint operations — a `.ingestion` item with `lintPageIDs` in its
     /// payload runs lint instead of ingestion.
     case ingestion
-    /// Transcription (source → transcript markdown): network/subprocess fetch
-    /// of YouTube captions or podcast feeds. Mirrors extraction's shape but
-    /// has no local bytes (no `ExtractionResolution.pdfData`).
-    case transcription
 }
 
 // MARK: - Item lifecycle states

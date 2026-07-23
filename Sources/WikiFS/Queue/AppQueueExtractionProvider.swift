@@ -98,6 +98,67 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             return nil
         }
 
+        // Check if this is a transcript source (YouTube, podcast, etc.) —
+        // transcript sources have no local bytes; the markdown comes from a
+        // network/subprocess fetch. Merged from the former
+        // `AppQueueTranscriptionProvider` + `QueueTranscriptionProvider`.
+        if let origin = store.sourceOrigin(for: sourceID),
+           let providerKind = origin.provider {
+            switch providerKind {
+            case .youtube:
+                let videoID = origin.externalIdentity
+                    ?? MediaEmbedURL.youtube(origin.plan ?? "")?.externalIdentity
+                guard let videoID else { return nil }
+                let svc = YouTubeTranscriptService()
+                return ExtractionResolution(
+                    transcriptFetch: { @Sendable in
+                        try await svc.transcript(forVideoID: videoID).markdown
+                    },
+                    technique: "youtube-captions",
+                    filename: "transcript")
+
+            case .podcast:
+                guard let planURLString = origin.plan,
+                      let sourceURL = URL(string: planURLString) else {
+                    return nil
+                }
+                let svc = RSSPodcastTranscriptService()
+                return ExtractionResolution(
+                    transcriptFetch: { @Sendable in
+                        try await svc.transcript(forFeedURL: sourceURL).markdown
+                    },
+                    technique: "rss-podcast-transcript",
+                    filename: "transcript")
+
+            case .applePodcast:
+                #if PODCAST_TRANSCRIPTS
+                guard let planURLString = origin.plan,
+                      let pageURL = URL(string: planURLString),
+                      let episode = PodcastEpisodeURL.parse(planURLString) else {
+                    return nil
+                }
+                let fetcher: any PodcastTranscriptFetching =
+                    ApplePodcastTranscriptService.bundled()
+                    ?? RSSPodcastTranscriptService(sourceURL: pageURL)
+                let materializer = ApplePodcastMaterializer(
+                    episode: episode, pageURL: pageURL, fetcher: fetcher)
+                return ExtractionResolution(
+                    transcriptFetch: { @Sendable in
+                        let result = try await materializer.materialize()
+                        return String(data: result.data, encoding: .utf8) ?? ""
+                    },
+                    technique: "apple-ttml",
+                    filename: "transcript")
+                #else
+                return nil
+                #endif
+
+            default:
+                break
+            }
+        }
+
+        // Regular bytes-based extraction (PDF, HTML, etc.).
         guard let source = store.sources.first(where: { $0.id == sourceID }),
               let bytes = store.sourceBytes(id: sourceID)
         else {
@@ -124,17 +185,24 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         sourceID: PageID,
         markdown: String,
         backend: ExtractionBackend,
-        modelVersion: String?
+        modelVersion: String?,
+        technique: String?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistExtraction — no session for wikiID=\(wikiID)")
             return
         }
-        store.seedPdfMarkdown(
-            for: sourceID,
-            content: markdown,
-            backend: backend,
-            modelVersion: modelVersion
-        )
+        if let technique {
+            // Transcript extraction — write as .transcript origin.
+            _ = store.appendTranscriptMarkdown(
+                for: sourceID, content: markdown, technique: technique)
+        } else {
+            store.seedPdfMarkdown(
+                for: sourceID,
+                content: markdown,
+                backend: backend,
+                modelVersion: modelVersion
+            )
+        }
     }
 }

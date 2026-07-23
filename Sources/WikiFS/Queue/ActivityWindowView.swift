@@ -43,7 +43,6 @@ struct ActivityWindowView: View {
         switch queue {
         case .extraction: return "Extraction Queue"
         case .ingestion: return "Agent Queue"
-        case .transcription: return "Transcription Queue"
         }
     }
 
@@ -52,21 +51,17 @@ struct ActivityWindowView: View {
         switch queue {
         case .extraction: return "doc.text.magnifyingglass"
         case .ingestion: return "tray.full"
-        case .transcription: return "waveform"
         }
     }
 
     /// The "Configure…" call-to-action shown on configuration errors, or `nil`
-    /// when this queue has no relevant Settings tab (transcription needs no
-    /// credentials — YouTube is a scrape, RSS is `uv`).
+    /// when this queue has no relevant Settings tab.
     private var configureCTA: (tab: String, label: String)? {
         switch queue {
         case .extraction:
             return (tab: "extraction", label: "Configure Extraction…")
         case .ingestion:
             return (tab: "agents", label: "Configure Agents…")
-        case .transcription:
-            return nil
         }
     }
 
@@ -252,11 +247,9 @@ struct ActivityWindowView: View {
         let description: String
         switch queue {
         case .extraction:
-            description = "PDF extraction tasks appear here as they run."
+            description = "PDF extraction and transcription tasks appear here as they run."
         case .ingestion:
             description = "Ingestion and lint tasks appear here as they run."
-        case .transcription:
-            description = "Transcription tasks (YouTube/podcast) appear here as they run."
         }
         return ContentUnavailableView {
             Label("No \(queueTitle) Activity", systemImage: "checkmark.circle")
@@ -1028,7 +1021,6 @@ struct ActivityWindowView: View {
         switch item.queue {
         case .extraction: return "Extraction"
         case .ingestion: return "Ingestion"
-        case .transcription: return "Transcription"
         }
     }
 

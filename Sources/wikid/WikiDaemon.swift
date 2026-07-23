@@ -37,9 +37,9 @@ final class WikiDaemon: @unchecked Sendable {
 
     #if canImport(WikiFSEngine)
     /// Lazily-constructed queue engine over the container's `queue.sqlite`.
-    /// `nil` until `ensureQueueEngine()` is called. Phase 0: constructed but
-    /// not wired to real workers (the stub factory produces no workers).
-    /// See `plans/daemon-workloads.md` Phase 0 §3.
+    /// `nil` until `ensureQueueEngine()` is called. Wired to real extraction +
+    /// ingestion worker factories that talk to `GRDBWikiStore` directly.
+    /// See `plans/daemon-workloads.md`.
     private var _queueEngine: QueueEngine?
     #endif
 
@@ -265,23 +265,94 @@ final class WikiDaemon: @unchecked Sendable {
 
     #if canImport(WikiFSEngine)
     /// Construct (or return the existing) `QueueEngine` over the container's
-    /// `queue.sqlite`. The engine is constructed with a **stub worker factory**
-    /// that never produces workers — Phase 0 demonstrates the daemon CAN host
-    /// the engine; Phase A wires real extraction workers, Phase B ingestion.
+    /// `queue.sqlite`. The engine is wired with real extraction + ingestion
+    /// worker factories backed by `GRDBWikiStore`.
     ///
-    /// Thread-safe: synchronized on `queue`. The engine itself is a `Sendable`
-    /// actor, so once constructed it is safe to serve from XPC handlers.
-    func ensureQueueEngine() throws -> QueueEngine {
-        try queue.sync {
-            if let engine = _queueEngine {
-                return engine
+    /// Async because constructing the `ExtractionCoordinator` (`@MainActor`)
+    /// requires a main-actor hop. Thread-safe: double-checked on `queue`.
+    func ensureQueueEngine() async throws -> QueueEngine {
+        if let engine = queue.sync(execute: { _queueEngine }) {
+            return engine
+        }
+
+        let coordinator = await MainActor.run {
+            ExtractionCoordinator(
+                containerDirectory: containerDirectory,
+                localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+        }
+
+        let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
+            guard let self else { return nil }
+            return self.queue.sync { self.openStores[wikiID] }
+        }
+
+        let queueStore = try QueueStore(databaseURL: queueDatabaseURL)
+
+        let extractionProvider = DaemonQueueExtractionProvider(
+            containerDirectory: containerDirectory,
+            extractionCoordinator: coordinator,
+            storeResolver: storeResolver)
+
+        let dir = containerDirectory
+        let ingestionProvider = DaemonQueueIngestionProvider(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            storeResolver: storeResolver,
+            queueStore: queueStore,
+            resolveSelectedProvider: {
+                AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+            },
+            resolveProviderConfig: {
+                AgentProvidersConfig.loadOrSeed(from: dir)
+            })
+
+        let progressBox = DaemonEmitBox<(@Sendable (QueueItem.ID, String) -> Void)>()
+        let transcriptBox = DaemonEmitBox<(@Sendable (QueueItem.ID, AgentEvent) -> Void)>()
+        let usageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
+        let liveUsageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
+        let logPathsBox = DaemonEmitBox<(@Sendable (QueueItem.ID, URL?, URL?) -> Void)>()
+        let pendingPermissionBox = DaemonEmitBox<(@Sendable (QueueItem.ID, PendingPermission?) -> Void)>()
+
+        let extractionFactory = QueueExtractionWorkerFactory(
+            provider: extractionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) })
+
+        let ingestionFactory = QueueIngestionWorkerFactory(
+            provider: ingestionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) },
+            emitTranscript: { id, event in transcriptBox.emit?(id, event) },
+            emitUsage: { id, usage in usageBox.emit?(id, usage) },
+            emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
+            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
+            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
+
+        let workerFactory = CompositeWorkerFactory(factories: [
+            .extraction: extractionFactory,
+            .ingestion: ingestionFactory,
+        ])
+
+        let engine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+
+        Task { progressBox.emit = await engine.makeEmitProgress() }
+        Task { transcriptBox.emit = await engine.makeEmitTranscript() }
+        Task { usageBox.emit = await engine.makeEmitUsage() }
+        Task { liveUsageBox.emit = await engine.makeEmitLiveUsage() }
+        Task { logPathsBox.emit = await engine.makeEmitLogPaths() }
+        Task { pendingPermissionBox.emit = await engine.makeEmitPendingPermission() }
+
+        let engineRef = engine
+        Task { [weak self] in
+            for await event in engineRef.events {
+                self?.pushQueueEvent(event)
             }
-            let store = try QueueStore(databaseURL: queueDatabaseURL)
-            let engine = QueueEngine(
-                store: store,
-                config: QueueEngineConfig(),
-                workerFactory: DaemonStubWorkerFactory()
-            )
+        }
+
+        Task { await engine.start() }
+
+        return queue.sync {
+            if let existing = _queueEngine {
+                return existing
+            }
             _queueEngine = engine
             return engine
         }
@@ -290,10 +361,9 @@ final class WikiDaemon: @unchecked Sendable {
     /// Serve a queue snapshot as JSON `Data` for the XPC `queueSnapshot` method.
     /// The engine's `snapshot()` is async (it's an actor method), so this is
     /// async too — the exporter wraps it in a `Task` and replies when it
-    /// resolves. In Phase 0 the stub factory never dispatches workers, so the
-    /// snapshot contains only items the app enqueues (none yet).
+    /// resolves.
     func queueSnapshotData() async -> Data {
-        guard let engine = try? ensureQueueEngine() else {
+        guard let engine = try? await ensureQueueEngine() else {
             return (try? JSONEncoder().encode(QueueSnapshot())) ?? Data()
         }
         let snapshot = await engine.snapshot()
@@ -305,20 +375,32 @@ final class WikiDaemon: @unchecked Sendable {
         Data()
     }
     #endif
+
+    // MARK: - Event forwarding
+
+    #if os(macOS)
+    /// Encode a `QueueEvent` as a `QueueEventEnvelope`, JSON-encode it to
+    /// `Data`, and call `deliverEvent` on all registered event sinks. This is
+    /// the sole path by which engine events reach the app over XPC.
+    func pushQueueEvent(_ event: QueueEvent) {
+        #if canImport(WikiFSEngine)
+        guard let envelope = QueueEventEnvelope(from: event) else { return }
+        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        let sinks = queue.sync { eventSinks }
+        for sink in sinks {
+            sink.deliverEvent(data)
+        }
+        #endif
+    }
+    #endif
 }
 
 #if canImport(WikiFSEngine)
-/// A no-op `QueueWorkerFactory` used by the daemon's workload host in Phase 0.
-/// `providerID(for:)` always returns `nil`, so the `QueueEngine`'s dispatch
-/// scan never claims an item — enqueued items sit in `.queued` indefinitely.
-/// This is intentional: Phase 0 demonstrates the daemon CAN construct and host
-/// a `QueueEngine`; Phase A replaces this with a real extraction factory.
-///
-/// See `plans/daemon-workloads.md` Phase 0 §3.
-private struct DaemonStubWorkerFactory: QueueWorkerFactory {
-    func providerID(for item: QueueItem) async -> String? { nil }
-    func worker(for item: QueueItem) async throws -> any QueueWorker {
-        throw QueueIngestionError.noSources
-    }
+/// A mutable box for a `@Sendable` emit closure. Used to break the circular
+/// dependency between the worker factories (need the closure) and the engine
+/// (provides it). Generic over the closure type so all six emit boxes share
+/// one implementation.
+final class DaemonEmitBox<T>: @unchecked Sendable {
+    var emit: T?
 }
 #endif

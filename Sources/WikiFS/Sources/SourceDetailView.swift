@@ -866,8 +866,8 @@ struct SourceDetailView: View {
                         // running job in the Activity window — mirroring
                         // PageDetailView's "View Lint" pattern (#837). Reuses
                         // the existing `pendingSelectionItemID` seam (set it,
-                        // set `pendingSelectionQueue = .transcription`, then
-                        // call `openActivityWindow?(.transcription)`).
+                        // set `pendingSelectionQueue = .extraction`, then
+                        // call `openActivityWindow?(.extraction)`).
                         Button(isTranscribing ? "View Transcription" : "Transcribe",
                                systemImage: isTranscribing
                                ? "checkmark.seal.fill"
@@ -875,11 +875,11 @@ struct SourceDetailView: View {
                             if isTranscribing {
                                 if let itemID = tracker.transcriptionItemID(for: file.id) {
                                     tracker.pendingSelectionItemID = itemID
-                                    tracker.pendingSelectionQueue = .transcription
-                                    openActivityWindow?(.transcription)
+                                    tracker.pendingSelectionQueue = .extraction
+                                    openActivityWindow?(.extraction)
                                     DebugLog.extraction("Transcribe button: navigating to transcription job \(itemID.prefix(8)) for source \(file.id.rawValue)")
                                 } else {
-                                    openActivityWindow?(.transcription)
+                                    openActivityWindow?(.extraction)
                                     DebugLog.extraction("Transcribe button: transcription in flight for source \(file.id.rawValue) but item not found; opening Activity window")
                                 }
                             } else {
@@ -1580,15 +1580,16 @@ struct SourceDetailView: View {
     /// unreachable in production; the YouTube path stays available.
     /// Run transcription through the queue engine instead of calling
     /// `store.transcribe(sourceID:)` inline (#842). Enqueues a durable
-    /// `.transcription` queue job, waits for completion, and refreshes the
-    /// head version on success — mirroring `runExtraction()`. Errors land
-    /// on the queue item's `error` field + Activity window (not inline
-    /// `transcribeError`, which was removed). The de-dupe / reveal-job
-    /// navigation is PR2 (shared with #837).
+    /// `.extraction` queue job (transcription merged into extraction — the
+    /// provider resolves transcript sources to a `transcriptFetch` closure),
+    /// waits for completion, and refreshes the head version on success —
+    /// mirroring `runExtraction()`. Errors land on the queue item's `error`
+    /// field + Activity window (not inline `transcribeError`, which was
+    /// removed). The de-dupe / reveal-job navigation is PR2 (shared with #837).
     private func runTranscription() async {
         do {
             let request = QueueItemRequest(
-                queue: .transcription, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)
@@ -1614,7 +1615,7 @@ struct SourceDetailView: View {
         DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
         do {
             let request = QueueItemRequest(
-                queue: .transcription, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)

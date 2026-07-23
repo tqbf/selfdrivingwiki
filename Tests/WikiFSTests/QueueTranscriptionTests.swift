@@ -5,10 +5,11 @@ import os
 @testable import WikiFSEngine
 @testable import WikiFSCore
 
-/// Tests for the `.transcription` queue kind: `QueueTranscriptionWorker`,
-/// `QueueTranscriptionWorkerFactory`, engine enqueue/waitForCompletion, and
-/// capacity limits. Mirrors `QueueExtractionTests`. Uses fake providers (no
-/// real network/subprocess fetches).
+/// Tests for transcript extraction via the `.extraction` queue kind (formerly
+/// `.transcription`). Uses `QueueExtractionWorkerFactory` with a fake provider
+/// that returns `ExtractionResolution(transcriptFetch:…)`. Mirrors
+/// `QueueExtractionTests`. Uses fake providers (no real network/subprocess
+/// fetches).
 @Suite(.serialized, .timeLimit(.minutes(2)))
 struct QueueTranscriptionTests {
 
@@ -35,17 +36,17 @@ struct QueueTranscriptionTests {
             resolveResult: .resolved,
             fetchBehavior: { await gate.wait() }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider,
             emitProgress: { _, _ in }
         )
-        let config = QueueEngineConfig(transcriptionLimit: 2)
+        let config = QueueEngineConfig(remoteExtractionLimit: 2)
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
         await engine.start()
 
         let start = Date()
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(elapsed < 1.0) // Immediate — not waiting for the worker.
@@ -58,14 +59,14 @@ struct QueueTranscriptionTests {
     @Test func testEnqueueRejectsEmptyWikiID() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let provider = FakeTranscriptionProvider(resolveResult: .resolved)
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store, workerFactory: factory)
         await engine.start()
 
         do {
             _ = try await engine.enqueue(
-                QueueItemRequest(queue: .transcription, wikiID: "", payload: makePayload()))
+                QueueItemRequest(queue: .extraction, wikiID: "", payload: makePayload()))
             Issue.record("Should have thrown")
         } catch is QueueStoreError { /* expected */ }
         store.close()
@@ -77,13 +78,13 @@ struct QueueTranscriptionTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let provider = FakeTranscriptionProvider(resolveResult: .nilResolution)
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store, workerFactory: factory)
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -101,15 +102,15 @@ struct QueueTranscriptionTests {
             resolveResult: .resolved,
             fetchBehavior: { }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store,
-                                 config: QueueEngineConfig(transcriptionLimit: 2),
+                                 config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
         await engine.start()
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -134,15 +135,15 @@ struct QueueTranscriptionTests {
             resolveResult: .resolved,
             fetchBehavior: { throw TestError() }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store,
-                                 config: QueueEngineConfig(transcriptionLimit: 2),
+                                 config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         let result = await engine.waitForCompletion(of: id)
 
@@ -165,15 +166,15 @@ struct QueueTranscriptionTests {
             resolveResult: .resolved,
             fetchBehavior: { }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store,
-                                 config: QueueEngineConfig(transcriptionLimit: 2),
+                                 config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         let result = await engine.waitForCompletion(of: id)
 
@@ -202,21 +203,21 @@ struct QueueTranscriptionTests {
                 if n == 2 { await gate2.wait() }
             }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store,
-                                 config: QueueEngineConfig(transcriptionLimit: 2),
+                                 config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
         await engine.start()
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1",
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1",
                              payload: makePayload(sourceID: "SRC1")))
         let id2 = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1",
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1",
                              payload: makePayload(sourceID: "SRC2")))
         let id3 = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1",
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1",
                              payload: makePayload(sourceID: "SRC3")))
 
         // Give the engine time to dispatch.
@@ -242,32 +243,32 @@ struct QueueTranscriptionTests {
     @Test func testFactoryProviderIDReturnsTranscriptionWhenResolvable() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let provider = FakeTranscriptionProvider(resolveResult: .resolved)
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store, workerFactory: factory)
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
         let item = try store.getItem(id)
-        // When dispatched, the providerID should be "transcription".
-        #expect(item?.providerID == "transcription")
+        // When dispatched, the providerID should be "transcript".
+        #expect(item?.providerID == "transcript")
         store.close()
     }
 
     @Test func testFactoryProviderIDReturnsNilWhenNotResolvable() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let provider = FakeTranscriptionProvider(resolveResult: .nilResolution)
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider, emitProgress: { _, _ in })
         let engine = QueueEngine(store: store, workerFactory: factory)
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -288,16 +289,16 @@ struct QueueTranscriptionTests {
             resolveResult: .resolved,
             fetchBehavior: { }
         )
-        let factory = QueueTranscriptionWorkerFactory(
+        let factory = QueueExtractionWorkerFactory(
             provider: provider,
             emitProgress: { id, line in progressHolder.record(id: id, line: line) })
         let engine = QueueEngine(store: store,
-                                 config: QueueEngineConfig(transcriptionLimit: 2),
+                                 config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
         await engine.start()
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .transcription, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
 
         try await progressHolder.waitForCount(1, timeoutSeconds: 5)
 
@@ -315,8 +316,8 @@ struct QueueTranscriptionTests {
             .deletingLastPathComponent()
 
         let files = [
-            root.appendingPathComponent("Sources/WikiFSEngine/QueueTranscriptionProvider.swift"),
-            root.appendingPathComponent("Sources/WikiFSEngine/QueueTranscriptionWorker.swift"),
+            root.appendingPathComponent("Sources/WikiFSEngine/QueueExtractionProvider.swift"),
+            root.appendingPathComponent("Sources/WikiFSEngine/QueueExtractionWorker.swift"),
         ]
 
         for fileURL in files {
@@ -331,7 +332,7 @@ struct QueueTranscriptionTests {
 
 // MARK: - Fake transcription provider
 
-private final class FakeTranscriptionProvider: QueueTranscriptionProvider, @unchecked Sendable {
+private final class FakeTranscriptionProvider: QueueExtractionProvider, @unchecked Sendable {
     enum ResolveResult {
         case resolved
         case nilResolution
@@ -357,9 +358,9 @@ private final class FakeTranscriptionProvider: QueueTranscriptionProvider, @unch
         self.fetchBehavior = fetchBehavior
     }
 
-    func resolveTranscription(
-        wikiID: String, sourceID: PageID
-    ) async throws -> TranscriptionResolution? {
+    func resolveExtraction(
+        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+    ) async throws -> ExtractionResolution? {
         lock.withLock { state in
             state.callLog.append("resolve(wikiID:\(wikiID), sourceID:\(sourceID.rawValue))")
             state.lastTechnique = "youtube-captions"
@@ -367,23 +368,25 @@ private final class FakeTranscriptionProvider: QueueTranscriptionProvider, @unch
 
         switch resolveResult {
         case .resolved:
-            return TranscriptionResolution(
-                fetch: { @Sendable in
+            return ExtractionResolution(
+                transcriptFetch: { @Sendable in
                     try await self.fetchBehavior()
                     return "# Transcript markdown"
                 },
-                technique: "youtube-captions")
+                technique: "youtube-captions",
+                filename: "transcript")
         case .nilResolution:
             return nil
         }
     }
 
-    func persistTranscription(
+    func persistExtraction(
         wikiID: String, sourceID: PageID,
-        markdown: String, technique: String
+        markdown: String, backend: ExtractionBackend,
+        modelVersion: String?, technique: String?
     ) async throws {
         lock.withLock { state in
-            state.callLog.append("persist(wikiID:\(wikiID), sourceID:\(sourceID.rawValue), technique:\(technique))")
+            state.callLog.append("persist(wikiID:\(wikiID), sourceID:\(sourceID.rawValue), technique:\(technique ?? "nil"))")
         }
     }
 }
