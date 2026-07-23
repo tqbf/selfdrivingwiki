@@ -97,6 +97,21 @@ struct WikiDaemonEventSinkTests {
         #expect(daemon.registeredEventSinks.count == 2)
     }
 
+    // MARK: - pushChatEnvelope logging paths (#872)
+
+    /// With no sinks registered, `pushChatEnvelope` hits the unconditional
+    /// "no sinks registered (drop)" `DebugLog.store` path and must not crash.
+    /// This is the #871 diagnostic — events produced with nowhere to go — and
+    /// it stays unconditional precisely so it surfaces in Console.app.
+    @Test func pushChatEnvelopeWithNoSinksDoesNotCrash() throws {
+        let dir = makeTempDir()
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: "chat-1")
+
+        daemon.pushChatEnvelope(envelope)
+        // No crash / no throw => the empty-sinks drop path executed cleanly.
+    }
+
     // MARK: - Event delivery (#871): events must reach registered sinks
 
     /// Regression for #871: `pushQueueEvent` must deliver every lifecycle

@@ -29,6 +29,34 @@ public enum DebugLog {
     /// events surface cleanly in Console.app.
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
 
+    /// When true, high-frequency diagnostic logs (per-event `pushQueueEvent`/
+    /// `pushChatEnvelope`, etc.) are emitted. Off by default to avoid flooding
+    /// Console.app during active extraction/ingestion — the daemon pushes one
+    /// event per queue/chat transition, which is hundreds of lines per ingest
+    /// run (#872). Toggle at runtime via
+    /// `defaults write com.willsargent.WikiFS debugVerboseLogging -bool YES`,
+    /// or set `DebugLog.verboseLogging = true` directly from a debug menu/test.
+    ///
+    /// `nonisolated(unsafe)` matches the codebase convention for mutable
+    /// test-injectable statics (see `DisplayNameResolver.pdfTitleExtractor`,
+    /// `EmbeddingService.miniLMFactory`): a simple Bool read on the verbose
+    /// path and written rarely, so a torn read at worst yields one stale
+    /// emit/skip — never a correctness issue (it only gates a log line).
+    public nonisolated(unsafe) static var verboseLogging: Bool = {
+        UserDefaults.standard.bool(forKey: "debugVerboseLogging")
+    }()
+
+    /// Like the category helpers but only emits when ``verboseLogging`` is true.
+    /// Use for high-frequency per-event traces (e.g. every `pushQueueEvent`/
+    /// `pushChatEnvelope` success) that would flood Console.app during active
+    /// ingestion. Routed through the `store` category so it groups with the
+    /// existing daemon diagnostics in Console.app. Signal-worthy events
+    /// (errors, empty-sinks drops) should still use `store`/`debug` directly.
+    public static func verbose(_ message: @autoclosure () -> String) {
+        guard verboseLogging else { return }
+        emit("store", message())
+    }
+
     private static let subsystem = "com.selfdrivingwiki.debug"
 
     #if canImport(os)

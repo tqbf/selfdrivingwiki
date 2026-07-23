@@ -589,7 +589,16 @@ final class WikiDaemon: @unchecked Sendable {
             return
         }
         let sinks = queue.sync { eventSinks }
-        DebugLog.store("wikid: pushQueueEvent kind=\(envelope.kind.rawValue) sinks=\(sinks.count)")
+        // The empty-sinks case is the diagnostic that matters (the #871 symptom:
+        // events produced with nowhere to go) — keep it unconditional. The
+        // normal success path is high-frequency (one log per event) so it goes
+        // through `DebugLog.verbose`, which only emits when the verbose flag is
+        // on (#872).
+        if sinks.isEmpty {
+            DebugLog.store("wikid: pushQueueEvent kind=\(envelope.kind.rawValue) — no sinks registered (drop)")
+        } else {
+            DebugLog.verbose("wikid: pushQueueEvent kind=\(envelope.kind.rawValue) sinks=\(sinks.count)")
+        }
         for sink in sinks {
             sink.deliverEvent(data)
         }
@@ -608,7 +617,15 @@ final class WikiDaemon: @unchecked Sendable {
             return
         }
         let sinks = queue.sync { eventSinks }
-        DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") sinks=\(sinks.count)")
+        // Same split as `pushQueueEvent`: empty-sinks drop is unconditional
+        // (signal-worthy — chat events lost), success is verbose-only (#872).
+        // `chatID` is included because chat envelopes are per-conversation and
+        // correlating a drop to its chat is the whole point of this diagnostic.
+        if sinks.isEmpty {
+            DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") — no sinks registered (drop)")
+        } else {
+            DebugLog.verbose("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") sinks=\(sinks.count)")
+        }
         for sink in sinks {
             sink.deliverEvent(data)
         }
