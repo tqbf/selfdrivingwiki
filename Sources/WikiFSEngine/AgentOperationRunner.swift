@@ -199,32 +199,34 @@ public enum AgentOperationRunner {
         return .idle
     }
 
-    /// Build the first prompt for a seeded-fallback continue: a "continuing an
-    /// earlier chat" preamble carrying the last N user/assistant turns
-    /// (the `.text` projection — never `event_json`), byte-capped, followed by
-    /// the new user message.
-    ///
-    /// Pure and unit-tested: the caller hands in the persisted `chat_messages`
-    /// (already ordered by `seq`) and the new message; this returns the exact
-    /// string sent as the first turn of the fresh session.
-    ///
-    /// - Only `user` and `assistant` roles contribute (tool calls / results /
-    ///   system rows are noise for re-seeding context).
-    /// - The most recent N *matching* rows are kept (last-wins), then the whole
-    ///   preamble is trimmed from the front so the UTF-8 byte budget holds.
-    /// - The new user message is ALWAYS included in full (it is the actual
-    ///   question); only the transcript window is elided to fit the budget.
-    static func continuationPreamble(
-        from messages: [ChatMessage],
-        newMessage: String,
-        maxTurns: Int = 10,
-        maxBytes: Int = 12_000
-    ) -> String {
-        // Project to (role, text) for user/assistant rows only. `.result`
-        // duplicates `.assistantText` (same turn, same text) — skip it when
-        // the preceding turn is an `.assistantText` with identical text. A
-        // standalone `.result` (no preceding `.assistantText`) is kept so a
-        // turn that only emitted a result is not lost.
+    // MARK: - Adaptive preamble budget (#825)
+
+    // The preamble window scales with conversation depth rather than a flat
+    // 10-turn / 12 KB cap, so deep conversations keep more early context. Every
+    // value is bounded by the ceilings below, so the preamble can never blow
+    // the model's context window. See `adaptivePreambleBudget`.
+
+    /// Eligible-turn depth at and below which the floor (legacy) budget applies.
+    static let adaptiveFloorDepth = 10
+    /// Eligible-turn depth at and above which the ceiling budget is reached.
+    static let adaptiveCeilingDepth = 80
+    /// Floor of the turn-count window (also the legacy flat cap).
+    static let adaptiveFloorTurns = 10
+    /// Ceiling of the turn-count window.
+    static let adaptiveCeilingTurns = 40
+    /// Floor of the byte budget, in UTF-8 bytes (also the legacy flat cap).
+    static let adaptiveFloorBytes = 12_000
+    /// Ceiling of the byte budget, in UTF-8 bytes.
+    static let adaptiveCeilingBytes = 48_000
+
+    /// Project persisted messages to the (role, text) turns the preamble
+    /// re-seeds: `.userText` and `.assistantText` rows, plus a standalone
+    /// `.result`'s text, deduplicated against an identical preceding
+    /// `.assistantText`. Pure, and shared by `continuationPreamble` and the
+    /// adaptive budget so depth is measured the same way the window is filled.
+    static func projectedPreambleTurns(
+        from messages: [ChatMessage]
+    ) -> [(role: String, text: String)] {
         var turns: [(role: String, text: String)] = []
         for msg in messages {
             switch msg.event {
@@ -241,6 +243,66 @@ public enum AgentOperationRunner {
                 break
             }
         }
+        return turns
+    }
+
+    /// Compute the adaptive (maxTurns, maxBytes) preamble window for a
+    /// conversation of `eligibleTurns` user/assistant turns (#825). The window
+    /// grows with depth so deep conversations don't lose all early context, and
+    /// is bounded by `adaptiveCeilingTurns` / `adaptiveCeilingBytes`.
+    ///
+    /// Pure and unit-tested. Piecewise-linear ramp over depth:
+    ///   - depth ≤ `adaptiveFloorDepth` → floor budget (the legacy cap).
+    ///   - floor < depth < ceiling → linear interpolation floor → ceiling.
+    ///   - depth ≥ `adaptiveCeilingDepth` → ceiling budget (saturated).
+    ///
+    /// `eligibleTurns` is `projectedPreambleTurns(from:).count`. Depth 0 still
+    /// yields the floor budget; `continuationPreamble` then just bounds the
+    /// header + new message, as before.
+    static func adaptivePreambleBudget(
+        eligibleTurns depth: Int
+    ) -> (maxTurns: Int, maxBytes: Int) {
+        let lo = Self.adaptiveFloorDepth
+        let hi = Self.adaptiveCeilingDepth
+        guard hi > lo else {
+            return (Self.adaptiveCeilingTurns, Self.adaptiveCeilingBytes)
+        }
+        let clamped = min(max(depth, lo), hi)
+        let t = Double(clamped - lo) / Double(hi - lo)  // 0…1 across the ramp
+        let maxTurns = Int((Double(Self.adaptiveFloorTurns)
+            + t * Double(Self.adaptiveCeilingTurns - Self.adaptiveFloorTurns)).rounded())
+        let maxBytes = Int((Double(Self.adaptiveFloorBytes)
+            + t * Double(Self.adaptiveCeilingBytes - Self.adaptiveFloorBytes)).rounded())
+        return (maxTurns, maxBytes)
+    }
+
+    /// Build the first prompt for a seeded-fallback continue: a "continuing an
+    /// earlier chat" preamble carrying the last N user/assistant turns
+    /// (the `.text` projection — never `event_json`), byte-capped, followed by
+    /// the new user message.
+    ///
+    /// Pure and unit-tested: the caller hands in the persisted `chat_messages`
+    /// (already ordered by `seq`) and the new message; this returns the exact
+    /// string sent as the first turn of the fresh session.
+    ///
+    /// - Only `user` and `assistant` roles contribute (tool calls / results /
+    ///   system rows are noise for re-seeding context).
+    /// - The most recent N *matching* rows are kept (last-wins), then the whole
+    ///   preamble is trimmed from the front so the UTF-8 byte budget holds.
+    /// - The new user message is ALWAYS included in full (it is the actual
+    ///   question); only the transcript window is elided to fit the budget.
+    ///
+    /// `maxTurns` / `maxBytes` default to the legacy flat cap for backward
+    /// compatibility; `continueChat` passes an adaptive budget from
+    /// `adaptivePreambleBudget` (#825).
+    static func continuationPreamble(
+        from messages: [ChatMessage],
+        newMessage: String,
+        maxTurns: Int = 10,
+        maxBytes: Int = 12_000
+    ) -> String {
+        // Project to (role, text) turns (shared with the adaptive budget).
+        let turns = projectedPreambleTurns(from: messages)
 
         // Take the last N matching rows (most recent context wins).
         let recent: [(role: String, text: String)] = {
@@ -369,8 +431,17 @@ public enum AgentOperationRunner {
         store.finalizeStaleDrafts(forChat: chatID)
 
         // Build the condensed transcript + new message as the first prompt.
+        // #825: the preamble window is adaptive — it scales with conversation
+        // depth (more turns for longer chats, up to a ceiling) instead of the
+        // legacy flat 10-turn / 12 KB cap. This is the FALLBACK path (used when
+        // ACP resume fails / returns nil); the resume path sends the raw
+        // `trimmed` message via `firstMessageDisplay`, which is unaffected here.
         let history = store.chatMessages(chatID: chatID)
-        let firstMessage = continuationPreamble(from: history, newMessage: trimmed)
+        let budget = Self.adaptivePreambleBudget(
+            eligibleTurns: Self.projectedPreambleTurns(from: history).count)
+        let firstMessage = continuationPreamble(
+            from: history, newMessage: trimmed,
+            maxTurns: budget.maxTurns, maxBytes: budget.maxBytes)
         // #830: Read the chat's prior ACP session ID so startInteractiveQuery
         // can attempt resume before falling back to the fresh-start + preamble.
         let priorAcpSessionId = store.getChat(id: chatID)?.acpSessionId

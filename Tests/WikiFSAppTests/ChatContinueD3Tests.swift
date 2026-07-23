@@ -264,5 +264,161 @@ struct ChatContinueD3Tests {
         let after = model.chats.sorted { $0.updatedAt > $1.updatedAt }
         #expect(after.first?.id == chat.id)
     }
+
+    // MARK: - (d) adaptive preamble budget (#825)
+
+    @Test func adaptiveBudget_shortConversation_usesFloorBudget() {
+        // A shallow conversation (depth ≤ floorDepth) gets the legacy cap.
+        let budget = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: 3)
+        #expect(budget.maxTurns == AgentOperationRunner.adaptiveFloorTurns)
+        #expect(budget.maxBytes == AgentOperationRunner.adaptiveFloorBytes)
+    }
+
+    @Test func adaptiveBudget_atFloorDepth_usesFloorBudget() {
+        // Exactly at the floor depth → still the floor budget (ramp starts above).
+        let budget = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveFloorDepth)
+        #expect(budget.maxTurns == AgentOperationRunner.adaptiveFloorTurns)
+        #expect(budget.maxBytes == AgentOperationRunner.adaptiveFloorBytes)
+    }
+
+    @Test func adaptiveBudget_zeroDepthStillYieldsFloor() {
+        // Depth 0 (empty/fresh chat) is clamped to the floor — never negative
+        // or zero, so the header + new message still render as before.
+        let budget = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: 0)
+        #expect(budget.maxTurns == AgentOperationRunner.adaptiveFloorTurns)
+        #expect(budget.maxBytes == AgentOperationRunner.adaptiveFloorBytes)
+    }
+
+    @Test func adaptiveBudget_rampsUpBetweenFloorAndCeiling() {
+        // A mid-depth conversation lands strictly between floor and ceiling.
+        let midDepth = (AgentOperationRunner.adaptiveFloorDepth
+                        + AgentOperationRunner.adaptiveCeilingDepth) / 2
+        let floor = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveFloorDepth)
+        let mid = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: midDepth)
+        let ceiling = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveCeilingDepth)
+
+        // Monotonic: floor ≤ mid ≤ ceiling in both dimensions.
+        #expect(mid.maxTurns >= floor.maxTurns)
+        #expect(mid.maxTurns <= ceiling.maxTurns)
+        #expect(mid.maxBytes >= floor.maxBytes)
+        #expect(mid.maxBytes <= ceiling.maxBytes)
+        // The ramp actually grows past the floor for a deep-ish conversation.
+        #expect(mid.maxTurns > floor.maxTurns)
+        #expect(mid.maxBytes > floor.maxBytes)
+    }
+
+    @Test func adaptiveBudget_atCeilingDepth_reachesCeiling() {
+        // At the ceiling depth the budget saturates at the ceiling values.
+        let budget = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveCeilingDepth)
+        #expect(budget.maxTurns == AgentOperationRunner.adaptiveCeilingTurns)
+        #expect(budget.maxBytes == AgentOperationRunner.adaptiveCeilingBytes)
+    }
+
+    @Test func adaptiveBudget_farAboveCeiling_saturates() {
+        // Far beyond the ceiling depth → identical to the at-ceiling budget.
+        let atCeiling = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveCeilingDepth)
+        let farAbove = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.adaptiveCeilingDepth * 10)
+        #expect(farAbove.maxTurns == atCeiling.maxTurns)
+        #expect(farAbove.maxBytes == atCeiling.maxBytes)
+    }
+
+    @Test func adaptiveBudget_isMonotonicNonDecreasingAcrossDepth() {
+        // Sweeping depth 0…ceiling+20 must never decrease either dimension.
+        var prev = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: 0)
+        for depth in 1...(AgentOperationRunner.adaptiveCeilingDepth + 20) {
+            let cur = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: depth)
+            #expect(cur.maxTurns >= prev.maxTurns)
+            #expect(cur.maxBytes >= prev.maxBytes)
+            prev = cur
+        }
+    }
+
+    @Test func adaptiveBudget_neverExceedsCeiling() {
+        // Bounded: no depth, however large, exceeds the ceiling budget.
+        for depth in [0, 1, 10, 50, 80, 100, 1_000, 1_000_000] {
+            let budget = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: depth)
+            #expect(budget.maxTurns <= AgentOperationRunner.adaptiveCeilingTurns)
+            #expect(budget.maxBytes <= AgentOperationRunner.adaptiveCeilingBytes)
+        }
+    }
+
+    @Test func projectedPreambleTurns_countsEligibleUserAssistantRows() {
+        // Depth is measured the same way the window is filled: user/assistant
+        // text rows only, with the .result-duplicates-.assistantText dedup.
+        let messages: [ChatMessage] = [
+            msg(0, .userText("q")),
+            msg(1, .assistantText("a")),
+            msg(2, .toolUse(name: "Bash", inputSummary: "x")),
+            msg(3, .toolResult(isError: false, summary: "y")),
+            msg(4, .systemInit(model: "m")),
+            msg(5, .result(isError: false, text: "a")),  // dup of msg1 → dropped
+        ]
+        let turns = AgentOperationRunner.projectedPreambleTurns(from: messages)
+        #expect(turns.count == 2)
+        #expect(turns.map(\.role) == ["user", "assistant"])
+    }
+
+    @Test func preambleAdaptiveWindowKeepsMoreTurnsForDeepConversations() {
+        // A 40-turn conversation. The legacy flat 10-turn cap would keep only
+        // turn30…turn39; the adaptive window scales maxTurns up for this depth,
+        // so it retains early turns the flat cap would have lost. Byte budget
+        // is generous here so the turn-count window is the binding constraint.
+        var messages: [ChatMessage] = []
+        for i in 0..<40 {
+            messages.append(msg(i, .userText("turn\(i)")))
+        }
+        let depth = AgentOperationRunner.projectedPreambleTurns(from: messages).count
+        let budget = AgentOperationRunner.adaptivePreambleBudget(eligibleTurns: depth)
+
+        #expect(depth == 40)
+        #expect(budget.maxTurns > AgentOperationRunner.adaptiveFloorTurns)   // ramp grew
+        #expect(budget.maxTurns <= AgentOperationRunner.adaptiveCeilingTurns)
+
+        let preamble = AgentOperationRunner.continuationPreamble(
+            from: messages, newMessage: "next",
+            maxTurns: budget.maxTurns, maxBytes: budget.maxBytes)
+
+        // Parse the surviving turn indices per-line (avoids the "turn1" ⊂
+        // "turn10" substring trap).
+        let prefix = "[user] turn"
+        let kept: Set<Int> = Set(
+            preamble.split(separator: "\n").compactMap { line -> Int? in
+                let s = String(line)
+                guard s.hasPrefix(prefix) else { return nil }
+                return Int(s.dropFirst(prefix.count))
+            }
+        )
+        #expect(kept.contains(39))                 // most recent always survives
+        let lowestKept = kept.min() ?? -1
+        #expect(lowestKept >= 0 && lowestKept < 30)  // an early turn legacy cap drops
+    }
+
+    @Test func preambleAdaptiveWindowStillRespectsByteCeiling() {
+        // Even with the grown byte budget, deep + verbose conversations stay
+        // within the ceiling; the new message is always included in full.
+        let big = String(repeating: "x", count: 400)
+        var messages: [ChatMessage] = []
+        for i in 0..<100 {  // well past the ceiling depth → ceiling budget
+            messages.append(msg(i, .userText("Q\(i) " + big)))
+            messages.append(msg(i + 100, .assistantText("A\(i) " + big)))
+        }
+        let budget = AgentOperationRunner.adaptivePreambleBudget(
+            eligibleTurns: AgentOperationRunner.projectedPreambleTurns(from: messages).count)
+        #expect(budget.maxBytes == AgentOperationRunner.adaptiveCeilingBytes)
+
+        let preamble = AgentOperationRunner.continuationPreamble(
+            from: messages, newMessage: "the real new question",
+            maxTurns: budget.maxTurns, maxBytes: budget.maxBytes)
+
+        // Bounded by the ceiling (+ a couple bytes slack for head-trim rounding).
+        #expect(preamble.utf8.count <= AgentOperationRunner.adaptiveCeilingBytes + 8)
+        #expect(preamble.hasSuffix("the real new question"))
+    }
 }
 #endif
