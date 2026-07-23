@@ -755,7 +755,11 @@ struct SourceDetailView: View {
 
             if isHeaderExpanded {
                 sourceActionBar
-                    .frame(maxWidth: .infinity)
+                    // Anchor leading: without an alignment the default is
+                    // `.center`, which offsets the whole bar when there's no
+                    // trailing `Spacer` to force full width (e.g. a source
+                    // with no markdown → `isOutlineApplicable` false).
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
             }
         }
