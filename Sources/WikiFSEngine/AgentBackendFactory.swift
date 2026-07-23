@@ -27,7 +27,7 @@ public enum AgentBackendFactory {
     ///     `.ingest`/`.lint` (queued) → `queuedIngestCeiling` (600s). Defaults
     ///     to the interactive value for callers that don't differentiate
     ///     (matching the underlying `ACPBackend.init` default).
-    static func makeBackend(
+    public static func makeBackend(
         policy: PermissionPolicy,
         budget: Duration? = nil,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout

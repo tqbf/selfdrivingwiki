@@ -272,6 +272,56 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             }
         }
     }
+
+    // MARK: - Workload: chat (Phase C)
+
+    func startChat(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.startChatData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
+    func continueChat(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.continueChatData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
+    func sendChatMessage(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.sendChatMessageData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
+    func stopChat(chatID: String, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            await daemon.stopChat(chatID: chatID)
+            sendableReply.reply()
+        }
+    }
+
+    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.chatSessionStateData(chatID: chatID)
+            sendableReply.reply(data)
+        }
+    }
+
+    func resolveChatPermission(request: Data, reply: @escaping () -> Void) {
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            await daemon.resolveChatPermissionData(request: request)
+            sendableReply.reply()
+        }
+    }
     #else
     // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
     func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
@@ -303,6 +353,23 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) { reply(Data()) }
+
+    // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
+    func startChat(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
+        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+    }
+    func continueChat(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
+        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+    }
+    func sendChatMessage(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
+        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+    }
+    func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
+    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
     #endif
 }
 

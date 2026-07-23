@@ -102,6 +102,30 @@ import Foundation
     /// Load all activity snapshots. Reply is JSON-encoded
     /// `[String: ActivitySnapshotData]`.
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void)
+
+    // MARK: - Workload: chat (Phase C)
+
+    /// Start a new chat. `request` is JSON-encoded `ChatStartRequest`;
+    /// reply is JSON `ChatStartReply` (`{"chatID": "<ulid>", "error": null}`).
+    func startChat(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Continue a persisted chat with a new user turn.
+    /// `request` is JSON `ChatContinueRequest`; reply `{"error": null}`.
+    func continueChat(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Send a follow-up turn to the active chat session.
+    /// `request` is JSON `{"chatID": "...", "message": "..."}`; reply `{"error": null}`.
+    func sendChatMessage(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Cancel/stop the active turn (or end the session).
+    func stopChat(chatID: String, reply: @escaping () -> Void)
+
+    /// Rehydrate a chat's live state after (re)connect. Reply is JSON `ChatSessionState`.
+    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void)
+
+    /// Resolve a pending permission request for a chat (approve/reject).
+    /// `request` is JSON `ChatPermissionResolveRequest`.
+    func resolveChatPermission(request: Data, reply: @escaping () -> Void)
 }
 
 /// The reverse-channel protocol the app implements so the daemon can push
