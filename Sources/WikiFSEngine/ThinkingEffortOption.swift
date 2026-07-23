@@ -18,7 +18,7 @@ import Foundation
 /// advertises no such option, so the calling UI hides the affordance (capability
 /// detection is agent-dependent: Claude, GLM, etc. advertise it; older agents
 /// don't).
-public struct ThinkingEffortOption: Equatable, Sendable {
+public struct ThinkingEffortOption: Equatable, Sendable, Codable {
     /// The config option id the toolbar passes back to `setConfigOption`
     /// (usually `"thought_level"`).
     public let configId: String
@@ -28,7 +28,7 @@ public struct ThinkingEffortOption: Equatable, Sendable {
     /// carries the value id (sent on selection) and a display name.
     public let choices: [Choice]
 
-    public struct Choice: Equatable, Sendable, Identifiable {
+    public struct Choice: Equatable, Sendable, Identifiable, Codable {
         /// The value id to send to `setConfigOption` when this choice is picked.
         public let value: String
         /// A human-readable label for the menu item.

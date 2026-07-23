@@ -164,8 +164,7 @@ public enum AgentOperationRunner {
     ///   (The three logical states from the spec — idle / between-turns /
     ///   mid-generation — map to idle / betweenTurns / refused respectively,
     ///   since a refused takeover is the "mid-generation" outcome.)
-    public enum ContinueTakeover: Equatable {
-        case idle
+    public enum ContinueTakeover: Equatable, Sendable {        case idle
         case betweenTurns
         case refused
     }
@@ -174,7 +173,7 @@ public enum AgentOperationRunner {
     /// mid-generation (`isGenerating` or queued for the gate
     /// `isAwaitingGenerationSlot`) — the composer is already disabled in that
     /// state, and `continueChat` treats this as a hard bail.
-    static func continueTakeoverDecision(
+    public static func continueTakeoverDecision(
         isRunning: Bool,
         isInteractiveSession: Bool,
         isGenerating: Bool,
@@ -224,7 +223,7 @@ public enum AgentOperationRunner {
     /// `.result`'s text, deduplicated against an identical preceding
     /// `.assistantText`. Pure, and shared by `continuationPreamble` and the
     /// adaptive budget so depth is measured the same way the window is filled.
-    static func projectedPreambleTurns(
+    public static func projectedPreambleTurns(
         from messages: [ChatMessage]
     ) -> [(role: String, text: String)] {
         var turns: [(role: String, text: String)] = []
@@ -259,7 +258,7 @@ public enum AgentOperationRunner {
     /// `eligibleTurns` is `projectedPreambleTurns(from:).count`. Depth 0 still
     /// yields the floor budget; `continuationPreamble` then just bounds the
     /// header + new message, as before.
-    static func adaptivePreambleBudget(
+    public static func adaptivePreambleBudget(
         eligibleTurns depth: Int
     ) -> (maxTurns: Int, maxBytes: Int) {
         let lo = Self.adaptiveFloorDepth
@@ -295,7 +294,7 @@ public enum AgentOperationRunner {
     /// `maxTurns` / `maxBytes` default to the legacy flat cap for backward
     /// compatibility; `continueChat` passes an adaptive budget from
     /// `adaptivePreambleBudget` (#825).
-    static func continuationPreamble(
+    public static func continuationPreamble(
         from messages: [ChatMessage],
         newMessage: String,
         maxTurns: Int = 10,

@@ -369,6 +369,152 @@ final class WikiDaemon: @unchecked Sendable {
         let snapshot = await engine.snapshot()
         return (try? JSONEncoder().encode(snapshot)) ?? Data()
     }
+
+    // MARK: - Chat host (Phase C)
+
+    #if canImport(WikiFSEngine)
+    /// Lazily-constructed chat host owning the live `[chatID → ChatSession]`
+    /// registry. `nil` until `ensureChatHost()` is called.
+    private var _chatHost: DaemonChatHost?
+
+    /// Construct (or return the existing) `DaemonChatHost`. The host is wired
+    /// with the same `storeResolver` + container the queue engine uses, so chat
+    /// persistence lands on the same `GRDBWikiStore` instances.
+    func ensureChatHost() async throws -> DaemonChatHost {
+        if let host = queue.sync(execute: { _chatHost }) {
+            return host
+        }
+
+        let coordinator = await MainActor.run {
+            ExtractionCoordinator(
+                containerDirectory: containerDirectory,
+                localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+        }
+
+        let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
+            guard let self else { return nil }
+            return self.queue.sync { self.openStores[wikiID] }
+        }
+
+        let dir = containerDirectory
+        let host = DaemonChatHost(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            storeResolver: storeResolver,
+            resolveSelectedProvider: {
+                AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
+            },
+            resolveProviderConfig: {
+                AgentProvidersConfig.loadOrSeed(from: dir)
+            },
+            pushEvent: { [weak self] envelope in
+                self?.pushChatEnvelope(envelope)
+            })
+
+        return queue.sync {
+            if let existing = _chatHost {
+                return existing
+            }
+            _chatHost = host
+            return host
+        }
+    }
+    #endif
+
+    /// Start a chat. Returns JSON `ChatStartReply`. Async because the chat
+    /// host constructs an `AgentLauncher` on the main actor.
+    func startChatData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
+            let chatID = try await host.startChat(wikiID: req.wikiID, firstMessage: req.firstMessage)
+            let reply = ChatStartReply(chatID: chatID, error: nil)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        } catch {
+            let reply = ChatStartReply(chatID: nil, error: error.localizedDescription)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Continue a chat. Returns JSON `ChatErrorReply`.
+    func continueChatData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatContinueRequest.self, from: request)
+            try await host.continueChat(wikiID: req.wikiID, chatID: req.chatID, message: req.message)
+            let reply = ChatErrorReply(error: nil)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        } catch {
+            let reply = ChatErrorReply(error: error.localizedDescription)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Send a follow-up turn. Returns JSON `ChatErrorReply`.
+    func sendChatMessageData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            guard let dict = try JSONSerialization.jsonObject(with: request) as? [String: Any],
+                  let chatID = dict["chatID"] as? String,
+                  let message = dict["message"] as? String else {
+                let reply = ChatErrorReply(error: "invalid request")
+                return (try? JSONEncoder().encode(reply)) ?? Data()
+            }
+            try await host.sendChatMessage(chatID: chatID, message: message)
+            let reply = ChatErrorReply(error: nil)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        } catch {
+            let reply = ChatErrorReply(error: error.localizedDescription)
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Stop a chat.
+    func stopChat(chatID: String) async {
+        #if canImport(WikiFSEngine)
+        if let host = try? await ensureChatHost() {
+            await host.stopChat(chatID: chatID)
+        }
+        #endif
+    }
+
+    /// Get the chat session state. Returns JSON `ChatSessionState`.
+    func chatSessionStateData(chatID: String) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let state = try await host.chatSessionState(chatID: chatID)
+            return (try? JSONEncoder().encode(state)) ?? Data()
+        } catch {
+            return Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Resolve a chat permission.
+    func resolveChatPermissionData(request: Data) async {
+        #if canImport(WikiFSEngine)
+        if let host = try? await ensureChatHost(),
+           let req = try? JSONDecoder().decode(ChatPermissionResolveRequest.self, from: request) {
+            await host.resolvePermission(
+                chatID: req.chatID, optionId: req.optionId, approve: req.approve)
+        }
+        #endif
+    }
     #else
     /// On Linux (no WikiFSEngine), returns an empty JSON snapshot.
     func queueSnapshotData() async -> Data {
@@ -391,6 +537,17 @@ final class WikiDaemon: @unchecked Sendable {
             sink.deliverEvent(data)
         }
         #endif
+    }
+
+    /// Encode a chat `QueueEventEnvelope` to `Data` and call `deliverEvent`
+    /// on all registered event sinks. The sole path by which chat events
+    /// reach the app over XPC.
+    func pushChatEnvelope(_ envelope: QueueEventEnvelope) {
+        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        let sinks = queue.sync { eventSinks }
+        for sink in sinks {
+            sink.deliverEvent(data)
+        }
     }
     #endif
 }

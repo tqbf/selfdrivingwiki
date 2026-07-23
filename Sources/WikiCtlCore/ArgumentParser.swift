@@ -64,6 +64,12 @@ public enum ArgumentParser {
         case wikiCreate(name: String)
         case wikiDelete(id: String)
         case wikiRename(id: String, name: String)
+
+        /// Phase C: daemon-XPC chat commands. `chat new/send/stop` drive
+        /// interactive sessions on the daemon (no app needed).
+        case daemonChatNew(message: String)
+        case daemonChatSend(chatID: String, message: String)
+        case daemonChatStop(chatID: String)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -447,6 +453,32 @@ public enum ArgumentParser {
                 throw Failure.usage("chat rename: --to <new-title> is required")
             }
             return .chat(.rename(selector, to: newName))
+
+        case "new":
+            // Phase C: daemon-XPC chat. Needs a message (positional or --message).
+            let message = options.value("--message")
+                ?? rest.first
+                ?? ""
+            guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("chat new: a message is required (positional or --message)")
+            }
+            return .daemonChatNew(message: message)
+
+        case "send":
+            let chatID = try options.value("--chat-id")
+                ?? rest.first ?? { throw Failure.usage("chat send: --chat-id <id> is required") }()
+            let message = options.value("--message")
+                ?? rest.dropFirst().first
+                ?? ""
+            guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("chat send: a message is required (positional or --message)")
+            }
+            return .daemonChatSend(chatID: chatID, message: message)
+
+        case "stop":
+            let chatID = try options.value("--chat-id")
+                ?? rest.first ?? { throw Failure.usage("chat stop: --chat-id <id> is required") }()
+            return .daemonChatStop(chatID: chatID)
 
         default:
             throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")

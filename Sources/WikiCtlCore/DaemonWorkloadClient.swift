@@ -4,7 +4,6 @@ import WikiFSCore
 #if canImport(WikiFSEngine)
 import WikiFSEngine
 #endif
-
 /// Errors from daemon XPC workload calls.
 public enum DaemonXPCError: Error, LocalizedError {
     case timeout
@@ -254,5 +253,103 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             }
         }
     }
+
+    // MARK: - Chat (Phase C)
+
+    #if canImport(WikiFSEngine)
+
+    /// Start a new chat on the daemon. Returns the assigned chat ULID.
+    @discardableResult
+    public func startChat(_ request: ChatStartRequest) async throws -> String {
+        let requestData = try JSONEncoder().encode(request)
+        return try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.startChat(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
+                throw DaemonXPCError.unexpectedReply
+            }
+            if let error = dict["error"] as? String, !error.isEmpty {
+                throw DaemonXPCError.failure(error)
+            }
+            guard let chatID = dict["chatID"] as? String else {
+                throw DaemonXPCError.unexpectedReply
+            }
+            return chatID
+        }
+    }
+
+    /// Continue a persisted chat with a new user turn.
+    public func continueChat(_ request: ChatContinueRequest) async throws {
+        let requestData = try JSONEncoder().encode(request)
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.continueChat(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
+               let error = dict["error"] as? String, !error.isEmpty {
+                throw DaemonXPCError.failure(error)
+            }
+        }
+    }
+
+    /// Send a follow-up turn to an active chat session.
+    public func sendChatMessage(chatID: String, message: String) async throws {
+        let requestData = try JSONEncoder().encode([
+            "chatID": chatID, "message": message
+        ])
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.sendChatMessage(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
+               let error = dict["error"] as? String, !error.isEmpty {
+                throw DaemonXPCError.failure(error)
+            }
+        }
+    }
+
+    /// Stop/cancel the active chat turn.
+    public func stopChat(_ chatID: String) async throws {
+        try await withTimeout {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                self.proxy.stopChat(chatID: chatID) { cont.resume() }
+            }
+        }
+    }
+
+    /// Rehydrate a chat's live state after (re)connect.
+    public func chatSessionState(_ chatID: String) async throws -> ChatSessionState {
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.chatSessionState(chatID: chatID) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            do {
+                return try JSONDecoder().decode(ChatSessionState.self, from: replyData)
+            } catch {
+                throw DaemonXPCError.unexpectedReply
+            }
+        }
+    }
+
+    /// Resolve a pending permission request for a chat.
+    public func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
+        let requestData = try JSONEncoder().encode(request)
+        try await withTimeout {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                self.proxy.resolveChatPermission(request: requestData) { cont.resume() }
+            }
+        }
+    }
+
+    #endif // canImport(WikiFSEngine)
 }
 #endif

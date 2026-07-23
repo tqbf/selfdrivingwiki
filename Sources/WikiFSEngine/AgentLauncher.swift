@@ -308,11 +308,26 @@ public final class AgentLauncher {
         return latest.appendingPathComponent("debug", isDirectory: true)
     }
 
+    /// Static companion to ``debugFolderURL(forChat:)`` — resolves the same
+    /// path without an instance (used by `RemoteChatSession` which has no
+    /// launcher). Pure — delegates to `latestRunDirectory(for:)`.
+    public static func debugFolderURLStatic(forChat id: String) -> URL? {
+        guard let latest = latestRunDirectory(for: id) else { return nil }
+        return latest.appendingPathComponent("debug", isDirectory: true)
+    }
+
     /// Returns the chat's most-recent run's `run.jsonl` log file by resolving
     /// from disk: `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/<latest>/run.jsonl`.
     /// Pure — companion to `debugFolderURL(forChat:)`.
     public func logFileURL(forChat id: String) -> URL? {
         guard let latest = Self.latestRunDirectory(for: id) else { return nil }
+        return latest.appendingPathComponent("run.jsonl", isDirectory: false)
+    }
+
+    /// Static companion to ``logFileURL(forChat:)`` — resolves the same
+    /// path without an instance (used by `RemoteChatSession`). Pure.
+    public static func logFileURLStatic(forChat id: String) -> URL? {
+        guard let latest = latestRunDirectory(for: id) else { return nil }
         return latest.appendingPathComponent("run.jsonl", isDirectory: false)
     }
 

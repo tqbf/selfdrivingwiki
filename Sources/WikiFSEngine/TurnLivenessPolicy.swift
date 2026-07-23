@@ -15,7 +15,7 @@ import Foundation
 /// `ACPBackend.send` calls this from its watchdog task on every poll interval.
 ///
 /// See `plans/acp-stall-recovery.md` §1a (idle path now removed).
-enum TurnLivenessPolicy {
+public enum TurnLivenessPolicy {
 
     /// The watchdog's verdict for a single poll.
     enum Decision: Equatable {
@@ -61,7 +61,7 @@ enum TurnLivenessPolicy {
     /// that streams heartbeat-ish updates forever without finishing. Used by
     /// `startInteractiveQuery` (interactive chat — long reasoning chains are
     /// legitimate, and the UI chip is the user-facing release valve).
-    static let defaultCeilingTimeout: TimeInterval = 1800
+    public static let defaultCeilingTimeout: TimeInterval = 1800
 
     /// Queued-ingestion ceiling: 10 minutes. Used by unattended pipelines
     /// (ingest — including `runACPIngestPlannerExecutors` — and lint runs).
