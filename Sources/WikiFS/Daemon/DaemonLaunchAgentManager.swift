@@ -145,6 +145,25 @@ final class DaemonLaunchAgentManager {
         }
     }
 
+    /// Restart the daemon fresh on app launch: bootout (unload) any existing
+    /// service, wait for it to exit, then bootstrap (reload). Guarantees the
+    /// daemon picks up the current binary after a rebuild — a plain
+    /// `bootstrap` returns "already loaded" (error 5) and leaves the stale
+    /// daemon running with the old binary, so two daemons can race on
+    /// queue.sqlite (#876). Errors from bootout (e.g. "not loaded" when the
+    /// daemon wasn't running) are silently ignored — that just means there
+    /// was nothing to unload.
+    func bootoutAndBootstrap() {
+        DebugLog.store("wikid: restarting daemon (bootout + bootstrap)")
+        runLaunchctl(["bootout", serviceTarget]) { status in
+            // Non-zero is expected when the daemon isn't loaded yet — ignore.
+            DebugLog.store("wikid: launchctl bootout returned \(status) (ignored if not loaded)")
+        }
+        // Let the old process fully exit before the new one starts.
+        Thread.sleep(forTimeInterval: 1)
+        bootstrap()
+    }
+
     // MARK: - Private
 
     private func runLaunchctl(_ arguments: [String], completion: @escaping (Int32) -> Void) {
