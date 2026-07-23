@@ -158,12 +158,19 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
     /// When the summary was written, for staleness display. `nil` alongside
     /// `summary`.
     public var summaryAt: Date?
+    /// True when this row is a mid-generation streaming checkpoint not yet
+    /// finalized (#826). Draft rows decode to a normal `.assistantText` and
+    /// render as the (partial) assistant message; the flag is available for an
+    /// optional interrupted-turn indicator. Finalized on turn completion or on
+    /// chat reopen.
+    public var isDraft: Bool
 
     public init(
         id: PageID, chatID: PageID, seq: Int, event: AgentEvent, createdAt: Date,
         summary: String? = nil,
         summaryKind: ChatMessageSummaryKind? = nil,
-        summaryAt: Date? = nil
+        summaryAt: Date? = nil,
+        isDraft: Bool = false
     ) {
         self.id = id
         self.chatID = chatID
@@ -173,6 +180,7 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
         self.summary = summary
         self.summaryKind = summaryKind
         self.summaryAt = summaryAt
+        self.isDraft = isDraft
     }
 }
 

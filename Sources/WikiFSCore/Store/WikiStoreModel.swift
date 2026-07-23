@@ -4184,6 +4184,35 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Checkpoint a streaming assistant row to the store via the draft-handle
+    /// upsert (#826, C2). Returns `true` on success so the launcher can advance
+    /// its cursor only when the row was actually persisted — on failure the
+    /// dirty flag stays set so the next checkpoint retries (no silent data
+    /// loss). Routes through the store's `mutate()` + emits (C6: draft
+    /// checkpoints skip `updated_at`; only finalize bumps it).
+    @discardableResult
+    public func checkpointStreamingMessage(
+        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+    ) -> Bool {
+        do {
+            try store.checkpointStreamingMessage(
+                chatID: chatID, handle: handle, event: event, isDraft: isDraft)
+            return true
+        } catch {
+            DebugLog.store("WikiStoreModel.checkpointStreamingMessage failed: \(error)")
+            return false
+        }
+    }
+
+    /// Finalize stale drafts for a chat on reopen (C8). Cheap single UPDATE.
+    public func finalizeStaleDrafts(forChat chatID: PageID) {
+        do {
+            try store.finalizeStaleDrafts(forChat: chatID)
+        } catch {
+            DebugLog.store("WikiStoreModel.finalizeStaleDrafts failed: \(error)")
+        }
+    }
+
     public func chatMessages(chatID: PageID) -> [ChatMessage] {
         (try? store.chatMessages(chatID: chatID)) ?? []
     }

@@ -58,7 +58,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 43
+    private static let currentSchemaVersion = 44
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1236,6 +1236,33 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 43
         }
 
+        // v43->v44: incremental in-flight turn persistence (#826). Adds
+        // `is_draft` (0 = finalized, 1 = a mid-generation checkpoint not yet
+        // finalized) and `draft_handle` (a launcher-generated ULID used as the
+        // upsert key for streaming rows) to `chat_messages`. Both nullable /
+        // default-0 so every pre-existing row is finalized with no backfill.
+        // The partial unique index allows many NULL handles (standard SQLite
+        // behavior) while enforcing one row per live handle. #830/#849 own
+        // v43; this plan owns v43->v44.
+        if version < 44 {
+            let columns = try Self.tableColumnInfo("chat_messages", in: db)
+            if !columns.contains("is_draft") {
+                try db.inTransaction(.immediate) {
+                    try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0;")
+                    try db.execute(sql: "ALTER TABLE chat_messages ADD COLUMN draft_handle TEXT;")
+                    return .commit
+                }
+            }
+            if !(try Self.hasIndex("chat_messages_draft_handle", in: db)) {
+                try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_draft_handle
+                    ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
+                """)
+            }
+            try db.execute(sql: "PRAGMA user_version = 44;")
+            version = 44
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1471,10 +1498,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             created_at  REAL NOT NULL,
             summary     TEXT,
             summary_kind TEXT,
-            summary_at  REAL
+            summary_at  REAL,
+            is_draft    INTEGER NOT NULL DEFAULT 0,
+            draft_handle TEXT
         );
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_draft_handle
+            ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
+        """)
     }
 
     /// Create the chat-search tables (issue #245): `chat_chunks` (per-chunk
@@ -2501,10 +2534,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             created_at  REAL NOT NULL,
             summary     TEXT,
             summary_kind TEXT,
-            summary_at  REAL
+            summary_at  REAL,
+            is_draft    INTEGER NOT NULL DEFAULT 0,
+            draft_handle TEXT
         );
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_seq ON chat_messages(chat_id, seq);")
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_draft_handle
+            ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
+        """)
 
         // v28: chat semantic search (chat_chunks) + the `chat_search` sidecar
         // (kept as an ordinary table post-#634 — written by `upsertChatSearch`,
@@ -6088,6 +6127,124 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
+    /// Upsert a streaming assistant row under a stable draft handle (#826).
+    /// First call INSERTs (assigns the next seq, is_draft=1); subsequent calls
+    /// UPDATE the same row's `event_json`/`text` in place (is_draft unchanged).
+    /// `isDraft=false` finalizes (turn complete): sets `is_draft=0` AND bumps
+    /// `chats.updated_at` + refreshes the chat_search FTS sidecar. Per C6,
+    /// draft checkpoints (isDraft=true) do NOT bump `updated_at` so the chat
+    /// list doesn't re-sort every ~2s during generation.
+    ///
+    /// Manual SELECT/INSERT/UPDATE inside `mutate()` (C5 — matches existing
+    /// `appendChatMessages` style). Idempotent: re-checkpointing the same
+    /// content is a no-op UPDATE. Throws `.notFound` if `chatID` has no row.
+    public func checkpointStreamingMessage(
+        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+    ) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            // Existence check (mirrors appendChatMessages).
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            guard exists != 0 else {
+                throw WikiStoreError.notFound(chatID)
+            }
+
+            let now = Date()
+            let json = String(data: try JSONEncoder().encode(event), encoding: .utf8) ?? "{}"
+
+            // Does a row with this draft_handle already exist?
+            let existingSeq = try Int.fetchOne(
+                db,
+                sql: "SELECT seq FROM chat_messages WHERE chat_id = ? AND draft_handle = ?;",
+                arguments: [chatID.rawValue, handle]
+            )
+
+            if let _ = existingSeq {
+                // UPDATE in place — keep the original created_at + id + seq.
+                try db.execute(sql: """
+                UPDATE chat_messages
+                SET event_json = ?, text = ?, is_draft = ?
+                WHERE chat_id = ? AND draft_handle = ?;
+                """, arguments: [
+                    json, event.plainText, isDraft ? 1 : 0,
+                    chatID.rawValue, handle
+                ])
+            } else {
+                // INSERT — assign the next dense seq (continuing from max).
+                let maxSeq = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?;",
+                    arguments: [chatID.rawValue]
+                ) ?? -1
+                let nextSeq = maxSeq + 1
+                let messageID = PageID(rawValue: ULID.generate())
+                try db.execute(sql: """
+                INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at, is_draft, draft_handle)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, arguments: [
+                    messageID.rawValue, chatID.rawValue, nextSeq,
+                    event.chatRole, json, event.plainText,
+                    now.timeIntervalSince1970, isDraft ? 1 : 0, handle
+                ])
+            }
+
+            // C6: only bump updated_at + refresh chat_search on finalize (not
+            // on draft checkpoints) so the chat list doesn't re-sort every ~2s
+            // during generation and the FTS sidecar only refreshes on the
+            // authoritative final text.
+            if !isDraft {
+                try db.execute(sql: """
+                UPDATE chats SET updated_at = ? WHERE id = ?;
+                """, arguments: [now.timeIntervalSince1970, chatID.rawValue])
+
+                do {
+                    if let titleRow = try Row.fetchOne(
+                        db,
+                        sql: "SELECT title FROM chats WHERE id = ?;",
+                        arguments: [chatID.rawValue]
+                    ) {
+                        let title: String = titleRow["title"]
+                        let body: String = (try String.fetchOne(
+                            db,
+                            sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
+                            arguments: [chatID.rawValue]
+                        )) ?? ""
+                        try db.execute(sql: """
+                        INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
+                        """, arguments: [chatID.rawValue, title, body])
+                    }
+                } catch {
+                    DebugLog.store("checkpointStreamingMessage chat_search refresh failed — \(error)")
+                }
+            }
+        }
+    }
+
+    /// Finalize any stale draft rows for a chat (C8). Called when a chat is
+    /// opened: a draft row left over from an interrupted turn (hard kill)
+    /// should no longer be marked as in-progress. Sets `is_draft=0` for all
+    /// draft rows belonging to `chatID`. Cheap single UPDATE. Bumps
+    /// `chats.updated_at` so the chat list reflects the finalized state.
+    public func finalizeStaleDrafts(forChat chatID: PageID) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chat_messages SET is_draft = 0
+            WHERE chat_id = ? AND is_draft = 1;
+            """, arguments: [chatID.rawValue])
+            try db.execute(sql: """
+            UPDATE chats SET updated_at = ? WHERE id = ?;
+            """, arguments: [Date().timeIntervalSince1970, chatID.rawValue])
+        }
+    }
+
+
     public func listChats() throws -> [ChatSummary] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
@@ -6113,7 +6270,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func chatMessages(chatID: PageID) throws -> [ChatMessage] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
-            SELECT id, seq, event_json, created_at, summary, summary_kind, summary_at
+            SELECT id, seq, event_json, created_at, summary, summary_kind, summary_at, is_draft
             FROM chat_messages
             WHERE chat_id = ? ORDER BY seq ASC;
             """, arguments: [chatID.rawValue])
@@ -6139,7 +6296,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
                     summary: summary,
                     summaryKind: summaryKindRaw.flatMap(ChatMessageSummaryKind.init(rawValue:)),
-                    summaryAt: summaryAtDouble.map { Date(timeIntervalSince1970: $0) }
+                    summaryAt: summaryAtDouble.map { Date(timeIntervalSince1970: $0) },
+                    isDraft: (row["is_draft"] as Int?) == 1
                 ))
             }
             return out

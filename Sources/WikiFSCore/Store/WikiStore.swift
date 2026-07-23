@@ -683,6 +683,20 @@ public protocol WikiStore: Sendable {
         chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
     ) throws
 
+    /// Upsert a streaming assistant row under a stable draft handle (#826).
+    /// First call INSERTs (is_draft=1); subsequent calls UPDATE the same row's
+    /// `event_json`/`text` in place. `isDraft=false` finalizes (is_draft=0,
+    /// bumps `chats.updated_at` + refreshes chat_search). Draft checkpoints do
+    /// NOT bump `updated_at` (C6). Throws `.notFound` if `chatID` has no row.
+    func checkpointStreamingMessage(
+        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+    ) throws
+
+    /// Finalize any stale draft rows for a chat (C8). Called on chat reopen
+    /// so a draft left by an interrupted turn (hard kill) is no longer marked
+    /// in-progress. Sets `is_draft=0` for all draft rows belonging to `chatID`.
+    func finalizeStaleDrafts(forChat chatID: PageID) throws
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
     func listAllChatsOrderedByID() throws -> [ChatSummary]
