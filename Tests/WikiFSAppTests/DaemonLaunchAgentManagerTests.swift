@@ -177,5 +177,13 @@ struct DaemonLaunchAgentManagerTests {
         let manager = makeManager()
         manager.restart()
     }
+
+    @Test func bootoutAndBootstrapDoesNotCrashInTestEnvironment() {
+        // bootoutAndBootstrap() runs launchctl bootout + bootstrap which will
+        // fail in CI (no launchd domain for the test runner, and the service
+        // isn't loaded). It should not crash — errors are logged and ignored.
+        let manager = makeManager()
+        manager.bootoutAndBootstrap()
+    }
 }
 #endif

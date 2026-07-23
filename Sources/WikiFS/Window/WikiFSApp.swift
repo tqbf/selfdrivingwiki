@@ -299,15 +299,19 @@ struct WikiFSApp: App {
         // Bootstrap the wikid daemon via launchctl. The app generates the
         // LaunchAgent plist at runtime (it knows the container path + the
         // app bundle path), writes it to ~/Library/LaunchAgents/, and runs
-        // `launchctl bootstrap`. The daemon is unsandboxed — no entitlements
-        // (AMFI killed the old entitled binary because the bare Mach-O had
-        // no embedded provisioning profile). It reads the app group container
-        // directly via filesystem permissions. The daemon survives app quit.
-        // Best-effort: in dev mode (`swift run`) the bootstrap still works
-        // (the plist points at the container binary), wikictl falls back to
-        // direct file access if the daemon isn't running.
+        // `launchctl bootout` then `launchctl bootstrap`. The daemon is
+        // unsandboxed — no entitlements (AMFI killed the old entitled binary
+        // because the bare Mach-O had no embedded provisioning profile). It
+        // reads the app group container directly via filesystem permissions.
+        // The daemon survives app quit. Best-effort: in dev mode (`swift run`)
+        // the bootstrap still works (the plist points at the container
+        // binary), wikictl falls back to direct file access if the daemon
+        // isn't running.
+        // #876: bootout before bootstrap so a stale daemon (running an old
+        // binary after a rebuild) is always unloaded and restarted fresh — a
+        // plain bootstrap returns "already loaded" and leaves the old daemon.
         let manager = DaemonLaunchAgentManager(containerDirectory: directory)
-        manager.bootstrap()
+        manager.bootoutAndBootstrap()
         self.daemonManager = manager
 
         // Call bootstrap directly from init.
