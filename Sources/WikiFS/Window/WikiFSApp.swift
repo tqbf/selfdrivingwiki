@@ -83,6 +83,13 @@ struct WikiFSApp: App {
     /// unavailable state (no local fallback; the daemon owns chat).
     @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
 
+    /// The wikid LaunchAgent registered via SMAppService at launch (macOS
+    /// 13+). Held so the app can `unregister()` it on clean terminate —
+    /// otherwise launchd keeps a stale registration pointing at a dead daemon
+    /// (#863). `nil` when registration failed (e.g. running via `swift run`,
+    /// not in a bundle).
+    private let daemonService: SMAppService?
+
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
     // causes only one to win the NSApplication.shared.delegate slot; accessing the
@@ -299,8 +306,10 @@ struct WikiFSApp: App {
             let daemonService = SMAppService.agent(plistName: "com.selfdrivingwiki.wikid.plist")
             try daemonService.register()
             DebugLog.store("wikid: SMAppService registered, status=\(daemonService.status.rawValue)")
+            self.daemonService = daemonService
         } catch {
             DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
+            self.daemonService = nil
         }
 
         // Call bootstrap directly from init.
@@ -422,6 +431,18 @@ struct WikiFSApp: App {
             // items on ⌘Q — extraction/ingestion survives the app quitting,
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
+        }
+        appDelegate.unregisterDaemon = { [daemonService] in
+            // #863: unregister the wikid LaunchAgent on clean terminate so
+            // launchd releases management. Next launch re-registers a fresh
+            // daemon instead of finding a stale registration. Best-effort: a
+            // failure here (e.g. dev mode) must not block quit.
+            do {
+                try daemonService?.unregister()
+                DebugLog.store("wikid: SMAppService unregistered")
+            } catch {
+                DebugLog.store("wikid: SMAppService unregister failed: \(error)")
+            }
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
@@ -698,6 +719,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `NSApp.reply(toApplicationShouldTerminate:)` is called.
     var cancelInFlightForQuit: (() async -> Void)?
 
+    /// Called on the terminate path to unregister the wikid LaunchAgent from
+    /// SMAppService, so launchd releases management instead of keeping a stale
+    /// registration pointing at a dead daemon (#863). Runs AFTER
+    /// `cancelInFlightForQuit` completes and BEFORE
+    /// `NSApp.reply(toApplicationShouldTerminate:)`, while the daemon is still
+    /// alive to process the cancellation. Wired in `startStatusItem()`.
+    var unregisterDaemon: (() -> Void)?
+
     /// Called from `applicationShouldHandleReopen` (Dock click) to restore a
     /// wiki window when the user reopens the app with no visible windows.
     /// Opens the MRU wiki's window, or the main window (empty-state) if no
@@ -826,8 +855,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let activeOp = activeOperationDescription?()
 
         // If nothing is running AND the user has disabled confirm-before-quit,
-        // quit now without a dialog.
+        // quit now without a dialog. Unregister the daemon first so launchd
+        // releases management (#863) — nothing is in flight to cancel.
         guard activeOp != nil || Self.confirmBeforeQuitting else {
+            unregisterDaemon?()
             return .terminateNow
         }
 
@@ -869,14 +900,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Cancel in-flight items BEFORE replying to terminate so
                     // crash recovery on restart skips them (.cancelled, not
                     // .running). The Task awaits cancellation, then replies
-                    // on the main actor.
+                    // on the main actor. The daemon unregister (#863) runs
+                    // AFTER cancellation, while the daemon is still alive to
+                    // process it, and BEFORE the terminate reply.
                     Task {
                         await cancel()
                         await MainActor.run {
+                            self.unregisterDaemon?()
                             NSApp.reply(toApplicationShouldTerminate: true)
                         }
                     }
                 } else {
+                    if response == .alertFirstButtonReturn {
+                        self.unregisterDaemon?()
+                    }
                     NSApp.reply(
                         toApplicationShouldTerminate:
                             response == .alertFirstButtonReturn
@@ -889,10 +926,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task {
                     await cancel()
                     await MainActor.run {
+                        self.unregisterDaemon?()
                         NSApp.reply(toApplicationShouldTerminate: true)
                     }
                 }
             } else {
+                if response == .alertFirstButtonReturn {
+                    self.unregisterDaemon?()
+                }
                 NSApp.reply(
                     toApplicationShouldTerminate:
                         response == .alertFirstButtonReturn
