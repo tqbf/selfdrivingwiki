@@ -83,6 +83,7 @@ final class WikiDaemon: @unchecked Sendable {
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
                 let store = try makeStore(dbURL) as? GRDBWikiStore
+                if let store { wireEventBus(on: store, wikiID: descriptor.id) }
                 openStores[descriptor.id] = store
             } catch {
                 DebugLog.store("wikid: createWiki failed for \(descriptor.id): \(error)")
@@ -171,6 +172,7 @@ final class WikiDaemon: @unchecked Sendable {
             do {
                 // Read-write open (runs bootstrap ladder on first open)
                 let store = try GRDBWikiStore(databaseURL: dbURL)
+                wireEventBus(on: store, wikiID: wikiID)
                 openStores[wikiID] = store
                 return true
             } catch {
@@ -206,6 +208,7 @@ final class WikiDaemon: @unchecked Sendable {
             let dbURL = databaseURL(forWikiID: wikiID)
             do {
                 let store = try GRDBWikiStore(databaseURL: dbURL)
+                wireEventBus(on: store, wikiID: wikiID)
                 openStores[wikiID] = store
                 DebugLog.store("wikid: store lazily opened for \(wikiID)")
                 return store
@@ -263,6 +266,30 @@ final class WikiDaemon: @unchecked Sendable {
 
     private func databaseURL(forWikiID id: String) -> URL {
         containerDirectory.appendingPathComponent("\(id).sqlite", isDirectory: false)
+    }
+
+    /// Attach a per-wiki `WikiEventBus` to `store` whose all-events listener
+    /// forwards every committed mutation to a Darwin change notification.
+    ///
+    /// The daemon's stores live in a separate process from the app, so the
+    /// store's own `ResourceChangeEvent` emissions (from `mutate()`) can't
+    /// reach the app directly. This wiring bridges them: each event →
+    /// `DarwinNotifier.postChange(forWikiID:)` → the app's `WikiChangeBridge`
+    /// receives the cross-process Darwin notification → coalesces → reloads.
+    ///
+    /// Without it, daemon-only writes that never pass through an agent
+    /// `onUnlock` callback (summarizer writes, queue-extraction completion,
+    /// chat-message appends) emit into a nil bus and the app never learns about
+    /// them (#871 follow-up): persisted chat summaries stayed invisible and
+    /// completed queue items never refreshed the Activity window. Idempotent —
+    /// a no-op if the store already carries a bus.
+    private func wireEventBus(on store: GRDBWikiStore, wikiID: String) {
+        guard store.eventBus == nil else { return }
+        let bus = WikiEventBus(wikiID: wikiID)
+        bus.subscribe(nil) { event in
+            DarwinNotifier.postChange(forWikiID: event.wikiID)
+        }
+        store.eventBus = bus
     }
 
     // MARK: - Event sink management (Phase 0)
