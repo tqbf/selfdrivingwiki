@@ -1,5 +1,4 @@
 import SwiftUI
-import ServiceManagement
 import WikiFSEngine
 import WikiFSCore
 import WikiCtlCore
@@ -83,12 +82,12 @@ struct WikiFSApp: App {
     /// unavailable state (no local fallback; the daemon owns chat).
     @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
 
-    /// The wikid LaunchAgent registered via SMAppService at launch (macOS
-    /// 13+). Held so the app can `unregister()` it on clean terminate —
-    /// otherwise launchd keeps a stale registration pointing at a dead daemon
-    /// (#863). `nil` when registration failed (e.g. running via `swift run`,
-    /// not in a bundle).
-    private let daemonService: SMAppService?
+    /// Manages the wikid LaunchAgent via `launchctl` (replaces SMAppService).
+    /// The daemon is an unsandboxed binary — no entitlements, no provisioning
+    /// profile. The app generates the LaunchAgent plist at runtime and
+    /// bootstraps it via `launchctl bootstrap gui/<uid> <path>`. The daemon
+    /// survives app quit (launchd manages it independently).
+    private let daemonManager: DaemonLaunchAgentManager?
 
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
@@ -293,24 +292,19 @@ struct WikiFSApp: App {
             DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
         }
 
-        // Register the wikid daemon via SMAppService (macOS 13+). The daemon's
-        // plist is at Contents/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
-        // and its binary is at Contents/Helpers/wikid. SMAppService registers
-        // it as a launchd-managed LaunchAgent that inherits the app's bundle
-        // identity + TCC trust — no kTCCServiceSystemPolicyAppData prompts.
-        // See plans/multi-wiki-daemon.md §4.3.
-        // Best-effort: if registration fails (e.g. not in an app bundle during
-        // `swift run`), the daemon simply won't be available — wikictl falls
-        // back to direct file access.
-        do {
-            let daemonService = SMAppService.agent(plistName: "com.selfdrivingwiki.wikid.plist")
-            try daemonService.register()
-            DebugLog.store("wikid: SMAppService registered, status=\(daemonService.status.rawValue)")
-            self.daemonService = daemonService
-        } catch {
-            DebugLog.store("wikid: SMAppService registration failed (expected in dev mode): \(error)")
-            self.daemonService = nil
-        }
+        // Bootstrap the wikid daemon via launchctl. The app generates the
+        // LaunchAgent plist at runtime (it knows the container path + the
+        // app bundle path), writes it to ~/Library/LaunchAgents/, and runs
+        // `launchctl bootstrap`. The daemon is unsandboxed — no entitlements
+        // (AMFI killed the old entitled binary because the bare Mach-O had
+        // no embedded provisioning profile). It reads the app group container
+        // directly via filesystem permissions. The daemon survives app quit.
+        // Best-effort: in dev mode (`swift run`) the bootstrap still works
+        // (the plist points at the container binary), wikictl falls back to
+        // direct file access if the daemon isn't running.
+        let manager = DaemonLaunchAgentManager(containerDirectory: directory)
+        manager.bootstrap()
+        self.daemonManager = manager
 
         // Call bootstrap directly from init.
         print("SDW: calling bootstrapApp from init")
@@ -357,7 +351,10 @@ struct WikiFSApp: App {
             sessionManager: sessionManager,
             registry: registry,
             openWindowBridge: openWindowBridge,
-            backgroundIngestCoordinator: backgroundIngestCoordinator)
+            backgroundIngestCoordinator: backgroundIngestCoordinator,
+            daemonRestartHandler: { [daemonManager] in
+                daemonManager?.restart()
+            })
         statusController.start()
         windowTracker.start()
         appDelegate.menuBarItemController = statusController
@@ -432,17 +429,13 @@ struct WikiFSApp: App {
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
         }
-        appDelegate.unregisterDaemon = { [daemonService] in
-            // #863: unregister the wikid LaunchAgent on clean terminate so
-            // launchd releases management. Next launch re-registers a fresh
-            // daemon instead of finding a stale registration. Best-effort: a
-            // failure here (e.g. dev mode) must not block quit.
-            do {
-                try daemonService?.unregister()
-                DebugLog.store("wikid: SMAppService unregistered")
-            } catch {
-                DebugLog.store("wikid: SMAppService unregister failed: \(error)")
-            }
+        appDelegate.unregisterDaemon = { [daemonManager] in
+            // The daemon survives app quit — launchd manages it independently
+            // (KeepAlive + RunAtLoad). We do NOT bootout on terminate; the
+            // daemon keeps running so extraction/ingestion/chat survive the
+            // app quitting (the whole point of the daemon architecture). The
+            // "Restart Daemon" menu item uses launchctl kickstart when needed.
+            _ = daemonManager
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
@@ -719,12 +712,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `NSApp.reply(toApplicationShouldTerminate:)` is called.
     var cancelInFlightForQuit: (() async -> Void)?
 
-    /// Called on the terminate path to unregister the wikid LaunchAgent from
-    /// SMAppService, so launchd releases management instead of keeping a stale
-    /// registration pointing at a dead daemon (#863). Runs AFTER
-    /// `cancelInFlightForQuit` completes and BEFORE
-    /// `NSApp.reply(toApplicationShouldTerminate:)`, while the daemon is still
-    /// alive to process the cancellation. Wired in `startStatusItem()`.
+    /// Called on the terminate path to (optionally) stop the wikid daemon.
+    /// The daemon now survives app quit (launchd-managed LaunchAgent), so
+    /// this is a no-op — but the hook stays so the terminate flow doesn't
+    /// need to know about the daemon's lifecycle model. Wired in
+    /// `startStatusItem()`.
     var unregisterDaemon: (() -> Void)?
 
     /// Called from `applicationShouldHandleReopen` (Dock click) to restore a

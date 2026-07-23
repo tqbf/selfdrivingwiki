@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.selfdrivingwiki.wikid</string>
-    <!-- BundleProgram is relative to the app bundle root. SMAppService uses
-         this instead of ProgramArguments (absolute path). The binary is at
-         Contents/Helpers/wikid (bundled by build.sh alongside wikictl). -->
-    <key>BundleProgram</key>
-    <string>Contents/Helpers/wikid</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>exec "$HOME/Library/Group Containers/group.com.willsargent.wiki/wikid" || exec "/Applications/Self Driving Wiki.app/Contents/Helpers/wikid"</string>
+    </array>
     <key>MachServices</key>
     <dict>
         <key>com.selfdrivingwiki.wikid</key>
@@ -22,6 +22,8 @@
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>RunAtLoad</key>
+    <true/>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>

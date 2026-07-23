@@ -97,11 +97,6 @@ HELPERS_DIR="${CONTENTS}/Helpers"
 # baked to one developer's team). Written just before codesign.
 APP_ENTITLEMENTS="${BUILD_DIR}/WikiFS.entitlements"
 EXT_ENTITLEMENTS="${BUILD_DIR}/WikiFSFileProvider.entitlements"
-# wikid daemon entitlements — generated too (the daemon is a bare Mach-O with no
-# Info.plist; keychain-access-groups needs a per-developer value, so a committed
-# static file would only work for one developer). See plans/keychain-sharing.md.
-WIKID_ENTITLEMENTS="${BUILD_DIR}/wikid.entitlements"
-
 VERSION="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)"
 if [ -z "${VERSION}" ] && [ -f VERSION ]; then VERSION="$(sed -n '1p' VERSION | tr -d '[:space:]')"; fi
 VERSION="${VERSION:-0.0.0}"
@@ -149,17 +144,18 @@ done
 # ---------------------------------------------------------------------------
 echo "→ assembling ${APP_BUNDLE}"
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}" "${CONTENTS}/Library/LaunchAgents"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}"
 cp "${APP_BIN}" "${MACOS_DIR}/${APP_NAME}"
 cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
 # wikid daemon — bundled beside wikictl so launchd launches the SIGNED binary
-# (inherits the app's TCC trust; a standalone .build binary prompts on every rebuild).
+# (a standalone .build binary prompts on every rebuild — different cdhash resets
+# TCC trust). The daemon is unsandboxed: NO entitlements (AMFI kills a bare
+# Mach-O that has entitlements but no embedded provisioning profile). It reads
+# the app group container directly via filesystem permissions. The LaunchAgent
+# plist is generated at RUNTIME by DaemonLaunchAgentManager (the app knows the
+# correct container + bundle paths for any developer).
 cp "${DAEMON_BIN}" "${HELPERS_DIR}/${DAEMON_NAME}"
-# The SMAppService plist goes at Contents/Library/LaunchAgents/ so
-# SMAppService.agent(plistName:) can find it. Uses BundleProgram (relative
-# to the app bundle root) instead of ProgramArguments (absolute path).
-cp signing/com.selfdrivingwiki.wikid.plist "${CONTENTS}/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist"
 # Also drop a copy at build/wikictl for the Phase A gate to invoke directly.
 cp "${CTL_BIN}" "${BUILD_DIR}/${CTL_NAME}"
 # podcast-token-helper alongside wikictl (spawned via Process for transcript
@@ -486,28 +482,6 @@ PLIST
 </dict>
 </plist>
 PLIST
-  # wikid daemon entitlements — per-developer, generated (no committed static
-  # file: keychain-access-groups needs the builder's real Team ID + App Group,
-  # which come from signing/local.config). The FileProvider extension does NOT
-  # get keychain-access-groups (it never touches the Keychain; adding it would
-  # risk AMFI killing the sandboxed extension if its profile lacks the cap).
-  cat > "${WIKID_ENTITLEMENTS}" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>com.apple.security.application-groups</key>
-	<array>
-		<string>${APP_GROUP}</string>
-	</array>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>${KEYCHAIN_ACCESS_GROUP}</string>
-	</array>
-</dict>
-</plist>
-PLIST
-
   echo "→ embedding provisioning profiles"
   cp "${APP_PROFILE}" "${CONTENTS}/embedded.provisionprofile"
   cp "${EXT_PROFILE}" "${APPEX_CONTENTS}/embedded.provisionprofile"
@@ -518,16 +492,12 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
-  # wikid daemon — signs WITH the per-developer generated entitlements
-  # (${WIKID_ENTITLEMENTS}, carrying the shared keychain-access-groups entry
-  # verified by the R1 spike) so the daemon can read the ACP/Extraction/Zotero
-  # secrets the app wrote under that group. Without --entitlements the
-  # keychain-access-groups entry is ignored in shipped builds and the daemon
-  # reads nil keys. See plans/keychain-sharing.md.
+  # wikid daemon — unsandboxed, NO entitlements. AMFI kills a bare Mach-O
+  # that carries entitlements without an embedded provisioning profile;
+  # the daemon reads the app group container via filesystem permissions.
   echo "→ codesign wikid daemon (${IDENTITY})"
   codesign --force --timestamp=none \
     --identifier com.selfdrivingwiki.wikid \
-    --entitlements "${WIKID_ENTITLEMENTS}" \
     --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${DAEMON_NAME}"
   # pdf2md is a plain script bundled in Helpers/ — must also be signed, or the
@@ -581,6 +551,7 @@ PLIST
 else
   echo "→ ad-hoc codesign (File Provider extension will NOT load)"
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
+  codesign --force --sign - "${HELPERS_DIR}/${DAEMON_NAME}"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi

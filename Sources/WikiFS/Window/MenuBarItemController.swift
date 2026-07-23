@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 import WikiFSCore
 import WikiFSEngine
@@ -40,6 +39,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// status bar menu opens (or focuses) that wiki's window — even in
     /// accessory mode when no windows are visible.
     private let openWindowBridge: OpenWindowBridge
+    /// Restarts the wikid daemon via `launchctl kickstart`. Injected from
+    /// `WikiFSApp` (owns the `DaemonLaunchAgentManager`). Called by the
+    /// "Restart Daemon" menu item when the daemon is stale (running an old
+    /// binary after the app was rebuilt).
+    private var daemonRestartHandler: (() -> Void)?
 
     // MARK: - AppKit
 
@@ -66,7 +70,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         sessionManager: SessionManager,
         registry: WikiRegistryClient,
         openWindowBridge: OpenWindowBridge,
-        backgroundIngestCoordinator: BackgroundIngestCoordinator? = nil
+        backgroundIngestCoordinator: BackgroundIngestCoordinator? = nil,
+        daemonRestartHandler: (() -> Void)? = nil
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
@@ -74,6 +79,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         self.registry = registry
         self.openWindowBridge = openWindowBridge
         self.backgroundIngestCoordinator = backgroundIngestCoordinator
+        self.daemonRestartHandler = daemonRestartHandler
     }
 
     // MARK: - Lifecycle
@@ -379,25 +385,14 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         activateWikiWindow()
     }
 
-    /// Restart the wikid launchd daemon by unregistering + re-registering its
-    /// SMAppService. Used when the daemon is stale (running an old binary
-    /// after the app was rebuilt) — avoids a full app restart. Best-effort:
-    /// errors are logged, not fatal (in dev mode `unregister`/`register` may
-    /// no-op or throw if the service was never registered).
+    /// Restart the wikid daemon via `launchctl kickstart`. Used when the
+    /// daemon is stale (running an old binary after the app was rebuilt) —
+    /// avoids a full app restart. Delegates to the injected
+    /// `daemonRestartHandler` (which calls
+    /// `DaemonLaunchAgentManager.restart()`).
     @objc private func restartDaemon(_ sender: NSMenuItem?) {
         DebugLog.store("wikid: restart requested")
-        let daemonService = SMAppService.agent(plistName: "com.selfdrivingwiki.wikid.plist")
-        do {
-            try daemonService.unregister()
-        } catch {
-            DebugLog.store("wikid: unregister failed during restart: \(error)")
-        }
-        do {
-            try daemonService.register()
-            DebugLog.store("wikid: re-registered, status=\(daemonService.status.rawValue)")
-        } catch {
-            DebugLog.store("wikid: re-register failed during restart: \(error)")
-        }
+        daemonRestartHandler?()
     }
 
     /// Open the Settings window. Calls the `OpenWindowBridge`'s
