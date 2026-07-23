@@ -16,6 +16,7 @@ public protocol ChatDaemonCommands: AnyObject, Sendable {
     func stopChat(_ chatID: String) async throws
     func chatSessionState(_ chatID: String) async throws -> ChatSessionState
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
+    func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
 
 extension DaemonWorkloadClient: ChatDaemonCommands {}
@@ -23,7 +24,7 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// App-side coordinator for daemon-hosted chat sessions (Phase C4).
 ///
 /// Owns the per-chat `RemoteChatSession` registry, routes chat event envelopes
-/// demuxed by `DaemonQueueEventSink`, wraps the 6 chat XPC commands behind
+/// demuxed by `DaemonQueueEventSink`, wraps the 7 chat XPC commands behind
 /// typed Swift methods, and rehydrates sessions from the daemon's live state.
 /// This is the replacement for the per-wiki chat `AgentLauncher` — after C4
 /// the app no longer runs chat in-process; the daemon owns every chat session.
@@ -76,6 +77,7 @@ public final class ChatDaemonCoordinator {
         let key = chatID ?? Self.draftKey
         if let existing = sessions[key] { return existing }
         let session = RemoteChatSession(chatID: key)
+        wireSessionCallbacks(session)
         sessions[key] = session
         return session
     }
@@ -170,7 +172,38 @@ public final class ChatDaemonCoordinator {
         }
     }
 
+    /// Set the thinking-effort config option on a live chat session via the
+    /// daemon's `setChatConfigOption` XPC method. Errors are logged (the UI
+    /// already flipped optimistically; a `chatState` envelope reconciles).
+    public func setThinkingEffort(chatID: String, value: String) async {
+        do {
+            try await client.setChatConfigOption(
+                ChatConfigOptionRequest(chatID: chatID, option: "thought_level", value: value))
+        } catch {
+            DebugLog.agent("ChatDaemonCoordinator.setThinkingEffort failed for \(chatID): \(error)")
+        }
+    }
+
     // MARK: - Rehydration
+
+    /// Wire the session's config-option callback to route through the daemon's
+    /// `setChatConfigOption` XPC method. Called when a session is created so
+    /// `RemoteChatSession.setThinkingEffort` delegates to the daemon instead
+    /// of being a local-only optimistic flip. Skipped for the draft session
+    /// (no real chatID to target).
+    private func wireSessionCallbacks(_ session: RemoteChatSession) {
+        let chatID = session.chatID
+        guard chatID != Self.draftKey else { return }
+        let client = self.client
+        session.onSetChatConfigOption = { option, value in
+            do {
+                try await client.setChatConfigOption(
+                    ChatConfigOptionRequest(chatID: chatID, option: option, value: value))
+            } catch {
+                DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
+            }
+        }
+    }
 
     /// Rehydrate a session from the daemon's live state. Call on view appear
     /// and whenever the active chat changes so the mirror reflects the

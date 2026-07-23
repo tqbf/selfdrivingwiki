@@ -322,6 +322,14 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             sendableReply.reply()
         }
     }
+
+    func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.setChatConfigOptionData(request: request)
+            sendableReply.reply(data)
+        }
+    }
     #else
     // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
     func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
@@ -370,6 +378,10 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
+    func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
+        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+    }
     #endif
 }
 

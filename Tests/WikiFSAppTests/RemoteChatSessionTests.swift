@@ -176,6 +176,105 @@ struct RemoteChatSessionTests {
         #expect(session.runStartedAt?.timeIntervalSince1970 == 2000)
     }
 
+    // MARK: - Phase C4 follow-up: state envelope fields (stderr, lastActivityAt, currentProcessID)
+
+    @Test @MainActor func hydrateFromStateSetsStderrLastActivityAndPID() {
+        let session = RemoteChatSession(chatID: "chat-1")
+        let state = ChatSessionState(
+            chatID: "chat-1",
+            events: [],
+            isRunning: true,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil,
+            stderr: "some diagnostic output",
+            lastActivityAt: Date(timeIntervalSince1970: 5000),
+            currentProcessID: 12345)
+        session.hydrate(from: state)
+
+        #expect(session.stderr == "some diagnostic output")
+        #expect(session.lastActivityAt?.timeIntervalSince1970 == 5000)
+        #expect(session.currentProcessID == 12345)
+    }
+
+    @Test @MainActor func hydrateFromStateNilFieldsDefaultGracefully() {
+        let session = RemoteChatSession(chatID: "chat-1")
+        let state = ChatSessionState(
+            chatID: "chat-1",
+            events: [],
+            isRunning: false,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil)
+        session.hydrate(from: state)
+
+        #expect(session.stderr == "")
+        #expect(session.lastActivityAt == nil)
+        #expect(session.currentProcessID == nil)
+    }
+
+    @Test @MainActor func chatStateUpdateCarriesStderrLastActivityAndPID() {
+        let session = RemoteChatSession(chatID: "chat-1")
+        let update = ChatStateUpdate(
+            isRunning: true,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil,
+            stderr: "stderr line",
+            lastActivityAt: Date(timeIntervalSince1970: 9000),
+            currentProcessID: 999)
+        session.ingest(.chatState(chatID: "chat-1", update: update))
+
+        #expect(session.stderr == "stderr line")
+        #expect(session.lastActivityAt?.timeIntervalSince1970 == 9000)
+        #expect(session.currentProcessID == 999)
+    }
+
+    @Test @MainActor func stateEnvelopeFieldsRoundTrip() throws {
+        // Verify the new fields survive JSON encode/decode.
+        let state = ChatSessionState(
+            chatID: "chat-rt",
+            events: [],
+            isRunning: true,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil,
+            stderr: "captured stderr",
+            lastActivityAt: Date(timeIntervalSince1970: 7777),
+            currentProcessID: 4242)
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(ChatSessionState.self, from: data)
+
+        #expect(decoded.stderr == "captured stderr")
+        #expect(decoded.lastActivityAt?.timeIntervalSince1970 == 7777)
+        #expect(decoded.currentProcessID == 4242)
+    }
+
     // MARK: - Reset
 
     @Test @MainActor func resetClearsAllState() {

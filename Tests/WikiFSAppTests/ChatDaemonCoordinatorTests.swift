@@ -151,6 +151,59 @@ struct ChatDaemonCoordinatorTests {
         #expect(req.approve)
     }
 
+    // MARK: - Phase C4 follow-up: setChatConfigOption (7th XPC method)
+
+    @Test func setThinkingEffort_forwardsConfigOptionRequest() async throws {
+        let stub = StubChatDaemonCommands()
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coord.setThinkingEffort(chatID: "chat-1", value: "high")
+        let req = try #require(stub.configOptionCalls.first)
+        #expect(req.chatID == "chat-1")
+        #expect(req.option == "thought_level")
+        #expect(req.value == "high")
+    }
+
+    @Test func setThinkingEffort_swallowsClientError() async {
+        // A throwing client must not crash; the optimistic flip stays.
+        let stub = StubChatDaemonCommands(shouldThrow: true)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coord.setThinkingEffort(chatID: "chat-1", value: "high")
+        #expect(stub.configOptionCalls.count == 1)
+    }
+
+    @Test func session_wiresOnSetChatConfigOptionCallback() async throws {
+        // When the coordinator creates a session, the session's
+        // onSetChatConfigOption closure should be wired so
+        // setThinkingEffort routes through the daemon.
+        let stub = StubChatDaemonCommands()
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let session = coord.session(for: "chat-wired")
+        session.thinkingOption = ThinkingEffortOption(
+            configId: "thought_level", currentValue: "low",
+            choices: [ThinkingEffortOption.Choice(value: "low", label: "Low"),
+                      ThinkingEffortOption.Choice(value: "high", label: "High")])
+        session.setThinkingEffort("high")
+        // The callback fires in a detached Task; poll until it lands.
+        for _ in 0..<100 {
+            if !stub.configOptionCalls.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.thinkingOption?.currentValue == "high")
+        let req = try #require(stub.configOptionCalls.first)
+        #expect(req.chatID == "chat-wired")
+        #expect(req.option == "thought_level")
+        #expect(req.value == "high")
+    }
+
+    @Test func draftSession_doesNotWireConfigOptionCallback() {
+        // The draft session (nil chatID) should NOT wire the callback — there
+        // is no real chatID to target on the daemon.
+        let stub = StubChatDaemonCommands()
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let draft = coord.session(for: nil)
+        #expect(draft.onSetChatConfigOption == nil)
+    }
+
     @Test func rehydrate_hydratesOpenSessionFromStubState() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
@@ -195,6 +248,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var stopCalls: [String] = []
     var resolveCalls: [ChatPermissionResolveRequest] = []
     var sessionStateRequests: [String] = []
+    var configOptionCalls: [ChatConfigOptionRequest] = []
 
     var nextStartChatID: String = "stub-chat-id"
     var sessionState: ChatSessionState?
@@ -237,6 +291,11 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
 
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
         resolveCalls.append(request)
+        if shouldThrow { throw StubError.throwing }
+    }
+
+    func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws {
+        configOptionCalls.append(request)
         if shouldThrow { throw StubError.throwing }
     }
 }

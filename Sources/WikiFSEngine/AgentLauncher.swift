@@ -578,6 +578,36 @@ public final class AgentLauncher {
         #endif
     }
 
+    /// Set an arbitrary config option on the live ACP session by config id.
+    /// This is the generic form of ``setThinkingEffort(_:)`` — the daemon's
+    /// `setChatConfigOption` XPC method calls this so the app can change any
+    /// advertised config option (not just `thought_level`) on a live session
+    /// without restarting it. No-op when no session is live or the backend
+    /// isn't ACP. Errors are logged (not surfaced).
+    public func setConfigOption(configId: String, value: String) {
+        #if os(macOS)
+        guard let acp = backend as? ACPBackend,
+              let handle = sessionHandle else { return }
+        DebugLog.agent("setConfigOption: configId=\(configId) value=\(value)")
+        Task { @MainActor [weak self] in
+            do {
+                try await acp.setConfigOption(
+                    sessionHandle: handle,
+                    configId: configId,
+                    value: value)
+                // If this is the thought_level option, flip the local mirror.
+                if configId == "thought_level" {
+                    self?.thinkingOption = self?.thinkingOption?.withCurrentValue(value)
+                }
+            } catch {
+                DebugLog.agent("setConfigOption: failed configId=\(configId) value=\(value) \(error.localizedDescription)")
+            }
+        }
+        #else
+        // ACPBackend is macOS-only; no-op on Linux.
+        #endif
+    }
+
     /// The currently-pending write-permission requests surfaced from the backend
     /// (always-ask mode). When non-empty AND this surface is the live chat, the
     /// UI renders an inline Approve/Reject affordance (slice 2). Mirrors how

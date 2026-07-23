@@ -42,20 +42,25 @@ public final class RemoteChatSession {
     public var pendingPermissions: [PendingPermission] = []
     public var thinkingOption: ThinkingEffortOption?
 
-    /// stderr mirror (best-effort). The daemon does not stream per-chat stderr
-    /// over the chat envelope channel today; this stays empty unless a future
-    /// envelope kind populates it. `AgentQueueView` reads it for the internals
-    /// banner, same as the launcher path.
+    /// stderr mirror (best-effort). Populated from `ChatSessionState` on
+    /// rehydrate and from `chatState` streaming envelopes. Read by
+    /// `AgentQueueView` for the internals banner.
     public var stderr: String = ""
 
-    /// Last-activity timestamp mirror. Not carried by the chat envelope
-    /// protocol today, so this stays nil unless a future envelope populates
-    /// it. `AgentRunStatusView` degrades gracefully when nil.
+    /// Last-activity timestamp mirror. Populated from `ChatSessionState` on
+    /// rehydrate and from `chatState` streaming envelopes. `AgentRunStatusView`
+    /// degrades gracefully when nil.
     public var lastActivityAt: Date?
 
-    /// Spawned process id mirror. Not carried by the chat envelope protocol
-    /// today, so this stays nil unless a future envelope populates it.
+    /// Spawned process id mirror. Populated from `ChatSessionState` on
+    /// rehydrate and from `chatState` streaming envelopes.
     public var currentProcessID: Int32?
+
+    /// Optional callback to apply a config-option change on the daemon's live
+    /// session via the `setChatConfigOption` XPC method. Set by
+    /// `ChatDaemonCoordinator` when it creates the session; nil for the draft
+    /// session or when no coordinator is wired (optimistic-only flip).
+    public var onSetChatConfigOption: (@Sendable (String, String) async -> Void)?
 
     /// Cumulative usage for this chat (mirrors AgentLauncher.runTotalUsage).
     public private(set) var runTotalUsage: SessionUsage?
@@ -140,6 +145,9 @@ public final class RemoteChatSession {
             runningKind = WikiOperation.Kind(rawValue: raw)
         }
         runStartedAt = state.runStartedAt
+        stderr = state.stderr ?? ""
+        lastActivityAt = state.lastActivityAt
+        currentProcessID = state.currentProcessID.flatMap(Int32.init(exactly:))
         isInteractiveSession = state.isRunning || state.isGenerating
         // Source-of-truth rule: this mirror is "live" (activeChatID set)
         // exactly while the daemon reports the session interactive.
@@ -197,6 +205,9 @@ public final class RemoteChatSession {
             runningKind = WikiOperation.Kind(rawValue: raw)
         }
         runStartedAt = update.runStartedAt
+        if let stderr = update.stderr { self.stderr = stderr }
+        if let lastActivityAt = update.lastActivityAt { self.lastActivityAt = lastActivityAt }
+        if let pid = update.currentProcessID { self.currentProcessID = Int32(exactly: pid) }
         isInteractiveSession = update.isRunning || update.isGenerating
         // Source-of-truth rule: keep activeChatID in sync with interactivity.
         activeChatID = isInteractiveSession ? chatID : nil
@@ -270,15 +281,19 @@ public final class RemoteChatSession {
 
     // MARK: - Mid-session thinking effort (best-effort)
 
-    /// Optimistically flip the thinking-effort chip. The daemon-side apply
-    /// (a live `session/set_config_option`) needs a chat XPC method not in
-    /// the Phase C 6-method protocol, so C4 flips the UI locally and the next
-    /// `chatState` envelope from the daemon reconciles to its truth. A future
-    /// XPC method (`setChatConfigOption`) will make this authoritative.
+    /// Optimistically flip the thinking-effort chip AND fire the daemon's
+    /// `setChatConfigOption` XPC method so the live ACP session applies the
+    /// change. The optimistic flip keeps the UI snappy; a subsequent
+    /// `chatState` envelope from the daemon reconciles to its truth. If
+    /// `onSetChatConfigOption` is nil (draft session or no coordinator), only
+    /// the local flip happens.
     public func setThinkingEffort(_ value: String) {
         guard let option = thinkingOption else { return }
-        DebugLog.agent("RemoteChatSession.setThinkingEffort: value=\(value) (daemon apply deferred — no chat-config XPC method in C4)")
+        DebugLog.agent("RemoteChatSession.setThinkingEffort: value=\(value) configId=\(option.configId)")
         thinkingOption = option.withCurrentValue(value)
+        let configId = option.configId
+        let callback = onSetChatConfigOption
+        Task { await callback?(configId, value) }
     }
 
     // MARK: - Per-chat debug/log URL resolution (instance companions)
@@ -320,6 +335,9 @@ public final class RemoteChatSession {
         runTotalUsage = nil
         runningKind = nil
         runStartedAt = nil
+        stderr = ""
+        lastActivityAt = nil
+        currentProcessID = nil
     }
 }
 #endif

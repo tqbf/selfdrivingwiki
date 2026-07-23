@@ -126,6 +126,11 @@ import Foundation
     /// Resolve a pending permission request for a chat (approve/reject).
     /// `request` is JSON `ChatPermissionResolveRequest`.
     func resolveChatPermission(request: Data, reply: @escaping () -> Void)
+
+    /// Set a config option (e.g. thinking effort) on the live chat session
+    /// without restarting it. `request` is JSON `ChatConfigOptionRequest`;
+    /// reply is JSON `{"error": null}`.
+    func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// The reverse-channel protocol the app implements so the daemon can push
