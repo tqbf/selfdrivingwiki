@@ -49,9 +49,10 @@ public struct ACPKeychainError: Error, Equatable {
 /// The production `ACPCredentialStore`: generic-password Keychain items under
 /// a shared `service` + account. The legacy single-key API uses a fixed account;
 /// the per-provider API (#324) namespaces by provider id so each ACP provider
-/// keeps its own secret. `WikiFS.entitlements` has no App Sandbox, so this needs
-/// no keychain-access-group entitlement — same un-sandboxed access
-/// `KeychainExtractionCredentialStore` already relies on.
+/// keeps its own secret. `KeychainSecretStore` (the shared helper this delegates
+/// to) writes items to the DataProtection keychain under a shared
+/// `keychain-access-groups` access group so the un-sandboxed `wikid` daemon can
+/// read them — see `plans/keychain-sharing.md`.
 public struct KeychainACPCredentialStore: ACPCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.acp"
     private static let account = "acp-agent-api-key"
