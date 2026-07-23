@@ -450,53 +450,35 @@ register: install
 # wikid daemon — launchd install/uninstall (plans/multi-wiki-daemon.md Phase 1B)
 # ---------------------------------------------------------------------------
 
-# wikid daemon — managed by SMAppService (plans/multi-wiki-daemon.md §4.3).
-# The app registers the daemon on launch via SMAppService.agent(plistName:).
-# The plist is at Contents/Library/LaunchAgents/ and the binary at
-# Contents/Helpers/wikid — both inside the app bundle, signed with the app's
-# identity. The daemon inherits the app's TCC trust (no permission prompts).
+# wikid daemon — managed by launchctl (the app bootstraps it on launch via
+# DaemonLaunchAgentManager). The daemon is unsandboxed: NO entitlements (AMFI
+# kills a bare Mach-O that has entitlements but no embedded provisioning
+# profile). It reads the app group container directly via filesystem perms.
 #
-# `make install-daemon` is now a no-op for production (the app auto-registers).
-# It remains for dev-mode: signs the .build binaries + installs a manual
-# launchd plist pointing at the .build path (will prompt once for TCC).
+# `make install-daemon` is for dev-mode: signs the .build binary (ad-hoc or
+# dev cert), copies it to the container dir, installs a manual launchd plist
+# pointing at the container binary + sets WIKI_CONTAINER_DIR. Production:
+# the app generates the plist at runtime and bootstraps via launchctl.
 WIKID_BIN := $(shell swift build --show-bin-path)/wikid
 WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
 WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
 WIKID_SIGN_IDENTITY := $(shell grep '^DEV_IDENTITY=' signing/local.config 2>/dev/null | sed 's/DEV_IDENTITY=//; s/^"//; s/"$$//' || echo "-")
 WIKID_CONTAINER_DIR := $(HOME)/Library/Group Containers/$(shell grep '^APP_GROUP=' signing/local.config 2>/dev/null | sed 's/APP_GROUP=//; s/^"//; s/"$$//' || echo "group.org.sockpuppet.wiki")
+WIKID_UID := $(shell id -u)
 
 .PHONY: install-daemon uninstall-daemon daemon-status
 
-install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .build binaries). Production uses SMAppService (auto-registered by the app).
+install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .build binaries). Production: app bootstraps via launchctl.
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
-	@echo "→ Generating wikid entitlements (keychain-access-group: $(KEYCHAIN_ACCESS_GROUP))…"
-	@mkdir -p build
-	@printf '%s\n' \
-		'<?xml version="1.0" encoding="UTF-8"?>' \
-		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-		'<plist version="1.0">' \
-		'<dict>' \
-		'	<key>com.apple.security.application-groups</key>' \
-		'	<array>' \
-		'		<string>$(APP_GROUP)</string>' \
-		'	</array>' \
-		'</dict>' \
-		'</plist>' > build/wikid.entitlements
-	@# Append the keychain-access-groups entry only when a group is configured
-	@# (TEAM_ID resolved from local.config). Ad-hoc / no-config → no entry.
-	@if [ -n "$(KEYCHAIN_ACCESS_GROUP)" ]; then \
-		plutil -insert keychain-access-groups -array \
-			build/wikid.entitlements -o build/wikid.entitlements; \
-		plutil -insert keychain-access-groups.0 -string "$(KEYCHAIN_ACCESS_GROUP)" \
-			build/wikid.entitlements -o build/wikid.entitlements; \
-	fi
+	@echo "→ Copying wikid binary to container dir…"
+	@mkdir -p "$(WIKID_CONTAINER_DIR)"
+	@cp "$(WIKID_BIN)" "$(WIKID_CONTAINER_DIR)/wikid"
 	@echo "→ Codesigning wikid + wikictl (identity: $(WIKID_SIGN_IDENTITY))…"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
-		--entitlements build/wikid.entitlements \
-		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_BIN)" 2>/dev/null \
-		|| codesign --force --timestamp=none --sign - "$(WIKID_BIN)"
+		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_CONTAINER_DIR)/wikid" 2>/dev/null \
+		|| codesign --force --timestamp=none --sign - "$(WIKID_CONTAINER_DIR)/wikid"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \
 		--entitlements signing/wikictl.entitlements \
 		--sign "$(WIKID_SIGN_IDENTITY)" "$(dir $(WIKID_BIN))wikictl" 2>/dev/null \
@@ -504,23 +486,24 @@ install-daemon:
 	@echo "→ Installing launchd plist (dev mode — may prompt for TCC once)…"
 	@mkdir -p $(dir $(WIKID_PLIST_DST))
 	@cp $(WIKID_PLIST) $(WIKID_PLIST_DST)
-	@# Replace BundleProgram with ProgramArguments (dev mode uses absolute path).
-	@plutil -remove BundleProgram -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
+	@# Replace the shell-wrapped ProgramArguments with the direct binary path.
+	@plutil -remove ProgramArguments -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
 	@plutil -insert ProgramArguments -array -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
-	@plutil -insert ProgramArguments.0 -string "$(WIKID_BIN)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
+	@plutil -insert ProgramArguments.0 -string "$(WIKID_CONTAINER_DIR)/wikid" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
 	@plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null \
 		|| { plutil -insert EnvironmentVariables -xml '<dict/>' -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); \
 		     plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); }
-	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
-	@launchctl load $(WIKID_PLIST_DST)
-	@echo "✓ wikid installed (dev mode). Production: the app auto-registers via SMAppService."
-	@echo "  Binary:     $(WIKID_BIN)"
+	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
+	@launchctl bootstrap gui/$(WIKID_UID) $(WIKID_PLIST_DST)
+	@echo "✓ wikid installed (dev mode). Production: app bootstraps via launchctl."
+	@echo "  Binary:     $(WIKID_CONTAINER_DIR)/wikid"
 	@echo "  Container:  $(WIKID_CONTAINER_DIR)"
 	@echo "  Plist:      $(WIKID_PLIST_DST)"
 	@echo "  Status:     make daemon-status"
 
 uninstall-daemon: ## Remove the wikid launchd agent
 uninstall-daemon:
+	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
 	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
 	@rm -f $(WIKID_PLIST_DST)
 	@echo "✓ wikid uninstalled."
