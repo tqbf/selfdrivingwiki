@@ -140,7 +140,7 @@ struct PageDetailViewHostedTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        return WikiSession(
+        return try WikiSession(
             wikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,

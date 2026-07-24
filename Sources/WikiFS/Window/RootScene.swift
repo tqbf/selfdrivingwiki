@@ -61,12 +61,43 @@ struct RootScene: View {
                         Text(report.alertMessage)
                     }
             } else if let wikiID {
-                // The wiki ID is known but the session isn't resolved yet.
-                ProgressView("Opening wiki…")
-                    .onAppear { resolveSession(for: wikiID) }
-                    .onAppear {
-                        DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID)")
+                // The wiki ID is known but the session isn't resolved yet, OR
+                // the store failed to open (issue #881 — no in-memory fallback).
+                // Show a user-visible error view instead of silently degrading
+                // to an empty wiki, so the user understands their data isn't gone.
+                if let errorMessage = sessionManager.openError(for: wikiID) {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.orange)
+                        Text("Couldn’t Open Wiki")
+                            .font(.title2.bold())
+                        Text(errorMessage)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: 420)
+                        HStack {
+                            Button("Retry") {
+                                sessionManager.clearOpenError(for: wikiID)
+                                session = nil
+                                resolveSession(for: wikiID)
+                            }
+                            Button("Reveal Database") {
+                                let dbURL = sessionManager.containerDirectory
+                                    .appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
+                                NSWorkspace.shared.activateFileViewerSelecting([dbURL])
+                            }
+                        }
                     }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ProgressView("Opening wiki…")
+                        .onAppear { resolveSession(for: wikiID) }
+                        .onAppear {
+                            DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID)")
+                        }
+                }
             } else {
                 // No wiki ID from the WindowGroup binding AND no activeWikiID
                 // adoption yet. This happens when the main WindowGroup creates
@@ -189,7 +220,15 @@ struct RootScene: View {
             // Yield first so the spinner paints before the store opens.
             await Task.yield()
             guard session == nil else { return }  // re-check after suspension
-            let resolved = sessionManager.session(for: wikiID, descriptor: descriptor)
+            // `session(for:)` throws when the on-disk store can't be opened
+            // (issue #881). SessionManager records the error so the error
+            // branch above renders; `session` stays nil.
+            let resolved: WikiSession
+            do {
+                resolved = try sessionManager.session(for: wikiID, descriptor: descriptor)
+            } catch {
+                return
+            }
             session = resolved
             // Wire the File Provider bus subscription for this wiki's session.
             fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
