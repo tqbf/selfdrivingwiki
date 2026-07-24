@@ -44,6 +44,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// "Restart Daemon" menu item when the daemon is stale (running an old
     /// binary after the app was rebuilt).
     private var daemonRestartHandler: (() -> Void)?
+    /// The daemon health monitor (#878). When the daemon is `.disconnected`,
+    /// the status item icon swaps to `exclamation.triangle` so the user sees
+    /// at a glance that the daemon is down. `nil` in tests that don't care.
+    private weak var daemonHealthMonitor: DaemonHealthMonitor?
 
     // MARK: - AppKit
 
@@ -71,7 +75,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         registry: WikiRegistryClient,
         openWindowBridge: OpenWindowBridge,
         backgroundIngestCoordinator: BackgroundIngestCoordinator? = nil,
-        daemonRestartHandler: (() -> Void)? = nil
+        daemonRestartHandler: (() -> Void)? = nil,
+        daemonHealthMonitor: DaemonHealthMonitor? = nil
     ) {
         self.queueEngine = queueEngine
         self.activityTracker = activityTracker
@@ -80,6 +85,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         self.openWindowBridge = openWindowBridge
         self.backgroundIngestCoordinator = backgroundIngestCoordinator
         self.daemonRestartHandler = daemonRestartHandler
+        self.daemonHealthMonitor = daemonHealthMonitor
     }
 
     // MARK: - Lifecycle
@@ -131,6 +137,16 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             for await event in self.queueEngine.events {
                 self.handleEvent(event)
             }
+        }
+
+        // #878: observe daemon health to swap the icon to a warning variant
+        // when the daemon is disconnected.
+        daemonHealthMonitor?.onStateChange = { [weak self] _ in
+            self?.updateIcon()
+        }
+        // Reflect the initial state immediately.
+        if daemonHealthMonitor?.state == .disconnected {
+            updateIcon()
         }
     }
 
@@ -447,16 +463,26 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         case working
         case paused
         case attention
+        /// #878: the wikid daemon is disconnected. Shows `exclamation.triangle`
+        /// so the user sees at a glance that the daemon is down and the app is
+        /// running on a local fallback.
+        case daemonDown
     }
 
     private func statusIcon(for state: IconState) -> NSImage? {
-        // ALWAYS the books glyph — paused/attention states convey via the
-        // tooltip and the activity windows. A menu bar icon that morphs into
-        // an alert triangle reads as a different app's item.
+        // When the daemon is down, show the warning triangle (#878 BLOCKER 1.5).
+        // Otherwise, ALWAYS the books glyph — paused/attention states convey
+        // via the tooltip and the activity windows.
+        if state == .daemonDown {
+            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            return NSImage(systemSymbolName: "exclamation.triangle", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config)
+        }
         let filled: Bool
         switch state {
         case .working: filled = true
         case .idle, .paused, .attention: filled = false
+        case .daemonDown: filled = false // unreachable (handled above)
         }
         return booksIcon(filled: filled)
     }
@@ -475,7 +501,12 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     private func updateIcon() {
         let state: IconState
-        if hasFailedItems {
+        // #878: daemon-disconnected takes precedence — even if items are
+        // running on the local fallback, the user needs to know the daemon is
+        // down.
+        if daemonHealthMonitor?.state == .disconnected {
+            state = .daemonDown
+        } else if hasFailedItems {
             state = .attention
         } else if isPaused {
             state = .paused
@@ -513,6 +544,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             }
         case .paused: return "Self Driving Wiki — Paused"
         case .attention: return "Self Driving Wiki — Attention needed"
+        case .daemonDown: return "Self Driving Wiki — wikid daemon not running (local fallback)"
         }
     }
 

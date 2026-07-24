@@ -371,7 +371,7 @@ func runDaemonChatNew(wikiSelector: String, message: String) async -> Int32 {
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
             return 1
         }
-        let workload = DaemonWorkloadClient(connection: daemon)
+        let workload = try DaemonWorkloadClient(connection: daemon)
         let chatID = try await workload.startChat(
             ChatStartRequest(wikiID: descriptor.id, firstMessage: message))
         print(chatID)
@@ -390,7 +390,7 @@ func runDaemonChatSend(wikiSelector: String, chatID: String, message: String) as
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
             return 1
         }
-        let workload = DaemonWorkloadClient(connection: daemon)
+        let workload = try DaemonWorkloadClient(connection: daemon)
         try await workload.continueChat(
             ChatContinueRequest(wikiID: descriptor.id, chatID: chatID, message: message))
         return 0
@@ -404,7 +404,7 @@ func runDaemonChatSend(wikiSelector: String, chatID: String, message: String) as
 func runDaemonChatStop(wikiSelector: String, chatID: String) async -> Int32 {
     do {
         let daemon = try WikiDaemonConnection.connect()
-        let workload = DaemonWorkloadClient(connection: daemon)
+        let workload = try DaemonWorkloadClient(connection: daemon)
         try await workload.stopChat(chatID)
         return 0
     } catch {

@@ -65,6 +65,77 @@ final class WikiDaemon: @unchecked Sendable {
         self.registry = WikiRegistry.load(from: containerDirectory)
     }
 
+    // MARK: - Liveness heartbeat (#878 BLOCKER 1.2)
+
+    /// The background heartbeat task. Stored so tests can cancel it.
+    private var heartbeatTask: Task<Void, Never>?
+
+    #if os(macOS)
+    /// Heartbeat interval: 60 s in production. Overridable for tests.
+    var heartbeatInterval: Duration = .seconds(60)
+    #else
+    var heartbeatInterval: UInt64 = 60_000_000_000
+    #endif
+
+    /// Start a recurring liveness heartbeat that logs every 60 s:
+    /// `wikid: heartbeat — active sessions=N, queue items=M`.
+    ///
+    /// The heartbeat is visible in Console.app (`log show` on the
+    /// `com.selfdrivingwiki.debug` subsystem) so an operator can confirm at a
+    /// glance that the daemon is alive and see its current load. Idempotent —
+    /// calling twice cancels the prior task.
+    func startHeartbeat() {
+        heartbeatTask?.cancel()
+        #if os(macOS)
+        let interval = heartbeatInterval
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { break }
+                await self.emitHeartbeat()
+            }
+        }
+        #else
+        let intervalNs = heartbeatInterval
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: intervalNs)
+                guard !Task.isCancelled, let self else { break }
+                await self.emitHeartbeat()
+            }
+        }
+        #endif
+    }
+
+    /// Stop the heartbeat (e.g. for tests).
+    func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    /// Emit one heartbeat log line with current session + queue counts.
+    func emitHeartbeat() async {
+        let sessions = queue.sync {
+            #if os(macOS)
+            return eventSinks.count
+            #else
+            return 0
+            #endif
+        }
+        #if canImport(WikiFSEngine)
+        let queueItems: Int
+        if let engine = queue.sync(execute: { _queueEngine }) {
+            let snapshot = await engine.snapshot()
+            queueItems = snapshot.activeItems.count + snapshot.recentItems.count
+        } else {
+            queueItems = 0
+        }
+        DebugLog.store("wikid: heartbeat — active sessions=\(sessions), queue items=\(queueItems)")
+        #else
+        DebugLog.store("wikid: heartbeat — active sessions=\(sessions), queue items=0")
+        #endif
+    }
+
     // MARK: - Registry
 
     func listWikis() -> Data {

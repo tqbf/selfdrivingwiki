@@ -82,6 +82,22 @@ struct WikiFSApp: App {
     /// unavailable state (no local fallback; the daemon owns chat).
     @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
 
+    /// App-wide daemon health monitor (#878). Drives the menu-bar badge and
+    /// the in-app disconnected/reconnected banner via its `@Observable` state.
+    /// Owns the recurring 30 s health-ping loop + the XPC invalidation handler.
+    @State private var healthMonitor = DaemonHealthMonitor()
+
+    /// The hot-swappable queue engine router (#878). Wraps whichever engine is
+    /// currently active (XPC proxy when the daemon is healthy, local
+    /// `QueueEngine` when it's not). All consumers (SessionManager,
+    /// MenuBarItemController, QueueActivityTracker) talk to this router, so a
+    /// mid-session swap is transparent.
+    private var queueEngineRouter: QueueEngineHotSwap?
+
+    /// The session-lookup box, retained so the local-engine fallback factory
+    /// (called on disconnect/reconnect) can re-wire it.
+    private var sessionLookupBox: SessionLookupBox?
+
     /// Manages the wikid LaunchAgent via `launchctl` (replaces SMAppService).
     /// The daemon is an unsandboxed binary — no entitlements, no provisioning
     /// profile. The app generates the LaunchAgent plist at runtime and
@@ -157,92 +173,47 @@ struct WikiFSApp: App {
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         _extractionCoordinator = State(initialValue: coordinator)
 
-        // Queue engine: connect to the wikid daemon via XPC (Phase A+B).
-        // The daemon owns the ENTIRE queue (extraction + ingestion). The app
-        // is a pure XPC client — all 13 QueueEngineClient methods proxy to
-        // the daemon. One DB, one engine, one owner.
+        // Queue engine: start with a LOCAL engine as the initial fallback
+        // (#878 BLOCKER 2). The daemon connection is deferred to a Task so
+        // init() never blocks the main thread. If the daemon is available, the
+        // `QueueEngineHotSwap` router swaps to the XPC proxy; if the daemon
+        // dies later, the `DaemonHealthMonitor` swaps back to a local engine.
         //
-        // Fallback: if the daemon isn't running (dev mode without
-        // `make install-daemon`), construct a local QueueEngine so the app
-        // stays functional.
+        // The daemon (when healthy) owns the ENTIRE queue. The app is a pure
+        // XPC client — all 13 QueueEngineClient methods proxy to the daemon.
+        // One DB, one engine, one owner.
         let sessionBox = SessionLookupBox()
+        sessionLookupBox = sessionBox
         let extractionProvider = AppQueueExtractionProvider(
             extractionCoordinator: coordinator,
             sessionBox: sessionBox)
         let fileProviderBox = FileProviderBox()
 
-        let queueEngine: any QueueEngineClient
         let activityTracker = QueueActivityTracker()
 
-        if let daemonConnection = try? WikiDaemonConnection.connect() {
-            DebugLog.store("WikiFSApp: connected to wikid daemon — using XPC proxy")
-            let workloadClient = DaemonWorkloadClient(connection: daemonConnection)
-            let eventSink = DaemonQueueEventSink()
-            workloadClient.registerEventSink(eventSink)
-            queueEngine = XPCQueueEngineProxy(
-                workloadClient: workloadClient, eventSink: eventSink)
-            activityTracker.attach(engine: queueEngine)
-            Task { await activityTracker.rehydrate(from: queueEngine) }
-            // #871 self-heal: if the daemon → app event stream breaks (sink
-            // invalidated, envelope dropped), poll the snapshot so a finished
-            // item still clears the spinner instead of spinning forever.
-            activityTracker.startSnapshotWatchdog(engine: queueEngine)
-            // Phase C4: the coordinator owns chat sessions over the same
-            // connection + event sink (chat envelopes are demuxed alongside
-            // queue events). Routes envelopes per chatID + wraps the 6 chat
-            // XPC commands.
-            chatDaemonCoordinator = ChatDaemonCoordinator(
-                client: workloadClient, eventSink: eventSink)
-        } else {
-            DebugLog.store("WikiFSApp: daemon not available — falling back to local QueueEngine")
-            let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
-                ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
-            let queueStore: QueueStore
-            do {
-                queueStore = try QueueStore(databaseURL: queueDBURL)
-            } catch {
-                DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
-                // swiftlint:disable:next force_try
-                queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-            }
-            let ingestionProvider = AppQueueIngestionProvider(
-                sessionBox: sessionBox,
-                fileProviderBox: fileProviderBox,
-                wikictlDirectory: HelpersLocation.wikictlDirectory,
-                queueStore: queueStore)
-            let progressBox = ProgressEmitBox()
-            let transcriptBox = TranscriptEmitBox()
-            let usageBox = UsageEmitBox()
-            let liveUsageBox = LiveUsageEmitBox()
-            let logPathsBox = LogPathsEmitBox()
-            let pendingPermissionBox = PendingPermissionEmitBox()
-            let extractionFactory = QueueExtractionWorkerFactory(
-                provider: extractionProvider,
-                emitProgress: { id, line in progressBox.emit?(id, line) })
-            let ingestionFactory = QueueIngestionWorkerFactory(
-                provider: ingestionProvider,
-                emitProgress: { id, line in progressBox.emit?(id, line) },
-                emitTranscript: { id, event in transcriptBox.emit?(id, event) },
-                emitUsage: { id, usage in usageBox.emit?(id, usage) },
-                emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
-                emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
-                emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
-            let workerFactory = CompositeWorkerFactory(factories: [
-                .extraction: extractionFactory,
-                .ingestion: ingestionFactory,
-            ])
-            let localEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
-            Task { progressBox.emit = await localEngine.makeEmitProgress() }
-            Task { transcriptBox.emit = await localEngine.makeEmitTranscript() }
-            Task { usageBox.emit = await localEngine.makeEmitUsage() }
-            Task { liveUsageBox.emit = await localEngine.makeEmitLiveUsage() }
-            Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
-            Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
-            Task { await localEngine.start() }
-            queueEngine = localEngine
-            activityTracker.attach(engine: localEngine)
-            Task { await activityTracker.rehydrate(from: localEngine) }
-        }
+        // Always construct a local engine first — it's the fallback if the
+        // daemon isn't running (dev mode without `make install-daemon`) AND
+        // the recovery target if the daemon dies mid-session.
+        let localEngine = Self.makeLocalQueueEngine(
+            directory: directory,
+            sessionBox: sessionBox,
+            fileProviderBox: fileProviderBox,
+            extractionProvider: extractionProvider)
+
+        // Wrap in the hot-swap router so a mid-session daemon death can swap
+        // back to a fresh local engine transparently — all consumers
+        // (SessionManager, MenuBarItemController, QueueActivityTracker) hold
+        // the router, never the inner engine.
+        let router = QueueEngineHotSwap(localEngine)
+        queueEngineRouter = router
+        activityTracker.attach(engine: router)
+        Task { await activityTracker.rehydrate(from: router) }
+        // #871 self-heal: poll the snapshot so a finished item still clears
+        // the spinner if the event stream breaks. The router forwards to the
+        // current engine, so this works across swaps.
+        activityTracker.startSnapshotWatchdog(engine: router)
+
+        let queueEngine: any QueueEngineClient = router
 
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
@@ -362,7 +333,8 @@ struct WikiFSApp: App {
             backgroundIngestCoordinator: backgroundIngestCoordinator,
             daemonRestartHandler: { [daemonManager] in
                 daemonManager?.restart()
-            })
+            },
+            daemonHealthMonitor: healthMonitor)
         statusController.start()
         windowTracker.start()
         appDelegate.menuBarItemController = statusController
@@ -454,6 +426,150 @@ struct WikiFSApp: App {
         }
     }
 
+    // MARK: - Daemon connection (#878 BLOCKER 2 — async, non-blocking)
+
+    /// Attempt to connect to the wikid daemon after the first render. Called
+    /// from the main WindowGroup's `.task`. If the daemon is healthy, swaps the
+    /// queue engine router from the local fallback to the XPC proxy and starts
+    /// the health monitor. Never blocks the main thread.
+    @MainActor
+    private static var didConnectDaemon = false
+    @MainActor
+    private func connectToDaemon() {
+        guard !Self.didConnectDaemon else { return }
+        Self.didConnectDaemon = true
+
+        let directory = containerDirectory
+        guard let sessionBox = sessionLookupBox else { return }
+        let fileProviderBoxValue = fileProviderBox
+        let extractionProviderValue = extractionProvider
+
+        Task { [weak healthMonitor, weak queueEngineRouter] in
+            guard let conn = try? WikiDaemonConnection.connect() else {
+                DebugLog.store("WikiFSApp: daemon not available — staying on local QueueEngine")
+                return
+            }
+            let healthy = await conn.healthCheck()
+            guard healthy else {
+                DebugLog.store("WikiFSApp: daemon health check failed — staying on local QueueEngine")
+                conn.invalidate()
+                return
+            }
+
+            await MainActor.run {
+                DebugLog.store("WikiFSApp: connected to wikid daemon — swapping to XPC proxy")
+                do {
+                    let workloadClient = try DaemonWorkloadClient(connection: conn)
+                    let eventSink = DaemonQueueEventSink()
+                    workloadClient.registerEventSink(eventSink)
+                    let proxy = XPCQueueEngineProxy(
+                        workloadClient: workloadClient, eventSink: eventSink)
+                    queueEngineRouter?.swap(to: proxy)
+
+                    // Phase C4: the coordinator owns chat sessions over the
+                    // same connection + event sink.
+                    chatDaemonCoordinator = ChatDaemonCoordinator(
+                        client: workloadClient, eventSink: eventSink)
+
+                    // Wire the health monitor: on disconnect, swap back to a
+                    // fresh local engine; on reconnect, swap to a new XPC proxy.
+                    // WikiFSApp is a struct (value type), so there's no retain
+                    // cycle — the closures capture the router (a class ref)
+                    // and directory/box values by value.
+                    let router = queueEngineRouter
+                    healthMonitor?.onDisconnect = {
+                        DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
+                        let local = Self.makeLocalQueueEngine(
+                            directory: directory,
+                            sessionBox: sessionBox,
+                            fileProviderBox: fileProviderBoxValue,
+                            extractionProvider: extractionProviderValue)
+                        router?.swap(to: local)
+                        chatDaemonCoordinator = nil
+                    }
+                    healthMonitor?.onReconnect = { newConn in
+                        DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
+                        do {
+                            let workloadClient = try DaemonWorkloadClient(connection: newConn)
+                            let eventSink = DaemonQueueEventSink()
+                            workloadClient.registerEventSink(eventSink)
+                            let proxy = XPCQueueEngineProxy(
+                                workloadClient: workloadClient, eventSink: eventSink)
+                            router?.swap(to: proxy)
+                            chatDaemonCoordinator = ChatDaemonCoordinator(
+                                client: workloadClient, eventSink: eventSink)
+                        } catch {
+                            DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
+                        }
+                    }
+
+                    healthMonitor?.start(connection: conn)
+                } catch {
+                    DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
+                    conn.invalidate()
+                }
+            }
+        }
+    }
+
+    /// Construct a local `QueueEngine` as the fallback for when the daemon is
+    /// unavailable or has died mid-session. Extracted from the former inline
+    /// init() block so it can be called on initial launch AND on disconnect.
+    @MainActor
+    private static func makeLocalQueueEngine(
+        directory: URL,
+        sessionBox: SessionLookupBox,
+        fileProviderBox: FileProviderBox,
+        extractionProvider: any QueueExtractionProvider
+    ) -> QueueEngine {
+        DebugLog.store("WikiFSApp: constructing local QueueEngine fallback")
+        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
+        let queueStore: QueueStore
+        do {
+            queueStore = try QueueStore(databaseURL: queueDBURL)
+        } catch {
+            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
+            // swiftlint:disable:next force_try
+            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+        }
+        let ingestionProvider = AppQueueIngestionProvider(
+            sessionBox: sessionBox,
+            fileProviderBox: fileProviderBox,
+            wikictlDirectory: HelpersLocation.wikictlDirectory,
+            queueStore: queueStore)
+        let progressBox = ProgressEmitBox()
+        let transcriptBox = TranscriptEmitBox()
+        let usageBox = UsageEmitBox()
+        let liveUsageBox = LiveUsageEmitBox()
+        let logPathsBox = LogPathsEmitBox()
+        let pendingPermissionBox = PendingPermissionEmitBox()
+        let extractionFactory = QueueExtractionWorkerFactory(
+            provider: extractionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) })
+        let ingestionFactory = QueueIngestionWorkerFactory(
+            provider: ingestionProvider,
+            emitProgress: { id, line in progressBox.emit?(id, line) },
+            emitTranscript: { id, event in transcriptBox.emit?(id, event) },
+            emitUsage: { id, usage in usageBox.emit?(id, usage) },
+            emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
+            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
+            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
+        let workerFactory = CompositeWorkerFactory(factories: [
+            .extraction: extractionFactory,
+            .ingestion: ingestionFactory,
+        ])
+        let localEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
+        Task { progressBox.emit = await localEngine.makeEmitProgress() }
+        Task { transcriptBox.emit = await localEngine.makeEmitTranscript() }
+        Task { usageBox.emit = await localEngine.makeEmitUsage() }
+        Task { liveUsageBox.emit = await localEngine.makeEmitLiveUsage() }
+        Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
+        Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
+        Task { await localEngine.start() }
+        return localEngine
+    }
+
     var body: some Scene {
         // Main window: single-identity, opens on launch. Resolves the MRU
         // wiki via the `registry.activeWikiID` → `wikiID` adoption flow in
@@ -474,7 +590,8 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
-                chatDaemon: chatDaemonCoordinator)
+                chatDaemon: chatDaemonCoordinator,
+                healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",
@@ -519,6 +636,7 @@ struct WikiFSApp: App {
                 bootstrapApp()
                 startStatusItem()
                 applyAppKitAppearance()
+                connectToDaemon()
             }
         }
         .windowToolbarStyle(.unified)
@@ -549,7 +667,8 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
-                chatDaemon: chatDaemonCoordinator)
+                chatDaemon: chatDaemonCoordinator,
+                healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
             .onAppear {
                 DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
@@ -606,7 +725,8 @@ struct WikiFSApp: App {
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] queue in
                     openWindowBridge?.openQueueWindow?(queue)
-                })
+                },
+                healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
         }
         .defaultSize(width: 760, height: 500)
@@ -1003,12 +1123,14 @@ extension View {
     func appEnvironment(
         tracker: QueueActivityTracker,
         openActivityWindow: ((QueueKind) -> Void)? = nil,
-        chatDaemon: ChatDaemonCoordinator? = nil
+        chatDaemon: ChatDaemonCoordinator? = nil,
+        healthMonitor: DaemonHealthMonitor? = nil
     ) -> some View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self
             .environment(tracker)
             .environment(\.openActivityWindow, openActivityWindow)
             .environment(\.chatDaemonCoordinator, chatDaemon)
+            .environment(\.daemonHealthMonitor, healthMonitor)
     }
 }

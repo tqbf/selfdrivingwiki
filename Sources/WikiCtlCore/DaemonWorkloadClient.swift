@@ -37,9 +37,10 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     private let proxy: WikiDaemonProtocol
 
     /// Create a workload client from an existing daemon connection (shares the
-    /// same `NSXPCConnection` — no second connection).
-    public init(connection: WikiDaemonConnection) {
-        self.proxy = connection.proxy
+    /// same `NSXPCConnection` — no second connection). Throws if the connection
+    /// can't vend a valid daemon proxy (e.g. it was already invalidated).
+    public init(connection: WikiDaemonConnection) throws {
+        self.proxy = try connection.daemonProxy()
     }
 
     // MARK: - Timeout helper

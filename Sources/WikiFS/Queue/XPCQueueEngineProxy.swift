@@ -60,7 +60,12 @@ final class XPCQueueEngineProxy: QueueEngineClient {
     }
 
     func retryItem(_ id: QueueItem.ID) async throws {
-        try await workloadClient.retryItem(id)
+        do {
+            try await workloadClient.retryItem(id)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.retryItem failed for \(id): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func pause(_ queue: QueueKind) async {
@@ -118,6 +123,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
             try await workloadClient.waitForCompletion(of: id)
             return .success(())
         } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.waitForCompletion failed for \(id): \(error.localizedDescription)")
             return .failure(error)
         }
     }
