@@ -104,13 +104,6 @@ struct WikiFSApp: App {
     /// (called on disconnect/reconnect) can re-wire it.
     private var sessionLookupBox: SessionLookupBox?
 
-    /// Manages the wikid LaunchAgent via `launchctl` (replaces SMAppService).
-    /// The daemon is an unsandboxed binary — no entitlements, no provisioning
-    /// profile. The app generates the LaunchAgent plist at runtime and
-    /// bootstraps it via `launchctl bootstrap gui/<uid> <path>`. The daemon
-    /// survives app quit (launchd manages it independently).
-    private let daemonManager: DaemonLaunchAgentManager?
-
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
     // causes only one to win the NSApplication.shared.delegate slot; accessing the
@@ -279,23 +272,13 @@ struct WikiFSApp: App {
             DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
         }
 
-        // Bootstrap the wikid daemon via launchctl. The app generates the
-        // LaunchAgent plist at runtime (it knows the container path + the
-        // app bundle path), writes it to ~/Library/LaunchAgents/, and runs
-        // `launchctl bootout` then `launchctl bootstrap`. The daemon is
-        // unsandboxed — no entitlements (AMFI killed the old entitled binary
-        // because the bare Mach-O had no embedded provisioning profile). It
-        // reads the app group container directly via filesystem permissions.
-        // The daemon survives app quit. Best-effort: in dev mode (`swift run`)
-        // the bootstrap still works (the plist points at the container
-        // binary), wikictl falls back to direct file access if the daemon
-        // isn't running.
-        // #876: bootout before bootstrap so a stale daemon (running an old
-        // binary after a rebuild) is always unloaded and restarted fresh — a
-        // plain bootstrap returns "already loaded" and leaves the old daemon.
-        let manager = DaemonLaunchAgentManager(containerDirectory: directory)
-        manager.bootoutAndBootstrap()
-        self.daemonManager = manager
+        // The wikid daemon is now a bundled XPC service
+        // (Contents/XPCServices/wikid.xpc). The system auto-launches it on
+        // first NSXPCConnection(serviceName:) — no LaunchAgent, no launchctl,
+        // no plist management. The connection is established in
+        // `connectToDaemon()` from the main WindowGroup's .task. If the daemon
+        // isn't available yet, the app starts on a local QueueEngine and the
+        // DaemonHealthMonitor retries until the XPC service responds.
 
         // Call bootstrap directly from init.
         print("SDW: calling bootstrapApp from init")
@@ -343,8 +326,13 @@ struct WikiFSApp: App {
             registry: registry,
             openWindowBridge: openWindowBridge,
             backgroundIngestCoordinator: backgroundIngestCoordinator,
-            daemonRestartHandler: { [daemonManager] in
-                daemonManager?.restart()
+            daemonRestartHandler: { [weak healthMonitor] in
+                // For a bundled XPC service, "restart" = invalidate the
+                // current connection + let the health monitor reconnect (the
+                // system relaunches the service on the next
+                // NSXPCConnection(serviceName:)). If the daemon is currently
+                // connected, this forces a disconnect→reconnect cycle.
+                healthMonitor?.forceReconnect()
             },
             daemonHealthMonitor: healthMonitor)
         statusController.start()
@@ -421,13 +409,12 @@ struct WikiFSApp: App {
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
         }
-        appDelegate.unregisterDaemon = { [daemonManager] in
-            // The daemon survives app quit — launchd manages it independently
-            // (KeepAlive + RunAtLoad). We do NOT bootout on terminate; the
-            // daemon keeps running so extraction/ingestion/chat survive the
-            // app quitting (the whole point of the daemon architecture). The
-            // "Restart Daemon" menu item uses launchctl kickstart when needed.
-            _ = daemonManager
+        appDelegate.unregisterDaemon = {
+            // The daemon is a bundled XPC service — the system manages its
+            // lifecycle (auto-launch on demand, idle termination). We do
+            // nothing on app terminate; the daemon's XPC service exits when
+            // the app exits (or on idle timeout). Extraction/ingestion/chat
+            // that were in-flight are resumed on next app launch.
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
@@ -444,6 +431,11 @@ struct WikiFSApp: App {
     /// from the main WindowGroup's `.task`. If the daemon is healthy, swaps the
     /// queue engine router from the local fallback to the XPC proxy and starts
     /// the health monitor. Never blocks the main thread.
+    ///
+    /// #885 startup race fix: if the initial connection fails (the XPC service
+    /// may not be available yet on first launch or mid-replacement), the
+    /// health monitor's retry loop is started so the app keeps trying until the
+    /// service responds — instead of silently staying on the local engine.
     @MainActor
     private static var didConnectDaemon = false
     @MainActor
@@ -456,15 +448,26 @@ struct WikiFSApp: App {
         let fileProviderBoxValue = fileProviderBox
         let extractionProviderValue = extractionProvider
 
-        Task { [weak healthMonitor, weak queueEngineRouter] in
+        // Wire the health monitor's disconnect/reconnect closures BEFORE the
+        // connection attempt so they're ready whether the initial connect
+        // succeeds or fails (#885 — the retry loop fires onReconnect).
+        configureHealthMonitor(
+            directory: directory,
+            sessionBox: sessionBox,
+            fileProviderBoxValue: fileProviderBoxValue,
+            extractionProviderValue: extractionProviderValue)
+
+        Task { [weak healthMonitor] in
             guard let conn = try? WikiDaemonConnection.connect() else {
-                DebugLog.store("WikiFSApp: daemon not available — staying on local QueueEngine")
+                DebugLog.store("WikiFSApp: daemon not available — starting retry loop (#885)")
+                healthMonitor?.startRetrying()
                 return
             }
             let healthy = await conn.healthCheck()
             guard healthy else {
-                DebugLog.store("WikiFSApp: daemon health check failed — staying on local QueueEngine")
+                DebugLog.store("WikiFSApp: daemon health check failed — starting retry loop (#885)")
                 conn.invalidate()
+                healthMonitor?.startRetrying()
                 return
             }
 
@@ -477,57 +480,56 @@ struct WikiFSApp: App {
                     let proxy = XPCQueueEngineProxy(
                         workloadClient: workloadClient, eventSink: eventSink)
                     queueEngineRouter?.swap(to: proxy)
-
-                    // Phase C4: the coordinator owns chat sessions over the
-                    // same connection + event sink.
                     chatDaemonCoordinator = ChatDaemonCoordinator(
                         client: workloadClient, eventSink: eventSink)
-
-                    // Wire the health monitor: on disconnect, swap back to a
-                    // fresh local engine; on reconnect, swap to a new XPC proxy.
-                    // WikiFSApp is a struct (value type), so there's no retain
-                    // cycle — the closures capture the router (a class ref)
-                    // and directory/box values by value.
-                    let router = queueEngineRouter
-                    healthMonitor?.onDisconnect = {
-                        DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
-                        let local = Self.makeLocalQueueEngine(
-                            directory: directory,
-                            sessionBox: sessionBox,
-                            fileProviderBox: fileProviderBoxValue,
-                            extractionProvider: extractionProviderValue)
-                        // Issue #881: if the local queue store also failed to
-                        // open, `local.engine` is an `UnavailableQueueEngine`.
-                        // The enqueue path surfaces the error to the user; the
-                        // launch-time alert (`queueStoreError`) covers the
-                        // initial-failure UX.
-                        if let disconnectError = local.openError {
-                            DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
-                        }
-                        router?.swap(to: local.engine)
-                        chatDaemonCoordinator = nil
-                    }
-                    healthMonitor?.onReconnect = { newConn in
-                        DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
-                        do {
-                            let workloadClient = try DaemonWorkloadClient(connection: newConn)
-                            let eventSink = DaemonQueueEventSink()
-                            workloadClient.registerEventSink(eventSink)
-                            let proxy = XPCQueueEngineProxy(
-                                workloadClient: workloadClient, eventSink: eventSink)
-                            router?.swap(to: proxy)
-                            chatDaemonCoordinator = ChatDaemonCoordinator(
-                                client: workloadClient, eventSink: eventSink)
-                        } catch {
-                            DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
-                        }
-                    }
-
                     healthMonitor?.start(connection: conn)
                 } catch {
                     DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
                     conn.invalidate()
+                    healthMonitor?.startRetrying()
                 }
+            }
+        }
+    }
+
+    /// Wire the health monitor's disconnect/reconnect closures. Called before
+    /// the initial connection attempt so the retry loop (#885) has the engine-
+    /// swap logic ready. The closures capture the router (a class ref) and
+    /// directory/box values by value — WikiFSApp is a struct (no retain cycle).
+    @MainActor
+    private func configureHealthMonitor(
+        directory: URL,
+        sessionBox: SessionLookupBox,
+        fileProviderBoxValue: FileProviderBox,
+        extractionProviderValue: any QueueExtractionProvider
+    ) {
+        let router = queueEngineRouter
+        healthMonitor.onDisconnect = {
+            DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
+            let local = Self.makeLocalQueueEngine(
+                directory: directory,
+                sessionBox: sessionBox,
+                fileProviderBox: fileProviderBoxValue,
+                extractionProvider: extractionProviderValue)
+            if let disconnectError = local.openError {
+                DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
+            }
+            router?.swap(to: local.engine)
+            chatDaemonCoordinator = nil
+        }
+        healthMonitor.onReconnect = { newConn in
+            DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
+            do {
+                let workloadClient = try DaemonWorkloadClient(connection: newConn)
+                let eventSink = DaemonQueueEventSink()
+                workloadClient.registerEventSink(eventSink)
+                let proxy = XPCQueueEngineProxy(
+                    workloadClient: workloadClient, eventSink: eventSink)
+                router?.swap(to: proxy)
+                chatDaemonCoordinator = ChatDaemonCoordinator(
+                    client: workloadClient, eventSink: eventSink)
+            } catch {
+                DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
             }
         }
     }

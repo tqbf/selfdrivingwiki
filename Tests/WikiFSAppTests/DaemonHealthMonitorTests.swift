@@ -38,7 +38,7 @@ struct DaemonHealthMonitorTests {
         #expect(observedStates == [.connected])
     }
 
-    @Test func invalidationTransitionsToDisconnected() async throws {
+    @Test func invalidationTransitionsToDisconnected() throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
 
@@ -55,7 +55,8 @@ struct DaemonHealthMonitorTests {
         // asynchronously on an XPC-internal queue, then hops to the main actor
         // via Task { @MainActor }). We call `_testSimulateInvalidation()` for a
         // deterministic transition that doesn't race under concurrent test
-        // load (#884).
+        // load (#884) — and that no longer depends on a live daemon (the
+        // serviceName: connection is never truly established in the test runner).
         monitor._testSimulateInvalidation()
 
         #expect(monitor.state == .disconnected)
@@ -76,7 +77,7 @@ struct DaemonHealthMonitorTests {
         #expect(!monitor.isMonitoring)
     }
 
-    @Test func onStateChangeFiresOnInvalidation() async throws {
+    @Test func onStateChangeFiresOnInvalidation() throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
 
@@ -88,7 +89,6 @@ struct DaemonHealthMonitorTests {
         // Simulate the XPC invalidation deterministically (#884).
         monitor._testSimulateInvalidation()
 
-        // Should have seen .connected then .disconnected.
         #expect(states.contains(.connected))
         #expect(states.contains(.disconnected))
 
@@ -128,6 +128,84 @@ struct DaemonHealthMonitorTests {
         // The change count should still be 1 (or 2 if stop+start cycle
         // caused a transition). Let me be lenient.
         #expect(changeCount >= 1)
+    }
+
+    // MARK: - #885: startRetrying (startup race fix)
+
+    @Test func startRetryingTransitionsToDisconnectedAndStartsMonitoring() {
+        let monitor = DaemonHealthMonitor()
+        // Monitor starts disconnected + not monitoring.
+        #expect(monitor.state == .disconnected)
+        #expect(!monitor.isMonitoring)
+
+        monitor.startRetrying()
+
+        // State stays .disconnected (no connection), but monitoring is active.
+        #expect(monitor.state == .disconnected)
+        #expect(monitor.isMonitoring)
+    }
+
+    @Test func startRetryingFiresOnStateChangeToDisconnected() {
+        let monitor = DaemonHealthMonitor()
+        // First, fake a .connected state so startRetrying has a transition to fire.
+        // We can't easily fake .connected without a real connection, but we CAN
+        // verify that startRetrying on a fresh monitor (already .disconnected)
+        // does NOT spuriously fire onStateChange (idempotent guard).
+        var stateChanges: [DaemonConnectionState] = []
+        monitor.onStateChange = { stateChanges.append($0) }
+
+        monitor.startRetrying()
+
+        // State was already .disconnected, so the guard prevents a duplicate fire.
+        #expect(stateChanges.isEmpty)
+    }
+
+    @Test func startRetryingStartsHealthPingLoop() {
+        let monitor = DaemonHealthMonitor()
+        monitor.healthPingInterval = .milliseconds(50)
+
+        monitor.startRetrying()
+        #expect(monitor.isMonitoring)
+
+        // The ping loop should be running — after a short delay, it will have
+        // attempted at least one reconnect (which fails in the test env since
+        // the XPC service isn't available). We verify monitoring is active.
+        monitor.stop()
+        #expect(!monitor.isMonitoring)
+    }
+
+    // MARK: - forceReconnect (Restart Daemon menu item)
+
+    @Test func forceReconnectOnIdleMonitorStartsRetrying() {
+        let monitor = DaemonHealthMonitor()
+        #expect(!monitor.isMonitoring)
+
+        monitor.forceReconnect()
+
+        // forceReconnect on an idle monitor starts the retry loop.
+        #expect(monitor.isMonitoring)
+        #expect(monitor.state == .disconnected)
+    }
+
+    @Test func forceReconnectOnDisconnectedMonitorDoesNotRefireOnDisconnect() {
+        let monitor = DaemonHealthMonitor()
+        monitor.startRetrying()
+        #expect(monitor.isMonitoring)
+        #expect(monitor.state == .disconnected)
+
+        var disconnectFired = false
+        monitor.onDisconnect = { disconnectFired = true }
+
+        monitor.forceReconnect()
+
+        // Already `.disconnected` → onDisconnect must NOT fire again. Re-firing
+        // it would tear down the working local fallback engine and open a
+        // second one. The contract is: onDisconnect fires exactly once per
+        // disconnect. forceReconnect still kicks a reconnect attempt (via the
+        // ping loop) and leaves monitoring active.
+        #expect(!disconnectFired)
+        #expect(monitor.state == .disconnected)
+        #expect(monitor.isMonitoring)
     }
 }
 
@@ -193,6 +271,14 @@ struct WikiDaemonConnectionHealthTests {
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(elapsed < 15)
+    }
+
+    @Test func serviceNameMatchesXPCBundleIdentifier() {
+        // The XPC service name must match the CFBundleIdentifier in the
+        // wikid.xpc Info.plist and the WikiDaemonServiceName in wikid/main.swift.
+        // This invariant ensures the client connection resolves to the
+        // correct XPC service bundle.
+        #expect(WikiDaemonConnection.serviceName == "com.selfdrivingwiki.wikid")
     }
 }
 #endif

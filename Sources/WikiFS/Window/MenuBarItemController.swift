@@ -39,10 +39,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// status bar menu opens (or focuses) that wiki's window — even in
     /// accessory mode when no windows are visible.
     private let openWindowBridge: OpenWindowBridge
-    /// Restarts the wikid daemon via `launchctl kickstart`. Injected from
-    /// `WikiFSApp` (owns the `DaemonLaunchAgentManager`). Called by the
-    /// "Restart Daemon" menu item when the daemon is stale (running an old
-    /// binary after the app was rebuilt).
+    /// Restarts the wikid daemon by invalidating the XPC connection +
+    /// reconnecting. Injected from `WikiFSApp` (owns the
+    /// `DaemonHealthMonitor`). Called by the "Restart Daemon" menu item when
+    /// the daemon is stale (running an old binary after the app was rebuilt).
     private var daemonRestartHandler: (() -> Void)?
     /// The daemon health monitor (#878). When the daemon is `.disconnected`,
     /// the status item icon swaps to `exclamation.triangle` so the user sees
@@ -401,11 +401,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         activateWikiWindow()
     }
 
-    /// Restart the wikid daemon via `launchctl kickstart`. Used when the
-    /// daemon is stale (running an old binary after the app was rebuilt) —
-    /// avoids a full app restart. Delegates to the injected
-    /// `daemonRestartHandler` (which calls
-    /// `DaemonLaunchAgentManager.restart()`).
+    /// Restarts the wikid daemon by invalidating the XPC connection +
+    /// reconnecting (the system relaunches the XPC service on-demand).
+    /// Delegates to the injected `daemonRestartHandler` (which calls
+    /// `DaemonHealthMonitor.forceReconnect()`).
     @objc private func restartDaemon(_ sender: NSMenuItem?) {
         DebugLog.store("wikid: restart requested")
         daemonRestartHandler?()
