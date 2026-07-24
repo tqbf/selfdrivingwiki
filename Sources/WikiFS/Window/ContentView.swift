@@ -55,6 +55,11 @@ struct ContentView: View {
 
     var body: some View {
         baseContent
+        // #878: daemon status banner (red disconnected / green reconnected) at
+        // the very top of the content area.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            DaemonStatusBanner()
+        }
         .sheet(item: $pendingAddURL) { pending in
             AddFromURLSheet(store: store, initialURL: pending.url)
         }

@@ -451,6 +451,10 @@ listener.resume()
 
 DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
 
+// #878: start the liveness heartbeat (logs every 60 s so an operator can
+// confirm the daemon is alive + see its current load in Console.app).
+daemon.startHeartbeat()
+
 // Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
 RunLoop.current.run()
 
