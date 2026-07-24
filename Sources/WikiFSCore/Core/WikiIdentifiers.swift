@@ -96,23 +96,52 @@ public enum WikiIdentifiers {
     /// file is absent — i.e. for the `.app`/`.appex` (which use the Info.plist
     /// path) and for plain test runs.
     ///
-    /// Two locations are checked, in order, relative to the running executable:
+    /// Locations checked, in order, relative to the running executable:
     /// `build/wikictl` reads it from its own directory (the Phase A gate copy);
     /// the bundled `Contents/Helpers/wikictl` reads it from `../Resources`
-    /// (build.sh can't leave plain files in the code-only Helpers dir).
+    /// (build.sh can't leave plain files in the code-only Helpers dir); and the
+    /// **enclosing `.app`'s `Contents/Resources`** — required by the `wikid`
+    /// daemon, which as a bundled XPC service
+    /// (`…/App.app/Contents/XPCServices/wikid.xpc`) has its executable four
+    /// levels below the app's Resources. Without that third candidate the daemon
+    /// finds NO sidecar (its own `.xpc/Contents/Resources` is empty) and — since
+    /// a nested XPC service's `Bundle.main` Info.plist custom keys don't reliably
+    /// surface either — falls through to the `group.org.sockpuppet.wiki` default,
+    /// reading the WRONG App Group container (empty registry → "No store for
+    /// wikiID" at ingest, and a stale 1-provider agent config). #887 follow-up.
     private static let sidecar: [String: String] = {
         guard let exeDir = executableDir else { return [:] }
-        let candidates = [
+        var candidates = [
             exeDir.appendingPathComponent("wiki-identifiers.env"),
             exeDir.deletingLastPathComponent()
                 .appendingPathComponent("Resources/wiki-identifiers.env"),
         ]
+        if let appResources = enclosingAppResourcesDirectory(from: exeDir) {
+            candidates.append(appResources.appendingPathComponent("wiki-identifiers.env"))
+        }
         guard let text = candidates.lazy
             .compactMap({ try? String(contentsOf: $0, encoding: .utf8) })
             .first
         else { return [:] }
         return parseKV(text)
     }()
+
+    /// `<enclosing .app>/Contents/Resources`, found by walking up from `exeDir`
+    /// to the nearest ancestor whose path component ends in `.app`, or `nil` if
+    /// the executable isn't inside a `.app` (e.g. a `swift run` dev CLI). Lets a
+    /// nested bundle (the `wikid.xpc` daemon) read the app-level id sidecar.
+    static func enclosingAppResourcesDirectory(from exeDir: URL) -> URL? {
+        var url = exeDir
+        for _ in 0..<8 {
+            if url.pathExtension == "app" {
+                return url.appendingPathComponent("Contents/Resources", isDirectory: true)
+            }
+            let parent = url.deletingLastPathComponent()
+            if parent.path == url.path { break }   // reached filesystem root
+            url = parent
+        }
+        return nil
+    }
 
     /// `signing/local.config` (gitignored, per-developer) parsed once — the SAME
     /// file `build.sh` reads to build the `.app`. Keys are the build.sh names

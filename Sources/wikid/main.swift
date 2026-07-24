@@ -414,13 +414,25 @@ private struct SendableBoolReply: @unchecked Sendable {
 
 // MARK: - Main
 
-// Resolve the App Group container path. As a bundled XPC service WITH the
-// `application-groups` entitlement + embedded provisioning profile, the daemon
-// can access `~/Library/Group Containers/<id>/` directly via
-// DatabaseLocation.appGroupContainerDirectory() without TCC prompts (same as
-// the app). For ad-hoc / dev builds without a provisioning profile, accept the
-// container path from (1) a --container arg, or (2) the WIKI_CONTAINER_DIR env
-// var (set by `make install-daemon` in dev mode) as a fallback.
+// Resolve the App Group container path. The daemon reaches the SHARED group
+// container through the security API —
+// `containerURL(forSecurityApplicationGroupIdentifier:)`, via
+// `DatabaseLocation.extensionContainerDirectory()` — which the
+// `application-groups` entitlement maps to the real
+// `~/Library/Group Containers/<id>/` the app writes to. This is robust whether
+// or not the daemon is sandboxed.
+//
+// History (#887): the XPC migration briefly sandboxed the daemon AND resolved
+// the container via `appGroupContainerDirectory()`, whose LITERAL
+// `homeDirectoryForCurrentUser/Library/Group Containers/<id>` path resolves to
+// the SANDBOX home inside a sandbox — an empty sandbox-local dir with no
+// `wikis.json` → every ingest failed "No store for wikiID". The daemon is now
+// un-sandboxed (it must spawn arbitrary agent CLIs), but the security-API
+// resolution is kept as the explicit, correct way to reach the shared container.
+//
+// Precedence: (1) a `--container` arg or (2) `WIKI_CONTAINER_DIR` env (dev, set
+// by `make install-daemon`), then (3) the security-API shared container, then
+// (4) the literal path as a last resort (dev build with no app-group entitlement).
 let containerDirectory: URL
 if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }),
    FileManager.default.fileExists(atPath: argPath) {
@@ -428,9 +440,21 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
 } else if let envPath = ProcessInfo.processInfo.environment["WIKI_CONTAINER_DIR"],
           FileManager.default.fileExists(atPath: envPath) {
     containerDirectory = URL(fileURLWithPath: envPath, isDirectory: true)
+} else if let shared = DatabaseLocation.extensionContainerDirectory() {
+    containerDirectory = shared
 } else {
     containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
 }
+
+// Diagnostic: log the RESOLVED App Group id + container the daemon will use.
+// The group id comes from `WikiIdentifiers.appGroupID` (read from the id sidecar
+// bundled in the daemon's own Contents/Resources). If that sidecar is missing,
+// resolution falls back to the `group.org.sockpuppet.wiki` default → a container
+// with NO wikis → "No store for wikiID" at ingest. This line is the fastest way
+// to see that mismatch: grep for `appGroup=` and confirm it matches the app's
+// real group, and `container=` points at ~/Library/Group Containers (not a
+// sandbox-local path). (#887.)
+DebugLog.store("wikid: resolved appGroup=\(WikiIdentifiers.appGroupID) container=\(containerDirectory.path)")
 
 let daemon = WikiDaemon(containerDirectory: containerDirectory)
 
