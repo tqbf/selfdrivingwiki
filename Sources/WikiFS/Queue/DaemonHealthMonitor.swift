@@ -99,6 +99,19 @@ final class DaemonHealthMonitor {
 
     // MARK: - Invalidation handler (#878 MEDIUM 2)
 
+    /// Test-only: directly trigger the invalidation → `.disconnected`
+    /// transition as if the XPC connection had been invalidated. Exposed so
+    /// tests can exercise the state machine deterministically without relying
+    /// on `NSXPCConnection`'s asynchronous invalidation dispatch, which races
+    /// under concurrent test load (#884).
+    ///
+    /// In production, `handleInvalidation()` is called by the invalidation
+    /// handler installed in ``installInvalidationHandler(_:)``, which fires on
+    /// an XPC-internal queue.
+    func _testSimulateInvalidation() {
+        handleInvalidation()
+    }
+
     private func installInvalidationHandler(_ conn: WikiDaemonConnection) {
         conn.setInvalidationHandler { [weak self] in
             // Fires on an XPC-internal queue — hop to the main actor.

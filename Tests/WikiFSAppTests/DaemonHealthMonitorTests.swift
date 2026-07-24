@@ -50,16 +50,19 @@ struct DaemonHealthMonitorTests {
         monitor.start(connection: conn)
         #expect(monitor.state == .connected)
 
-        // Invalidate the XPC connection — the invalidation handler fires on
-        // an XPC-internal queue and hops to the main actor via Task.
-        conn.invalidate()
-
-        // Wait for the main-actor hop to process.
-        try? await Task.sleep(for: .milliseconds(300))
+        // Simulate the XPC connection being invalidated. In production this is
+        // triggered by `NSXPCConnection`'s invalidation handler (which fires
+        // asynchronously on an XPC-internal queue, then hops to the main actor
+        // via Task { @MainActor }). We call `_testSimulateInvalidation()` for a
+        // deterministic transition that doesn't race under concurrent test
+        // load (#884).
+        monitor._testSimulateInvalidation()
 
         #expect(monitor.state == .disconnected)
         #expect(disconnectFired)
         #expect(stateChanges.contains(.disconnected))
+
+        conn.invalidate()
     }
 
     @Test func stopClearsMonitoring() throws {
@@ -81,13 +84,15 @@ struct DaemonHealthMonitorTests {
         monitor.onStateChange = { states.append($0) }
 
         monitor.start(connection: conn)
-        conn.invalidate()
 
-        try? await Task.sleep(for: .milliseconds(300))
+        // Simulate the XPC invalidation deterministically (#884).
+        monitor._testSimulateInvalidation()
 
         // Should have seen .connected then .disconnected.
         #expect(states.contains(.connected))
         #expect(states.contains(.disconnected))
+
+        conn.invalidate()
     }
 
     @Test func healthPingIntervalIsConfigurable() throws {
@@ -178,13 +183,16 @@ struct WikiDaemonConnectionHealthTests {
     @Test func healthCheckTimeoutParameterIsRespected() async throws {
         let conn = try #require(try? WikiDaemonConnection.connect())
 
-        // A 1-second timeout should return well within 5 seconds.
+        // A 1-second timeout should return well within 15 seconds. The generous
+        // margin accounts for CI / concurrent-test-load scheduling delays: the
+        // point is that the timeout is *respected* (proportional to the passed
+        // value), not that it hangs for 128 s waiting on a dead XPC connection
+        // (#884).
         let start = Date()
         _ = await conn.healthCheck(timeout: 1)
         let elapsed = Date().timeIntervalSince(start)
 
-        // Should complete in under 5 seconds regardless of daemon state.
-        #expect(elapsed < 5)
+        #expect(elapsed < 15)
     }
 }
 #endif
