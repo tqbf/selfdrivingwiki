@@ -196,20 +196,25 @@ struct DaemonHealthMonitorTests {
         #expect(monitor.state == .disconnected)
     }
 
-    @Test func forceReconnectOnDisconnectedMonitorFiresOnDisconnect() {
+    @Test func forceReconnectOnDisconnectedMonitorDoesNotRefireOnDisconnect() {
         let monitor = DaemonHealthMonitor()
         monitor.startRetrying()
         #expect(monitor.isMonitoring)
+        #expect(monitor.state == .disconnected)
 
         var disconnectFired = false
         monitor.onDisconnect = { disconnectFired = true }
 
         monitor.forceReconnect()
 
-        // Already monitoring + disconnected → onDisconnect fires (so the app
-        // swaps to local engine if it hadn't already).
-        #expect(disconnectFired)
+        // Already `.disconnected` → onDisconnect must NOT fire again. Re-firing
+        // it would tear down the working local fallback engine and open a
+        // second one. The contract is: onDisconnect fires exactly once per
+        // disconnect. forceReconnect still kicks a reconnect attempt (via the
+        // ping loop) and leaves monitoring active.
+        #expect(!disconnectFired)
         #expect(monitor.state == .disconnected)
+        #expect(monitor.isMonitoring)
     }
 }
 

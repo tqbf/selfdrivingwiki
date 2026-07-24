@@ -413,9 +413,12 @@ PLIST
 
 # wikid.xpc Info.plist. CFBundlePackageType=XPC! and the XPCService dict make
 # the system treat this bundle as an on-demand XPC service. ServiceType=
-# Application means the service runs in the app's security context (not
-# sandboxed by default), matching the daemon's need to read the App Group
-# container directly.
+# Application launches ONE instance per connecting app and ties its lifetime
+# to that app — the service terminates when the app exits (or on idle). This
+# is what we want: the daemon must NOT survive app quit. NOTE: ServiceType
+# controls instancing/lifetime, NOT sandboxing — confinement comes purely from
+# the `com.apple.security.app-sandbox` entitlement in the generated
+# DAEMON_ENTITLEMENTS below. This is a SANDBOXED service.
 cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -534,6 +537,20 @@ PLIST
 	<string>${TEAM_ID}.${DAEMON_BUNDLE_ID}</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
+	<!-- SANDBOXED XPC service. Unlike the main app (which runs un-sandboxed),
+	     the daemon is confined by App Sandbox: it reaches the shared SQLite DB
+	     ONLY through the App Group container (application-groups) and the shared
+	     secrets ONLY through the keychain access group. The sandbox entitlement
+	     REQUIRES the daemon provisioning profile to authorize it (${DAEMON_PROFILE});
+	     the ad-hoc fallback below cannot carry it, so ad-hoc dev builds run
+	     UN-sandboxed. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- The daemon runs the agent-execution engine (ACP backends, chat,
+	     extraction) which talks to LLM APIs + fetches URLs — sandboxed
+	     processes have no network by default. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>${APP_GROUP}</string>
@@ -552,6 +569,16 @@ PLIST
   # codesign embeds it into the .xpc bundle, which AMFI checks at exec).
   if [ -f "${DAEMON_PROFILE}" ]; then
     cp "${DAEMON_PROFILE}" "${DAEMON_XPC_CONTENTS}/embedded.provisionprofile"
+  else
+    # LOUD warning: without the daemon profile the sandbox + App Group +
+    # keychain entitlements below can't be signed in, so the fallback signs
+    # the .xpc WITHOUT entitlements. The daemon then runs un-sandboxed AND
+    # can't reach the App Group container / shared keychain — failing far from
+    # this cause. See signing/README.md for generating wikid.provisionprofile.
+    echo "⚠️  ${DAEMON_PROFILE} missing — wikid.xpc will be signed WITHOUT"
+    echo "⚠️  entitlements (not sandboxed, no App Group / keychain access)."
+    echo "⚠️  Run signing/setup.sh to generate it, or the daemon will fail to"
+    echo "⚠️  reach the shared container at runtime."
   fi
 
   # Inside-out: sign nested Mach-O (the wikictl helper + the .appex) first, then

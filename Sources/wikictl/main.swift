@@ -46,8 +46,9 @@ func run() async -> Int32 {
         return 0
     }
 
-    // `wiki` subcommands — registry operations via the wikid daemon.
-    // These don't open a store or need a wiki selector.
+    // `wiki` subcommands — registry operations via direct App Group container
+    // access (the app-bound XPC daemon is unreachable from the CLI). These
+    // don't need a wiki selector.
     if case .wikiList = invocation.command {
         return await runWikiList()
     }
@@ -79,17 +80,14 @@ func run() async -> Int32 {
     let command = ArgumentParser.applyEnv(invocation.command, env: ProcessInfo.processInfo.environment)
 
     do {
-        // Try the daemon first for wiki resolution. If the daemon isn't running,
-        // fall back to direct file access (the existing WikiResolver path).
-        // This makes wikictl the first real XPC client of wikid (Phase 1C).
-        let descriptor: WikiDescriptor?
+        // Resolve the wiki directly against the registry in the App Group
+        // container. wikictl no longer consults the daemon: wikid is now an
+        // app-bound XPC service (Contents/XPCServices/wikid.xpc), unreachable
+        // from this standalone CLI — a daemon attempt could only time out and
+        // fall back, adding XPC latency to every page write. See
+        // plans/xpc-service-migration.md.
         let resolver = try WikiResolver.appGroupContainer()
-        if let daemon = try? WikiDaemonConnection.connect(),
-           let daemonDesc = try? await daemon.resolveWiki(selector: invocation.wikiSelector) {
-            descriptor = daemonDesc
-        } else {
-            descriptor = resolver.descriptor(forSelector: invocation.wikiSelector)
-        }
+        let descriptor = resolver.descriptor(forSelector: invocation.wikiSelector)
         guard let descriptor else {
             throw PageCommand.Failure.message(
                 "no wiki matching \(invocation.wikiSelector.debugDescription) in the registry")
@@ -300,13 +298,29 @@ func readBody(from source: String) throws -> String {
     try readBodyFile(from: source)
 }
 
-// MARK: - wiki subcommands (via wikid daemon XPC)
+// MARK: - wiki subcommands (direct registry access)
+//
+// These operate directly on `wikis.json` + the per-wiki `<ulid>.sqlite` in the
+// App Group container — NOT via the daemon. The wikid daemon is now a bundled,
+// app-bound XPC service (Contents/XPCServices/wikid.xpc): it is only reachable
+// from within the host app's process, never from this standalone CLI. See
+// plans/xpc-service-migration.md. The logic mirrors `WikiDaemon.createWiki` /
+// `deleteWiki` / `renameWiki` verbatim, minus the daemon-only store caching +
+// event-bus wiring.
+//
+// Registry-level changes (a new/deleted/renamed wiki) become visible to a
+// running app on its NEXT launch: the app drives its registry in-process via
+// `WikiRegistryClient` and only watches PER-PAGE Darwin notifications, not
+// `wikis.json` itself (WikiChangeBridge). This matches the daemon's prior
+// behavior — `createWiki` posted no registry notification either — and is fine
+// for the CLI's scripting/headless role (the app creates wikis via its own
+// client, not via wikictl).
 
 func runWikiList() async -> Int32 {
     do {
-        let daemon = try WikiDaemonConnection.connect()
-        let wikis = try await daemon.listWikis()
-        for wiki in wikis {
+        let resolver = try WikiResolver.appGroupContainer()
+        let registry = WikiRegistry.load(from: resolver.containerDirectory)
+        for wiki in registry.wikis {
             print("\(wiki.id)\t\(wiki.displayName)")
         }
         return 0
@@ -318,8 +332,28 @@ func runWikiList() async -> Int32 {
 
 func runWikiCreate(name: String) async -> Int32 {
     do {
-        let daemon = try WikiDaemonConnection.connect()
-        let descriptor = try await daemon.createWiki(name: name)
+        let resolver = try WikiResolver.appGroupContainer()
+        let container = resolver.containerDirectory
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
+        var descriptor = WikiDescriptor.make(displayName: displayName)
+
+        // Open + seed the DB (the GRDBWikiStore init runs the bootstrap ladder —
+        // pages, system prompt, search tables), then seed a Home page if empty.
+        // Mirrors WikiDaemon.createWiki.
+        let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
+        let pages = (try? store.listPages(sortBy: .newestFirst)) ?? []
+        if pages.isEmpty,
+           // #797: an explicit (synthesized) user action — stamp `user`, not the
+           // shared `legacy-import` author that `createdBy: nil` maps to.
+           let homePage = try? store.createPage(title: "Home", createdBy: PageAuthor.user.rawValue) {
+            descriptor.homePageID = homePage.id
+        }
+
+        var registry = WikiRegistry.load(from: container)
+        registry.add(descriptor)
+        try registry.save(to: container)
+
         print("\(descriptor.id)\t\(descriptor.displayName)")
         return 0
     } catch {
@@ -330,11 +364,23 @@ func runWikiCreate(name: String) async -> Int32 {
 
 func runWikiDelete(id: String) async -> Int32 {
     do {
-        let daemon = try WikiDaemonConnection.connect()
-        let success = try await daemon.deleteWiki(id: id)
-        if !success {
-            FileHandle.standardError.write(Data("wikictl: wiki delete failed for \(id)\n".utf8))
+        let resolver = try WikiResolver.appGroupContainer()
+        let container = resolver.containerDirectory
+        var registry = WikiRegistry.load(from: container)
+        guard let descriptor = registry.descriptor(id: id) else {
+            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
             return 1
+        }
+
+        // Remove from the registry first, then drop the DB files (main + WAL
+        // sidecars). Mirrors WikiDaemon.deleteWiki.
+        registry.remove(id: id)
+        try registry.save(to: container)
+
+        let dbURL = resolver.databaseURL(for: descriptor)
+        let fm = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(atPath: dbURL.path + suffix)
         }
         return 0
     } catch {
@@ -345,12 +391,20 @@ func runWikiDelete(id: String) async -> Int32 {
 
 func runWikiRename(id: String, name: String) async -> Int32 {
     do {
-        let daemon = try WikiDaemonConnection.connect()
-        let success = try await daemon.renameWiki(id: id, name: name)
-        if !success {
-            FileHandle.standardError.write(Data("wikictl: wiki rename failed for \(id)\n".utf8))
+        let resolver = try WikiResolver.appGroupContainer()
+        let container = resolver.containerDirectory
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            FileHandle.standardError.write(Data("wikictl: wiki rename requires a non-empty name\n".utf8))
             return 1
         }
+        var registry = WikiRegistry.load(from: container)
+        guard registry.descriptor(id: id) != nil else {
+            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
+            return 1
+        }
+        registry.rename(id: id, to: trimmed)
+        try registry.save(to: container)
         return 0
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
@@ -361,54 +415,35 @@ func runWikiRename(id: String, name: String) async -> Int32 {
 // `run()` is async — boot a top-level task and wait for it.
 exit(await run())
 
-// MARK: - daemon chat subcommands (Phase C)
+// MARK: - chat subcommands (RETIRED — live chat is app-only)
+//
+// `chat new/send/stop` drove LIVE, streaming, persistent ACP sessions hosted
+// inside the long-running wikid daemon. That daemon is now a bundled, app-bound
+// XPC service (Contents/XPCServices/wikid.xpc) reachable only from the host app
+// — a short-lived CLI process can neither reach it nor host a live conversation.
+// wikictl stays a READ path for chat; driving a conversation is app-only. These
+// commands are kept (so the CLI surface/scripts don't hard-break on an unknown
+// subcommand) but fail fast with a clear message. See plans/xpc-service-migration.md.
 
-/// `wikictl chat new "<message>"` — start a chat on the daemon.
+/// The shared "chat is app-only" failure. Exit 1.
+private func chatRetired() -> Int32 {
+    let message = "wikictl: live chat is only available in the app (the wikid daemon "
+        + "is an app-bound XPC service, not reachable from the CLI)\n"
+    FileHandle.standardError.write(Data(message.utf8))
+    return 1
+}
+
+/// `wikictl chat new "<message>"` — RETIRED (live chat is app-only).
 func runDaemonChatNew(wikiSelector: String, message: String) async -> Int32 {
-    do {
-        let daemon = try WikiDaemonConnection.connect()
-        guard let descriptor = try await daemon.resolveWiki(selector: wikiSelector) else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
-            return 1
-        }
-        let workload = try DaemonWorkloadClient(connection: daemon)
-        let chatID = try await workload.startChat(
-            ChatStartRequest(wikiID: descriptor.id, firstMessage: message))
-        print(chatID)
-        return 0
-    } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
-        return 1
-    }
+    chatRetired()
 }
 
-/// `wikictl chat send <chatID> "<message>"` — continue a chat on the daemon.
+/// `wikictl chat send <chatID> "<message>"` — RETIRED (live chat is app-only).
 func runDaemonChatSend(wikiSelector: String, chatID: String, message: String) async -> Int32 {
-    do {
-        let daemon = try WikiDaemonConnection.connect()
-        guard let descriptor = try await daemon.resolveWiki(selector: wikiSelector) else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(wikiSelector)\n".utf8))
-            return 1
-        }
-        let workload = try DaemonWorkloadClient(connection: daemon)
-        try await workload.continueChat(
-            ChatContinueRequest(wikiID: descriptor.id, chatID: chatID, message: message))
-        return 0
-    } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
-        return 1
-    }
+    chatRetired()
 }
 
-/// `wikictl chat stop <chatID>` — stop a chat on the daemon.
+/// `wikictl chat stop <chatID>` — RETIRED (live chat is app-only).
 func runDaemonChatStop(wikiSelector: String, chatID: String) async -> Int32 {
-    do {
-        let daemon = try WikiDaemonConnection.connect()
-        let workload = try DaemonWorkloadClient(connection: daemon)
-        try await workload.stopChat(chatID)
-        return 0
-    } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
-        return 1
-    }
+    chatRetired()
 }

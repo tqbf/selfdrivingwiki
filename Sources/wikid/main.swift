@@ -437,28 +437,34 @@ let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
 // The daemon is a bundled XPC service (Contents/XPCServices/wikid.xpc). The
 // system creates the listener and passes connections to it. We obtain the
-// singleton service listener via `NSXPCListener.serviceListener`, set our
-// delegate, and resume. For a service listener, `resume()` never returns —
-// it hands control to the system's run loop, which is ideal for the XPC
-// service's main() function. No `RunLoop.current.run()` needed.
+// singleton service listener via `NSXPCListener.service()`, set our delegate,
+// and resume. For a service listener, `resume()` never returns — it hands
+// control to the system's run loop, which is ideal for the XPC service's
+// main() function. No `RunLoop.current.run()` needed.
 //
 // Clients connect via `NSXPCConnection(serviceName: WikiDaemonServiceName)`.
 // The system auto-launches the service on the first connection and terminates
 // it after idle (no LaunchAgent plist, no launchctl, no stale-daemon races).
 let listener = NSXPCListener.service()
 listener.delegate = delegate
-listener.resume()
 
+// Emit the startup log + start the #878 liveness heartbeat BEFORE resume() —
+// `resume()` on a service listener never returns (it hands control to the
+// system's run loop), so anything after it is unreachable in production. The
+// "XPC service started" log line in particular is the first thing an operator
+// greps for to confirm the service launched.
 DebugLog.store("wikid: XPC service started, serving on \(WikiDaemonServiceName)")
 
 // #878: start the liveness heartbeat (logs every 60 s so an operator can
 // confirm the daemon is alive + see its current load in Console.app).
 daemon.startHeartbeat()
 
-// `listener.resume()` on a serviceListener never returns — the system owns
-// the run loop. The code below is unreachable in production but kept as
-// documentation + a fallback for non-XPC execution contexts (tests, direct
-// invocation for debugging).
+listener.resume()
+
+// Unreachable in production — `listener.resume()` above never returns. Kept as
+// a fallback for non-XPC execution contexts (tests, direct invocation for
+// debugging), where `service()` returns a listener whose `resume()` does not
+// block.
 RunLoop.current.run()
 
 #else // Linux

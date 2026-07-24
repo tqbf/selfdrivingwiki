@@ -89,7 +89,10 @@ final class DaemonHealthMonitor {
         stop()
         isMonitoring = true
         setState(.disconnected)
-        startHealthPings()
+        // `immediate: true` fires the first reconnect attempt right away rather
+        // than after a full ping interval — the retry loop should not make the
+        // user wait 30 s to recover from a failed initial connect.
+        startHealthPings(immediate: true)
         DebugLog.store("wikid: DaemonHealthMonitor retry loop started — state=.disconnected")
     }
 
@@ -100,19 +103,28 @@ final class DaemonHealthMonitor {
     /// is currently `.connected`, this forces a disconnect→reconnect cycle.
     func forceReconnect() {
         DebugLog.store("wikid: forceReconnect requested")
+        let wasConnected = (state == .connected)
         if let conn = connection {
             conn.invalidate()
             connection = nil
         }
-        // If we're already monitoring, the ping loop will detect the missing
-        // connection and reconnect on the next iteration. If we're not
-        // monitoring yet, start the retry loop.
-        if !isMonitoring {
+        // Not monitoring yet — start the retry loop (which fires an immediate
+        // reconnect attempt).
+        guard isMonitoring else {
             startRetrying()
-        } else {
+            return
+        }
+        // Already monitoring. Only fire `onDisconnect` if we were actually
+        // connected — re-firing it while already `.disconnected` would tear
+        // down a working local fallback engine and open a second one (the
+        // contract is: onDisconnect fires exactly once per disconnect).
+        if wasConnected {
             setState(.disconnected)
             onDisconnect?()
         }
+        // Kick an immediate reconnect attempt instead of waiting a full ping
+        // interval — the whole point of "Restart Daemon" is a prompt recovery.
+        startHealthPings(immediate: true)
     }
 
     /// Stop monitoring (cancel the ping loop, clear the connection reference).
@@ -160,11 +172,20 @@ final class DaemonHealthMonitor {
 
     // MARK: - Recurring health ping (#878 BLOCKER 1.1)
 
-    private func startHealthPings() {
+    /// - Parameter immediate: when `true`, run the first health ping right away
+    ///   before entering the sleep loop. Used by `startRetrying` /
+    ///   `forceReconnect` so recovery doesn't wait a full `healthPingInterval`.
+    ///   The steady-state `start(connection:)` path leaves it `false` (the
+    ///   connection was just verified — no need to re-ping immediately).
+    private func startHealthPings(immediate: Bool = false) {
         healthPingTask?.cancel()
         let interval = healthPingInterval
         let timeout = healthCheckTimeout
         healthPingTask = Task { [weak self] in
+            if immediate {
+                guard !Task.isCancelled, let self else { return }
+                await self.performHealthPing(timeout: timeout)
+            }
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
