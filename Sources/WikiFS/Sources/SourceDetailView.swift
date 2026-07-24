@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Detail pane for one ingested source file. Shows metadata header + inline
 /// content (markdown render, inline PDF, or tabbed Markdown⇄PDF when extraction
