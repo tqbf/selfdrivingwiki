@@ -121,14 +121,14 @@ public enum MediaTitleFetcher {
     /// returns a top-level `{"title": "…", "author_name": "…"}`. Pure; returns
     /// `nil` for empty/absent/undecodable titles.
     public static func parseTitle(from data: Data) -> String? {
-        trim((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["title"] as? String)
+        trim(DebugLog.trying("parseTitle", operation: { (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["title"] as? String }))
     }
 
     /// Parse the full oEmbed metadata blob from a JSON response. Tolerant of
     /// missing fields — every property is optional. Pure; returns `nil` only
     /// when the bytes aren't a JSON object at all. Issue #646.
     public static func parseMetadata(from data: Data) -> MediaOEmbedMetadata? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let obj = DebugLog.trying("parseMetadata", operation: { try JSONSerialization.jsonObject(with: data) as? [String: Any] }) else {
             return nil
         }
         return MediaOEmbedMetadata(

@@ -102,6 +102,8 @@ final class WikiDaemon: @unchecked Sendable {
         let interval = heartbeatInterval
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
                 await self.emitHeartbeat()
@@ -111,6 +113,8 @@ final class WikiDaemon: @unchecked Sendable {
         let intervalNs = heartbeatInterval
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(nanoseconds: intervalNs)
                 guard !Task.isCancelled, let self else { break }
                 await self.emitHeartbeat()
@@ -155,7 +159,7 @@ final class WikiDaemon: @unchecked Sendable {
 
     func listWikis() -> Data {
         queue.sync {
-            (try? JSONEncoder().encode(registry.wikis)) ?? Data()
+            (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(registry.wikis) })) ?? Data()
         }
     }
 
@@ -182,16 +186,18 @@ final class WikiDaemon: @unchecked Sendable {
 
             // Seed a Home page if the store is empty (mirrors WikiRegistryClient.createWiki)
             if let store = openStores[descriptor.id] {
-                let pages = (try? store.listPages(sortBy: .newestFirst)) ?? []
+                let pages = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .newestFirst) })) ?? []
                 if pages.isEmpty {
                     // #797: pre-fix `createdBy: nil` mapped to the shared
                     // `legacy-import` agent, so the daemon-seeded Home page
                     // read as `legacy-import` in `pageOrigin` / the Provenance
                     // panel. A daemon bootstrap is an explicit (synthesized)
                     // user action — stamp `user`.
-                    if let homePage = try? store.createPage(
-                        title: "Home",
-                        createdBy: PageAuthor.user.rawValue) {
+                    if let homePage = DebugLog.trying("createPage", operation: {
+                        try store.createPage(
+                            title: "Home",
+                            createdBy: PageAuthor.user.rawValue)
+                    }) {
                         var desc = descriptor
                         desc.homePageID = homePage.id
                         registry.add(desc)
@@ -205,8 +211,10 @@ final class WikiDaemon: @unchecked Sendable {
                 registry.add(descriptor)
             }
 
-            try? registry.save(to: containerDirectory)
-            return try? JSONEncoder().encode(registry.descriptor(id: descriptor.id) ?? descriptor)
+            DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
+            return (DebugLog.trying("JSONEncoder.encode", operation: {
+                try JSONEncoder().encode(registry.descriptor(id: descriptor.id) ?? descriptor)
+            }))
         }
     }
 
@@ -217,14 +225,14 @@ final class WikiDaemon: @unchecked Sendable {
 
             // Remove from registry
             registry.remove(id: id)
-            try? registry.save(to: containerDirectory)
+            DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
 
             // Delete DB files (main + WAL sidecars)
             let dbURL = databaseURL(forWikiID: id)
             let fm = FileManager.default
             for suffix in ["", "-wal", "-shm"] {
                 let path = dbURL.path + suffix
-                try? fm.removeItem(atPath: path)
+                DebugLog.trying("removeItem", operation: { try fm.removeItem(atPath: path) })
             }
             return true
         }
@@ -236,7 +244,7 @@ final class WikiDaemon: @unchecked Sendable {
             guard !trimmed.isEmpty else { return false }
             guard registry.descriptor(id: id) != nil else { return false }
             registry.rename(id: id, to: trimmed)
-            try? registry.save(to: containerDirectory)
+            DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
             return true
         }
     }
@@ -246,7 +254,7 @@ final class WikiDaemon: @unchecked Sendable {
             // Mirrors WikiResolver.descriptor(forSelector:): ULID first, then displayName
             let descriptor = registry.descriptor(id: selector)
                 ?? registry.wikis.first { $0.displayName == selector }
-            return descriptor.flatMap { try? JSONEncoder().encode($0) }
+            return descriptor.flatMap { desc in DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(desc) }) }
         }
     }
 
@@ -547,11 +555,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// async too — the exporter wraps it in a `Task` and replies when it
     /// resolves.
     func queueSnapshotData() async -> Data {
-        guard let engine = try? await ensureQueueEngine() else {
-            return (try? JSONEncoder().encode(QueueSnapshot())) ?? Data()
+        guard let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await ensureQueueEngine() }) else {
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(QueueSnapshot()) })) ?? Data()
         }
         let snapshot = await engine.snapshot()
-        return (try? JSONEncoder().encode(snapshot)) ?? Data()
+        return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(snapshot) })) ?? Data()
     }
 
     // MARK: - Chat host (Phase C)
@@ -613,10 +621,10 @@ final class WikiDaemon: @unchecked Sendable {
             let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
             let chatID = try await host.startChat(wikiID: req.wikiID, firstMessage: req.firstMessage)
             let reply = ChatStartReply(chatID: chatID, error: nil)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatStartReply(chatID: nil, error: error.localizedDescription)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else
         return Data()
@@ -631,10 +639,10 @@ final class WikiDaemon: @unchecked Sendable {
             let req = try JSONDecoder().decode(ChatContinueRequest.self, from: request)
             try await host.continueChat(wikiID: req.wikiID, chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatErrorReply(error: error.localizedDescription)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else
         return Data()
@@ -650,14 +658,14 @@ final class WikiDaemon: @unchecked Sendable {
                   let chatID = dict["chatID"] as? String,
                   let message = dict["message"] as? String else {
                 let reply = ChatErrorReply(error: "invalid request")
-                return (try? JSONEncoder().encode(reply)) ?? Data()
+                return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
             }
             try await host.sendChatMessage(chatID: chatID, message: message)
             let reply = ChatErrorReply(error: nil)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatErrorReply(error: error.localizedDescription)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else
         return Data()
@@ -667,7 +675,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// Stop a chat.
     func stopChat(chatID: String) async {
         #if canImport(WikiFSEngine)
-        if let host = try? await ensureChatHost() {
+        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }) {
             await host.stopChat(chatID: chatID)
         }
         #endif
@@ -679,7 +687,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let host = try await ensureChatHost()
             let state = try await host.chatSessionState(chatID: chatID)
-            return (try? JSONEncoder().encode(state)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(state) })) ?? Data()
         } catch {
             return Data()
         }
@@ -691,8 +699,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// Resolve a chat permission.
     func resolveChatPermissionData(request: Data) async {
         #if canImport(WikiFSEngine)
-        if let host = try? await ensureChatHost(),
-           let req = try? JSONDecoder().decode(ChatPermissionResolveRequest.self, from: request) {
+        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }),
+           let req = DebugLog.trying("JSONDecoder.decode", operation: {
+            try JSONDecoder().decode(ChatPermissionResolveRequest.self, from: request)
+        }) {
             await host.resolvePermission(
                 chatID: req.chatID, optionId: req.optionId, approve: req.approve)
         }
@@ -708,10 +718,10 @@ final class WikiDaemon: @unchecked Sendable {
             try await host.setChatConfigOption(
                 chatID: req.chatID, option: req.option, value: req.value)
             let reply = ChatErrorReply(error: nil)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatErrorReply(error: error.localizedDescription)
-            return (try? JSONEncoder().encode(reply)) ?? Data()
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else
         return Data()

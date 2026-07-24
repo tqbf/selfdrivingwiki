@@ -331,8 +331,8 @@ final class DebugRunLogger: @unchecked Sendable {
     /// nil on failure — the field is omitted rather than crashing.
     private func encodeToAny<T: Encodable>(_ value: T?) -> Any? {
         guard let value else { return nil }
-        guard let data = try? prettyEncoder.encode(value) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data, options: [.allowFragments])
+        guard let data = DebugLog.trying("encode value", operation: { try prettyEncoder.encode(value) }) else { return nil }
+        return DebugLog.trying("JSONSerialization", operation: { try JSONSerialization.jsonObject(with: data, options: [.allowFragments]) })
     }
 
     /// Encode a `[String: Any?]` dictionary to pretty-printed JSON and write to
@@ -371,7 +371,7 @@ final class DebugRunLogger: @unchecked Sendable {
         }
         do {
             let handle = try FileHandle(forWritingTo: url)
-            defer { try? handle.close() }
+            defer { DebugLog.trying("close handle", operation: { try handle.close() }) }
             try handle.seekToEnd()
             try handle.write(contentsOf: data)
         } catch {

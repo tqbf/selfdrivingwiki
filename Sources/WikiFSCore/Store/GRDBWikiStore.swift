@@ -354,7 +354,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let r = try body(db)
                 result = r
                 // Compute the event inside the transaction (committed state).
-                pending = try? event(r)
+                pending = DebugLog.trying("processEvent", operation: { try event(r) })
                 return .commit
             }
         }
@@ -2743,7 +2743,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `changeToken()` always answers. Mirrors the `try?` resilience of the
     /// historical SQLiteWikiStore helpers.
     internal func resilientScalar(_ sql: String, on db: Database) -> Int64 {
-        (try? Int64.fetchOne(db, sql: sql)) ?? 0
+        DebugLog.trying("resilientScalar", operation: { try Int64.fetchOne(db, sql: sql) }) ?? 0
     }
 
     /// `COUNT`/`SUM(version)` over `pages`. Unlike the resilient helpers
@@ -2756,7 +2756,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// COUNT/SUM(version) over `sources`, resilient to a missing table.
     internal func sourceCountSum(on db: Database) -> (Int64, Int64) {
-        guard let row = try? Row.fetchOne(db, sql: "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM sources;") else {
+        guard let row = DebugLog.trying("sourceCountSum", operation: { try Row.fetchOne(db, sql: "SELECT COUNT(*), COALESCE(SUM(version), 0) FROM sources;") }) else {
             return (0, 0)
         }
         return (row[0] ?? 0, row[1] ?? 0)
@@ -3620,7 +3620,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Post-commit: re-embed + refresh FTS for the new title (best-effort),
         // using the current processed-markdown HEAD body so embedding reflects
         // both the new name and the content.
-        let headBody = (try? processedMarkdownHead(sourceID: id)?.content) ?? ""
+        let headBody = DebugLog.trying("reindexSource", operation: { try processedMarkdownHead(sourceID: id)?.content }) ?? ""
         reembedSource(sourceID: id, body: headBody)
         upsertSourceSearchPostCommit(sourceID: id, body: headBody)
     }
@@ -4271,7 +4271,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // Resolve the source's active content version when the caller didn't
             // supply one.
             let resolvedSourceVersionID = sourceVersionID
-                ?? (try? self.activeContentVersion(sourceID: sourceID, on: db))?.id
+                ?? DebugLog.trying("recordExtraction", operation: { try self.activeContentVersion(sourceID: sourceID, on: db) })?.id
 
             // Agent (idempotent by name) + a single extract activity.
             let agentID = try self.ensureAgent(
@@ -4299,7 +4299,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // Re-embed/index only when this row is now the active head (default-
             // active rule: it is MAX(id); if a ref nominates a different row, this
             // is just a coexisting alternative and must not disturb the active index).
-            let refExists = (try? self.markdownDerivedRef(sourceID: sourceID, on: db)) != nil
+            let refExists = DebugLog.trying("recordExtraction", operation: { try self.markdownDerivedRef(sourceID: sourceID, on: db) }) != nil
             if !refExists {
                 self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
             }
@@ -4339,7 +4339,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 now: Date().timeIntervalSince1970, on: db)
         }
         // Post-commit: refresh the search indexes for the newly-active body.
-        if let head = try? processedMarkdownHead(sourceID: sourceID) {
+        if let head = DebugLog.trying("setActiveMarkdown", operation: { try processedMarkdownHead(sourceID: sourceID) }) {
             reembedSource(sourceID: sourceID, body: head.content)
             upsertSourceSearchPostCommit(sourceID: sourceID, body: head.content)
         }
@@ -5241,18 +5241,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         if !mergedPageIDs.isEmpty {
             for pageIDStr in mergedPageIDs {
                 let pid = PageID(rawValue: pageIDStr)
-                if let page = try? getPage(id: pid) {
+                if let page = DebugLog.trying("mergeWorkspace", operation: { try getPage(id: pid) }) {
                     let text = page.bodyMarkdown.isEmpty
                         ? page.title
                         : "\(page.title)\n\n\(page.bodyMarkdown)"
                     let chunks = EmbeddingService.chunkedEmbeddings(for: text)
                     if !chunks.isEmpty {
-                        try? storePageChunks(id: pid, chunks: chunks)
+                        DebugLog.trying("mergeWorkspace store chunks", operation: { try storePageChunks(id: pid, chunks: chunks) })
                     }
                 }
             }
             let note = "\(mergedPageIDs.count) page(s) merged"
-            _ = try? appendLog(kind: .ingest, title: "Workspace merge completed", note: note)
+            DebugLog.trying("mergeWorkspace log", operation: { try appendLog(kind: .ingest, title: "Workspace merge completed", note: note) })
         }
 
         return mergedPageIDs
@@ -6280,7 +6280,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 guard
                     let json: String = row["event_json"],
                     let data = json.data(using: .utf8),
-                    let event = try? decoder.decode(AgentEvent.self, from: data)
+                    let event = DebugLog.trying("listChatMessages", operation: { try decoder.decode(AgentEvent.self, from: data) })
                 else { continue }
                 // Decode-if-present for the nullable summary columns
                 // (chat-summary plan §3.4). Pre-v40 rows and unsummarized
@@ -6953,11 +6953,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// triggers on `source_search` keep `sources_fts` fresh. Best-effort: a
     /// failure is logged, never thrown (mirrors SQLiteWikiStore's `try?` guard).
     private func upsertSourceSearch(sourceID: PageID, body: String, on db: Database) {
-        guard let title = try? String.fetchOne(
-            db,
-            sql: "SELECT COALESCE(display_name, filename) FROM sources WHERE id = ?;",
-            arguments: [sourceID.rawValue]
-        ) else { return }
+        guard let title = DebugLog.trying("upsertSourceSearch", operation: {
+            try String.fetchOne(
+                db,
+                sql: "SELECT COALESCE(display_name, filename) FROM sources WHERE id = ?;",
+                arguments: [sourceID.rawValue]
+            )
+        }) else { return }
         do {
             try db.execute(sql: """
             INSERT OR REPLACE INTO source_search (source_id, title, body) VALUES (?, ?, ?);
@@ -6980,12 +6982,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// loaded (the model must be available to embed). Mirrors
     /// `SQLiteWikiStore.reembedSource` minus the lock-holding.
     private func reembedSource(sourceID: PageID, body: String) {
-        guard let title = try? dbWriter.read({ db in
-            try String.fetchOne(
-                db,
-                sql: "SELECT COALESCE(display_name, filename) FROM sources WHERE id = ?;",
-                arguments: [sourceID.rawValue]
-            )
+        guard let title = DebugLog.trying("reembedSource", operation: {
+            try dbWriter.read { db in
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(display_name, filename) FROM sources WHERE id = ?;",
+                    arguments: [sourceID.rawValue]
+                )
+            }
         }) else { return }
         // Embedder-gated (issue #628): no C scalar to probe anymore; the
         // embedder must be loaded to produce chunk vectors.
@@ -7909,10 +7913,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
         do {
             try dbWriter.writeWithoutTransaction { db in
-                let stored = (try? String.fetchOne(
+                let stored = DebugLog.trying("dropChunksOnEmbedderSwitch", operation: { try String.fetchOne(
                     db,
                     sql: "SELECT embedder FROM embedding_meta WHERE id = 1;"
-                )) ?? ""
+                ) }) ?? ""
                 guard stored != activeIdentifier else { return }
                 try db.execute(sql: "DELETE FROM page_chunks;")
                 try db.execute(sql: "DELETE FROM source_chunks;")
@@ -8029,7 +8033,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
         var seeded = 0
         for id in ids {
-            guard let bytes = try? sourceContent(id: id),
+            guard let bytes = DebugLog.trying("seedNativeMarkdownSources", operation: { try sourceContent(id: id) }),
                   let text = String(data: bytes, encoding: .utf8) else { continue }
             do {
                 _ = try appendProcessedMarkdown(

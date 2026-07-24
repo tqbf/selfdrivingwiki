@@ -240,6 +240,8 @@ struct AddressBarView: View {
             return
         }
         searchTask = Task {
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .milliseconds(200))
             if Task.isCancelled { return }
             results = store.searchOmnibox(query: trimmed)

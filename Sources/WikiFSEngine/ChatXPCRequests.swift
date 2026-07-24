@@ -160,6 +160,6 @@ public struct ChatSessionState: Codable, Sendable {
     /// Decoded `SessionUsage` from `usageData`, or nil.
     public var usage: SessionUsage? {
         guard let usageData else { return nil }
-        return try? JSONDecoder().decode(SessionUsage.self, from: usageData)
+        return DebugLog.trying("decode SessionUsage", operation: { try JSONDecoder().decode(SessionUsage.self, from: usageData) })
     }
 }

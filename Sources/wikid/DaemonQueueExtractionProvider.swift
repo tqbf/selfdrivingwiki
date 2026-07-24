@@ -42,7 +42,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             return nil
         }
 
-        if let origin = try? store.sourceOrigin(sourceID: sourceID),
+        if let origin = DebugLog.trying("sourceOrigin", operation: { try store.sourceOrigin(sourceID: sourceID) }),
            let providerKind = origin.provider {
             switch providerKind {
             case .youtube:
@@ -98,11 +98,11 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             }
         }
 
-        guard let bytes = try? store.sourceContent(id: sourceID) else {
+        guard let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
             DebugLog.extraction("DaemonQueueExtractionProvider: no bytes for \(sourceID.rawValue)")
             return nil
         }
-        let sources = (try? store.listSources()) ?? []
+        let sources = (DebugLog.trying("listSources", operation: { try store.listSources() })) ?? []
         guard let source = sources.first(where: { $0.id == sourceID }) else {
             DebugLog.extraction("DaemonQueueExtractionProvider: no source row for \(sourceID.rawValue)")
             return nil
@@ -134,14 +134,18 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             return
         }
         if let technique {
-            _ = try? store.appendProcessedMarkdown(
-                sourceID: sourceID, content: markdown,
-                origin: .transcript, note: nil, technique: technique)
+            _ = DebugLog.trying("appendProcessedMarkdown", operation: {
+                try store.appendProcessedMarkdown(
+                    sourceID: sourceID, content: markdown,
+                    origin: .transcript, note: nil, technique: technique)
+            })
         } else {
-            _ = try? store.recordMarkdownExtraction(
-                sourceID: sourceID, content: markdown,
-                backend: backend,
-                sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+            _ = DebugLog.trying("recordMarkdownExtraction", operation: {
+                try store.recordMarkdownExtraction(
+                    sourceID: sourceID, content: markdown,
+                    backend: backend,
+                    sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+            })
         }
         DarwinNotifier.postChange(forWikiID: wikiID)
     }

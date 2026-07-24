@@ -123,14 +123,14 @@ public struct ACPIngestPlan: Codable, Equatable, Sendable {
         let jsonSubstring = String(s[firstBrace...lastBrace])
 
         guard let jsonData = jsonSubstring.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(ACPIngestPlan.self, from: jsonData)
+        return DebugLog.trying("extract", operation: { try JSONDecoder().decode(ACPIngestPlan.self, from: jsonData) })
     }
 
     /// Read `plan.json` from the given directory and extract the plan.
     /// Returns `nil` if the file is missing or invalid.
     public static func load(from directory: URL) -> ACPIngestPlan? {
         let planURL = directory.appendingPathComponent("plan.json")
-        guard let data = try? Data(contentsOf: planURL) else { return nil }
+        guard let data = DebugLog.trying("load", operation: { try Data(contentsOf: planURL) }) else { return nil }
         return extract(from: data)
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import ACPModel
+import WikiFSTypes
 
 /// #727: the outcome of inspecting a provider error for quota exhaustion.
 /// `nil` means "not a quota error — handle normally."
@@ -258,7 +259,7 @@ public enum ProviderQuotaDetector {
     /// "code=1316". Returns the first match or nil.
     private static func parseCodeFromText(_ text: String) -> Int? {
         let pattern = #"code[:\s=]+(\d{4})"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+        guard let regex = DebugLog.trying("compile regex", operation: { try NSRegularExpression(pattern: pattern, options: .caseInsensitive) }) else {
             return nil
         }
         let range = NSRange(text.startIndex..., in: text)

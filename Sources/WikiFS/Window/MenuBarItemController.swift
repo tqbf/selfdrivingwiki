@@ -564,6 +564,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         setAnimationFrame(filled: false)
         animationTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 if Task.isCancelled { break }
                 isFilled.toggle()
@@ -702,6 +704,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private func startHintDismissTimer() {
         hintDismissTask?.cancel()
         hintDismissTask = Task { @MainActor [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             self?.dismissHint()

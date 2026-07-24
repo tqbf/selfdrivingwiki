@@ -52,12 +52,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikictlDirectory: String,
         queueStore: QueueStore,
         resolveSelectedProvider: @escaping () -> AgentProvider = {
-            let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+            let dir = (DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() }))
                 ?? FileManager.default.temporaryDirectory
             return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
         },
         resolveProviderConfig: @escaping () -> AgentProvidersConfig = {
-            let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+            let dir = (DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() }))
                 ?? FileManager.default.temporaryDirectory
             return AgentProvidersConfig.loadOrSeed(from: dir)
         }

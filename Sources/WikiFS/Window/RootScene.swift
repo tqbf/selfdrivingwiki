@@ -234,7 +234,7 @@ struct RootScene: View {
             fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
             Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
             // Reap stale workspaces for this wiki.
-            _ = try? resolved.store.reapStaleWorkspaces(ttl: 86_400)
+            DebugLog.trying("reap stale workspaces", operation: { try resolved.store.reapStaleWorkspaces(ttl: 86_400) })
         }
     }
 }

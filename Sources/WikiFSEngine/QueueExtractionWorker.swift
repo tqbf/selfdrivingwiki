@@ -45,11 +45,18 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
 
         // Ask the provider to resolve — if it returns nil (no PDF bytes,
         // unconfigured backend), the item stays queued and is never dispatched.
-        guard let resolved = try? await provider.resolveExtraction(
-            wikiID: item.wikiID,
-            sourceID: sourceID,
-            backendOverride: override
-        ) else { return nil }
+        let resolved: ExtractionResolution?
+        do {
+            resolved = try await provider.resolveExtraction(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                backendOverride: override
+            )
+        } catch {
+            DebugLog.store("QueueExtractionWorker.resolveExtraction: \(error)")
+            return nil
+        }
+        guard let resolved else { return nil }
 
         // Transcript sources get their own capacity bucket.
         if resolved.transcriptFetch != nil { return "transcript" }

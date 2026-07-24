@@ -78,8 +78,9 @@ enum ToolCallRendering {
     /// JSON to get a `[String: Any]` we can subscript safely. No force-casts;
     /// returns nil for missing keys or non-string values.
     private static func stringField(_ raw: AnyCodable, keys: [String]) -> String? {
-        guard let data = try? JSONEncoder().encode(raw),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = DebugLog.trying("encode raw", operation: { try JSONEncoder().encode(raw) }),
+              let object = DebugLog.trying("JSONSerialization", operation: { try JSONSerialization.jsonObject(with: data) as? [String: Any] })
+        else {
             return nil
         }
         for key in keys {

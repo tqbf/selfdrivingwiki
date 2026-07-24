@@ -113,8 +113,8 @@ public struct HelperPodcastTokenProvider: PodcastTokenProviding {
     }
 
     private func loadCachedToken() -> String? {
-        guard let data = try? Data(contentsOf: cacheURL),
-              let entry = try? JSONDecoder().decode(CacheEntry.self, from: data),
+        guard let data = DebugLog.trying("loadCachedToken", operation: { try Data(contentsOf: cacheURL) }),
+              let entry = DebugLog.trying("loadCachedToken decode", operation: { try JSONDecoder().decode(CacheEntry.self, from: data) }),
               Date().timeIntervalSince(entry.fetched) < maxAge,
               entry.token.hasPrefix("ey")
         else { return nil }
@@ -123,10 +123,10 @@ public struct HelperPodcastTokenProvider: PodcastTokenProviding {
 
     private func storeToken(_ token: String) {
         let entry = CacheEntry(token: token, fetched: Date())
-        guard let data = try? JSONEncoder().encode(entry) else { return }
-        try? FileManager.default.createDirectory(
-            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: cacheURL, options: .atomic)
+        guard let data = DebugLog.trying("storeToken encode", operation: { try JSONEncoder().encode(entry) }) else { return }
+        DebugLog.trying("storeToken create dir", operation: { try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true) })
+        DebugLog.trying("storeToken write", operation: { try data.write(to: cacheURL, options: .atomic) })
     }
 }
 

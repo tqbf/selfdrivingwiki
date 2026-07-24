@@ -271,7 +271,7 @@ public final class AgentLauncher {
     /// launcher should use this session. Read fresh at spawn time so Settings
     /// changes apply on the next session. Injectable for tests.
     @ObservationIgnored var resolveSelectedProvider: () -> AgentProvider = {
-        let dir = (try? DatabaseLocation.appGroupContainerDirectory())
+        let dir = DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
         return AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
     }
@@ -283,7 +283,7 @@ public final class AgentLauncher {
     /// function (not a stored URL) so a Settings change to the container path
     /// takes effect without a restart, mirroring `resolveSelectedProvider`.
     @ObservationIgnored var resolveProvidersContainerDirectory: () -> URL = {
-        (try? DatabaseLocation.appGroupContainerDirectory())
+        DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
     }
 
@@ -353,7 +353,7 @@ public final class AgentLauncher {
     /// run, which is the nil case the callers already handle.
     private static func latestRunDirectory(for chatID: String) -> URL? {
         guard let runsDir = chatRunsDirectory(for: chatID),
-              let runNames = try? FileManager.default.contentsOfDirectory(atPath: runsDir.path),
+              let runNames = DebugLog.trying("contentsOfDirectory", operation: { try FileManager.default.contentsOfDirectory(atPath: runsDir.path) }),
               !runNames.isEmpty else {
             return nil
         }
@@ -871,6 +871,8 @@ public final class AgentLauncher {
                 let interval = (self?.pendingPermissions.isEmpty ?? true)
                     ? UInt64(300_000_000)   // 300ms idle
                     : UInt64(150_000_000)   // 150ms while a request is pending
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(nanoseconds: interval)
             }
         }
@@ -1150,7 +1152,7 @@ public final class AgentLauncher {
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.
-        let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
 
         // #607: per-operation permission policy. The kind is known from the
         // `request` parameter (the staged `WikiOperation` isn't built yet, but
@@ -1245,7 +1247,7 @@ public final class AgentLauncher {
             operation = try request.stage(into: scratch)
         } catch {
             preflightError = "Could not stage the agent's inputs: \(error.localizedDescription)"
-            try? FileManager.default.removeItem(at: scratch)
+            DebugLog.trying("remove scratch on stage error", operation: { try FileManager.default.removeItem(at: scratch) })
             isRunning = false
             releaseGenerationSlot()
             return
@@ -1255,7 +1257,7 @@ public final class AgentLauncher {
         var resumedSession: SessionHandle? = nil
         if let queueStore = queueStore,
            let queueItemID = queueItemID,
-           let item = try? queueStore.getItem(queueItemID),
+           let item = DebugLog.trying("queueStore.getItem", operation: { try queueStore.getItem(queueItemID) }),
            let sessionId = item.payload.acpSessionId {
             // Create a temporary backend to attempt resume
             let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
@@ -1480,7 +1482,7 @@ public final class AgentLauncher {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
-            try? FileManager.default.removeItem(at: scratch)
+            DebugLog.trying("remove scratch on spawn failure", operation: { try FileManager.default.removeItem(at: scratch) })
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
@@ -2022,7 +2024,7 @@ public final class AgentLauncher {
                     let session: SessionHandle
                     if let parentHandle = parentHandle, let acp = acp {
                         DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
-                        if let forked = try? await acp.forkSession(from: parentHandle, cwd: workDir) {
+                        if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workDir) }) {
                             DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded")
                             session = forked
                             // §4.5: apply the executor's stage model with the
@@ -2247,7 +2249,7 @@ public final class AgentLauncher {
                 phaseScratch = scratch
             } else {
                 phaseScratch = scratch.appending(path: "fallback-\(provider.id)")
-                try? FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true)
+                DebugLog.trying("create phaseScratch directory", operation: { try FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true) })
             }
 
             let profile = BackendProfile(
@@ -2376,7 +2378,7 @@ public final class AgentLauncher {
             if let parentHandle = forkFrom, let acp = backend as? ACPBackend {
                 DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
                 let workingDir = profile.scratchDirectory?.path
-                if let forked = try? await acp.forkSession(from: parentHandle, cwd: workingDir) {
+                if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workingDir) }) {
                     DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded, using forked session")
                     session = forked
                     // §4.5: apply the executor's stage model with the planner's
@@ -2767,6 +2769,8 @@ public final class AgentLauncher {
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .seconds(Self.watchdogPollInterval))
                 guard let self, self.isRunning else { return }
                 let pid = self.currentProcessID ?? -1
@@ -2896,7 +2900,7 @@ public final class AgentLauncher {
         self.firstMessagePrePersisted = firstMessagePrePersisted
 
         // Resolved fresh at spawn time.
-        let dir = containerDirectory ?? (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
 
         // The chat's permission policy (default yolo). The ACP agent spawn is
         // threaded into providerHints below.
@@ -2970,7 +2974,7 @@ public final class AgentLauncher {
             stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
         } catch {
             preflightError = "Could not stage the agent's inputs: \(error.localizedDescription)"
-            try? FileManager.default.removeItem(at: scratch)
+            DebugLog.trying("remove scratch on preflight error", operation: { try FileManager.default.removeItem(at: scratch) })
             return
         }
 
@@ -3183,7 +3187,7 @@ public final class AgentLauncher {
             DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)")
             preflightError = "Failed to launch claude: \(error.localizedDescription)"
             closeLogFiles()
-            try? FileManager.default.removeItem(at: scratch)
+            DebugLog.trying("remove scratch on backend.start failure", operation: { try FileManager.default.removeItem(at: scratch) })
             isInteractiveSession = false
             isRunning = false
             runningKind = nil
@@ -3526,6 +3530,8 @@ public final class AgentLauncher {
     private func scheduleCheckpoint() {
         checkpointTimer?.cancel()
         checkpointTimer = Task { @MainActor [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let self else { return }
             self.checkpointStreamingRow(finalize: false)
@@ -3899,8 +3905,8 @@ public final class AgentLauncher {
         let manager = FileManager.default
         manager.createFile(atPath: jsonl.path, contents: nil)
         manager.createFile(atPath: stderrLog.path, contents: nil)
-        logHandle = try? FileHandle(forWritingTo: jsonl)
-        stderrLogHandle = try? FileHandle(forWritingTo: stderrLog)
+        logHandle = DebugLog.trying("open run.jsonl", operation: { try FileHandle(forWritingTo: jsonl) })
+        stderrLogHandle = DebugLog.trying("open run.stderr.log", operation: { try FileHandle(forWritingTo: stderrLog) })
         logFileURL = jsonl
         // Create the debug/ subfolder. `DebugRunLogger` creates the actual
         // `debug/` + `debug/turns/` directories lazily when instantiated in
@@ -3911,7 +3917,7 @@ public final class AgentLauncher {
 
     private func writeLog(_ text: String, to handle: FileHandle?) {
         guard let handle, let data = text.data(using: .utf8) else { return }
-        try? handle.write(contentsOf: data)
+        DebugLog.trying("write to log", operation: { try handle.write(contentsOf: data) })
     }
 
     /// Write `summary.json` to the run's `debug/` folder with provider, model,
@@ -3952,8 +3958,8 @@ public final class AgentLauncher {
     }
 
     private func closeLogFiles() {
-        try? logHandle?.close()
-        try? stderrLogHandle?.close()
+        DebugLog.trying("close logHandle", operation: { try logHandle?.close() })
+        DebugLog.trying("close stderrLogHandle", operation: { try stderrLogHandle?.close() })
         logHandle = nil
         stderrLogHandle = nil
     }
@@ -4100,7 +4106,7 @@ public final class AgentLauncher {
     private static let tmpRelocationLeaf = ".tmp"
     private func createSandboxTmpDir(in scratch: URL) {
         let tmp = scratch.appendingPathComponent(Self.tmpRelocationLeaf, isDirectory: true)
-        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        DebugLog.trying("createSandboxTmpDir", operation: { try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true) })
     }
 }
 

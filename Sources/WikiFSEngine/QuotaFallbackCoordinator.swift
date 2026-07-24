@@ -58,7 +58,7 @@ public final class QuotaFallbackCoordinator {
         if let quotaStateURL {
             self.quotaStateURL = quotaStateURL
         } else {
-            if let containerURL = try? DatabaseLocation.appGroupContainerDirectory() {
+            if let containerURL = DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) {
                 self.quotaStateURL = containerURL.appendingPathComponent("quota-state.json")
             } else {
                 DebugLog.store("QuotaFallbackCoordinator: failed to resolve app group container, using temp dir")

@@ -190,7 +190,7 @@ struct ContentView: View {
     /// agent-phase ingest (the extraction phase precedes the agent process).
     /// Drives the toolbar glow. Both phase flags are included so the glow stays
     private var zoteroContainerDirectory: URL {
-        (try? DatabaseLocation.appGroupContainerDirectory()) ?? FileManager.default.temporaryDirectory
+        (DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() })) ?? FileManager.default.temporaryDirectory
     }
 
     private var isZoteroConfigured: Bool {
