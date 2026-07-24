@@ -1,5 +1,75 @@
 # Progress log
 
+## feat: Migrate wikid daemon from LaunchAgent to bundled XPC service (#887)
+
+**Goal:** eliminate the LaunchAgent-based daemon lifecycle (bare Mach-O +
+runtime-generated plist + launchctl bootout/bootstrap) by bundling wikid as
+a proper XPC service at `Contents/XPCServices/wikid.xpc`. The system now
+manages lifecycle (auto-launch on demand, idle termination), the binary is
+always at the right path, provisioning profiles embed properly (it's a
+bundle), and no LaunchAgent plist is needed.
+
+**What changed:**
+- **build.sh** — wikid is bundled at
+  `Contents/XPCServices/wikid.xpc/Contents/MacOS/wikid` with an Info.plist
+  (`CFBundlePackageType=XPC!`, `ServiceType=Application`). Being a bundle
+  means the provisioning profile embeds properly (codesign CLI can embed in
+  bundles, not bare Mach-Os), so the daemon now carries `application-groups`
+  + `keychain-access-groups` entitlements — no AMFI kills, no TCC prompts.
+  Signed inside-out before the outer app (same as the .appex). Ad-hoc path
+  signs without entitlements (dev fallback).
+- **WikiDaemonConnection** — `NSXPCConnection(serviceName:)` instead of
+  `NSXPCConnection(machServiceName:)`. The system resolves the service name
+  to the `.xpc` bundle and auto-launches on first message.
+- **wikid/main.swift** — `NSXPCListener.service()` instead of
+  `NSXPCListener(machServiceName:)`. For bundled XPC services, the system
+  provides the listener singleton; `resume()` never returns (hands control
+  to the system's run loop).
+- **Deleted** `DaemonLaunchAgentManager.swift` (191 LOC) + its 17 tests +
+  `signing/com.selfdrivingwiki.wikid.plist`. No more runtime plist
+  generation, no `launchctl bootout/bootstrap/kickstart`.
+- **WikiFSApp.swift** — removed all `DaemonLaunchAgentManager` usage
+  (`bootoutAndBootstrap()` in init, `daemonManager` property). The daemon
+  connection is now established in `connectToDaemon()` which the system
+  auto-launches on first `NSXPCConnection(serviceName:)`.
+- **#885 startup race fix:** `connectToDaemon()` now starts the health
+  monitor's retry loop (`startRetrying()`) if the initial connection fails,
+  instead of silently staying on the local QueueEngine. The retry loop keeps
+  trying — the system launches the XPC service on-demand.
+- **DaemonHealthMonitor** — new `startRetrying()` (start in `.disconnected`
+  state with ping loop active) + `forceReconnect()` (invalidate + reconnect;
+  used by the Restart Daemon menu item).
+- **MenuBarItemController** — Restart Daemon calls
+  `healthMonitor.forceReconnect()` instead of `launchctl kickstart`.
+- **Makefile** — `install-daemon` simplified (dev-mode binary copy to
+  container dir only; no launchctl/plist plumbing).
+
+**Tests:** 7 new tests (startRetrying/forceReconnect state transitions,
+service name invariant). Full suite: 3858 tests pass. Existing daemon
+invalidation tests guard on a live health check (skip gracefully in CI
+without a running daemon).
+
+**Evidence:**
+- `make prompts version keychain && swift build` ✓ (35s, 0 errors)
+- `swift test` ✓ (3858 tests, 0 failures)
+- `swift test --filter 'DaemonHealthMonitorTests|WikiDaemonConnectionHealthTests'` ✓ (19 tests)
+
+**Files touched:**
+- `build.sh` — XPC bundle creation + signing
+- `Sources/wikid/main.swift` — NSXPCListener.service() entry point
+- `Sources/WikiCtlCore/WikiDaemonConnection.swift` — serviceName connection
+- `Sources/WikiFS/Window/WikiFSApp.swift` — removed DaemonLaunchAgentManager, #885 retry
+- `Sources/WikiFS/Queue/DaemonHealthMonitor.swift` — startRetrying + forceReconnect
+- `Sources/WikiFS/Window/MenuBarItemController.swift` — Restart Daemon handler
+- `Makefile` — simplified install-daemon
+- `Tests/WikiFSAppTests/DaemonHealthMonitorTests.swift` — 7 new tests
+- `Tests/WikiFSTests/KeychainSecretStoreTests.swift` — comment fix (XPC path)
+- **Deleted:** `Sources/WikiFS/Daemon/DaemonLaunchAgentManager.swift`,
+  `Tests/WikiFSAppTests/DaemonLaunchAgentManagerTests.swift`,
+  `signing/com.selfdrivingwiki.wikid.plist`
+
+---
+
 ## fix: Switch wikid daemon from SMAppService + entitlements to plain LaunchAgent
 
 **Goal:** AMFI killed the wikid daemon at launch because the bare Mach-O had
