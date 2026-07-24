@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
+import SQLite3
+#endif
 import Testing
 @testable import WikiFSCore
 
@@ -218,6 +223,57 @@ struct QueueStoreTests {
         for id in queuedIDs {
             #expect(active.contains { $0.id == id })
         }
+    }
+
+    // MARK: - Legacy `queue = 'lint'` tolerance
+
+    /// A database migrated before the v1 cleanup can still hold rows stamped
+    /// with the abandoned `queue = 'lint'` kind (never shipped in `QueueKind`;
+    /// lint is a payload variant of `.ingestion`). Reading one such row used to
+    /// throw inside `readItem`, which aborts the whole `loadRecent`/`loadActive`
+    /// map — so a *single* legacy row made every terminal job vanish from the
+    /// Agents view. The store now decodes `lint` as `.ingestion` instead.
+    @Test func testLegacyLintRowDecodesAsIngestionInsteadOfHidingAllJobs() throws {
+        let url = tempDatabaseURL()
+
+        // Seed two completed ingestion items through the store, so both rows
+        // carry a valid store-encoded payload. `lintID` is the one we'll stamp
+        // with the legacy queue value.
+        let normalID: QueueItem.ID
+        let lintID: QueueItem.ID
+        do {
+            let store = try QueueStore(databaseURL: url)
+            func completeOne() throws -> QueueItem.ID {
+                let item = try store.enqueue(
+                    QueueItemRequest(queue: .ingestion, wikiID: "wiki1", payload: makePayload()))
+                try store.markRunning(id: item.id, providerID: "p")
+                try store.markCompleted(id: item.id)
+                return item.id
+            }
+            normalID = try completeOne()
+            lintID = try completeOne()
+            store.close()
+        }
+
+        // Stamp one row with the legacy `queue = 'lint'` value directly — there
+        // is (by design) no public API that produces it, so bypass the enum via
+        // raw SQL, the same pattern the canonicalization tests use.
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let updateSQL = "UPDATE queue_items SET queue = 'lint' WHERE id = '\(lintID)';"
+        #expect(sqlite3_exec(db, updateSQL, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        // Reopen and load recent history: the load must succeed (not throw), and
+        // the legacy row must surface, decoded onto the `.ingestion` queue.
+        let store = try QueueStore(databaseURL: url)
+        let recent = try store.loadRecent(limit: 200)
+        // One bad row no longer hides the rest — both are visible.
+        #expect(recent.count == 2)
+        #expect(recent.contains { $0.id == normalID })
+        let stamped = recent.first { $0.id == lintID }
+        #expect(stamped != nil)
+        #expect(stamped?.queue == .ingestion)
     }
 
     // MARK: - AC.5: Headless isolation (source-scan)

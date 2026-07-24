@@ -335,6 +335,20 @@ public final class QueueStore: @unchecked Sendable {
         provider_id, attempt, error, created_at, started_at, finished_at
     """
 
+    /// Decode a stored `queue` raw value into a `QueueKind`.
+    ///
+    /// Tolerates the legacy `"lint"` raw value: an abandoned dev-only queue
+    /// kind that was never shipped in `QueueKind` but can survive in databases
+    /// migrated before the v1 cleanup `DELETE`. Lint is a payload variant of
+    /// `.ingestion` (see `QueueKind`), so those rows decode as `.ingestion`.
+    /// Genuinely unrecognized values still throw — so real corruption stays
+    /// visible instead of being silently coerced.
+    private static func decodeQueueKind(_ raw: String) throws -> QueueKind {
+        if let kind = QueueKind(rawValue: raw) { return kind }
+        if raw == "lint" { return .ingestion }
+        throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(raw)")
+    }
+
     /// Read a `QueueItem` from a GRDB `Row`. Named column access (not positional)
     /// so column order changes are harmless — a key safety improvement over
     /// the old `stmt.text(at: 0)` positional access.
@@ -352,9 +366,7 @@ public final class QueueStore: @unchecked Sendable {
         let startedAt: Int64? = row["started_at"]
         let finishedAt: Int64? = row["finished_at"]
 
-        guard let queue = QueueKind(rawValue: queueRaw) else {
-            throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(queueRaw)")
-        }
+        let queue = try decodeQueueKind(queueRaw)
         guard let state = QueueItemState(rawValue: stateRaw) else {
             throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(stateRaw)")
         }
@@ -1009,9 +1021,6 @@ public final class QueueStore: @unchecked Sendable {
             sql: "SELECT queue FROM queue_items WHERE id = ?;",
             arguments: [id])
         guard let raw else { throw QueueStoreError.notFound(id) }
-        guard let kind = QueueKind(rawValue: raw) else {
-            throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(raw)")
-        }
-        return kind
+        return try decodeQueueKind(raw)
     }
 }
