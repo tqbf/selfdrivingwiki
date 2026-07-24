@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// The Chats section — a native `NSTableView` (`ChatsListView`) of the wiki's
 /// chat history. Mirrors the Pages/Sources/Bookmarks tabs structurally:

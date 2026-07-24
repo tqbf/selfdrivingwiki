@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// The live activity feed for an ACP-driven agent run — the "Agent Queue."
 /// Shows a real-time transcript of agent tool calls, diagnostics, and results

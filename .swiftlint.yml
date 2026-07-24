@@ -9,19 +9,22 @@
 # silently*, or that an AGENTS.md invariant is broken? If it's merely "this
 # could be written more prettily", it does not belong here.
 #
-# Every rule below was measured against the tree before being enabled, and all
-# of them are at ZERO violations — this file is pure prevention, not cleanup.
-# Rules with a non-zero count (force_unwrapping 52, @unchecked Sendable 85,
-# force_try 7, …) are deliberately NOT here; adding them is a separate change
-# with its own baseline growth to review.
+# Every rule here was measured against the tree before being enabled. Rules
+# fall into two groups, and the distinction matters when you add one:
+#
+#   FREE RATCHETS — 0 violations, so the gate is pure prevention.
+#   BASELINED     — a real pre-existing count, grandfathered in
+#                   .swiftlint-baseline.json so only NEW ones fail. The
+#                   baseline is a ratchet, not a permit: fix some, then
+#                   regenerate with `make lint-baseline` so it can only shrink.
 #
 # GOTCHA: `only_rules` and `opt_in_rules` are mutually exclusive. To turn on a
 # built-in rule, add its name to `only_rules` below — there is no second list.
 
 only_rules:
   - custom_rules
-  # Built-ins, all at 0 violations as of this commit. Free ratchets: they cost
-  # nothing today and stop the class from ever entering the tree.
+
+  # ---- Free ratchets (0 violations as of this commit) ----------------------
   - force_cast                        # `as!` — 0 in Sources/ + tools/
   - weak_delegate                     # strong delegate = retain cycle; we have
                                       # many NSViewRepresentable Coordinators
@@ -29,11 +32,29 @@ only_rules:
   - unused_setter_value               # a setter that drops newValue on the floor
   - overridden_super_call             # missing super in a lifecycle override
   - prohibited_super_call             # super called where it must not be
+  - duplicate_imports                 # was 8, all a doubled `import
+                                      # WikiFSEngine`; fixed rather than
+                                      # baselined, so this is free now
   # 3 pre-existing sites, all annotated at the call site with a reason rather
   # than baselined — they are once-only, app-lifetime willTerminate observers
   # where there is genuinely nothing to remove. Anywhere else, discarding the
   # token means the observer can never be detached.
   - discarded_notification_center_observer
+
+  # ---- Baselined (see .swiftlint-baseline.json) ----------------------------
+  #
+  # These pass the admission test because of HOW this app is deployed. A trap
+  # inside the File Provider extension, the wikid XPC service or a background
+  # Task is not a tidy crash dialog — it is a silent death with no crash report
+  # (that failure mode is common enough here to have its own procedure:
+  # docs/skills/debugging-with-lldb/SKILL.md). "It crashes, so you'll notice"
+  # does not hold outside the main app process.
+  - force_unwrapping                  # 52
+  - implicitly_unwrapped_optional     # 14
+  - force_try                         # 7 — all `static let … = try!
+                                      # NSRegularExpression(pattern: <literal>)`,
+                                      # which is defensible; baselining them
+                                      # still blocks the indefensible ones
 
 # Production code only. Tests/ is excluded on purpose: a `try?` in test setup
 # fails the test anyway, whereas a `try?` in Sources/ silently drops data.
@@ -134,4 +155,46 @@ custom_rules:
       `@Entry` resolves only under Xcode's build system; this repo must build
       with `swift build` from the command line. Use the manual
       `EnvironmentKey`/`FocusedValueKey` pattern instead. See AGENTS.md.
+    severity: error
+
+  # The two rules below are BASELINED (61 and 8 sites — a raw text search says
+  # 85 and 10, but `match_kinds` correctly discounts 26 prose mentions in
+  # comments and string literals). Neither is a bug on its
+  # own — both are legitimate, necessary tools in a codebase that bridges SQLite,
+  # AppKit and actors. The point is that each one is a hand-written proof the
+  # compiler cannot check, so it should be a deliberate act with a reason, not
+  # something that spreads by copy-paste. The baseline makes the 86th one a
+  # decision.
+  #
+  # Both use `match_kinds: [attribute.builtin]` and match only the ATTRIBUTE, not
+  # the whole phrase — `@unchecked` via lookahead rather than spanning
+  # `@unchecked Sendable`. That keeps both rules resting on a single syntax kind
+  # instead of two, so there's one way for them to silently stop matching rather
+  # than two. Verified against a fixture: fires on the declaration, not on prose
+  # in comments or on the phrase inside a string literal.
+  unchecked_sendable:
+    name: "@unchecked Sendable"
+    regex: '(?-s)@unchecked(?=[ \t]+Sendable)'
+    match_kinds:
+      - attribute.builtin
+    message: >-
+      `@unchecked Sendable` asserts thread safety the compiler cannot verify.
+      Prefer making the type actually Sendable (value types, `let` properties,
+      or an actor). If the unchecked conformance is genuinely required, state
+      the invariant that makes it safe — what lock or isolation covers the
+      mutable state — in a comment, then
+      `// swiftlint:disable:next unchecked_sendable`.
+    severity: error
+
+  nonisolated_unsafe:
+    name: "nonisolated(unsafe)"
+    regex: '(?-s)nonisolated(?=\(unsafe\))'
+    match_kinds:
+      - attribute.builtin
+    message: >-
+      `nonisolated(unsafe)` opts a declaration out of actor isolation checking
+      entirely — it is an assertion, not a fix. Prefer actor isolation, a
+      `let` constant, or a lock-guarded box. If it is genuinely required, say
+      why in a comment, then
+      `// swiftlint:disable:next nonisolated_unsafe`.
     severity: error

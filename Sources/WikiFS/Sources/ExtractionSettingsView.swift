@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Settings for PDF→Markdown extraction — the second Settings scene tab. Picks
 /// the backend (Local pdf2md / Claude / Gemini / Docling Serve) and configures
