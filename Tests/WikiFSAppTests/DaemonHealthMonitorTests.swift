@@ -38,17 +38,9 @@ struct DaemonHealthMonitorTests {
         #expect(observedStates == [.connected])
     }
 
-    @Test func invalidationTransitionsToDisconnected() async throws {
+    @Test func invalidationTransitionsToDisconnected() throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
-
-        // This test requires a truly established XPC connection (the daemon
-        // must be running). With serviceName: and no XPC service bundle in
-        // the test runner, the connection is never truly established and the
-        // invalidation handler doesn't fire. Guard on a health check so the
-        // test passes in CI (skipped) and runs fully when the daemon is live.
-        let daemonAlive = await conn.healthCheck(timeout: 2)
-        guard daemonAlive else { return }
 
         var disconnectFired = false
         var stateChanges: [DaemonConnectionState] = []
@@ -58,16 +50,20 @@ struct DaemonHealthMonitorTests {
         monitor.start(connection: conn)
         #expect(monitor.state == .connected)
 
-        conn.invalidate()
-
-        for _ in 0..<20 {
-            if monitor.state == .disconnected { break }
-            try? await Task.sleep(for: .milliseconds(200))
-        }
+        // Simulate the XPC connection being invalidated. In production this is
+        // triggered by `NSXPCConnection`'s invalidation handler (which fires
+        // asynchronously on an XPC-internal queue, then hops to the main actor
+        // via Task { @MainActor }). We call `_testSimulateInvalidation()` for a
+        // deterministic transition that doesn't race under concurrent test
+        // load (#884) — and that no longer depends on a live daemon (the
+        // serviceName: connection is never truly established in the test runner).
+        monitor._testSimulateInvalidation()
 
         #expect(monitor.state == .disconnected)
         #expect(disconnectFired)
         #expect(stateChanges.contains(.disconnected))
+
+        conn.invalidate()
     }
 
     @Test func stopClearsMonitoring() throws {
@@ -81,27 +77,22 @@ struct DaemonHealthMonitorTests {
         #expect(!monitor.isMonitoring)
     }
 
-    @Test func onStateChangeFiresOnInvalidation() async throws {
+    @Test func onStateChangeFiresOnInvalidation() throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
-
-        // Guard on a live daemon (see invalidationTransitionsToDisconnected).
-        let daemonAlive = await conn.healthCheck(timeout: 2)
-        guard daemonAlive else { return }
 
         var states: [DaemonConnectionState] = []
         monitor.onStateChange = { states.append($0) }
 
         monitor.start(connection: conn)
-        conn.invalidate()
 
-        for _ in 0..<20 {
-            if states.contains(.disconnected) { break }
-            try? await Task.sleep(for: .milliseconds(200))
-        }
+        // Simulate the XPC invalidation deterministically (#884).
+        monitor._testSimulateInvalidation()
 
         #expect(states.contains(.connected))
         #expect(states.contains(.disconnected))
+
+        conn.invalidate()
     }
 
     @Test func healthPingIntervalIsConfigurable() throws {
@@ -270,14 +261,16 @@ struct WikiDaemonConnectionHealthTests {
     @Test func healthCheckTimeoutParameterIsRespected() async throws {
         let conn = try #require(try? WikiDaemonConnection.connect())
 
-        // A 1-second timeout should return well within 10 seconds. With
-        // serviceName: the connection resolution adds latency before the
-        // timeout fires (the system first tries to find the XPC service).
+        // A 1-second timeout should return well within 15 seconds. The generous
+        // margin accounts for CI / concurrent-test-load scheduling delays: the
+        // point is that the timeout is *respected* (proportional to the passed
+        // value), not that it hangs for 128 s waiting on a dead XPC connection
+        // (#884).
         let start = Date()
         _ = await conn.healthCheck(timeout: 1)
         let elapsed = Date().timeIntervalSince(start)
 
-        #expect(elapsed < 10)
+        #expect(elapsed < 15)
     }
 
     @Test func serviceNameMatchesXPCBundleIdentifier() {

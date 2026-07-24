@@ -32,6 +32,28 @@ public enum WikiDaemonError: Error, LocalizedError {
     }
 }
 
+/// Thread-safe single-resume wrapper for a `CheckedContinuation`. The first
+/// call to ``resume(_:_:)`` wins; subsequent calls are no-ops.
+///
+/// Used by ``WikiDaemonConnection.healthCheck(timeout:)`` where the XPC reply,
+/// the XPC error handler, and a timeout can all race — only the first should
+/// resume the continuation. Internal `NSLock` makes it genuinely thread-safe,
+/// justifying `@unchecked Sendable`.
+private final class HealthCheckResumeBox: @unchecked Sendable {
+    private var resumed = false
+    private let lock = NSLock()
+
+    func resume(_ value: Bool, _ continuation: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        let shouldResume = !resumed
+        resumed = true
+        lock.unlock()
+        if shouldResume {
+            continuation.resume(returning: value)
+        }
+    }
+}
+
 /// Thin XPC client for the `wikid` daemon. Connects via the XPC service name
 /// (resolves to `Contents/XPCServices/wikid.xpc` in the app bundle);
 /// `NSXPCConnection` auto-launches the XPC service on first use — no
@@ -99,38 +121,41 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     /// if the connection was invalidated, the proxy couldn't be obtained, or the
     /// call timed out.
     ///
-    /// Uses `remoteObjectProxyWithErrorHandler` so a dead/invalidated connection
-    /// routes to the error handler rather than hanging. The result is
-    /// coordinated through a `CheckedContinuation` (thread-safe by design — no
-    /// shared mutable outcome variable, fixing the data race flagged in #878
-    /// MEDIUM 1).
+    /// Three outcomes race: the XPC reply (success), the XPC error handler
+    /// (dead/invalidated connection), and a timeout (daemon hung or not
+    /// registered with launchd). The first to fire resumes a single
+    /// continuation; the others are no-ops via `HealthCheckResumeBox`.
     ///
-    /// A `withThrowingTaskGroup`-based timeout ensures the method always returns
-    /// even if neither the reply nor the error handler ever fires (a hung
-    /// daemon).
+    /// This must NOT use a `TaskGroup`: a task group waits for ALL child tasks
+    /// to complete, and the XPC call task may never complete when the mach
+    /// service isn't registered (neither the reply nor the error handler fires).
+    /// That would hang the entire method past the timeout — a real bug that
+    /// caused the health ping loop and `healthCheckTimeoutParameterIsRespected`
+    /// to stall for ~128 s on systems without a daemon (#884).
     public func healthCheck(timeout: TimeInterval = 5) async -> Bool {
-        await withTaskGroup(of: Bool.self, returning: Bool.self) { group in
-            group.addTask { [self] in
-                await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                    let proxy = self.connection.remoteObjectProxyWithErrorHandler { _ in
-                        cont.resume(returning: false)
-                    }
-                    guard let daemon = proxy as? WikiDaemonProtocol else {
-                        cont.resume(returning: false)
-                        return
-                    }
-                    daemon.queueSnapshot { _ in
-                        cont.resume(returning: true)
-                    }
-                }
-            }
-            group.addTask {
+        let box = HealthCheckResumeBox()
+
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            // Timeout — fires if the daemon never responds (no LaunchAgent
+            // registered, or a half-open connection). This is what guarantees
+            // the method always returns within `timeout`.
+            Task {
                 try? await Task.sleep(for: .seconds(timeout))
-                return false
+                box.resume(false, cont)
             }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
+
+            // XPC error handler — fires if the connection is dead/invalidated.
+            let proxy = self.connection.remoteObjectProxyWithErrorHandler { _ in
+                box.resume(false, cont)
+            }
+            guard let daemon = proxy as? WikiDaemonProtocol else {
+                box.resume(false, cont)
+                return
+            }
+            // XPC reply — fires if the daemon responds.
+            daemon.queueSnapshot { _ in
+                box.resume(true, cont)
+            }
         }
     }
 
