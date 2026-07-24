@@ -4,9 +4,12 @@ import WikiFSCore
 import WikiFSEngine
 #endif
 
-/// The mach service name registered with launchd. Must match the `Label` in the
-/// launchd plist and the `WikiDaemonConnection.serviceName` in the client.
-let WikiDaemonMachServiceName = "com.selfdrivingwiki.wikid"
+/// The XPC service name — must match the bundle identifier in the wikid.xpc
+/// Info.plist and `WikiDaemonConnection.serviceName` in the client. The system
+/// resolves this to `Contents/XPCServices/wikid.xpc` in the app bundle and
+/// launches the service on-demand when a client connects via
+/// `NSXPCConnection(serviceName:)`.
+let WikiDaemonServiceName = "com.selfdrivingwiki.wikid"
 
 #if os(macOS)
 
@@ -410,17 +413,13 @@ private struct SendableBoolReply: @unchecked Sendable {
 
 // MARK: - Main
 
-// Resolve the App Group container path WITHOUT calling
-// DatabaseLocation.appGroupContainerDirectory() directly — that function
-// builds the literal path ~/Library/Group Containers/<id>/ and accessing it
-// from a launchd-started daemon triggers kTCCServiceSystemPolicyAppData
-// ("wikid would like to access data from other apps") on every rebuild
-// (the code signature hash changes per build, resetting TCC trust).
-//
-// Instead: accept the container path from (1) a --container arg, or (2) the
-// WIKI_CONTAINER_DIR env var (set by the launchd plist). If neither is
-// present, fall back to DatabaseLocation (the prompt will appear once, then
-// the user approves and it sticks in TCC).
+// Resolve the App Group container path. As a bundled XPC service WITH the
+// `application-groups` entitlement + embedded provisioning profile, the daemon
+// can access `~/Library/Group Containers/<id>/` directly via
+// DatabaseLocation.appGroupContainerDirectory() without TCC prompts (same as
+// the app). For ad-hoc / dev builds without a provisioning profile, accept the
+// container path from (1) a --container arg, or (2) the WIKI_CONTAINER_DIR env
+// var (set by `make install-daemon` in dev mode) as a fallback.
 let containerDirectory: URL
 if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }),
    FileManager.default.fileExists(atPath: argPath) {
@@ -436,26 +435,30 @@ let daemon = WikiDaemon(containerDirectory: containerDirectory)
 
 let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
-// The daemon is always launched via launchd (the `MachServices` key in the
-// plist registers the mach service name). `NSXPCListener(machServiceName:)`
-// registers with launchd so clients connecting via
-// `NSXPCConnection(machServiceName:)` reach this listener.
+// The daemon is a bundled XPC service (Contents/XPCServices/wikid.xpc). The
+// system creates the listener and passes connections to it. We obtain the
+// singleton service listener via `NSXPCListener.serviceListener`, set our
+// delegate, and resume. For a service listener, `resume()` never returns —
+// it hands control to the system's run loop, which is ideal for the XPC
+// service's main() function. No `RunLoop.current.run()` needed.
 //
-// Direct-run without launchd does NOT work: the mach service isn't
-// registered, and `NSXPCListenerEndpoint` can't be serialized to a file
-// (it must pass through an existing XPC connection — a chicken-and-egg
-// problem). Use `make install-daemon` for both development and production.
-let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
+// Clients connect via `NSXPCConnection(serviceName: WikiDaemonServiceName)`.
+// The system auto-launches the service on the first connection and terminates
+// it after idle (no LaunchAgent plist, no launchctl, no stale-daemon races).
+let listener = NSXPCListener.service()
 listener.delegate = delegate
 listener.resume()
 
-DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
+DebugLog.store("wikid: XPC service started, serving on \(WikiDaemonServiceName)")
 
 // #878: start the liveness heartbeat (logs every 60 s so an operator can
 // confirm the daemon is alive + see its current load in Console.app).
 daemon.startHeartbeat()
 
-// Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
+// `listener.resume()` on a serviceListener never returns — the system owns
+// the run loop. The code below is unreachable in production but kept as
+// documentation + a fallback for non-XPC execution contexts (tests, direct
+// invocation for debugging).
 RunLoop.current.run()
 
 #else // Linux

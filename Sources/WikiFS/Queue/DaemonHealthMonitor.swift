@@ -78,6 +78,43 @@ final class DaemonHealthMonitor {
         DebugLog.store("wikid: DaemonHealthMonitor started — state=.connected")
     }
 
+    /// #885 startup race fix: start the retry loop WITHOUT an existing
+    /// connection. The state starts as `.disconnected` and the health-ping loop
+    /// immediately tries to reconnect (the system launches the XPC service
+    /// on-demand via `NSXPCConnection(serviceName:)`). Used when the initial
+    /// `connectToDaemon()` fails — the app stays on the local QueueEngine until
+    /// the retry succeeds, at which point `onReconnect` fires and swaps to the
+    /// XPC proxy.
+    func startRetrying() {
+        stop()
+        isMonitoring = true
+        setState(.disconnected)
+        startHealthPings()
+        DebugLog.store("wikid: DaemonHealthMonitor retry loop started — state=.disconnected")
+    }
+
+    /// Force a reconnect: invalidate the current connection (if any), then
+    /// immediately trigger a reconnect attempt. Used by the "Restart Daemon"
+    /// menu item — for a bundled XPC service, invalidating the connection +
+    /// reconnecting causes the system to relaunch the service. If the daemon
+    /// is currently `.connected`, this forces a disconnect→reconnect cycle.
+    func forceReconnect() {
+        DebugLog.store("wikid: forceReconnect requested")
+        if let conn = connection {
+            conn.invalidate()
+            connection = nil
+        }
+        // If we're already monitoring, the ping loop will detect the missing
+        // connection and reconnect on the next iteration. If we're not
+        // monitoring yet, start the retry loop.
+        if !isMonitoring {
+            startRetrying()
+        } else {
+            setState(.disconnected)
+            onDisconnect?()
+        }
+    }
+
     /// Stop monitoring (cancel the ping loop, clear the connection reference).
     /// Does NOT change `state` — the caller decides the final state.
     func stop() {
@@ -157,10 +194,10 @@ final class DaemonHealthMonitor {
             return
         }
 
-        // No live connection — try to reconnect (launchd auto-launches the
-        // daemon on the new NSXPCConnection).
+        // No live connection — try to reconnect (the system auto-launches
+        // the XPC service on the new NSXPCConnection).
         setState(.reconnecting)
-        DebugLog.store("wikid: attempting reconnect via launchd auto-launch")
+        DebugLog.store("wikid: attempting reconnect via XPC service auto-launch")
         guard let newConn = try? WikiDaemonConnection.connect() else {
             DebugLog.store("wikid: reconnect failed — still disconnected")
             setState(.disconnected)

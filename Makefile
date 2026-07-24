@@ -475,78 +475,53 @@ uninstall:
 register: install
 
 # ---------------------------------------------------------------------------
-# wikid daemon — launchd install/uninstall (plans/multi-wiki-daemon.md Phase 1B)
+# wikid daemon — bundled XPC service (plans/xpc-service-migration.md)
 # ---------------------------------------------------------------------------
 
-# wikid daemon — managed by launchctl (the app bootstraps it on launch via
-# DaemonLaunchAgentManager). The daemon is unsandboxed: NO entitlements (AMFI
-# kills a bare Mach-O that has entitlements but no embedded provisioning
-# profile). It reads the app group container directly via filesystem perms.
+# wikid is now a bundled XPC service (Contents/XPCServices/wikid.xpc). The
+# system manages its lifecycle: auto-launches on first
+# NSXPCConnection(serviceName:), terminates after idle. No LaunchAgent plist,
+# no launchctl, no DaemonLaunchAgentManager.
 #
-# `make install-daemon` is for dev-mode: signs the .build binary (ad-hoc or
-# dev cert), copies it to the container dir, installs a manual launchd plist
-# pointing at the container binary + sets WIKI_CONTAINER_DIR. Production:
-# the app generates the plist at runtime and bootstraps via launchctl.
+# `make install-daemon` is now for dev-mode only: it copies the .build wikid
+# binary to the container dir + sets WIKI_CONTAINER_DIR so you can `swift run`
+# the daemon directly for debugging (bypassing the XPC service bundle). In
+# production, `make build` bundles wikid.xpc inside the app and the system
+# launches it automatically.
 WIKID_BIN := $(shell swift build --show-bin-path)/wikid
-WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
-WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
 WIKID_SIGN_IDENTITY := $(shell grep '^DEV_IDENTITY=' signing/local.config 2>/dev/null | sed 's/DEV_IDENTITY=//; s/^"//; s/"$$//' || echo "-")
 WIKID_CONTAINER_DIR := $(HOME)/Library/Group Containers/$(shell grep '^APP_GROUP=' signing/local.config 2>/dev/null | sed 's/APP_GROUP=//; s/^"//; s/"$$//' || echo "group.org.sockpuppet.wiki")
-WIKID_UID := $(shell id -u)
 
 .PHONY: install-daemon uninstall-daemon daemon-status
 
-install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .build binaries). Production: app bootstraps via launchctl.
+install-daemon: ## Dev-only: copy wikid .build binary to container dir for `swift run` debugging. Production: bundled as wikid.xpc inside the app.
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
 	@echo "→ Copying wikid binary to container dir…"
 	@mkdir -p "$(WIKID_CONTAINER_DIR)"
 	@cp "$(WIKID_BIN)" "$(WIKID_CONTAINER_DIR)/wikid"
-	@echo "→ Codesigning wikid + wikictl (identity: $(WIKID_SIGN_IDENTITY))…"
+	@echo "→ Codesigning wikid (identity: $(WIKID_SIGN_IDENTITY))…"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
 		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_CONTAINER_DIR)/wikid" 2>/dev/null \
 		|| codesign --force --timestamp=none --sign - "$(WIKID_CONTAINER_DIR)/wikid"
-	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \
-		--entitlements signing/wikictl.entitlements \
-		--sign "$(WIKID_SIGN_IDENTITY)" "$(dir $(WIKID_BIN))wikictl" 2>/dev/null \
-		|| codesign --force --timestamp=none --sign - "$(dir $(WIKID_BIN))wikictl"
-	@echo "→ Installing launchd plist (dev mode — may prompt for TCC once)…"
-	@mkdir -p $(dir $(WIKID_PLIST_DST))
-	@cp $(WIKID_PLIST) $(WIKID_PLIST_DST)
-	@# Replace the shell-wrapped ProgramArguments with the direct binary path.
-	@plutil -remove ProgramArguments -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
-	@plutil -insert ProgramArguments -array -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
-	@plutil -insert ProgramArguments.0 -string "$(WIKID_CONTAINER_DIR)/wikid" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
-	@plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null \
-		|| { plutil -insert EnvironmentVariables -xml '<dict/>' -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); \
-		     plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); }
-	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
-	@launchctl bootstrap gui/$(WIKID_UID) $(WIKID_PLIST_DST)
-	@echo "✓ wikid installed (dev mode). Production: app bootstraps via launchctl."
+	@echo "✓ wikid binary copied to container dir (dev mode)."
 	@echo "  Binary:     $(WIKID_CONTAINER_DIR)/wikid"
 	@echo "  Container:  $(WIKID_CONTAINER_DIR)"
-	@echo "  Plist:      $(WIKID_PLIST_DST)"
-	@echo "  Status:     make daemon-status"
+	@echo ""
+	@echo "  For dev-run:  WIKI_CONTAINER_DIR='$(WIKID_CONTAINER_DIR)' .build/debug/wikid"
+	@echo "  For prod:     make build (bundles wikid.xpc inside the app)"
 
-uninstall-daemon: ## Remove the wikid launchd agent
+uninstall-daemon: ## Remove the wikid binary from the container dir (LaunchAgent plist is no longer used)
 uninstall-daemon:
-	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
-	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
-	@rm -f $(WIKID_PLIST_DST)
-	@echo "✓ wikid uninstalled."
+	@rm -f "$(WIKID_CONTAINER_DIR)/wikid"
+	@# Clean up any stale LaunchAgent plist from the pre-XPC era.
+	@rm -f "$(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist"
+	@echo "✓ wikid dev binary removed. (XPC service is bundled in the app — no uninstall needed for production.)"
 
-daemon-status: ## Show the wikid launchd agent status
+daemon-status: ## Show whether the wikid XPC service is running
 daemon-status:
-	@launchctl list | grep wikid || echo "wikid is not loaded."
-
-approve-daemon: ## Open System Settings → Full Disk Access (add "Self Driving Wiki" to suppress TCC prompts)
-approve-daemon:
-	@echo "→ Opening System Settings → Privacy & Security → Full Disk Access"
-	@echo "  Add 'Self Driving Wiki' (from /Applications) to suppress the"
-	@echo "  'wikid would like to access data from other apps' prompt."
-	@echo "  This is a ONE-TIME step — the grant persists across rebuilds."
-	@open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+	@ps aux | grep -w '[w]ikid' || echo "wikid XPC service is not running (it launches on-demand when the app connects)."
 
 # ---------------------------------------------------------------------------
 # Clean

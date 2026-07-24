@@ -32,9 +32,10 @@ public enum WikiDaemonError: Error, LocalizedError {
     }
 }
 
-/// Thin XPC client for the `wikid` daemon. Connects via the mach service name
-/// registered with launchd; `NSXPCConnection` auto-launches the daemon on first
-/// use when it's installed as a LaunchAgent.
+/// Thin XPC client for the `wikid` daemon. Connects via the XPC service name
+/// (resolves to `Contents/XPCServices/wikid.xpc` in the app bundle);
+/// `NSXPCConnection` auto-launches the XPC service on first use — no
+/// LaunchAgent, no launchctl.
 ///
 /// `WikiDescriptor` values are serialized to JSON `Data` for transport (XPC
 /// `@objc` protocols require `NSSecureCoding`-compatible types; `Data` bridges
@@ -47,8 +48,8 @@ public enum WikiDaemonError: Error, LocalizedError {
 /// immutable `let`. This mirrors `DaemonWorkloadClient`'s conformance.
 public final class WikiDaemonConnection: @unchecked Sendable {
 
-    /// The mach service name — must match the launchd plist `Label` and
-    /// `MachServices` key.
+    /// The XPC service name — must match the `CFBundleIdentifier` in the
+    /// wikid.xpc Info.plist.
     public static let serviceName = "com.selfdrivingwiki.wikid"
 
     private let connection: NSXPCConnection
@@ -68,15 +69,16 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         self.connection = connection
     }
 
-    /// Connect to the daemon. The connection auto-launches via launchd if the
-    /// daemon isn't running.
+    /// Connect to the daemon XPC service. The system launches the XPC service
+    /// (from `Contents/XPCServices/wikid.xpc`) on-demand when the first message
+    /// is sent — no LaunchAgent plist or launchctl required.
     ///
     /// The `WikiDaemonProtocol` interface is set up with the
     /// `WikiDaemonEventSink` sub-interface on the `registerEventSink(_:)`
     /// selector, so XPC creates a proxy for the sink parameter (bidirectional
     /// XPC) rather than trying to serialize it.
     public static func connect() throws -> WikiDaemonConnection {
-        let connection = NSXPCConnection(machServiceName: serviceName)
+        let connection = NSXPCConnection(serviceName: serviceName)
         let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
         let sinkInterface = NSXPCInterface(with: WikiDaemonEventSink.self)
         daemonInterface.setInterface(
