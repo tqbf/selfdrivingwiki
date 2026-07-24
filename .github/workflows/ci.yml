@@ -7,6 +7,24 @@ on:
     branches: [main]
 
 jobs:
+  # Enforces the AGENTS.md "no bare try?" rule via a SwiftLint custom rule.
+  # Deliberately standalone: it needs no Swift build, no codegen and no cache,
+  # so it reports in ~1 min in parallel with the (much slower) test jobs.
+  #
+  # Pre-existing violations are grandfathered in .swiftlint-baseline.json —
+  # only NEW ones fail. Regenerate with `make lint-baseline` after fixing some.
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SwiftLint
+        # Poured from a bottle (prebuilt), so this is seconds, not a source build.
+        run: brew install swiftlint
+      - name: Lint (new bare try? fails the build)
+        # github-actions-logging surfaces each violation as an inline
+        # annotation on the PR diff instead of burying it in the log.
+        run: swiftlint lint --strict --reporter github-actions-logging
+
   swift:
     # Full `swift test` — no skip, no tier split. The in-memory SQLite
     # fixtures (#658) reduced the full suite from 30+ min to ~1.5 min, so the
