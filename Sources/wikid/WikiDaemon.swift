@@ -413,6 +413,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// to ensure the proxy's lifetime. Returns a unique ID that the caller
     /// must use to unregister the sink when the connection is invalidated.
     #if os(macOS)
+    @discardableResult
     func registerEventSink(_ sink: WikiDaemonEventSink) -> UUID {
         let registration = RegisteredEventSink(sink: sink)
         let total = queue.sync { () -> Int in

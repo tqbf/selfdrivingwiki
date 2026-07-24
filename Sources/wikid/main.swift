@@ -77,9 +77,6 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func listWikis(reply: @escaping (Data) -> Void) {
         reply(daemon.listWikis())
     }
-    
-    // ... (rest of the class)
-
 
     func createWiki(name: String, reply: @escaping (Data?) -> Void) {
         reply(daemon.createWiki(name: name))
@@ -113,8 +110,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // MARK: - Workload: event sink registration (Phase 0)
 
     func registerEventSink(_ sink: WikiDaemonEventSink) {
-        let id = daemon.registerEventSink(sink)
-        lock.withLock { sinkID = id }
+        // Hold the lock across registration so that if the connection's
+        // invalidation handler fires concurrently, unregisterSink blocks
+        // until sinkID is set — preventing an orphaned strong sink ref.
+        lock.lock()
+        defer { lock.unlock() }
+        sinkID = daemon.registerEventSink(sink)
     }
 
     // MARK: - Workload: queue snapshot (Phase 0 — scaffold)

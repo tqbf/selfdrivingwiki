@@ -11,8 +11,9 @@ import WikiFSEngine
 /// - **Chat envelopes** → a local `AsyncStream<(chatID, envelope)>` for
 ///   per-chat `RemoteChatSession` demux.
 ///
-/// RC7: uses its own `AsyncStream` + continuation (NOT a
-/// `QueueEventBroadcaster`, which does not exist as a reusable type).
+/// RC7: uses a `QueueEventBroadcaster` for queue events (multicast to all
+/// subscribers — Tracker, MenuBar, Notifier) and its own `AsyncStream` for
+/// chat envelopes.
 final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {
     private let broadcaster = QueueEventBroadcaster()
 
@@ -26,6 +27,8 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     }
 
     deinit {
+        broadcaster.finish()
+        chatContinuation.finish()
     }
 
     var events: AsyncStream<QueueEvent> { broadcaster.subscribe() }

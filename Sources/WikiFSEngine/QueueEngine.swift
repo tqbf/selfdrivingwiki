@@ -835,5 +835,18 @@ public final class QueueEventBroadcaster: @unchecked Sendable {
             continuation.yield(event)
         }
     }
+
+    /// Signal stream termination to all subscribers. Subscribers' `for await`
+    /// loops exit cleanly. Called when the owning object is deallocated.
+    public func finish() {
+        let targets = lock.withLock {
+            let vals = Array(continuations.values)
+            continuations.removeAll()
+            return vals
+        }
+        for continuation in targets {
+            continuation.finish()
+        }
+    }
 }
 

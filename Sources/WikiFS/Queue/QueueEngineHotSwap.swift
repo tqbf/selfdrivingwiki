@@ -37,6 +37,7 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
 
     deinit {
         forwardTask?.cancel()
+        broadcaster.finish()
     }
 
     /// The currently-active inner engine.
