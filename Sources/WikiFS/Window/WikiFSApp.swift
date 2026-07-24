@@ -429,86 +429,113 @@ struct WikiFSApp: App {
     // MARK: - Daemon connection (#878 BLOCKER 2 — async, non-blocking)
 
     /// Attempt to connect to the wikid daemon after the first render. Called
-    /// from the main WindowGroup's `.task`. If the daemon is healthy, swaps the
-    /// queue engine router from the local fallback to the XPC proxy and starts
-    /// the health monitor. Never blocks the main thread.
+    /// from the main WindowGroup's `.task` (and the wiki WindowGroup's `.task`
+    /// as a fallback for state-restoration that opens only a wiki window).
+    ///
+    /// If the daemon is healthy, swaps the queue engine router from the local
+    /// fallback to the XPC proxy and starts the health monitor. If the daemon
+    /// isn't ready yet (the freshly-bootstrapped daemon is still starting up),
+    /// starts the health monitor in retry mode — it reconnects on its own and
+    /// fires `onReconnect` to swap to the XPC proxy once the daemon is up.
+    /// Never blocks the main thread.
     @MainActor
     private static var didConnectDaemon = false
+
+    /// The initial health-check timeout — longer than the monitor's recurring
+    /// ping timeout because a cold daemon start (process launch → open
+    /// queue.sqlite → construct QueueEngine → open first wiki → answer XPC)
+    /// can take several seconds on the first launch.
+    private static let initialHealthCheckTimeout: TimeInterval = 15
+
     @MainActor
     private func connectToDaemon() {
         guard !Self.didConnectDaemon else { return }
-        Self.didConnectDaemon = true
 
         let directory = containerDirectory
         guard let sessionBox = sessionLookupBox else { return }
         let fileProviderBoxValue = fileProviderBox
         let extractionProviderValue = extractionProvider
 
-        Task { [weak healthMonitor, weak queueEngineRouter] in
+        // Wire the monitor's reconnect/disconnect closures BEFORE the
+        // connection attempt. Whether the initial connect succeeds immediately
+        // or the monitor reconnects later via its retry loop, the closures are
+        // in place to swap the queue engine + register the event sink.
+        wireDaemonHealthMonitor(
+            directory: directory,
+            sessionBox: sessionBox,
+            fileProviderBox: fileProviderBoxValue,
+            extractionProvider: extractionProviderValue)
+
+        Task { [weak healthMonitor] in
             guard let conn = try? WikiDaemonConnection.connect() else {
-                DebugLog.store("WikiFSApp: daemon not available — staying on local QueueEngine")
+                DebugLog.store("WikiFSApp: daemon not available yet — starting retry loop")
+                await MainActor.run { healthMonitor?.startRetrying() }
                 return
             }
-            let healthy = await conn.healthCheck()
+            let healthy = await conn.healthCheck(timeout: Self.initialHealthCheckTimeout)
             guard healthy else {
-                DebugLog.store("WikiFSApp: daemon health check failed — staying on local QueueEngine")
+                DebugLog.store("WikiFSApp: daemon health check timed out (cold start) — starting retry loop")
                 conn.invalidate()
+                await MainActor.run { healthMonitor?.startRetrying() }
                 return
             }
 
+            // Success — mark as connected so future .task calls are no--ops.
+            Self.didConnectDaemon = true
             await MainActor.run {
                 DebugLog.store("WikiFSApp: connected to wikid daemon — swapping to XPC proxy")
-                do {
-                    let workloadClient = try DaemonWorkloadClient(connection: conn)
-                    let eventSink = DaemonQueueEventSink()
-                    workloadClient.registerEventSink(eventSink)
-                    let proxy = XPCQueueEngineProxy(
-                        workloadClient: workloadClient, eventSink: eventSink)
-                    queueEngineRouter?.swap(to: proxy)
-
-                    // Phase C4: the coordinator owns chat sessions over the
-                    // same connection + event sink.
-                    chatDaemonCoordinator = ChatDaemonCoordinator(
-                        client: workloadClient, eventSink: eventSink)
-
-                    // Wire the health monitor: on disconnect, swap back to a
-                    // fresh local engine; on reconnect, swap to a new XPC proxy.
-                    // WikiFSApp is a struct (value type), so there's no retain
-                    // cycle — the closures capture the router (a class ref)
-                    // and directory/box values by value.
-                    let router = queueEngineRouter
-                    healthMonitor?.onDisconnect = {
-                        DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
-                        let local = Self.makeLocalQueueEngine(
-                            directory: directory,
-                            sessionBox: sessionBox,
-                            fileProviderBox: fileProviderBoxValue,
-                            extractionProvider: extractionProviderValue)
-                        router?.swap(to: local)
-                        chatDaemonCoordinator = nil
-                    }
-                    healthMonitor?.onReconnect = { newConn in
-                        DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
-                        do {
-                            let workloadClient = try DaemonWorkloadClient(connection: newConn)
-                            let eventSink = DaemonQueueEventSink()
-                            workloadClient.registerEventSink(eventSink)
-                            let proxy = XPCQueueEngineProxy(
-                                workloadClient: workloadClient, eventSink: eventSink)
-                            router?.swap(to: proxy)
-                            chatDaemonCoordinator = ChatDaemonCoordinator(
-                                client: workloadClient, eventSink: eventSink)
-                        } catch {
-                            DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
-                        }
-                    }
-
-                    healthMonitor?.start(connection: conn)
-                } catch {
-                    DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
-                    conn.invalidate()
-                }
+                activateDaemonConnection(conn)
+                healthMonitor?.start(connection: conn)
             }
+        }
+    }
+
+    /// Wire `DaemonHealthMonitor.onDisconnect` / `onReconnect`. Called once
+    /// before the initial connection attempt so the closures are in place
+    /// regardless of whether the daemon was immediately available. Both fire
+    /// on the main actor.
+    @MainActor
+    private func wireDaemonHealthMonitor(
+        directory: URL,
+        sessionBox: SessionLookupBox,
+        fileProviderBox: FileProviderBox,
+        extractionProvider: any QueueExtractionProvider
+    ) {
+        let router = queueEngineRouter
+        healthMonitor.onDisconnect = {
+            DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
+            let local = Self.makeLocalQueueEngine(
+                directory: directory,
+                sessionBox: sessionBox,
+                fileProviderBox: fileProviderBox,
+                extractionProvider: extractionProvider)
+            router?.swap(to: local)
+            chatDaemonCoordinator = nil
+        }
+        healthMonitor.onReconnect = { newConn in
+            DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
+            activateDaemonConnection(newConn)
+        }
+    }
+
+    /// Create the XPC proxy + event sink from a connection, swap the queue
+    /// engine router to it, and wire the chat daemon coordinator. Shared by
+    /// the initial connect success path and the `onReconnect` callback so
+    /// both go through the exact same setup.
+    @MainActor
+    private func activateDaemonConnection(_ conn: WikiDaemonConnection) {
+        do {
+            let workloadClient = try DaemonWorkloadClient(connection: conn)
+            let eventSink = DaemonQueueEventSink()
+            workloadClient.registerEventSink(eventSink)
+            let proxy = XPCQueueEngineProxy(
+                workloadClient: workloadClient, eventSink: eventSink)
+            queueEngineRouter?.swap(to: proxy)
+            chatDaemonCoordinator = ChatDaemonCoordinator(
+                client: workloadClient, eventSink: eventSink)
+        } catch {
+            DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
+            conn.invalidate()
         }
     }
 
@@ -676,6 +703,12 @@ struct WikiFSApp: App {
             .task {
                 bootstrapApp()
                 startStatusItem()
+                // Fallback: if macOS state restoration opens only a wiki window
+                // (the main window was closed last session), the main
+                // WindowGroup's .task never fires. connectToDaemon is
+                // idempotent (guarded by didConnectDaemon), so calling it here
+                // is a safe no-op when the main window already connected.
+                connectToDaemon()
             }
             // The presented value can arrive AFTER first render (state
             // restoration) or change in place (openWindow(value:) routing to

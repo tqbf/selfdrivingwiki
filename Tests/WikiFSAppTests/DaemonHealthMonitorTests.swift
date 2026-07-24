@@ -124,6 +124,167 @@ struct DaemonHealthMonitorTests {
         // caused a transition). Let me be lenient.
         #expect(changeCount >= 1)
     }
+
+    // MARK: - startRetrying (#880 startup race: daemon not ready on first connect)
+
+    @Test func startRetryingSetsMonitoringAndStaysDisconnected() {
+        let monitor = DaemonHealthMonitor()
+        #expect(!monitor.isMonitoring)
+        #expect(monitor.state == .disconnected)
+
+        monitor.startRetrying()
+
+        #expect(monitor.isMonitoring)
+        #expect(monitor.state == .disconnected)
+
+        monitor.stop()
+    }
+
+    @Test func startRetryingDoesNotFireOnDisconnect() {
+        let monitor = DaemonHealthMonitor()
+
+        var disconnectFired = false
+        monitor.onDisconnect = { disconnectFired = true }
+
+        monitor.startRetrying()
+
+        // onDisconnect must NOT fire — the app is already on the local
+        // fallback QueueEngine. Only onReconnect should fire when the daemon
+        // eventually comes up.
+        #expect(!disconnectFired)
+
+        monitor.stop()
+    }
+
+    @Test func startRetryingStaysDisconnectedWhenFactoryThrows() async throws {
+        let monitor = DaemonHealthMonitor()
+        monitor.healthPingInterval = .milliseconds(10)
+        monitor.healthCheckTimeout = 0.5
+        monitor.connectionFactory = { throw WikiDaemonError.connectionFailed }
+
+        var reconnectFired = false
+        monitor.onReconnect = { _ in reconnectFired = true }
+
+        var sawReconnecting = false
+        monitor.onStateChange = { if $0 == .reconnecting { sawReconnecting = true } }
+
+        monitor.startRetrying()
+
+        // Wait for the immediate first ping + failed reconnect attempt.
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(monitor.state == .disconnected)
+        #expect(!reconnectFired)
+        // Seeing .reconnecting proves the ping loop ran and tried to connect.
+        #expect(sawReconnecting)
+
+        monitor.stop()
+    }
+
+    @Test func startRetryingFirstPingIsImmediate() async throws {
+        let monitor = DaemonHealthMonitor()
+        // Long interval — if the first ping were delayed by it, the probe
+        // would never be set within our 300 ms wait.
+        monitor.healthPingInterval = .seconds(60)
+        monitor.healthCheckTimeout = 0.5
+
+        let probe = FactoryCallProbe()
+        monitor.connectionFactory = {
+            probe.markCalled()
+            throw WikiDaemonError.connectionFailed
+        }
+
+        monitor.startRetrying()
+
+        // delayFirstPing: false means the ping loop pings immediately.
+        try? await Task.sleep(for: .milliseconds(300))
+
+        #expect(probe.wasCalled)
+
+        monitor.stop()
+    }
+
+    @Test func startRetryingReconnectsWhenDaemonBecomesHealthy() async throws {
+        // Verify the full retry → reconnect path when a healthy daemon is
+        // available. If the daemon isn't running, this test passes vacuously
+        // (the factory returns an unhealthy connection and we assert the
+        // disconnected state).
+        let probe = FactoryCallProbe()
+        let monitor = DaemonHealthMonitor()
+        monitor.healthPingInterval = .seconds(60) // one ping is enough
+        monitor.healthCheckTimeout = 3
+
+        // Try a real daemon connection for the factory. If the daemon is up,
+        // healthCheck passes and the monitor reconnects.
+        let conn = try #require(try? WikiDaemonConnection.connect())
+        let isHealthy = await conn.healthCheck(timeout: 2)
+
+        if isHealthy {
+            // Daemon is running — the factory returns a fresh healthy connection.
+            let freshConn = try WikiDaemonConnection.connect()
+            monitor.connectionFactory = {
+                probe.markCalled()
+                return freshConn
+            }
+
+            var reconnectFired = false
+            monitor.onReconnect = { _ in reconnectFired = true }
+
+            monitor.startRetrying()
+
+            // Wait for the immediate first ping + health check.
+            try? await Task.sleep(for: .milliseconds(500))
+
+            #expect(probe.wasCalled)
+            #expect(monitor.state == .connected)
+            #expect(reconnectFired)
+
+            monitor.stop()
+            freshConn.invalidate()
+        } else {
+            // Daemon not running — factory returns an invalidated connection.
+            conn.invalidate()
+            monitor.connectionFactory = {
+                probe.markCalled()
+                return conn
+            }
+
+            monitor.startRetrying()
+
+            try? await Task.sleep(for: .milliseconds(500))
+
+            #expect(probe.wasCalled)
+            #expect(monitor.state == .disconnected)
+
+            monitor.stop()
+        }
+    }
+
+    @Test func healthCheckTimeoutDefaultIsBumpedTo10() {
+        let monitor = DaemonHealthMonitor()
+        // The default was 5 (too tight for a cold daemon start). Bumped to 10
+        // so a reconnect ping gives the daemon time to finish starting up.
+        #expect(monitor.healthCheckTimeout == 10)
+    }
+
+    @Test func connectionFactoryIsInjectable() {
+        let monitor = DaemonHealthMonitor()
+
+        let probe = FactoryCallProbe()
+        monitor.connectionFactory = {
+            probe.markCalled()
+            throw WikiDaemonError.connectionFailed
+        }
+        _ = try? monitor.connectionFactory()
+        #expect(probe.wasCalled)
+    }
+}
+
+/// Test helper — records whether the connection factory was called.
+/// @unchecked Sendable is safe: all access is @MainActor in tests.
+private final class FactoryCallProbe: @unchecked Sendable {
+    private(set) var wasCalled = false
+    func markCalled() { wasCalled = true }
 }
 
 /// Tests for `WikiDaemonConnection` health-check + invalidation (#878).

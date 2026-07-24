@@ -56,7 +56,16 @@ final class DaemonHealthMonitor {
     var healthPingInterval: Duration = .seconds(30)
 
     /// Health-check timeout passed to `WikiDaemonConnection.healthCheck`.
-    var healthCheckTimeout: TimeInterval = 5
+    /// 10 s — gives a freshly-bootstrapped daemon time to finish opening
+    /// SQLite + constructing its QueueEngine before we declare it unhealthy.
+    var healthCheckTimeout: TimeInterval = 10
+
+    /// Injectable connection factory used by the reconnect path. Defaults to
+    /// `WikiDaemonConnection.connect()` (launchd auto-launch). Tests override
+    /// this to return a mock/controlled connection.
+    var connectionFactory: @Sendable () throws -> WikiDaemonConnection = {
+        try WikiDaemonConnection.connect()
+    }
 
     private var connection: WikiDaemonConnection?
     private var healthPingTask: Task<Void, Never>?
@@ -74,8 +83,25 @@ final class DaemonHealthMonitor {
         isMonitoring = true
         setState(.connected)
         installInvalidationHandler(connection)
-        startHealthPings()
+        startHealthPings(delayFirstPing: true)
         DebugLog.store("wikid: DaemonHealthMonitor started — state=.connected")
+    }
+
+    /// Begin monitoring WITHOUT an active connection — the initial
+    /// `connectToDaemon()` attempt failed (the freshly-bootstrapped daemon
+    /// hadn't finished starting up). State stays `.disconnected`; the
+    /// health-ping loop attempts to reconnect on each tick (launchd
+    /// auto-launches the daemon), firing ``onReconnect`` when it succeeds.
+    /// The first attempt is immediate (no 30 s wait).
+    func startRetrying() {
+        stop()
+        self.connection = nil
+        isMonitoring = true
+        // State stays .disconnected — performHealthPing's reconnect branch
+        // fires onReconnect (not onDisconnect) when the daemon comes up.
+        setState(.disconnected)
+        startHealthPings(delayFirstPing: false)
+        DebugLog.store("wikid: DaemonHealthMonitor started in retry mode — awaiting daemon startup")
     }
 
     /// Stop monitoring (cancel the ping loop, clear the connection reference).
@@ -123,15 +149,17 @@ final class DaemonHealthMonitor {
 
     // MARK: - Recurring health ping (#878 BLOCKER 1.1)
 
-    private func startHealthPings() {
+    private func startHealthPings(delayFirstPing: Bool) {
         healthPingTask?.cancel()
         let interval = healthPingInterval
         let timeout = healthCheckTimeout
+        let initialDelay: Duration = delayFirstPing ? interval : .zero
         healthPingTask = Task { [weak self] in
+            try? await Task.sleep(for: initialDelay)
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
                 await self.performHealthPing(timeout: timeout)
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -161,7 +189,7 @@ final class DaemonHealthMonitor {
         // daemon on the new NSXPCConnection).
         setState(.reconnecting)
         DebugLog.store("wikid: attempting reconnect via launchd auto-launch")
-        guard let newConn = try? WikiDaemonConnection.connect() else {
+        guard let newConn = try? connectionFactory() else {
             DebugLog.store("wikid: reconnect failed — still disconnected")
             setState(.disconnected)
             return
