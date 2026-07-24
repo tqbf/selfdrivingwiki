@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import WikiFSCore
+import WikiDaemonContract
 #if canImport(WikiFSEngine)
 import WikiFSEngine
 #endif

@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import WikiFSCore
+import WikiDaemonContract
 
 /// Connection states for the wikid daemon. Drives the menu-bar icon badge
 /// and the in-app disconnected/reconnected banner. All transitions are logged
@@ -15,21 +16,6 @@ public enum DaemonConnectionState: String, Sendable, Equatable {
     /// A reconnect attempt is in flight (between a failed probe and the next
     /// one). The app is still on the local fallback.
     case reconnecting
-}
-
-/// Errors from the daemon XPC client.
-public enum WikiDaemonError: Error, LocalizedError {
-    case connectionFailed
-    case unexpectedReply
-
-    public var errorDescription: String? {
-        switch self {
-        case .connectionFailed:
-            return "Could not connect to the wikid daemon. Is it running? (make install-daemon)"
-        case .unexpectedReply:
-            return "The wikid daemon returned an unexpected reply."
-        }
-    }
 }
 
 /// Thread-safe single-resume wrapper for a `CheckedContinuation`. The first

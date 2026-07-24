@@ -1,4 +1,5 @@
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 #if canImport(WikiFSEngine)
 import WikiFSEngine
