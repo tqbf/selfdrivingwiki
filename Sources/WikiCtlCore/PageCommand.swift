@@ -176,12 +176,26 @@ public enum PageCommand {
             case .id(let pageID):
                 id = pageID
             case .title:
-                id = try? resolve(selector, in: store)
+                do {
+                    id = try resolve(selector, in: store)
+                } catch {
+                    DebugLog.store("page get: title resolve failed — \(error)")
+                    id = nil
+                }
             }
             if let id, let stagedBody = try store.workspacePageBody(workspaceID: workspace, pageID: id) {
-                var headVersionID = try? store.workspacePageVersion(workspaceID: workspace, pageID: id)
+                var headVersionID: String?
+                do {
+                    headVersionID = try store.workspacePageVersion(workspaceID: workspace, pageID: id)
+                } catch {
+                    DebugLog.store("page get: workspacePageVersion failed — \(error)")
+                }
                 if headVersionID == nil {
-                    headVersionID = try? store.pageHeadVersionID(pageID: id)
+                    do {
+                        headVersionID = try store.pageHeadVersionID(pageID: id)
+                    } catch {
+                        DebugLog.store("page get: pageHeadVersionID failed — \(error)")
+                    }
                 }
                 if json {
                     let row = PageGetJSON(body_markdown: stagedBody, head_version_id: headVersionID)
