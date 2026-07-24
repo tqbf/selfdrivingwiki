@@ -49,6 +49,10 @@ enum TranscriptSubprocess {
             guard !registered else { return }
             registered = true
             #if os(macOS)
+            // Token discarded on purpose: `registered` makes this once-only for
+            // the life of the process, and the observer fires during app
+            // termination — there is no point at which we would detach it.
+            // swiftlint:disable:next discarded_notification_center_observer
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification,
                 object: nil, queue: .main

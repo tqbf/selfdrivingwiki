@@ -1,14 +1,39 @@
 # SwiftLint — scoped deliberately narrow.
 #
-# This config enables ONLY custom rules (`only_rules: [custom_rules]`). It is
-# not a general Swift style gate. Turning on SwiftLint's ~200 default rules
-# against this codebase would emit thousands of line_length / identifier_name /
-# type_body_length violations and drown the one rule that exists to catch a
-# class of bug that has actually bitten us. Broaden later if you want, but do it
-# as its own change with its own baseline.
+# This is a BUG-CLASS GATE, not a general Swift style gate. Turning on
+# SwiftLint's ~200 default rules against this codebase would emit thousands of
+# line_length / identifier_name / type_body_length violations and drown the
+# rules that exist to catch classes of bug that have actually bitten us.
+#
+# Admission test for a new rule: does a violation mean *a failure disappears
+# silently*, or that an AGENTS.md invariant is broken? If it's merely "this
+# could be written more prettily", it does not belong here.
+#
+# Every rule below was measured against the tree before being enabled, and all
+# of them are at ZERO violations — this file is pure prevention, not cleanup.
+# Rules with a non-zero count (force_unwrapping 52, @unchecked Sendable 85,
+# force_try 7, …) are deliberately NOT here; adding them is a separate change
+# with its own baseline growth to review.
+#
+# GOTCHA: `only_rules` and `opt_in_rules` are mutually exclusive. To turn on a
+# built-in rule, add its name to `only_rules` below — there is no second list.
 
 only_rules:
   - custom_rules
+  # Built-ins, all at 0 violations as of this commit. Free ratchets: they cost
+  # nothing today and stop the class from ever entering the tree.
+  - force_cast                        # `as!` — 0 in Sources/ + tools/
+  - weak_delegate                     # strong delegate = retain cycle; we have
+                                      # many NSViewRepresentable Coordinators
+  - notification_center_detachment    # deinit-time removeObserver misuse
+  - unused_setter_value               # a setter that drops newValue on the floor
+  - overridden_super_call             # missing super in a lifecycle override
+  - prohibited_super_call             # super called where it must not be
+  # 3 pre-existing sites, all annotated at the call site with a reason rather
+  # than baselined — they are once-only, app-lifetime willTerminate observers
+  # where there is genuinely nothing to remove. Anywhere else, discarding the
+  # token means the observer can never be detached.
+  - discarded_notification_center_observer
 
 # Production code only. Tests/ is excluded on purpose: a `try?` in test setup
 # fails the test anyway, whereas a `try?` in Sources/ silently drops data.
@@ -55,4 +80,58 @@ custom_rules:
       saying why, then `// swiftlint:disable:next silent_try_optional` directly
       above the offending line — in that order, since disable:next takes the
       very next line. See AGENTS.md.
+    severity: error
+
+  diagnostic_print:
+    name: "print() for diagnostics"
+    # Same `match_kinds` trick as above: `print` lexes as an identifier only in
+    # real code, so the prose mention in ReaderTiming.swift is excluded
+    # structurally. `(?<![.\w])` avoids matching `sprint(` and member calls like
+    # `formatter.print(`. Known loophole: `Swift.print(…)` slips past the
+    # lookbehind — use `swiftlint:disable:next`, not that, as the escape hatch.
+    regex: '(?-s)(?<![.\w])print[ \t]*\('
+    match_kinds:
+      - identifier
+    # Per-rule `excluded` is a REGEX on the file path, not a glob. Real CLI
+    # stdout is the documented exception in AGENTS.md, so the executable targets
+    # whose whole job is printing are exempt.
+    excluded: ".*/(wikictl|versiongen|keychaingen|FuzzHarness|podcast-token-helper)/.*"
+    message: >-
+      `print` goes nowhere when the app is launched by launchd, XPC or the File
+      Provider — the diagnostic is simply lost. Route it through the appropriate
+      `DebugLog.<channel>` (os_log → Console.app, subsystem
+      com.selfdrivingwiki.debug) so it is visible no matter how the process
+      started. Genuine CLI command output belongs in wikictl/ or tools/.
+      See AGENTS.md.
+    severity: error
+
+  raw_sql_begin:
+    name: "Raw BEGIN"
+    # `match_kinds: [string]` because SQL lives in string literals. This is what
+    # keeps the three prose mentions of "BEGIN IMMEDIATE" in GRDBWikiStore's doc
+    # comments from tripping the rule.
+    regex: '(?i)(?-s)\bBEGIN[ \t]+(IMMEDIATE|EXCLUSIVE|DEFERRED|TRANSACTION)\b'
+    match_kinds:
+      - string
+    message: >-
+      A raw BEGIN breaks savepoint nesting — an inner one hits "cannot start a
+      transaction within a transaction" and an outer rollback silently discards
+      the inner work. Compose multi-step writes through `withTransaction`.
+      See docs/skills/sqlite-concurrency/SKILL.md.
+    severity: error
+
+  entry_macro:
+    name: "@Entry macro"
+    regex: '(?-s)@Entry\b'
+    # `typeidentifier` is what SourceKit lexes an unresolved macro name as (the
+    # macro doesn't expand under SwiftPM, which is the whole point of the rule).
+    # `attribute.id` is listed too in case a future toolchain resolves it.
+    # Without this, the rule fires on prose mentioning @Entry in comments.
+    match_kinds:
+      - typeidentifier
+      - attribute.id
+    message: >-
+      `@Entry` resolves only under Xcode's build system; this repo must build
+      with `swift build` from the command line. Use the manual
+      `EnvironmentKey`/`FocusedValueKey` pattern instead. See AGENTS.md.
     severity: error
