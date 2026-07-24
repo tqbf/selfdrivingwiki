@@ -23,25 +23,20 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
     private let lock = NSLock()
     private var _current: any QueueEngineClient
 
-    /// The unified event stream — republishes from whichever engine is active.
-    private let continuation: AsyncStream<QueueEvent>.Continuation
-    private let stream: AsyncStream<QueueEvent>
+    /// The unified event broadcaster — multicasts from whichever engine is active.
+    private let broadcaster = QueueEventBroadcaster()
 
     /// Background task forwarding events from the current inner engine into
-    /// `continuation`. Cancelled + restarted on every `swap`.
+    /// the broadcaster. Cancelled + restarted on every `swap`.
     private var forwardTask: Task<Void, Never>?
 
     init(_ engine: any QueueEngineClient) {
         self._current = engine
-        let (s, c) = AsyncStream.makeStream(of: QueueEvent.self, bufferingPolicy: .bufferingOldest(256))
-        self.stream = s
-        self.continuation = c
         startForwarding(from: engine)
     }
 
     deinit {
         forwardTask?.cancel()
-        continuation.finish()
     }
 
     /// The currently-active inner engine.
@@ -51,7 +46,7 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
 
     /// Replace the inner engine. Cancels the old event-forwarding task and
     /// starts a new one for `engine`. Existing event-stream subscribers see a
-    /// continuous stream (the same `AsyncStream` is fed by both the old and
+    /// continuous stream (the same broadcaster is fed by both the old and
     /// new engines in sequence).
     func swap(to engine: any QueueEngineClient) {
         forwardTask?.cancel()
@@ -61,20 +56,18 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
     }
 
     private func startForwarding(from engine: any QueueEngineClient) {
-        let cont = continuation
         forwardTask = Task { [weak self] in
             for await event in engine.events {
-                cont.yield(event)
+                guard let self else { return }
+                self.broadcaster.yield(event)
             }
-            // If `self` is deallocated the task is cancelled on deinit; the
-            // loop exit here just means the engine's event stream ended.
-            _ = self
         }
     }
 
     // MARK: - QueueEngineClient conformance
 
-    var events: AsyncStream<QueueEvent> { stream }
+    var events: AsyncStream<QueueEvent> { broadcaster.subscribe() }
+
 
     @discardableResult
     func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {

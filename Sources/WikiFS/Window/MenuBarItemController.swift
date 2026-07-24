@@ -666,15 +666,27 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Transient hint
 
+    private var lastHintMessage: String?
+    
     /// Show a brief popover below the status item, anchored to its button.
     /// Auto-dismisses after 2.5 seconds, or when the user clicks elsewhere
-    /// (`.transient` behavior), or when the menu opens (`menuNeedsUpdate`
+    /// (`.semitransient` behavior), or when the menu opens (`menuNeedsUpdate`
     /// calls `dismissHint`).
     private func showTransientHint(message: String, symbol: String) {
+        // #622: If the same message is already showing, just extend the timer
+        // to avoid visual flicker during batch operations.
+        if hintPopover?.isShown == true, lastHintMessage == message {
+            startHintDismissTimer()
+            return
+        }
+
         dismissHint()
+        lastHintMessage = message
 
         let popover = NSPopover()
-        popover.behavior = .transient
+        // .semitransient is more robust than .transient when the app is
+        // performing other UI updates (like spinners) that might steal focus.
+        popover.behavior = .semitransient
         popover.contentSize = NSSize(width: 220, height: 40)
         popover.contentViewController = NSHostingController(
             rootView: QueueHintView(message: message, symbol: symbol)
@@ -684,6 +696,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         hintPopover = popover
 
+        startHintDismissTimer()
+    }
+
+    private func startHintDismissTimer() {
+        hintDismissTask?.cancel()
         hintDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
@@ -697,6 +714,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         hintDismissTask = nil
         hintPopover?.close()
         hintPopover = nil
+        lastHintMessage = nil
     }
 }
 
@@ -711,7 +729,7 @@ private struct QueueHintView: View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.accentColor)
             Text(message)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.primary)

@@ -812,11 +812,13 @@ public actor QueueEngine {
 /// so a slow consumer doesn't block the engine or starve the others).
 /// Terminated streams (consumer task cancelled / deallocated) unregister
 /// themselves via `onTermination`.
-final class QueueEventBroadcaster: @unchecked Sendable {
+public final class QueueEventBroadcaster: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<QueueEvent>.Continuation] = [:]
 
-    func subscribe() -> AsyncStream<QueueEvent> {
+    public init() {}
+
+    public func subscribe() -> AsyncStream<QueueEvent> {
         AsyncStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
             let id = UUID()
             lock.withLock { continuations[id] = continuation }
@@ -827,10 +829,11 @@ final class QueueEventBroadcaster: @unchecked Sendable {
         }
     }
 
-    func yield(_ event: QueueEvent) {
+    public func yield(_ event: QueueEvent) {
         let targets = lock.withLock { Array(continuations.values) }
         for continuation in targets {
             continuation.yield(event)
         }
     }
 }
+
