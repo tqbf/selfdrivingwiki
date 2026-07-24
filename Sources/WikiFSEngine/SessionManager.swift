@@ -28,6 +28,21 @@ public final class SessionManager {
     /// shares ONE session (one store, one bus, one gate).
     public private(set) var sessions: [String: WikiSession] = [:]
 
+    /// Per-wiki store-open failures (issue #881). When `session(for:)` throws
+    /// (the on-disk DB couldn't be opened), the error message is recorded here
+    /// keyed by wiki ID so `RootScene` can render a user-visible error view
+    /// ("Could not open wiki database…") instead of silently showing an empty
+    /// wiki. Cleared by ``clearOpenError(for:)`` (Retry button) so the next
+    /// `session(for:)` call attempts a fresh open.
+    public private(set) var openErrors: [String: String] = [:]
+
+    /// The user-visible error message for a wiki that failed to open, or nil.
+    public func openError(for wikiID: String) -> String? { openErrors[wikiID] }
+
+    /// Clear a recorded open error so the next `session(for:)` retry attempts a
+    /// fresh open (Retry button in the error view).
+    public func clearOpenError(for wikiID: String) { openErrors.removeValue(forKey: wikiID) }
+
     /// The wiki ID of the frontmost window. Updated by per-window scenePhase
     /// transitions (`.active`). Used by `VacuumCommands` (which lives at the
     /// scene level — `.commands` is a `Scene` modifier, not a `View`
@@ -87,6 +102,12 @@ public final class SessionManager {
     /// model is deliberately NOT config-aware).
     public let podcastBackendResolver: @MainActor () -> PodcastTranscriptionBackend?
 
+    /// Injection seam for the store factory (mirrors `WikiSession.makeStore`).
+    /// Defaults to `StoreBackend.current.makeStore(databaseURL:)`. Tests inject
+    /// a throwing closure to exercise the open-failure path (issue #881)
+    /// without relying on filesystem corruption.
+    public let makeStore: @Sendable (URL) throws -> WikiStore
+
     public init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
@@ -96,7 +117,8 @@ public final class SessionManager {
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
+        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
+        makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) }
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -107,6 +129,7 @@ public final class SessionManager {
         self.htmlBackendResolver = htmlBackendResolver
         self.podcastBackendResolver = podcastBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
+        self.makeStore = makeStore
     }
 
     // MARK: - Session lifecycle
@@ -114,26 +137,48 @@ public final class SessionManager {
     /// Get or create a session for `wikiID`. If a session already exists for
     /// this wiki (open in another window), returns the existing instance —
     /// so two windows over the same wiki share one store + bus + gate.
-    public func session(for wikiID: String, descriptor: WikiDescriptor) -> WikiSession {
+    ///
+    /// - Throws: If the wiki's on-disk store cannot be opened, the error is
+    ///   recorded in ``openErrors`` (so `RootScene` can show a user-visible
+    ///   message) and rethrown. There is no in-memory fallback (#881) — a
+    ///   failed open leaves `sessions[wikiID]` unset, and the caller renders
+    ///   an error view instead of an empty wiki.
+    public func session(for wikiID: String, descriptor: WikiDescriptor) throws -> WikiSession {
         if let existing = sessions[wikiID] {
             // Refresh the descriptor in case the registry mutated (rename /
             // set home page) since this session was created.
             existing.updateDescriptor(descriptor)
             return existing
         }
-        let newSession = WikiSession(
-            wikiID: wikiID,
-            descriptor: descriptor,
-            containerDirectory: containerDirectory,
-            extractionCoordinator: extractionCoordinator,
-            queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
-            pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
-            htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
-            htmlBackendResolver: htmlBackendResolver,
-            podcastBackendResolver: podcastBackendResolver,
-            interactiveUsageRecorder: interactiveUsageRecorder
-        )
+        let newSession: WikiSession
+        do {
+            newSession = try WikiSession(
+                wikiID: wikiID,
+                descriptor: descriptor,
+                containerDirectory: containerDirectory,
+                extractionCoordinator: extractionCoordinator,
+                queueEngine: queueEngine,
+                extractionProvider: extractionProvider,
+                makeStore: makeStore,
+                pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
+                htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
+                htmlBackendResolver: htmlBackendResolver,
+                podcastBackendResolver: podcastBackendResolver,
+                interactiveUsageRecorder: interactiveUsageRecorder
+            )
+        } catch {
+            // Record a user-visible message so RootScene can render an error
+            // view. No in-memory fallback (#881) — the on-disk file is left
+            // untouched for recovery.
+            let dbPath = containerDirectory
+                .appendingPathComponent("\(wikiID).sqlite", isDirectory: false).path
+            let message = "Could not open the wiki database at \(dbPath). The file may be corrupt. \(error)"
+            DebugLog.store("SessionManager: failed to open wiki \(wikiID): \(error)")
+            openErrors[wikiID] = message
+            throw error
+        }
+        // A successful open clears any previously-recorded error for this wiki.
+        openErrors.removeValue(forKey: wikiID)
         // Transfer any deferred wiki-link click (registered by
         // `applyOrStashWikiLink` for a wiki whose window wasn't open yet)
         // onto the new session. `RootView` consumes it on appear.
