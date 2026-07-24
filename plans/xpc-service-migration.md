@@ -107,6 +107,35 @@ this preserves). Consequences for `wikictl`:
   `WikiRegistryClient`; only per-page Darwin notifications are watched). Same as
   the daemon's prior behavior — non-blocking for the CLI's scripting role.
 
+## The `WikiDaemonContract` module (contract boundary made explicit)
+
+The XPC *contract* was originally smeared across three modules — the two `@objc`
+protocols lived in the 131-file `WikiFSCore`, and `WikiDaemonError` was mixed into
+`WikiCtlCore`'s client transport. There was no single place that said "this is the
+app↔daemon boundary."
+
+Extracted a Foundation-only leaf module **`WikiDaemonContract`** holding exactly the
+contract:
+
+- `WikiDaemonProtocol` + `WikiDaemonEventSink` (the two `@objc` protocols) — moved
+  from `WikiFSCore/Core/WikiDaemonProtocol.swift`.
+- `WikiDaemonError` — moved from `WikiCtlCore/WikiDaemonConnection.swift`.
+- `Contract.swift` — a module doc stating the boundary + why there are no DTO types
+  here.
+
+**Why no DTOs move.** Every payload crosses the wire JSON-encoded as `Data` (NSXPC
+`@objc` protocols can't carry arbitrary `Codable`), so the protocol signatures
+reference only `Data`/`String`/`Bool`/`Int` — no domain types. The contract module
+is therefore a true leaf with zero domain coupling; the payload DTOs
+(`WikiDescriptor`, `QueueItemRequest`, `AgentEvent`, `ChatStartRequest`,
+`QueueSnapshot`, …) stay in `WikiFSCore`/`WikiFSEngine`, encoded/decoded by the typed
+client (`WikiCtlCore`) and server (`wikid`) wrappers.
+
+Dependency edges: `WikiDaemonContract ← { wikid (server), WikiFS (app —
+DaemonQueueEventSink), WikiCtlCore (typed client) }`. `WikiFSCore` and `WikiFSEngine`
+do **not** depend on it (their two references are doc comments). All source is
+`#if os(macOS)`, so the module is empty on Linux and the edges are harmless there.
+
 ## Files
 
 - `build.sh` — `wikid.xpc` bundle assembly, Info.plist (`XPC!` +

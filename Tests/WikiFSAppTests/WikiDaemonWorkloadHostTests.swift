@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiDaemonContract
 @testable import WikiFSCore
 @testable import WikiCtlCore
 @testable import WikiFSEngine

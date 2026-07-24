@@ -81,6 +81,19 @@ let package = Package(
             path: "Sources/WikiFSTypes",
             swiftSettings: strictSwiftSettings
         ),
+        // The app↔daemon XPC contract — the single, explicit boundary between
+        // the `wikid` XPC service (server) and its clients. Holds only the two
+        // `@objc` protocols (WikiDaemonProtocol + WikiDaemonEventSink) and the
+        // shared WikiDaemonError. Foundation-only leaf: every payload crosses
+        // the wire as JSON `Data`, so the protocols reference no domain types
+        // (the DTOs stay in WikiFSCore/WikiFSEngine). All source is
+        // `#if os(macOS)` (NSXPC/@objc are unavailable on Linux), so the module
+        // is empty there. See plans/xpc-service-migration.md.
+        .target(
+            name: "WikiDaemonContract",
+            path: "Sources/WikiDaemonContract",
+            swiftSettings: strictSwiftSettings
+        ),
         // The wiki-link grammar cluster — pure-logic parser/resolver/rewriter/
         // rules. Depends only on WikiFSTypes (PageID/ULID/ParsedLink/etc.).
         // Extracted from WikiFSCore in module restructuring Phase 1 (#532).
@@ -197,6 +210,9 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
+                // The XPC contract — the app implements WikiDaemonEventSink
+                // (DaemonQueueEventSink). Empty on Linux; harmless there.
+                "WikiDaemonContract",
                 // WikiFS (the app) is macOS-only — links WebKit, MLX, etc.
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 // WikiCtlCore provides DaemonWorkloadClient + WikiDaemonConnection
@@ -219,6 +235,10 @@ let package = Package(
             name: "WikiCtlCore",
             dependencies: [
                 "WikiFSCore",
+                // The XPC contract — the typed client (WikiDaemonConnection +
+                // DaemonWorkloadClient) speaks WikiDaemonProtocol + throws
+                // WikiDaemonError. Empty on Linux; harmless there.
+                "WikiDaemonContract",
                 // WikiFSEngine is needed for DaemonWorkloadClient (Phase 0 daemon
                 // workloads) which decodes QueueSnapshot from XPC JSON. macOS-only
                 // because WikiFSEngine pulls in the ACP product.
@@ -254,6 +274,10 @@ let package = Package(
             name: "wikid",
             dependencies: [
                 "WikiFSCore",
+                // The XPC contract — the daemon IS the server: it implements
+                // WikiDaemonProtocol + holds WikiDaemonEventSink proxies. Empty
+                // on Linux (the daemon uses the stdio transport there).
+                "WikiDaemonContract",
                 .target(name: "WikiFSEngine",
                         condition: .when(platforms: [.macOS])),
             ],
@@ -343,7 +367,7 @@ let package = Package(
         .testTarget(
             name: "WikiFSAppTests",
             dependencies: [
-                "WikiFSCore", "WikiCtlCore",
+                "WikiFSCore", "WikiCtlCore", "WikiDaemonContract",
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
