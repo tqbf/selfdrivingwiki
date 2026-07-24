@@ -103,7 +103,12 @@ public actor QueueEngine {
 
         // Crash recovery: any items left `.running` from a previous session
         // are reset to `.queued` (attempt preserved).
-        let resetCount = (try? store.resetRunningToQueued()) ?? 0
+        var resetCount = 0
+        do {
+            resetCount = try store.resetRunningToQueued()
+        } catch {
+            DebugLog.store("QueueEngine: failed to reset running items at launch: \(error)")
+        }
         if resetCount > 0 {
             DebugLog.store("QueueEngine.start: reset \(resetCount) running items to queued")
         }
@@ -119,7 +124,12 @@ public actor QueueEngine {
 
         // Load run states.
         for queue in [QueueKind.extraction, QueueKind.ingestion] {
-            runStates[queue] = (try? store.queueRunState(for: queue)) ?? .running
+            do {
+                runStates[queue] = try store.queueRunState(for: queue)
+            } catch {
+                DebugLog.store("QueueEngine: failed to load run state for \(queue): \(error)")
+                runStates[queue] = .running
+            }
         }
 
         // Initial dispatch scan.
@@ -149,14 +159,22 @@ public actor QueueEngine {
     /// normally. Pause state persists across relaunch (written to the store).
     public func pause(_ queue: QueueKind) async {
         runStates[queue] = .paused
-        try? store.setQueueRunState(queue, .paused)
+        do {
+            try store.setQueueRunState(queue, .paused)
+        } catch {
+            DebugLog.store("QueueEngine: failed to persist pause state for \(queue): \(error)")
+        }
         emit(.runStateChanged(queue: queue, state: .paused))
     }
 
     /// Resume a queue: restart dispatch. Persists the run state.
     public func resume(_ queue: QueueKind) async {
         runStates[queue] = .running
-        try? store.setQueueRunState(queue, .running)
+        do {
+            try store.setQueueRunState(queue, .running)
+        } catch {
+            DebugLog.store("QueueEngine: failed to persist resume state for \(queue): \(error)")
+        }
         emit(.runStateChanged(queue: queue, state: .running))
         await dispatchScan()
     }
@@ -166,11 +184,21 @@ public actor QueueEngine {
     /// `requeue`, which preserves `orderingKey`).
     public func halt(_ queue: QueueKind) async {
         runStates[queue] = .paused
-        try? store.setQueueRunState(queue, .paused)
+        do {
+            try store.setQueueRunState(queue, .paused)
+        } catch {
+            DebugLog.store("QueueEngine: failed to persist halt state for \(queue): \(error)")
+        }
         emit(.runStateChanged(queue: queue, state: .paused))
 
         // Cancel all running tasks for this queue kind.
-        let activeItems = (try? store.loadActive(for: queue)) ?? []
+        let activeItems: [QueueItem]
+        do {
+            activeItems = try store.loadActive(for: queue)
+        } catch {
+            DebugLog.store("QueueEngine: failed to load active items for halt: \(error)")
+            activeItems = []
+        }
         for item in activeItems where item.state == .running {
             if let task = runningTasks.removeValue(forKey: item.id) {
                 task.cancel()
@@ -207,7 +235,13 @@ public actor QueueEngine {
     public func cancelAllInFlight() async -> Int {
         var count = 0
         for queue in [QueueKind.extraction, QueueKind.ingestion] {
-            let active = (try? store.loadActive(for: queue)) ?? []
+            let active: [QueueItem]
+            do {
+                active = try store.loadActive(for: queue)
+            } catch {
+                DebugLog.store("QueueEngine: failed to load active items for cancelAll: \(error)")
+                continue
+            }
             for item in active where item.state == .running {
                 await cancelItem(item.id)
                 count += 1
@@ -269,35 +303,52 @@ public actor QueueEngine {
     /// shrinks to zero (extremely unlikely), the item is placed at
     /// `max + 1000` as a fallback.
     public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {
-        guard let item = try? store.getItem(id), item.state == .queued else { return }
-
-        var key: Int64
-        if let beforeID = beforeItemID,
-           let beforeItem = try? store.getItem(beforeID) {
-            // Move before `beforeItem`: new key is between the predecessor
-            // and `beforeItem`.
-            let active = (try? store.loadActive(for: item.queue)) ?? []
-            let beforeKey = beforeItem.orderingKey
-            let predecessorKey = active
-                .map(\.orderingKey)
-                .filter { $0 < beforeKey }
-                .max() ?? 0
-            let midpoint = predecessorKey + (beforeKey - predecessorKey) / 2
-            if midpoint > predecessorKey && midpoint < beforeKey {
-                key = midpoint
-            } else {
-                // Gap too small — fall back to end of queue.
-                let maxKey = (try? store.maxOrderingKey(for: item.queue)) ?? 0
-                key = max(maxKey, beforeKey) + 1000
-            }
-        } else {
-            // Move to end.
-            key = ((try? store.maxOrderingKey(for: item.queue)) ?? 0) + 1000
+        let item: QueueItem
+        do {
+            guard let fetched = try store.getItem(id), fetched.state == .queued else { return }
+            item = fetched
+        } catch {
+            DebugLog.store("QueueEngine.reorderItem: failed to fetch item \(id): \(error)")
+            return
         }
 
-        _ = try? store.updateOrderingKey(id: id, key: key)
-        if let updated = try? store.getItem(id) {
-            emit(.reordered(updated))
+        var key: Int64
+        do {
+            if let beforeID = beforeItemID,
+               let beforeItem = try store.getItem(beforeID) {
+                // Move before `beforeItem`: new key is between the predecessor
+                // and `beforeItem`.
+                let active = try store.loadActive(for: item.queue)
+                let beforeKey = beforeItem.orderingKey
+                let predecessorKey = active
+                    .map(\.orderingKey)
+                    .filter { $0 < beforeKey }
+                    .max() ?? 0
+                let midpoint = predecessorKey + (beforeKey - predecessorKey) / 2
+                if midpoint > predecessorKey && midpoint < beforeKey {
+                    key = midpoint
+                } else {
+                    // Gap too small — fall back to end of queue.
+                    let maxKey = try store.maxOrderingKey(for: item.queue)
+                    key = max(maxKey, beforeKey) + 1000
+                }
+            } else {
+                // Move to end.
+                let maxKey = try store.maxOrderingKey(for: item.queue)
+                key = maxKey + 1000
+            }
+        } catch {
+            DebugLog.store("QueueEngine.reorderItem: failed to calculate key: \(error)")
+            return
+        }
+
+        do {
+            _ = try store.updateOrderingKey(id: id, key: key)
+            if let updated = try store.getItem(id) {
+                emit(.reordered(updated))
+            }
+        } catch {
+            DebugLog.store("QueueEngine.reorderItem: failed to persist reorder for \(id): \(error)")
         }
     }
 
@@ -307,7 +358,13 @@ public actor QueueEngine {
     /// Used by `RootScene.onDisappear` to decide whether to retain a session
     /// (if work is pending) or release it.
     public func hasActiveWork(for wikiID: String) -> Bool {
-        let active = (try? store.loadActive()) ?? []
+        let active: [QueueItem]
+        do {
+            active = try store.loadActive()
+        } catch {
+            DebugLog.store("QueueEngine.hasActiveWork: failed to load active items: \(error)")
+            active = []
+        }
         return active.contains { $0.wikiID == wikiID }
     }
 
@@ -316,8 +373,20 @@ public actor QueueEngine {
     /// A point-in-time view of the engine's full state, for UI bootstrap and
     /// test assertions.
     public func snapshot() -> QueueSnapshot {
-        let activeItems = (try? store.loadActive()) ?? []
-        let recentItems = (try? store.loadRecent(limit: config.recentLimit)) ?? []
+        let activeItems: [QueueItem]
+        do {
+            activeItems = try store.loadActive()
+        } catch {
+            DebugLog.store("QueueEngine.snapshot: failed to load active items: \(error)")
+            activeItems = []
+        }
+        let recentItems: [QueueItem]
+        do {
+            recentItems = try store.loadRecent(limit: config.recentLimit)
+        } catch {
+            DebugLog.store("QueueEngine.snapshot: failed to load recent items: \(error)")
+            recentItems = []
+        }
         let qs: [QueueKind: QueueRunState] = [
             .extraction: runStates[.extraction] ?? .running,
             .ingestion: runStates[.ingestion] ?? .running,
@@ -345,14 +414,20 @@ public actor QueueEngine {
     /// the waiters array.
     public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
         // Check if already terminal.
-        if let item = try? store.getItem(id), item.state == .completed {
-            return .success(())
-        }
-        if let item = try? store.getItem(id), item.state == .failed {
-            return .failure(QueueExtractionError.notReady(item.error ?? "unknown"))
-        }
-        if let item = try? store.getItem(id), item.state == .cancelled {
-            return .failure(CancellationError())
+        do {
+            if let item = try store.getItem(id) {
+                if item.state == .completed {
+                    return .success(())
+                }
+                if item.state == .failed {
+                    return .failure(QueueExtractionError.notReady(item.error ?? "unknown"))
+                }
+                if item.state == .cancelled {
+                    return .failure(CancellationError())
+                }
+            }
+        } catch {
+            DebugLog.store("QueueEngine.waitForCompletion: failed to fetch item \(id): \(error)")
         }
 
         // Register a waiter.
@@ -473,12 +548,23 @@ public actor QueueEngine {
     /// from a previous session. Deltas are folded into whole rows on the way
     /// out — rows persisted before deltas were filtered contain fragments.
     public func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
-        AgentEvent.mergingStreamDeltas((try? store.loadItemEvents(itemID: itemID)) ?? [])
+        let events: [AgentEvent]
+        do {
+            events = try store.loadItemEvents(itemID: itemID)
+        } catch {
+            DebugLog.store("QueueEngine.loadTranscript: failed to load events for \(itemID): \(error)")
+            events = []
+        }
+        return AgentEvent.mergingStreamDeltas(events)
     }
 
     /// Delete persisted events for an item (e.g. on retry).
     public func clearTranscript(for itemID: QueueItem.ID) async {
-        try? store.deleteItemEvents(itemID: itemID)
+        do {
+            try store.deleteItemEvents(itemID: itemID)
+        } catch {
+            DebugLog.store("QueueEngine.clearTranscript: failed to delete events for \(itemID): \(error)")
+        }
     }
 
     /// Decoded per-item activity metadata for rehydration. The engine layer
@@ -524,7 +610,13 @@ public actor QueueEngine {
     /// failure for one row leaves that field `nil` rather than aborting the
     /// whole rehydration.
     public func loadAllActivitySnapshots() async -> [QueueItem.ID: ActivitySnapshot] {
-        let raw = (try? store.loadAllActivity()) ?? [:]
+        let raw: [QueueItem.ID: QueueStore.QueueItemActivity]
+        do {
+            raw = try store.loadAllActivity()
+        } catch {
+            DebugLog.store("QueueEngine.loadAllActivitySnapshots: failed to load from store: \(error)")
+            raw = [:]
+        }
         var result: [QueueItem.ID: ActivitySnapshot] = [:]
         result.reserveCapacity(raw.count)
         for (id, activity) in raw {
@@ -571,7 +663,13 @@ public actor QueueEngine {
         for queue in [QueueKind.extraction, QueueKind.ingestion] {
             guard runStates[queue] == .running else { continue }
 
-            let active = (try? store.loadActive(for: queue)) ?? []
+            let active: [QueueItem]
+            do {
+                active = try store.loadActive(for: queue)
+            } catch {
+                DebugLog.store("QueueEngine.dispatchScan: failed to load active items for \(queue): \(error)")
+                continue
+            }
             for item in active where item.state == .queued {
                 // The ONE await — resolve the provider up front.
                 guard let providerID = await workerFactory.providerID(for: item) else {
@@ -610,7 +708,14 @@ public actor QueueEngine {
                 }
 
                 // Read back the running item for the event (synchronous).
-                guard let runningItem = try? store.getItem(item.id) else { continue }
+                let runningItem: QueueItem
+                do {
+                    guard let updated = try store.getItem(item.id) else { continue }
+                    runningItem = updated
+                } catch {
+                    DebugLog.store("QueueEngine.dispatchScan: failed to load updated item \(item.id): \(error)")
+                    continue
+                }
 
                 // Update in-memory counts — immediately after the successful
                 // claim, with no suspension in between.
@@ -707,15 +812,19 @@ public actor QueueEngine {
                 // `.cancelled` and the slot was freed there.
                 // Either way, the slot is already freed — DON'T double-decrement.
                 // Only act if the item is orphaned (still .running).
-                if let updated = try? store.getItem(item.id), updated.state == .running {
-                    try? store.requeue(id: item.id)
-                    decrementProviderCount(for: item)
-                    if item.queue == .ingestion {
-                        activeIngestionWikis.remove(item.wikiID)
+                do {
+                    if let updated = try store.getItem(item.id), updated.state == .running {
+                        try store.requeue(id: item.id)
+                        decrementProviderCount(for: item)
+                        if item.queue == .ingestion {
+                            activeIngestionWikis.remove(item.wikiID)
+                        }
+                        if let requeued = try store.getItem(item.id) {
+                            emit(.cancelled(requeued))
+                        }
                     }
-                    if let requeued = try? store.getItem(item.id) {
-                        emit(.cancelled(requeued))
-                    }
+                } catch {
+                    DebugLog.store("QueueEngine.handleWorkerFinished: failed to handle cancellation for \(item.id): \(error)")
                 }
             } else {
                 // #440: prefer `localizedDescription` (respects
@@ -749,6 +858,13 @@ public actor QueueEngine {
 
         // Trigger dispatch for potentially unblocked items.
         await dispatchScan()
+
+        // Maintain the terminal history bound (default 200 per queue).
+        do {
+            try store.pruneHistory(maxPerQueue: config.recentLimit)
+        } catch {
+            DebugLog.store("QueueEngine.handleWorkerFinished: pruneHistory failed: \(error)")
+        }
     }
 
     /// Resume all `waitForCompletion` waiters for an item with the given result
@@ -781,10 +897,17 @@ public actor QueueEngine {
     /// Rebuild in-memory state from the store. Called after `halt` to
     /// resync counts and wiki set.
     private func rebuildInMemoryState() async {
+        let active: [QueueItem]
+        do {
+            active = try store.loadActive()
+        } catch {
+            DebugLog.store("QueueEngine.rebuildInMemoryState: failed to load active items: \(error)")
+            return // Don't wipe state on transient read failure
+        }
+
         providerActiveCounts.removeAll()
         activeIngestionWikis.removeAll()
 
-        let active = (try? store.loadActive()) ?? []
         for item in active where item.state == .running {
             if let providerID = item.providerID {
                 incrementProviderCount(providerID)

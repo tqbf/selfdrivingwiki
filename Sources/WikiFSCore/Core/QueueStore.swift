@@ -352,9 +352,7 @@ public final class QueueStore: @unchecked Sendable {
         let startedAt: Int64? = row["started_at"]
         let finishedAt: Int64? = row["finished_at"]
 
-        guard let queue = QueueKind(rawValue: queueRaw) else {
-            throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(queueRaw)")
-        }
+        let queue = QueueKind(rawValue: queueRaw) ?? .ingestion
         guard let state = QueueItemState(rawValue: stateRaw) else {
             throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(stateRaw)")
         }
