@@ -57,6 +57,12 @@ struct WikiFSApp: App {
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
+    /// Issue #881: user-visible error shown when the local `queue.sqlite`
+    /// could not be opened at launch (no silent `:memory:` fallback). Drives
+    /// an alert over the main window so the user understands ingestion /
+    /// extraction are unavailable (instead of silently dropping every
+    /// enqueued item on restart).
+    @State private var queueStoreError: String?
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
@@ -194,17 +200,23 @@ struct WikiFSApp: App {
         // Always construct a local engine first — it's the fallback if the
         // daemon isn't running (dev mode without `make install-daemon`) AND
         // the recovery target if the daemon dies mid-session.
-        let localEngine = Self.makeLocalQueueEngine(
+        let localEngineResult = Self.makeLocalQueueEngine(
             directory: directory,
             sessionBox: sessionBox,
             fileProviderBox: fileProviderBox,
             extractionProvider: extractionProvider)
 
+        // Issue #881: surface a user-visible error if `queue.sqlite` could not
+        // be opened (no silent `:memory:` fallback). `localEngine` may be an
+        // `UnavailableQueueEngine` — the app stays usable for browsing, but
+        // ingest/extract throw a clear error.
+        _queueStoreError = State(initialValue: localEngineResult.openError)
+
         // Wrap in the hot-swap router so a mid-session daemon death can swap
         // back to a fresh local engine transparently — all consumers
         // (SessionManager, MenuBarItemController, QueueActivityTracker) hold
         // the router, never the inner engine.
-        let router = QueueEngineHotSwap(localEngine)
+        let router = QueueEngineHotSwap(localEngineResult.engine)
         queueEngineRouter = router
         activityTracker.attach(engine: router)
         Task { await activityTracker.rehydrate(from: router) }
@@ -509,7 +521,14 @@ struct WikiFSApp: App {
                 sessionBox: sessionBox,
                 fileProviderBox: fileProviderBox,
                 extractionProvider: extractionProvider)
-            router?.swap(to: local)
+            // Issue #881: if the local queue store also failed to open,
+            // `local.engine` is an `UnavailableQueueEngine`. The enqueue path
+            // surfaces the error to the user; the launch-time alert covers the
+            // initial-failure UX.
+            if let disconnectError = local.openError {
+                DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
+            }
+            router?.swap(to: local.engine)
             chatDaemonCoordinator = nil
         }
         healthMonitor.onReconnect = { newConn in
@@ -542,13 +561,20 @@ struct WikiFSApp: App {
     /// Construct a local `QueueEngine` as the fallback for when the daemon is
     /// unavailable or has died mid-session. Extracted from the former inline
     /// init() block so it can be called on initial launch AND on disconnect.
+    ///
+    /// - Returns: A tuple of the engine to wire into the hot-swap router and an
+    ///   optional user-visible error message. When the on-disk `queue.sqlite`
+    ///   cannot be opened, the engine is an `UnavailableQueueEngine` (so the app
+    ///   stays usable for browsing but ingest/extract throw a clear error) and
+    ///   `openError` carries the failure reason for the app-level alert (issue
+    ///   #881 — no silent `:memory:` fallback that drops every item on restart).
     @MainActor
     private static func makeLocalQueueEngine(
         directory: URL,
         sessionBox: SessionLookupBox,
         fileProviderBox: FileProviderBox,
         extractionProvider: any QueueExtractionProvider
-    ) -> QueueEngine {
+    ) -> (engine: any QueueEngineClient, openError: String?) {
         DebugLog.store("WikiFSApp: constructing local QueueEngine fallback")
         let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
             ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
@@ -556,9 +582,13 @@ struct WikiFSApp: App {
         do {
             queueStore = try QueueStore(databaseURL: queueDBURL)
         } catch {
-            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
-            // swiftlint:disable:next force_try
-            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            // Issue #881: no in-memory fallback. Surface a user-visible error
+            // and use an `UnavailableQueueEngine` so the app stays usable for
+            // browsing while ingest/extract throw a clear error (instead of
+            // silently dropping every enqueued item on restart).
+            let reason = "Could not open the queue database at \(queueDBURL.path). Ingestion and extraction will be unavailable until this is resolved. \(error)"
+            DebugLog.store("QueueEngine: failed to open queue.sqlite — queue unavailable: \(error)")
+            return (UnavailableQueueEngine(reason: reason), reason)
         }
         let ingestionProvider = AppQueueIngestionProvider(
             sessionBox: sessionBox,
@@ -594,7 +624,7 @@ struct WikiFSApp: App {
         Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
         Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
         Task { await localEngine.start() }
-        return localEngine
+        return (localEngine, nil)
     }
 
     var body: some Scene {
@@ -649,6 +679,22 @@ struct WikiFSApp: App {
                 Button("OK", role: .cancel) {}
             } message: { warning in
                 Text(warning.message)
+            }
+            // Issue #881: surface a queue-database open failure (the local
+            // `queue.sqlite` could not be opened). No silent in-memory
+            // fallback — ingestion / extraction are unavailable until the
+            // underlying issue is resolved.
+            .alert(
+                "Queue Database Unavailable",
+                isPresented: Binding(
+                    get: { queueStoreError != nil },
+                    set: { if !$0 { queueStoreError = nil } }
+                ),
+                presenting: queueStoreError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
             }
             // Keep the bridge's Darwin observations in lockstep with the wiki
             // set: a freshly-created wiki's CLI writes must be heard; a

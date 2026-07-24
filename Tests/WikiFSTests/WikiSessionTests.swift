@@ -36,7 +36,7 @@ struct WikiSessionTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
 
-        let session = WikiSession(
+        let session = try! WikiSession(
             wikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
@@ -60,14 +60,14 @@ struct WikiSessionTests {
             containerDirectory: dirA,
             localExtractorFactory: { StubExtractor() })
 
-        let sessionA = WikiSession(
+        let sessionA = try! WikiSession(
             wikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
-        let sessionB = WikiSession(
+        let sessionB = try! WikiSession(
             wikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
@@ -96,14 +96,14 @@ struct WikiSessionTests {
             containerDirectory: dirA,
             localExtractorFactory: { StubExtractor() })
 
-        let sessionA = WikiSession(
+        let sessionA = try! WikiSession(
             wikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
-        let sessionB = WikiSession(
+        let sessionB = try! WikiSession(
             wikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
@@ -130,7 +130,7 @@ struct WikiSessionTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        let session = WikiSession(
+        let session = try! WikiSession(
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
@@ -155,7 +155,7 @@ struct WikiSessionTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        let session = WikiSession(
+        let session = try! WikiSession(
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
@@ -182,7 +182,7 @@ struct WikiSessionTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        let session = WikiSession(
+        let session = try! WikiSession(
             wikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
@@ -194,6 +194,33 @@ struct WikiSessionTests {
         await session.upgradeSearchIndex()
         // The store still works — no crash, no hang.
         #expect(session.store.eventBus != nil)
+    }
+
+    // MARK: - Store-open failure (issue #881 — no in-memory fallback)
+
+    /// When the on-disk store cannot be opened, `WikiSession.init` MUST throw
+    /// instead of silently degrading to an in-memory store (the old behavior
+    /// showed an empty wiki and made users think their data was gone).
+    @Test func testInitThrowsWhenStoreOpenFails_NoInMemoryFallback() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = registry.wikis.first!
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+
+        struct StoreOpenFailure: Error {}
+        // `makeStore` always throws — simulates a corrupt / unopenable DB.
+        #expect(throws: StoreOpenFailure.self) {
+            _ = try WikiSession(
+                wikiID: descriptor.id,
+                descriptor: descriptor,
+                containerDirectory: dir,
+                extractionCoordinator: coordinator,
+                queueEngine: try! makeTestQueueEngine(),
+                extractionProvider: StubExtractionProvider(),
+                makeStore: { _ in throw StoreOpenFailure() })
+        }
     }
 }
 
