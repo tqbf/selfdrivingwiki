@@ -23,6 +23,20 @@
 
 only_rules:
   - custom_rules
+  # Built-ins, all at 0 violations as of this commit. Free ratchets: they cost
+  # nothing today and stop the class from ever entering the tree.
+  - force_cast                        # `as!` — 0 in Sources/ + tools/
+  - weak_delegate                     # strong delegate = retain cycle; we have
+                                      # many NSViewRepresentable Coordinators
+  - notification_center_detachment    # deinit-time removeObserver misuse
+  - unused_setter_value               # a setter that drops newValue on the floor
+  - overridden_super_call             # missing super in a lifecycle override
+  - prohibited_super_call             # super called where it must not be
+  # 3 pre-existing sites, all annotated at the call site with a reason rather
+  # than baselined — they are once-only, app-lifetime willTerminate observers
+  # where there is genuinely nothing to remove. Anywhere else, discarding the
+  # token means the observer can never be detached.
+  - discarded_notification_center_observer
 
   # ---- Free ratchets (0 violations as of this commit) ----------------------
   - force_cast                        # `as!` — 0 in Sources/ + tools/
