@@ -73,8 +73,12 @@ final class DaemonLaunchAgentManager {
     /// Build the shell command that finds the daemon binary. Tries the
     /// container path first (dev mode), then the app bundle (production).
     func shellCommand() -> String {
+        // Use [ -x ] test instead of exec || exec — exec replaces the shell
+        // process, so if the first binary doesn't exist the shell exits 127
+        // before reaching the fallback. Testing first, then exec, ensures
+        // the fallback works.
         if let bundlePath = bundleDaemonPath {
-            return "exec \"\(containerDaemonPath)\" || exec \"\(bundlePath)\""
+            return "DAEMON=\"\(containerDaemonPath)\"; [ -x \"$DAEMON\" ] || DAEMON=\"\(bundlePath)\"; exec \"$DAEMON\""
         }
         return "exec \"\(containerDaemonPath)\""
     }
