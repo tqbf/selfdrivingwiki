@@ -231,6 +231,17 @@ EOF
 }
 write_id_sidecar "${RESOURCES_DIR}"
 write_id_sidecar "${BUILD_DIR}"
+# The wikid daemon is a SANDBOXED bundled XPC service. It cannot read the outer
+# app's Contents/Resources sidecar (outside its sandbox container), and a nested
+# XPC service's Bundle.main custom Info.plist keys don't surface reliably — so
+# without a sidecar it falls through to the group.org.sockpuppet.wiki default and
+# reads the WRONG App Group container (empty registry → "No store for wikiID" at
+# ingest; stale 1-provider agent config). Drop the sidecar into the daemon's OWN
+# Contents/Resources, which it can always read; WikiIdentifiers resolves it via
+# its executable's ../Resources candidate. MUST be written BEFORE `codesign
+# wikid.xpc` so it's sealed into the daemon bundle. (#887 follow-up.)
+mkdir -p "${DAEMON_XPC_CONTENTS}/Resources"
+write_id_sidecar "${DAEMON_XPC_CONTENTS}/Resources"
 # Bundle the pdf2md PEP 723 script alongside wikictl so PdfExtractionService
 # can spawn it at ingest time.
 if [ -f "${PDF2MD_SRC}" ]; then
@@ -416,9 +427,9 @@ PLIST
 # Application launches ONE instance per connecting app and ties its lifetime
 # to that app — the service terminates when the app exits (or on idle). This
 # is what we want: the daemon must NOT survive app quit. NOTE: ServiceType
-# controls instancing/lifetime, NOT sandboxing — confinement comes purely from
-# the `com.apple.security.app-sandbox` entitlement in the generated
-# DAEMON_ENTITLEMENTS below. This is a SANDBOXED service.
+# controls instancing/lifetime only. The daemon runs UN-sandboxed (see
+# DAEMON_ENTITLEMENTS below — no com.apple.security.app-sandbox) because it must
+# spawn user-configured agent CLIs at arbitrary paths, which App Sandbox forbids.
 cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -432,6 +443,14 @@ cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
 	<key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
+	<!-- App Group / File Provider ids, read by WikiIdentifiers via -->
+	<!-- Bundle.main.object(forInfoDictionaryKey:). MUST match the app + -->
+	<!-- appex plists (lines ~351/409) — as a bundled XPC service the -->
+	<!-- daemon's Bundle.main is wikid.xpc, so without these it falls -->
+	<!-- through to the group.org.sockpuppet.wiki default and reads the -->
+	<!-- WRONG App Group container ("No store for wikiID …" at ingest). -->
+	<key>WIKIAppGroupID</key><string>${APP_GROUP}</string>
+	<key>WIKIFileProviderID</key><string>${EXT_BUNDLE_ID}</string>
 	<key>XPCService</key>
 	<dict>
 		<key>ServiceType</key>
@@ -537,20 +556,20 @@ PLIST
 	<string>${TEAM_ID}.${DAEMON_BUNDLE_ID}</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
-	<!-- SANDBOXED XPC service. Unlike the main app (which runs un-sandboxed),
-	     the daemon is confined by App Sandbox: it reaches the shared SQLite DB
-	     ONLY through the App Group container (application-groups) and the shared
-	     secrets ONLY through the keychain access group. The sandbox entitlement
-	     REQUIRES the daemon provisioning profile to authorize it (${DAEMON_PROFILE});
-	     the ad-hoc fallback below cannot carry it, so ad-hoc dev builds run
-	     UN-sandboxed. -->
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<!-- The daemon runs the agent-execution engine (ACP backends, chat,
-	     extraction) which talks to LLM APIs + fetches URLs — sandboxed
-	     processes have no network by default. -->
-	<key>com.apple.security.network.client</key>
-	<true/>
+	<!-- UN-sandboxed, like the main app. The daemon's core job is spawning
+	     USER-CONFIGURED agent CLIs (claude-acp via the bundled bun, opencode from
+	     Homebrew, custom provider binaries) that live at arbitrary paths anywhere
+	     on the system. App Sandbox confines a process to its own .xpc bundle +
+	     container, so a sandboxed daemon can execute NONE of them (not even the
+	     bundled bun, which lives in the app bundle outside the .xpc) → ingestion
+	     is impossible. It also can't reach the SHARED App Group container: inside
+	     the sandbox `homeDirectoryForCurrentUser` is the sandbox home, so the
+	     literal container path lands in an empty sandbox-local dir with no wikis
+	     ("No store for wikiID"). Un-sandboxing restores both. This reverts the
+	     app-sandbox that the #887 XPC migration added; the daemon still reaches
+	     the shared DB via the App Group container and secrets via the keychain
+	     access group — same boundaries the un-sandboxed app already uses.
+	     `com.apple.security.app-sandbox` is intentionally ABSENT. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>${APP_GROUP}</string>

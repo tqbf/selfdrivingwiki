@@ -2642,21 +2642,19 @@ public final class AgentLauncher {
         DebugLog.agent("captureInteractiveUsage: emitted delta in=\(delta.inputTokens) out=\(delta.outputTokens) cost=\(delta.cost ?? 0) model=\(delta.modelId ?? "nil") provider=\(delta.providerLabel ?? "nil") (cumulative session in=\(enriched.inputTokens) out=\(enriched.outputTokens))")
     }
 
-    /// Resolve the path to a binary bundled in `Contents/Helpers/`, or nil if
-    /// not present or not executable.
+    /// Resolve the path to a binary bundled in the app's `Contents/Helpers/`, or
+    /// nil if not present or not executable.
     ///
     /// `Bundle.url(forAuxiliaryExecutable:)` does NOT search `Contents/Helpers/`
-    /// (it only looks in `Contents/MacOS/` and `Contents/Resources/`), so we
-    /// construct the path manually. This is the fix for "bun not found on your
-    /// path" — bun was correctly bundled in Helpers but the old API call never
-    /// found it.
+    /// (it only looks in `Contents/MacOS/` and `Contents/Resources/`), so this
+    /// is resolved manually via ``HelpersLocation``. Delegating there is what
+    /// makes it XPC-service-aware: the `wikid` daemon (a bundled XPC service,
+    /// #887) has `Bundle.main` = `wikid.xpc`, so resolving Helpers relative to
+    /// `Bundle.main` looked inside the `.xpc` (no bun there) and ACP ingestion
+    /// failed with "bun was not found on your PATH". `HelpersLocation` walks up
+    /// to the enclosing `.app` so the app and the daemon share one Helpers dir.
     public static nonisolated func bundledHelperPath(_ name: String) -> String? {
-        let path = Bundle.main.bundleURL
-            .appendingPathComponent("Contents")
-            .appendingPathComponent("Helpers")
-            .appendingPathComponent(name)
-            .path
-        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        HelpersLocation.bundledHelperPath(name)
     }
 
     /// A quick readiness probe for an agent provider — checks whether

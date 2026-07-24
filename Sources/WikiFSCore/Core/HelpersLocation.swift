@@ -27,6 +27,24 @@ public enum HelpersLocation {
         return bundleHelpersDirectory().path
     }
 
+    /// Resolve a named helper binary (`bun`, `uv`, `wikictl`, …) bundled in the
+    /// app's `Contents/Helpers`, searching the same candidate directories as
+    /// ``wikictlDirectory``. Returns the absolute path if it exists and is
+    /// executable, or `nil` if no candidate holds it.
+    ///
+    /// This is the single source of truth for "find a bundled helper" — it is
+    /// XPC-service-aware (see ``bundleHelpersDirectory()``), so both the app and
+    /// the `wikid.xpc` daemon resolve to the SAME `App.app/Contents/Helpers`.
+    public static func bundledHelperPath(_ name: String) -> String? {
+        for candidate in candidateDirectories() {
+            let binary = candidate.appendingPathComponent(name, isDirectory: false)
+            if FileManager.default.isExecutableFile(atPath: binary.path) {
+                return binary.path
+            }
+        }
+        return nil
+    }
+
     private static func candidateDirectories() -> [URL] {
         var directories: [URL] = []
         // 1. The signed app bundle's Contents/Helpers (production).
@@ -41,9 +59,39 @@ public enum HelpersLocation {
         return directories
     }
 
+    /// The enclosing app bundle's `Contents/Helpers` directory.
+    ///
+    /// `build.sh` copies every helper (bun, uv, wikictl, …) into the OUTER app's
+    /// `Contents/Helpers`. But when the running process is a nested bundle —
+    /// notably the `wikid` daemon, now shipped as a bundled XPC service at
+    /// `App.app/Contents/XPCServices/wikid.xpc` (#887) — `Bundle.main` is the
+    /// `.xpc`, so a naive `Bundle.main.bundleURL/Contents/Helpers` points at
+    /// `wikid.xpc/Contents/Helpers`, which does not exist. That silently broke
+    /// bun/wikictl resolution in the daemon (ACP ingestion → "bun was not found
+    /// on your PATH"). Walk up to the enclosing `.app` so nested bundles resolve
+    /// to the app-level Helpers; fall back to `Bundle.main` for a `swift run`
+    /// CLI with no `.app` ancestor (candidateDirectories covers that case).
     private static func bundleHelpersDirectory() -> URL {
-        Bundle.main.bundleURL
+        let base = enclosingAppBundleURL(from: Bundle.main.bundleURL) ?? Bundle.main.bundleURL
+        return base
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Helpers", isDirectory: true)
+    }
+
+    /// Nearest ancestor (or self) of `bundleURL` whose path component ends in
+    /// `.app`, or `nil` when the process isn't running from inside a `.app`
+    /// bundle (e.g. a `swift run` CLI launched from `.build/debug/`).
+    ///
+    /// Pure (takes the URL rather than reading `Bundle.main`) so the XPC-service
+    /// nesting case can be unit-tested without an actual bundle.
+    static func enclosingAppBundleURL(from bundleURL: URL) -> URL? {
+        var url = bundleURL
+        for _ in 0..<8 {
+            if url.pathExtension == "app" { return url }
+            let parent = url.deletingLastPathComponent()
+            if parent.path == url.path { break }   // reached filesystem root
+            url = parent
+        }
+        return nil
     }
 }
