@@ -32,23 +32,26 @@ struct WikiDaemonEventSinkTests {
         }
     }
 
-    // MARK: - Weak retention (#878)
+    // MARK: - Strong retention (#622)
 
-    /// The daemon holds sinks weakly — dropping the last strong reference must
-    /// clear them from the registry (the #878 leak fix). `registeredEventSinks`
-    /// filters dead weak refs via `compactMap`, so it must report empty once
-    /// the sole strong owner is released.
-    @Test func eventSinksAreHeldWeakly() async {
+    /// The daemon holds sinks STRONGLY (#622) — the XPC runtime does not retain
+    /// method arguments, so a weak reference would be deallocated immediately.
+    /// Instead, sinks are cleaned up via `unregisterEventSink(id:)` when the
+    /// XPC connection is invalidated.
+    @Test func eventSinksHeldStronglyUntilUnregistered() async {
         let dir = tempDirectory()
         let daemon = WikiDaemon(containerDirectory: dir)
 
-        var sink: MockEventSink? = MockEventSink()
-        daemon.registerEventSink(sink!)
+        let sink = MockEventSink()
+        let id = daemon.registerEventSink(sink)
 
         #expect(daemon.registeredEventSinks.count == 1)
 
-        // Drop our strong reference — the daemon's weak ref must go nil.
-        sink = nil
+        // Strongly held: dropping our local reference does NOT clear it.
+        withExtendedLifetime(sink) {}
+
+        // Must explicitly unregister to remove the sink.
+        daemon.unregisterEventSink(id: id)
 
         #expect(daemon.registeredEventSinks.isEmpty)
     }

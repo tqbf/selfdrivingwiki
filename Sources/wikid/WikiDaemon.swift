@@ -32,14 +32,17 @@ final class WikiDaemon: @unchecked Sendable {
     /// Held weakly so an invalidated connection's proxy is freed (the #878 leak fix).
     /// macOS-only — `WikiDaemonEventSink` is an `@objc` XPC protocol.
     #if os(macOS)
-    /// A weak wrapper for the per-connection event-sink proxy. The proxy is
-    /// retained by the `NSXPCConnection`; once the connection is invalidated,
-    /// the proxy is deallocated and this reference becomes nil.
-    private struct WeakEventSink {
-        weak var sink: WikiDaemonEventSink?
+    /// A strong wrapper for the per-connection event-sink proxy.
+    /// Events are pushed to these via `pushQueueEvent`/`pushChatEnvelope`.
+    /// The daemon must hold these STRONGLY because XPC proxies passed as
+    /// arguments are deallocated if not retained. To avoid leaks, they are
+    /// removed via `unregisterEventSink` when the XPC connection is invalidated.
+    private struct RegisteredEventSink {
+        let id = UUID()
+        let sink: WikiDaemonEventSink
     }
 
-    private var eventSinks: [WeakEventSink] = []
+    private var eventSinks: [RegisteredEventSink] = []
     #endif
 
     // MARK: - Workload host scaffold (Phase 0)
@@ -126,8 +129,6 @@ final class WikiDaemon: @unchecked Sendable {
     func emitHeartbeat() async {
         let sessionCount = queue.sync {
             #if os(macOS)
-            // Compact the weak array: remove sinks whose connection has been invalidated.
-            eventSinks.removeAll { $0.sink == nil }
             return eventSinks.count
             #else
             return 0
@@ -408,22 +409,35 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Event sink management (Phase 0)
 
-    /// Register an event-sink proxy for a connection. The daemon holds it weakly
-    /// (the proxy is retained by the `NSXPCConnection`). Called from
-    /// `WikiDaemonExporter.registerEventSink`.
+    /// Register an event-sink proxy for a connection. The daemon holds it strongly
+    /// to ensure the proxy's lifetime. Returns a unique ID that the caller
+    /// must use to unregister the sink when the connection is invalidated.
     #if os(macOS)
-    func registerEventSink(_ sink: WikiDaemonEventSink) {
+    @discardableResult
+    func registerEventSink(_ sink: WikiDaemonEventSink) -> UUID {
+        let registration = RegisteredEventSink(sink: sink)
         let total = queue.sync { () -> Int in
-            eventSinks.append(WeakEventSink(sink: sink))
+            eventSinks.append(registration)
             return eventSinks.count
         }
         DebugLog.store("wikid: event sink registered, total=\(total)")
+        return registration.id
+    }
+
+    /// Unregister an event-sink proxy by its registration ID. Called when
+    /// the XPC connection is invalidated.
+    func unregisterEventSink(id: UUID) {
+        let total = queue.sync { () -> Int in
+            eventSinks.removeAll { $0.id == id }
+            return eventSinks.count
+        }
+        DebugLog.store("wikid: event sink unregistered, remaining=\(total)")
     }
 
     /// All currently-registered event-sink proxies. Used by future phases to
     /// push live workload events; Phase 0 exposes it for testing.
     var registeredEventSinks: [WikiDaemonEventSink] {
-        queue.sync { eventSinks.compactMap(\.sink) }
+        queue.sync { eventSinks.map(\.sink) }
     }
     #endif
 
@@ -730,8 +744,7 @@ final class WikiDaemon: @unchecked Sendable {
             return
         }
         let sinks = queue.sync {
-            eventSinks.removeAll { $0.sink == nil }
-            return eventSinks.compactMap(\.sink)
+            eventSinks.map(\.sink)
         }
         // The empty-sinks case is the diagnostic that matters (the #871 symptom:
         // events produced with nowhere to go) — keep it unconditional. The
@@ -761,8 +774,7 @@ final class WikiDaemon: @unchecked Sendable {
             return
         }
         let sinks = queue.sync {
-            eventSinks.removeAll { $0.sink == nil }
-            return eventSinks.compactMap(\.sink)
+            eventSinks.map(\.sink)
         }
         // Same split as `pushQueueEvent`: empty-sinks drop is unconditional
         // (signal-worthy — chat events lost), success is verbose-only (#872).

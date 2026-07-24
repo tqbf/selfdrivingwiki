@@ -625,6 +625,19 @@ final class QueueActivityTracker {
             let sourceIDs = Set(item.payload.sourceIDs)
             itemToSourceIDs[item.id] = sourceIDs
             itemToQueue[item.id] = item.queue
+            
+            // #622: Optimistically reflect the queued state in the UI spinners
+            // immediately, rather than waiting for .started.
+            switch item.queue {
+            case .extraction:
+                extractingSourceIDs.formUnion(sourceIDs)
+            case .ingestion:
+                if item.payload.lintPageIDs == nil {
+                    ingestingSourceIDs.formUnion(sourceIDs)
+                }
+                // Linting items have no sourceIDs, so nothing to add to the 
+                // per-source spinner sets.
+            }
 
         case .started(let item):
             let sourceIDs = Set(item.payload.sourceIDs)

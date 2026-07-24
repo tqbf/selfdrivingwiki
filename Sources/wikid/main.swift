@@ -41,6 +41,14 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
 
         let exporter = WikiDaemonExporter(daemon: daemon)
         newConnection.exportedObject = exporter
+
+        // #622: Use the connection's invalidation handler to unregister the
+        // sink when the app disconnects. This replaces the problematic weak-ref
+        // approach and ensures the strong sink proxy is cleaned up.
+        newConnection.invalidationHandler = { [weak exporter] in
+            exporter?.unregisterSink()
+        }
+
         newConnection.resume()
         return true
     }
@@ -50,9 +58,20 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
 /// `WikiDaemon`. Each method serializes JSON `Data` over XPC.
 final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendable {
     private let daemon: WikiDaemon
+    private let lock = NSLock()
+    private var sinkID: UUID?
 
     init(daemon: WikiDaemon) {
         self.daemon = daemon
+    }
+
+    /// Unregister the sink associated with this connection. Called by the
+    /// invalidation handler.
+    func unregisterSink() {
+        let id = lock.withLock { sinkID }
+        if let id {
+            daemon.unregisterEventSink(id: id)
+        }
     }
 
     func listWikis(reply: @escaping (Data) -> Void) {
@@ -91,7 +110,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // MARK: - Workload: event sink registration (Phase 0)
 
     func registerEventSink(_ sink: WikiDaemonEventSink) {
-        daemon.registerEventSink(sink)
+        // Hold the lock across registration so that if the connection's
+        // invalidation handler fires concurrently, unregisterSink blocks
+        // until sinkID is set — preventing an orphaned strong sink ref.
+        lock.lock()
+        defer { lock.unlock() }
+        sinkID = daemon.registerEventSink(sink)
     }
 
     // MARK: - Workload: queue snapshot (Phase 0 — scaffold)

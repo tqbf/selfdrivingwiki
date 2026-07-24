@@ -38,7 +38,7 @@ struct WikiFSApp: App {
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
-    @State private var queueEngine: any QueueEngineClient
+    @State private var queueEngine: QueueEngineHotSwap
     /// App-wide extraction provider. Bridges the headless queue engine to the
     /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
     /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
@@ -92,13 +92,6 @@ struct WikiFSApp: App {
     /// the in-app disconnected/reconnected banner via its `@Observable` state.
     /// Owns the recurring 30 s health-ping loop + the XPC invalidation handler.
     @State private var healthMonitor = DaemonHealthMonitor()
-
-    /// The hot-swappable queue engine router (#878). Wraps whichever engine is
-    /// currently active (XPC proxy when the daemon is healthy, local
-    /// `QueueEngine` when it's not). All consumers (SessionManager,
-    /// MenuBarItemController, QueueActivityTracker) talk to this router, so a
-    /// mid-session swap is transparent.
-    private var queueEngineRouter: QueueEngineHotSwap?
 
     /// The session-lookup box, retained so the local-engine fallback factory
     /// (called on disconnect/reconnect) can re-wire it.
@@ -210,7 +203,6 @@ struct WikiFSApp: App {
         // (SessionManager, MenuBarItemController, QueueActivityTracker) hold
         // the router, never the inner engine.
         let router = QueueEngineHotSwap(localEngineResult.engine)
-        queueEngineRouter = router
         activityTracker.attach(engine: router)
         Task { await activityTracker.rehydrate(from: router) }
         // #871 self-heal: poll the snapshot so a finished item still clears
@@ -218,7 +210,7 @@ struct WikiFSApp: App {
         // current engine, so this works across swaps.
         activityTracker.startSnapshotWatchdog(engine: router)
 
-        let queueEngine: any QueueEngineClient = router
+        let queueEngine = router
 
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
@@ -281,7 +273,6 @@ struct WikiFSApp: App {
         // DaemonHealthMonitor retries until the XPC service responds.
 
         // Call bootstrap directly from init.
-        print("SDW: calling bootstrapApp from init")
         bootstrapApp()
     }
 
@@ -479,7 +470,7 @@ struct WikiFSApp: App {
                     workloadClient.registerEventSink(eventSink)
                     let proxy = XPCQueueEngineProxy(
                         workloadClient: workloadClient, eventSink: eventSink)
-                    queueEngineRouter?.swap(to: proxy)
+                    queueEngine.swap(to: proxy)
                     chatDaemonCoordinator = ChatDaemonCoordinator(
                         client: workloadClient, eventSink: eventSink)
                     healthMonitor?.start(connection: conn)
@@ -503,7 +494,6 @@ struct WikiFSApp: App {
         fileProviderBoxValue: FileProviderBox,
         extractionProviderValue: any QueueExtractionProvider
     ) {
-        let router = queueEngineRouter
         healthMonitor.onDisconnect = {
             DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
             let local = Self.makeLocalQueueEngine(
@@ -514,7 +504,7 @@ struct WikiFSApp: App {
             if let disconnectError = local.openError {
                 DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
             }
-            router?.swap(to: local.engine)
+            queueEngine.swap(to: local.engine)
             chatDaemonCoordinator = nil
         }
         healthMonitor.onReconnect = { newConn in
@@ -525,7 +515,7 @@ struct WikiFSApp: App {
                 workloadClient.registerEventSink(eventSink)
                 let proxy = XPCQueueEngineProxy(
                     workloadClient: workloadClient, eventSink: eventSink)
-                router?.swap(to: proxy)
+                queueEngine.swap(to: proxy)
                 chatDaemonCoordinator = ChatDaemonCoordinator(
                     client: workloadClient, eventSink: eventSink)
             } catch {
