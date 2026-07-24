@@ -28,10 +28,18 @@ final class WikiDaemon: @unchecked Sendable {
     /// The per-connection event-sink proxies the daemon pushes live workload
     /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
     /// the app exports its `WikiDaemonEventSink` conformer on the connection.
-    /// Phase 0: captured but not yet pushed to (no real workload dispatch).
+    /// Events are pushed to these via `pushQueueEvent`/`pushChatEnvelope`.
+    /// Held weakly so an invalidated connection's proxy is freed (the #878 leak fix).
     /// macOS-only — `WikiDaemonEventSink` is an `@objc` XPC protocol.
     #if os(macOS)
-    private var eventSinks: [WikiDaemonEventSink] = []
+    /// A weak wrapper for the per-connection event-sink proxy. The proxy is
+    /// retained by the `NSXPCConnection`; once the connection is invalidated,
+    /// the proxy is deallocated and this reference becomes nil.
+    private struct WeakEventSink {
+        weak var sink: WikiDaemonEventSink?
+    }
+
+    private var eventSinks: [WeakEventSink] = []
     #endif
 
     // MARK: - Workload host scaffold (Phase 0)
@@ -116,24 +124,29 @@ final class WikiDaemon: @unchecked Sendable {
 
     /// Emit one heartbeat log line with current session + queue counts.
     func emitHeartbeat() async {
-        let sessions = queue.sync {
+        let sessionCount = queue.sync {
             #if os(macOS)
+            // Compact the weak array: remove sinks whose connection has been invalidated.
+            eventSinks.removeAll { $0.sink == nil }
             return eventSinks.count
             #else
             return 0
             #endif
         }
         #if canImport(WikiFSEngine)
-        let queueItems: Int
+        let activeCount: Int
+        let recentCount: Int
         if let engine = queue.sync(execute: { _queueEngine }) {
             let snapshot = await engine.snapshot()
-            queueItems = snapshot.activeItems.count + snapshot.recentItems.count
+            activeCount = snapshot.activeItems.count
+            recentCount = snapshot.recentItems.count
         } else {
-            queueItems = 0
+            activeCount = 0
+            recentCount = 0
         }
-        DebugLog.store("wikid: heartbeat — active sessions=\(sessions), queue items=\(queueItems)")
+        DebugLog.store("wikid: heartbeat — active sessions=\(sessionCount), queue=\(activeCount) active / \(recentCount) recent")
         #else
-        DebugLog.store("wikid: heartbeat — active sessions=\(sessions), queue items=0")
+        DebugLog.store("wikid: heartbeat — active sessions=\(sessionCount), queue=0 active / 0 recent")
         #endif
     }
 
@@ -401,7 +414,7 @@ final class WikiDaemon: @unchecked Sendable {
     #if os(macOS)
     func registerEventSink(_ sink: WikiDaemonEventSink) {
         let total = queue.sync { () -> Int in
-            eventSinks.append(sink)
+            eventSinks.append(WeakEventSink(sink: sink))
             return eventSinks.count
         }
         DebugLog.store("wikid: event sink registered, total=\(total)")
@@ -410,7 +423,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// All currently-registered event-sink proxies. Used by future phases to
     /// push live workload events; Phase 0 exposes it for testing.
     var registeredEventSinks: [WikiDaemonEventSink] {
-        queue.sync { eventSinks }
+        queue.sync { eventSinks.compactMap(\.sink) }
     }
     #endif
 
@@ -716,7 +729,10 @@ final class WikiDaemon: @unchecked Sendable {
             DebugLog.store("wikid: pushQueueEvent — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
             return
         }
-        let sinks = queue.sync { eventSinks }
+        let sinks = queue.sync {
+            eventSinks.removeAll { $0.sink == nil }
+            return eventSinks.compactMap(\.sink)
+        }
         // The empty-sinks case is the diagnostic that matters (the #871 symptom:
         // events produced with nowhere to go) — keep it unconditional. The
         // normal success path is high-frequency (one log per event) so it goes
@@ -744,7 +760,10 @@ final class WikiDaemon: @unchecked Sendable {
             DebugLog.store("wikid: pushChatEnvelope — JSON encode failed for kind=\(envelope.kind.rawValue): \(error)")
             return
         }
-        let sinks = queue.sync { eventSinks }
+        let sinks = queue.sync {
+            eventSinks.removeAll { $0.sink == nil }
+            return eventSinks.compactMap(\.sink)
+        }
         // Same split as `pushQueueEvent`: empty-sinks drop is unconditional
         // (signal-worthy — chat events lost), success is verbose-only (#872).
         // `chatID` is included because chat envelopes are per-conversation and
