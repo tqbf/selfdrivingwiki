@@ -749,6 +749,13 @@ public actor QueueEngine {
 
         // Trigger dispatch for potentially unblocked items.
         await dispatchScan()
+
+        // Maintain the terminal history bound (default 200 per queue).
+        do {
+            try store.pruneHistory(maxPerQueue: config.recentLimit)
+        } catch {
+            DebugLog.store("QueueEngine.handleWorkerFinished: pruneHistory failed: \(error)")
+        }
     }
 
     /// Resume all `waitForCompletion` waiters for an item with the given result
