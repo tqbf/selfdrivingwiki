@@ -325,6 +325,20 @@ lint:
 # violations against the OLD baseline before writing, which would preserve
 # entries you just fixed. The temp config lives at the repo root because
 # `included:` paths resolve relative to the config file's directory.
+#
+# THE PATH-REWRITE STEP IS LOAD-BEARING — do not drop it. swiftlint writes
+# baseline entries keyed by ABSOLUTE file URL
+# (file:///Users/you/work/selfdrivingwiki/Sources/…). Baseline matching is
+# per-file, so an absolute baseline matches on the machine that generated it and
+# NOWHERE else: on CI the checkout is at /home/runner/work/… and every
+# grandfathered violation comes roaring back at once. This is invisible while
+# the baseline is empty ([] matches everywhere), which is why it only surfaced
+# the first time the file had real entries in it (PR #896).
+#
+# Rewriting the URLs to repo-relative paths makes the file portable; swiftlint
+# resolves them against the run's working directory. Verify a change here by
+# running `swiftlint lint --strict` from a `git worktree` at a DIFFERENT path —
+# a run from this directory passes either way and proves nothing.
 lint-baseline:
 	@command -v swiftlint >/dev/null 2>&1 || { \
 	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
@@ -332,6 +346,17 @@ lint-baseline:
 	@swiftlint lint --no-cache --config .swiftlint-regen.yml \
 	  --write-baseline .swiftlint-baseline.json >/dev/null 2>&1 || true
 	@rm -f .swiftlint-regen.yml
+	@python3 -c 'import json,pathlib,sys; \
+	p=pathlib.Path(".swiftlint-baseline.json"); \
+	root=pathlib.Path.cwd().as_uri().rstrip("/")+"/"; \
+	b=json.loads(p.read_text()); \
+	[e["violation"]["location"].__setitem__("file", e["violation"]["location"]["file"][len(root):]) \
+	  for e in b if e["violation"]["location"]["file"].startswith(root)]; \
+	p.write_text(json.dumps(b, indent=2) + "\n"); \
+	sys.stderr.write("  → %d entries, paths made repo-relative\n" % len(b))'
+	@grep -q 'file:///' .swiftlint-baseline.json \
+	  && { echo "✗ baseline still contains absolute paths — it will not match on CI"; exit 1; } \
+	  || true
 	@echo "✓ baseline rewritten — review the diff, the count should only go DOWN"
 
 # Point git at .githooks/. That directory also carries copies of the four

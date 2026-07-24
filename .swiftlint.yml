@@ -89,10 +89,19 @@ excluded:
 # The baseline is a ratchet, not a permit: when you fix a `try?`, regenerate
 # with `make lint-baseline` so the count can only go down.
 #
-# GOTCHA: baseline entries record the violation's MESSAGE text, so editing
+# GOTCHA 1: baseline entries record the violation's MESSAGE text, so editing
 # `message:` or `regex:` below invalidates all of them at once and every
 # grandfathered violation comes roaring back. Always follow such an edit with
 # `make lint-baseline` in the same commit.
+#
+# GOTCHA 2: swiftlint WRITES this file with absolute file URLs, and matching is
+# per-file — so a baseline straight out of `--write-baseline` matches only on the
+# machine that generated it, and every violation fires on CI. `make
+# lint-baseline` rewrites the paths to repo-relative and hard-fails if any
+# absolute path survives; never hand-edit this file or regenerate it with a bare
+# `swiftlint --write-baseline`. Note that a local `make lint` passes either way:
+# to actually test the baseline, run `swiftlint lint --strict` from a
+# `git worktree` at a different path. (Cost us a red CI run on PR #896.)
 baseline: .swiftlint-baseline.json
 
 custom_rules:
