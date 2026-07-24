@@ -172,7 +172,7 @@ public struct DoclingServeClient: MarkdownExtractor {
     /// partial output alongside `errors`; we return the markdown when it's
     /// non-empty and only throw `serverErrors` / `emptyOutput` when it isn't.
     public static func decode(data: Data) throws -> String {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let obj = DebugLog.trying("decode", operation: { try JSONSerialization.jsonObject(with: data) as? [String: Any] }) else {
             throw Error.decoding("not a JSON object")
         }
         let md = (obj["document"] as? [String: Any])?["md_content"] as? String

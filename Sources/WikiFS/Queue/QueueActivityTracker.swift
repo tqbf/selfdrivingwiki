@@ -402,6 +402,8 @@ final class QueueActivityTracker {
                 let snapshot = await engine.snapshot()
                 if Task.isCancelled { return }
                 self.reconcile(with: snapshot)
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: interval)
             }
         }

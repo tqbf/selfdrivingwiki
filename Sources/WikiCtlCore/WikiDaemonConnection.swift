@@ -126,6 +126,9 @@ public final class WikiDaemonConnection: @unchecked Sendable {
             // registered, or a half-open connection). This is what guarantees
             // the method always returns within `timeout`.
             Task {
+                // Task.sleep only throws CancellationError, expected when the
+                // health check completes before the timeout fires — not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .seconds(timeout))
                 box.resume(false, cont)
             }
@@ -170,9 +173,11 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
             proxy.listWikis { data in
-                if let wikis = try? JSONDecoder().decode([WikiDescriptor].self, from: data) {
+                do {
+                    let wikis = try JSONDecoder().decode([WikiDescriptor].self, from: data)
                     cont.resume(returning: wikis)
-                } else {
+                } catch {
+                    DebugLog.store("listWikis: malformed XPC reply — \(error)")
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                 }
             }
@@ -188,9 +193,11 @@ public final class WikiDaemonConnection: @unchecked Sendable {
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                     return
                 }
-                if let descriptor = try? JSONDecoder().decode(WikiDescriptor.self, from: data) {
+                do {
+                    let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
                     cont.resume(returning: descriptor)
-                } else {
+                } catch {
+                    DebugLog.store("createWiki: malformed XPC reply — \(error)")
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                 }
             }
@@ -226,7 +233,12 @@ public final class WikiDaemonConnection: @unchecked Sendable {
                     cont.resume(returning: nil)
                     return
                 }
-                cont.resume(returning: try? JSONDecoder().decode(WikiDescriptor.self, from: data))
+                do {
+                    cont.resume(returning: try JSONDecoder().decode(WikiDescriptor.self, from: data))
+                } catch {
+                    DebugLog.store("resolveWiki: malformed XPC reply — \(error)")
+                    cont.resume(returning: nil)
+                }
             }
         }
     }
@@ -245,7 +257,13 @@ public final class WikiDaemonConnection: @unchecked Sendable {
 
     /// Close the daemon's held-open store for a wiki.
     public func closeStore(wikiID: String) async {
-        guard let proxy = try? daemonProxy() else { return }
+        let proxy: WikiDaemonProtocol
+        do {
+            proxy = try daemonProxy()
+        } catch {
+            DebugLog.store("closeStore: no daemon proxy (\(error)) — nothing to close")
+            return
+        }
         await withCheckedContinuation { cont in
             proxy.closeStore(wikiID: wikiID) {
                 cont.resume()

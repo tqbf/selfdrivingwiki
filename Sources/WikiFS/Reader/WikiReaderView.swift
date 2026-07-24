@@ -146,7 +146,7 @@ struct WikiReaderView: View {
     /// the convert task reads it.
     nonisolated private static let mermaidLib: String? = {
         guard let url = Bundle.main.url(forResource: "mermaid", withExtension: "js"),
-              let src = try? String(contentsOf: url, encoding: .utf8),
+              let src = DebugLog.trying("load mermaid.js", operation: { try String(contentsOf: url, encoding: .utf8) }),
               !src.isEmpty else { return nil }
         return src
     }()
@@ -463,7 +463,7 @@ final class WikiReaderWebView: WKWebView {
         guard let items = pb.pasteboardItems else { return [] }
         return items.compactMap { item -> SidebarDragPayloadList? in
             guard let data = item.data(forType: type) else { return nil }
-            return try? JSONDecoder().decode(SidebarDragPayloadList.self, from: data)
+            return DebugLog.trying("decode drag payload", operation: { try JSONDecoder().decode(SidebarDragPayloadList.self, from: data) })
         }.flatMap(\.items)
     }
 

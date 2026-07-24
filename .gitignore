@@ -43,3 +43,6 @@ Sources/WikiFSCore/GeneratedKeychain.swift
 mutation-report.json
 mutation-report.html
 sonar-mutation-report.json
+
+# SwiftLint transient config written by `make lint-baseline`
+.swiftlint-regen.yml

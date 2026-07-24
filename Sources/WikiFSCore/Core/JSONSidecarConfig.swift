@@ -39,8 +39,8 @@ public extension JSONSidecarConfig {
     /// `DebugLog.config`. Never throws — callers degrade to a default.
     static func load(from directory: URL) -> Self? {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let config = try? JSONDecoder().decode(Self.self, from: data) else {
+        guard let data = DebugLog.trying("load", operation: { try Data(contentsOf: url) }) else { return nil }
+        guard let config = DebugLog.trying("load decode", operation: { try JSONDecoder().decode(Self.self, from: data) }) else {
             DebugLog.config("\(String(describing: Self.self)): corrupt \(fileName), discarding")
             return nil
         }

@@ -163,11 +163,15 @@ struct PagesContainerView: View {
             },
             onLint: { ids in
                 Task {
-                    try? await session.queueEngine.enqueue(QueueItemRequest(
-                        queue: .ingestion,
-                        wikiID: session.wikiID,
-                        payload: QueueItemPayload(sourceIDs: [], lintPageIDs: ids)
-                    ))
+                    do {
+                        _ = try await session.queueEngine.enqueue(QueueItemRequest(
+                            queue: .ingestion,
+                            wikiID: session.wikiID,
+                            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: ids)
+                        ))
+                    } catch {
+                        DebugLog.store("PagesContainerView.onLint enqueue failed: \(error)")
+                    }
                 }
             },
             onRename: { summary in beginRename(summary) },

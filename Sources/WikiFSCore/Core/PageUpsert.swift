@@ -78,7 +78,7 @@ public enum PageUpsert {
         let text = body.isEmpty ? title : "\(title)\n\n\(body)"
         let chunks = EmbeddingService.chunkedEmbeddings(for: text)
         if !chunks.isEmpty {
-            try? store.storePageChunks(id: outcome.id, chunks: chunks)
+            DebugLog.trying("upsert store chunks", operation: { try store.storePageChunks(id: outcome.id, chunks: chunks) })
         }
         return outcome
     }

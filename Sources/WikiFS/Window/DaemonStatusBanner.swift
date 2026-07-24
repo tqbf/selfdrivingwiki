@@ -108,6 +108,8 @@ struct DaemonStatusBanner: View {
             // auto-dismiss after 3 seconds.
             showReconnectedBanner = true
             Task {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .seconds(3))
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showReconnectedBanner = false

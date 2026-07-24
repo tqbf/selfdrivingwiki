@@ -88,7 +88,7 @@ extension SidebarDragPasteboardItem: NSPasteboardWriting {
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == bookmarkNodeType { return bookmarkNodeID }
         if type == sidebarType, !payloads.isEmpty,
-           let data = try? JSONEncoder().encode(SidebarDragPayloadList(payloads)) {
+           let data = DebugLog.trying("encode drag payload", operation: { try JSONEncoder().encode(SidebarDragPayloadList(payloads)) }) {
             return data as NSData
         }
         return nil

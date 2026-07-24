@@ -124,9 +124,9 @@ public struct ACPExtractionClient: MarkdownExtractor {
         // Write the PDF to a temp file the ACP agent can read from disk.
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wiki-extraction-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        DebugLog.trying("create tempDir", operation: { try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true) })
         let pdfPath = tempDir.appendingPathComponent(filename)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        defer { DebugLog.trying("remove tempDir", operation: { try FileManager.default.removeItem(at: tempDir) }) }
 
         do {
             try pdfData.write(to: pdfPath, options: .atomic)

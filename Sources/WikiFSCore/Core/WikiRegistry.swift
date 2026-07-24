@@ -76,10 +76,10 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
     /// degrades to empty rather than crashing the app on launch.
     public static func load(from directory: URL) -> WikiRegistry {
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        guard let data = try? Data(contentsOf: url) else { return WikiRegistry() }
+        guard let data = DebugLog.trying("load", operation: { try Data(contentsOf: url) }) else { return WikiRegistry() }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let registry = try? decoder.decode(WikiRegistry.self, from: data) else {
+        guard let registry = DebugLog.trying("load decode", operation: { try decoder.decode(WikiRegistry.self, from: data) }) else {
             DebugLog.config("WikiRegistry: corrupt \(fileName), starting empty")
             return WikiRegistry()
         }

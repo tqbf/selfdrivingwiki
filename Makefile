@@ -121,7 +121,7 @@ NOTES_FILE       ?=
 .PHONY: all deps build check check-release test test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
-        version keychain mutate mutate-scope
+        version keychain mutate mutate-scope lint lint-baseline hooks
 
 all: build
 
@@ -134,6 +134,9 @@ help:
 	@echo "  test              Run the SwiftPM test suite"
 	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
+	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
+	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
+	@echo "  hooks             Install .githooks (pre-commit try? guard + git-lfs shims)"
 	@echo "  mutate            Run swift-mutation-testing (full — see .swift-mutation-testing.yml)"
 	@echo "  mutate-scope      Scoped mutation run: make mutate-scope SOURCES_PATH=Sources/Foo"
 	@echo "  prompts           Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md"
@@ -302,6 +305,42 @@ mutate-scope: deps prompts version keychain
 	fi
 	swift-mutation-testing --sources-path "$(SOURCES_PATH)"
 	@echo "✓ mutation testing complete for $(SOURCES_PATH) — see mutation-report.json"
+
+# ---------------------------------------------------------------------------
+# Lint — enforces the AGENTS.md "no bare try?" rule (see .swiftlint.yml)
+# ---------------------------------------------------------------------------
+#
+# Scoped narrowly on purpose: only `custom_rules` is enabled, so this is a
+# correctness gate, not a Swift style gate. The 389 pre-existing violations are
+# grandfathered in .swiftlint-baseline.json; only NEW ones fail.
+
+lint:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	swiftlint lint --strict
+	@echo "✓ no new bare try? in Sources/ or tools/"
+
+# Re-snapshot the baseline. Run this after fixing try?s so the ratchet tightens.
+# The `baseline:` key must be stripped first: with it set, swiftlint filters
+# violations against the OLD baseline before writing, which would preserve
+# entries you just fixed. The temp config lives at the repo root because
+# `included:` paths resolve relative to the config file's directory.
+lint-baseline:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	@sed '/^baseline:/d' .swiftlint.yml > .swiftlint-regen.yml
+	@swiftlint lint --no-cache --config .swiftlint-regen.yml \
+	  --write-baseline .swiftlint-baseline.json >/dev/null 2>&1 || true
+	@rm -f .swiftlint-regen.yml
+	@echo "✓ baseline rewritten — review the diff, the count should only go DOWN"
+
+# Point git at .githooks/. That directory also carries copies of the four
+# git-lfs shims (post-checkout, post-commit, post-merge, pre-push) — without
+# them, setting core.hooksPath would silently disable Git LFS.
+hooks:
+	@git config core.hooksPath .githooks
+	@chmod +x .githooks/*
+	@echo "✓ core.hooksPath = .githooks (pre-commit try? guard active; git-lfs shims preserved)"
 
 # ---------------------------------------------------------------------------
 # Agent prompts (prompts/*.md → Sources/WikiFSCore/GeneratedPrompts.swift)

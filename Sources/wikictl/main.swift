@@ -342,11 +342,11 @@ func runWikiCreate(name: String) async -> Int32 {
         // pages, system prompt, search tables), then seed a Home page if empty.
         // Mirrors WikiDaemon.createWiki.
         let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
-        let pages = (try? store.listPages(sortBy: .newestFirst)) ?? []
+        let pages = (DebugLog.trying("list pages", operation: { try store.listPages(sortBy: .newestFirst) })) ?? []
         if pages.isEmpty,
            // #797: an explicit (synthesized) user action — stamp `user`, not the
            // shared `legacy-import` author that `createdBy: nil` maps to.
-           let homePage = try? store.createPage(title: "Home", createdBy: PageAuthor.user.rawValue) {
+           let homePage = DebugLog.trying("create Home page", operation: { try store.createPage(title: "Home", createdBy: PageAuthor.user.rawValue) }) {
             descriptor.homePageID = homePage.id
         }
 
@@ -380,7 +380,7 @@ func runWikiDelete(id: String) async -> Int32 {
         let dbURL = resolver.databaseURL(for: descriptor)
         let fm = FileManager.default
         for suffix in ["", "-wal", "-shm"] {
-            try? fm.removeItem(atPath: dbURL.path + suffix)
+            DebugLog.trying("remove database suffix \(suffix)") { try fm.removeItem(atPath: dbURL.path + suffix) }
         }
         return 0
     } catch {

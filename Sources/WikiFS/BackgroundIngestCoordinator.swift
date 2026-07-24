@@ -31,6 +31,8 @@ final class BackgroundIngestCoordinator {
         scanTask = Task {
             while !Task.isCancelled {
                 await scanAllWikis()
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .seconds(scanInterval))
             }
             DebugLog.ingest("BackgroundIngestCoordinator: stopped")

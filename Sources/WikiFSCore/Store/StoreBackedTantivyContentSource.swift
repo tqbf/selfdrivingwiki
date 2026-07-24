@@ -126,7 +126,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
             // searchable. A missing HEAD is not an error worth aborting the
             // build over.
             var body = ""
-            if let head = try? store.processedMarkdownHead(sourceID: source.id) {
+            if let head = DebugLog.trying("buildSnapshots", operation: { try store.processedMarkdownHead(sourceID: source.id) }) {
                 body = head.content
             }
             snapshots.append(TantivyContentSnapshot(

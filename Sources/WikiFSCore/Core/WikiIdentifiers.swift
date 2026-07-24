@@ -120,7 +120,9 @@ public enum WikiIdentifiers {
             candidates.append(appResources.appendingPathComponent("wiki-identifiers.env"))
         }
         guard let text = candidates.lazy
-            .compactMap({ try? String(contentsOf: $0, encoding: .utf8) })
+            .compactMap({ (url: URL) -> String? in
+                DebugLog.trying("resolveAppGroupIDFromFile", operation: { try String(contentsOf: url, encoding: .utf8) })
+            })
             .first
         else { return [:] }
         return parseKV(text)
@@ -157,7 +159,7 @@ public enum WikiIdentifiers {
         guard var dir = executableDir else { return [:] }
         for _ in 0..<10 {
             let candidate = dir.appendingPathComponent("signing/local.config")
-            if let text = try? String(contentsOf: candidate, encoding: .utf8) {
+            if let text = DebugLog.trying("resolveAppGroupIDFromSidecar", operation: { try String(contentsOf: candidate, encoding: .utf8) }) {
                 return parseKV(text)
             }
             let parent = dir.deletingLastPathComponent()

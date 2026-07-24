@@ -207,7 +207,7 @@ public enum IndexGenerators {
     /// escaping the characters JSON requires. Uses `JSONEncoder` on a single
     /// `String`, which is deterministic (no dictionary key ordering involved).
     private static func jsonString(_ value: String) -> String {
-        guard let data = try? JSONEncoder().encode(value),
+        guard let data = DebugLog.trying("jsonString", operation: { try JSONEncoder().encode(value) }),
               let s = String(data: data, encoding: .utf8) else {
             return "\"\""
         }

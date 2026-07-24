@@ -130,7 +130,7 @@ struct WikiFSApp: App {
         launchLocationWarning = warning
         _showingLaunchLocationWarning = State(initialValue: warning != nil)
 
-        let directory = (try? DatabaseLocation.appGroupContainerDirectory())
+        let directory = DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
         // The v0 legacy import is strictly FIRST-RUN-ONLY. We gate the whole chain
         // on an empty registry: only a genuine first run (no wikis yet) may pull
@@ -449,7 +449,7 @@ struct WikiFSApp: App {
             extractionProviderValue: extractionProviderValue)
 
         Task { [weak healthMonitor] in
-            guard let conn = try? WikiDaemonConnection.connect() else {
+            guard let conn = DebugLog.trying("connect daemon", operation: { try WikiDaemonConnection.connect() }) else {
                 DebugLog.store("WikiFSApp: daemon not available — starting retry loop (#885)")
                 healthMonitor?.startRetrying()
                 return
@@ -542,7 +542,7 @@ struct WikiFSApp: App {
         extractionProvider: any QueueExtractionProvider
     ) -> (engine: any QueueEngineClient, openError: String?) {
         DebugLog.store("WikiFSApp: constructing local QueueEngine fallback")
-        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+        let queueDBURL = DebugLog.trying("resolve queue database URL", operation: { try DatabaseLocation.queueDatabaseURL() })
             ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
         let queueStore: QueueStore
         do {

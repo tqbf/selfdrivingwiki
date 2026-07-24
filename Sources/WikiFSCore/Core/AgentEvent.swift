@@ -368,7 +368,7 @@ public enum AgentEventParser {
 
         guard
             let data = line.data(using: .utf8),
-            let envelope = try? JSONDecoder().decode(Envelope.self, from: data)
+            let envelope = DebugLog.trying("parse", operation: { try JSONDecoder().decode(Envelope.self, from: data) })
         else {
             return .raw(line)
         }
@@ -559,9 +559,9 @@ struct StringOrBlocks: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let string = try? container.decode(String.self) {
+        if let string = DebugLog.trying("init from decoder", operation: { try container.decode(String.self) }) {
             text = string
-        } else if let blocks = try? container.decode([TextBlock].self) {
+        } else if let blocks = DebugLog.trying("init from decoder blocks", operation: { try container.decode([TextBlock].self) }) {
             text = blocks.compactMap(\.text).joined(separator: "\n")
         } else {
             text = ""
@@ -588,13 +588,13 @@ public enum JSONValue: Decodable, Sendable {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
-        } else if let value = try? container.decode(String.self) {
+        } else if let value = DebugLog.trying("init from decoder", operation: { try container.decode(String.self) }) {
             self = .string(value)
-        } else if let value = try? container.decode(Bool.self) {
+        } else if let value = DebugLog.trying("init from decoder", operation: { try container.decode(Bool.self) }) {
             self = .bool(value)
-        } else if let value = try? container.decode(Double.self) {
+        } else if let value = DebugLog.trying("init from decoder", operation: { try container.decode(Double.self) }) {
             self = .number(value)
-        } else if (try? container.decode([JSONValue].self)) != nil {
+        } else if DebugLog.trying("init from decoder", operation: { try container.decode([JSONValue].self) }) != nil {
             self = .array
         } else {
             self = .object

@@ -314,11 +314,11 @@ struct PageDetailView: View {
                     }
                 } else {
                     Task {
-                        try? await session.queueEngine.enqueue(QueueItemRequest(
+                        await DebugLog.trying("enqueue lint request", operation: { try await session.queueEngine.enqueue(QueueItemRequest(
                             queue: .ingestion,
                             wikiID: session.wikiID,
                             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [id])
-                        ))
+                        )) })
                     }
                 }
             }
@@ -694,8 +694,8 @@ struct PageOutlineView: View {
     /// rendered anchor IDs.
     private static let linkAndCodeRegexes: [NSRegularExpression] = {
         [
-            try? NSRegularExpression(pattern: #"\[([^\]]*)\]\([^)]*\)"#),  // links
-            try? NSRegularExpression(pattern: #"`([^`]*)`"#),              // code spans
+            DebugLog.trying("compile link regex", operation: { try NSRegularExpression(pattern: #"\[([^\]]*)\]\([^)]*\)"#) }),  // links
+            DebugLog.trying("compile code span regex", operation: { try NSRegularExpression(pattern: #"`([^`]*)`"#) }),              // code spans
         ].compactMap { $0 }
     }()
 

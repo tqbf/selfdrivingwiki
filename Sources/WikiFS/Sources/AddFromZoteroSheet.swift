@@ -277,6 +277,8 @@ struct AddFromZoteroSheet: View {
         guard let client else { return }
         let query = queryText
         searchTask = Task {
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             searchPhase = .searching

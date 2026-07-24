@@ -167,6 +167,8 @@ public enum PdfExtractionService {
                 }
             }
             group.addTask {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: timeout)
                 return false
             }
@@ -196,8 +198,7 @@ public enum PdfExtractionService {
             .appendingPathComponent(dirName, isDirectory: true)
             .appendingPathComponent("snapshots", isDirectory: true)
         let fm = FileManager.default
-        guard let revisions = try? fm.contentsOfDirectory(
-            at: snapshots, includingPropertiesForKeys: nil) else {
+        guard let revisions = DebugLog.trying("modelWeightsPresent", operation: { try fm.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil) }) else {
             DebugLog.extraction("[pdf2md] modelWeightsPresent: no snapshots at \(snapshots.path)")
             return false
         }
@@ -352,7 +353,7 @@ public enum PdfExtractionService {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("pdf2md-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        defer { DebugLog.trying("remove tempDir", operation: { try FileManager.default.removeItem(at: tempDir) }) }
 
         let inputFile = tempDir.appendingPathComponent(filename, isDirectory: false)
         try pdfData.write(to: inputFile)

@@ -48,7 +48,7 @@ public enum ApplePodcastAMP {
         }
         guard status == 200 else { throw PodcastTranscriptError.badResponse(status) }
 
-        guard let decoded = try? JSONDecoder().decode(TranscriptResponse.self, from: body),
+        guard let decoded = DebugLog.trying("transcriptURL", operation: { try JSONDecoder().decode(TranscriptResponse.self, from: body) }),
               let ttml = decoded.data.first?.attributes.ttmlAssetUrls?.ttml,
               let url = URL(string: ttml)
         else { throw PodcastTranscriptError.noTranscriptAvailable }

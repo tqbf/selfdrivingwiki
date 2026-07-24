@@ -39,7 +39,7 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     var chatEnvelopes: AsyncStream<(String, QueueEventEnvelope)> { chatStream }
 
     func deliverEvent(_ payload: Data) {
-        guard let envelope = try? JSONDecoder().decode(QueueEventEnvelope.self, from: payload) else { return }
+        guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }
 
         // Route chat envelopes to the chat stream.
         if envelope.isChatEnvelope, let chatID = envelope.chatID {

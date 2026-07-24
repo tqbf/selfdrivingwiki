@@ -142,11 +142,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
                 let id = try await engine.enqueue(req)
                 let envelope: [String: String?] = ["id": id, "error": nil]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
                 let envelope: [String: String?] = ["id": nil, "error": error.localizedDescription]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -155,7 +155,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func cancelItem(id: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 await engine.cancelItem(id)
             }
             sendableReply.reply()
@@ -165,7 +165,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func cancelAllInFlight(reply: @escaping (Int) -> Void) {
         let sendableReply = SendableIntReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let count = await engine.cancelAllInFlight()
                 sendableReply.reply(count)
             } else {
@@ -181,11 +181,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let engine = try await daemon.ensureQueueEngine()
                 try await engine.retryItem(id)
                 let envelope: [String: String?] = ["error": nil]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
                 let envelope: [String: String?] = ["error": error.localizedDescription]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -194,7 +194,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func pauseQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.pause(queueKind)
             }
@@ -205,7 +205,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func resumeQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.resume(queueKind)
             }
@@ -216,7 +216,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func haltQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.halt(queueKind)
             }
@@ -227,7 +227,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 await engine.reorderItem(id: id, beforeItemID: beforeItemID)
             }
             sendableReply.reply()
@@ -237,7 +237,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) {
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let result = await engine.hasActiveWork(for: wikiID)
                 sendableReply.reply(result)
             } else {
@@ -249,10 +249,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            guard let engine = try? await daemon.ensureQueueEngine() else {
+            guard let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) else {
                 let envelope: [String: Any] = ["success": false,
                                                "error": "daemon queue engine unavailable"]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
                 return
             }
@@ -260,12 +262,16 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             switch result {
             case .success:
                 let envelope: [String: Any] = ["success": true]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
             case .failure(let error):
                 let envelope: [String: Any] = ["success": false,
                                                "error": error.localizedDescription]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -274,9 +280,9 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let events = await engine.loadTranscript(for: itemID)
-                let data = (try? JSONEncoder().encode(events)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(events) })) ?? Data()
                 sendableReply.reply(data)
             } else {
                 sendableReply.reply(Data())
@@ -287,13 +293,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let snapshots = await engine.loadAllActivitySnapshots()
                 var data: [String: QueueEngine.ActivitySnapshotData] = [:]
                 for (id, snapshot) in snapshots {
                     data[id] = QueueEngine.ActivitySnapshotData(from: snapshot)
                 }
-                let result = (try? JSONEncoder().encode(data)) ?? Data()
+                let result = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(data) })) ?? Data()
                 sendableReply.reply(result)
             } else {
                 sendableReply.reply(Data())
@@ -362,7 +368,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
     func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["id": nil, "error": "queue engine unavailable on Linux"]
-        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
         reply(data)
     }
 
@@ -371,7 +377,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func retryItem(id: String, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "queue engine unavailable on Linux"]
-        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
         reply(data)
     }
 
@@ -383,7 +389,9 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
         let envelope: [String: Any] = ["success": false, "error": "queue engine unavailable on Linux"]
-        let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONSerialization.data", operation: {
+            try JSONSerialization.data(withJSONObject: envelope)
+        })) ?? Data()
         reply(data)
     }
 
@@ -393,22 +401,22 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
     func startChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func continueChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func sendChatMessage(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     #endif
 }
@@ -539,6 +547,8 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     // Linux default — a conventional XDG-style data directory.
     let home = FileManager.default.homeDirectoryForCurrentUser
     let defaultDir = home.appendingPathComponent(".local/share/selfdrivingwiki", isDirectory: true)
+    // Directory creation is idempotent — failure is acceptable (directory may already exist).
+    // swiftlint:disable:next silent_try_optional
     try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
     containerDirectory = defaultDir
 }
@@ -562,8 +572,10 @@ func writeResponse(_ string: String) {
 }
 
 while let line = readLine() {
-    let parsed: [String: Any]? = line.data(using: .utf8).flatMap {
-        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    let parsed: [String: Any]? = line.data(using: .utf8).flatMap { data in
+        DebugLog.trying("JSONSerialization.jsonObject", operation: {
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        })
     }
     let id = parsed?["id"]
     guard let req = parsed,
@@ -571,7 +583,7 @@ while let line = readLine() {
     else {
         // Reconstruct the response with the id if we have one, else -1.
         let resp: [String: Any] = ["id": id ?? -1, "error": "invalid request"]
-        if let data = try? JSONSerialization.data(withJSONObject: resp),
+        if let data = DebugLog.trying("JSONSerialization.data", operation: { try JSONSerialization.data(withJSONObject: resp) }),
            let str = String(data: data, encoding: .utf8) {
             writeResponse(str)
         }
@@ -635,7 +647,7 @@ while let line = readLine() {
         resp["result"] = result as Any
     }
 
-    if let data = try? JSONSerialization.data(withJSONObject: resp),
+    if let data = DebugLog.trying("JSONSerialization.data", operation: { try JSONSerialization.data(withJSONObject: resp) }),
        let str = String(data: data, encoding: .utf8) {
         writeResponse(str)
     }

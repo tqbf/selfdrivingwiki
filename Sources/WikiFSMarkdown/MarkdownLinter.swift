@@ -237,7 +237,7 @@ public final class MarkdownLinter: @unchecked Sendable {
     /// helper's executable lives in `Contents/Helpers`).
     public static func loadDefault() -> MarkdownLinter? {
         if let url = Bundle.main.url(forResource: "markdownlint", withExtension: "js"),
-           let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty {
+           let src = DebugLog.trying("load markdownlint.js", operation: { try String(contentsOf: url, encoding: .utf8) }), !src.isEmpty {
             let linter = MarkdownLinter(jsSource: src)
             DebugLog.store("MarkdownLinter.loadDefault: bundle found at \(url.lastPathComponent), init \(linter != nil ? "OK" : "FAILED")")
             return linter
@@ -251,7 +251,7 @@ public final class MarkdownLinter: @unchecked Sendable {
         }
         let candidate = exeDir.deletingLastPathComponent()
             .appendingPathComponent("Resources/markdownlint.js")
-        guard let src = try? String(contentsOf: candidate, encoding: .utf8), !src.isEmpty else {
+        guard let src = DebugLog.trying("load markdownlint.js from Resources", operation: { try String(contentsOf: candidate, encoding: .utf8) }), !src.isEmpty else {
             DebugLog.store("MarkdownLinter.loadDefault: markdownlint.js not found — linter unavailable")
             return nil
         }

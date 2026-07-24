@@ -200,6 +200,8 @@ final class DaemonHealthMonitor {
                 await self.performHealthPing(timeout: timeout)
             }
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
                 await self.performHealthPing(timeout: timeout)
@@ -232,7 +234,7 @@ final class DaemonHealthMonitor {
         // the XPC service on the new NSXPCConnection).
         setState(.reconnecting)
         DebugLog.store("wikid: attempting reconnect via XPC service auto-launch")
-        guard let newConn = try? WikiDaemonConnection.connect() else {
+        guard let newConn = DebugLog.trying("reconnect daemon", operation: { try WikiDaemonConnection.connect() }) else {
             DebugLog.store("wikid: reconnect failed — still disconnected")
             setState(.disconnected)
             return

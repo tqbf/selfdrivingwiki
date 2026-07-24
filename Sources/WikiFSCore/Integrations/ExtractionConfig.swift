@@ -120,7 +120,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.backend = (try? c.decode(ExtractionBackend.self, forKey: .backend)) ?? .localPdf2md
+        self.backend = DebugLog.trying("init(from:) decode backend") { try c.decode(ExtractionBackend.self, forKey: .backend) } ?? .localPdf2md
         self.acpProviderId = try c.decodeIfPresent(String.self, forKey: .acpProviderId)
         self.anthropicModel = try c.decodeIfPresent(String.self, forKey: .anthropicModel)
             ?? ExtractionConfig.defaultAnthropicModel
@@ -138,8 +138,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         // these optional fields is `nil` (vs `backend`'s `.localPdf2md`), so a
         // typo silently picks "prompt me" instead of "PDF" — same resilient
         // decode philosophy as `unknownBackendValueDegradesToLocalPdf2md`.
-        self.htmlBackend = try? c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend)
-        self.podcastBackend = try? c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend)
+        self.htmlBackend = DebugLog.trying("init(from:) decode htmlBackend") { try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend) }
+        self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
     }
 
     // MARK: - Persistence (via `JSONSidecarConfig`)
