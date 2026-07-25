@@ -14,6 +14,12 @@ import WikiFSEngine
 /// 2. **Chat event envelopes** demuxed from `DaemonQueueEventSink` → `ingest(_:)`
 /// 3. **Rehydration** from `chatSessionState(chatID:)` on (re)connect
 ///
+/// Run lifecycle is modeled as a `ChatRunState` FSM (`runState`), the single
+/// stored source of truth. The five legacy boolean/optional flags
+/// (`isRunning`, `isGenerating`, `isAwaitingGenerationSlot`,
+/// `isInteractiveSession`, `activeChatID`) are backward-compatible computed
+/// shims derived from `runState` — existing read sites are unchanged.
+///
 /// RC9: exposes `resolvePendingPermission(_:)`, `availableThinkingOptions`,
 /// `logFileURL`, and `runTotalUsage` — the full binding surface ChatDetailView
 /// needs.
@@ -25,16 +31,22 @@ public final class RemoteChatSession {
 
     public var events: [AgentEvent] = []
     public var eventTimestamps: [Date] = []
-    public private(set) var isRunning = false
-    public private(set) var isGenerating = false
-    public private(set) var isAwaitingGenerationSlot = false
-    public private(set) var isInteractiveSession = false
+    /// The single source of truth for this session's run lifecycle.
+    /// All five legacy flags derive from this via computed shims.
+    public private(set) var runState: ChatRunState = .idle
+
+    // MARK: - Backward-compatible run-flag shims (computed from runState)
+
+    public var isRunning: Bool { runState == .thinking || runState == .generating }
+    public var isGenerating: Bool { runState == .generating }
+    public var isAwaitingGenerationSlot: Bool { runState == .queued }
+    public var isInteractiveSession: Bool { runState.isActive }
     /// The chat id this mirror currently reflects as the LIVE session, or nil
     /// when this chat is not the daemon's active session (persisted/idle).
-    /// Managed by `hydrate`/`applyStateUpdate` from the daemon's run flags so
-    /// the `ChatDetailView` source-of-truth rule (`activeChatID == chatID`)
-    /// flips a chat live precisely when the daemon is running it.
-    public var activeChatID: String?
+    /// Derived from `runState` so the `ChatDetailView` source-of-truth rule
+    /// (`activeChatID == chatID`) flips a chat live precisely when the daemon
+    /// is running it.
+    public var activeChatID: String? { runState.isActive ? chatID : nil }
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
     public var runStartedAt: Date?
@@ -89,15 +101,14 @@ public final class RemoteChatSession {
     public init(chatID: String) {
         self.chatID = chatID
         // A fresh mirror knows NOTHING about the daemon yet, so it must not
-        // claim liveness: `activeChatID` is daemon-derived state, set only by
-        // `hydrate`/`applyStateUpdate` from the run flags (see the property's
-        // doc comment). Seeding it with `chatID` here made every newly-opened
-        // chat pass `ChatDetailView.isLiveChat`, which then rendered this
-        // mirror's empty `events` INSTEAD of the persisted rows — a chat with
-        // a full transcript showed "Ask a question to start a chat." whenever
+        // claim liveness: `runState` defaults to `.idle`, which makes the
+        // computed `activeChatID` return nil. Seeding `activeChatID` with
+        // `chatID` here made every newly-opened chat pass
+        // `ChatDetailView.isLiveChat`, which then rendered this mirror's
+        // empty `events` INSTEAD of the persisted rows — a chat with a full
+        // transcript showed "Ask a question to start a chat." whenever
         // rehydration couldn't correct the claim (the daemon throws
         // `noSession` for any chat whose launcher it has evicted).
-        self.activeChatID = nil
     }
 
     /// Drop this mirror's liveness claim: the daemon is not running this chat,
@@ -107,13 +118,7 @@ public final class RemoteChatSession {
     /// "not live" is the safe answer for both (the persisted transcript is
     /// always renderable; an empty live stream is not).
     func markNotLive() {
-        activeChatID = nil
-        isInteractiveSession = false
-        // Fully relinquish the liveness claim — `isChatRunning` also checks
-        // these session-local flags, so leaving them set would keep the sidebar
-        // "responding…" badge after the daemon evicts the session.
-        isRunning = false
-        isGenerating = false
+        runState = .idle
     }
 
     // MARK: - Envelope ingestion
@@ -160,9 +165,9 @@ public final class RemoteChatSession {
     func hydrate(from state: ChatSessionState) {
         events = state.events
         eventTimestamps = Array(repeating: Date(), count: state.events.count)
-        isRunning = state.isRunning
-        isGenerating = state.isGenerating
-        isAwaitingGenerationSlot = state.isAwaitingGenerationSlot
+        runState = .from(isRunning: state.isRunning,
+                          isGenerating: state.isGenerating,
+                          isAwaitingSlot: state.isAwaitingGenerationSlot)
         preflightError = state.preflightError
         thinkingOption = state.thinkingOption
         runTotalUsage = state.usage
@@ -173,10 +178,6 @@ public final class RemoteChatSession {
         stderr = state.stderr ?? ""
         lastActivityAt = state.lastActivityAt
         currentProcessID = state.currentProcessID.flatMap(Int32.init(exactly:))
-        isInteractiveSession = state.isRunning || state.isGenerating
-        // Source-of-truth rule: this mirror is "live" (activeChatID set)
-        // exactly while the daemon reports the session interactive.
-        activeChatID = isInteractiveSession ? chatID : nil
     }
 
     // MARK: - Private: event merge logic
@@ -217,9 +218,9 @@ public final class RemoteChatSession {
     }
 
     private func applyStateUpdate(_ update: ChatStateUpdate) {
-        isRunning = update.isRunning
-        isGenerating = update.isGenerating
-        isAwaitingGenerationSlot = update.isAwaitingGenerationSlot
+        runState = .from(isRunning: update.isRunning,
+                          isGenerating: update.isGenerating,
+                          isAwaitingSlot: update.isAwaitingGenerationSlot)
         preflightError = update.preflightError
         thinkingOption = update.thinkingOption
         if let usageData = update.usageData,
@@ -233,9 +234,6 @@ public final class RemoteChatSession {
         if let stderr = update.stderr { self.stderr = stderr }
         if let lastActivityAt = update.lastActivityAt { self.lastActivityAt = lastActivityAt }
         if let pid = update.currentProcessID { self.currentProcessID = Int32(exactly: pid) }
-        isInteractiveSession = update.isRunning || update.isGenerating
-        // Source-of-truth rule: keep activeChatID in sync with interactivity.
-        activeChatID = isInteractiveSession ? chatID : nil
     }
 
     // MARK: - Provider config surface (shared file, same as the daemon reads)
@@ -343,16 +341,12 @@ public final class RemoteChatSession {
     /// source-of-truth rule no longer treats this mirror as live.
     func startNewChat() {
         reset()
-        activeChatID = nil
     }
 
     func reset() {
         events = []
         eventTimestamps = []
-        isRunning = false
-        isGenerating = false
-        isAwaitingGenerationSlot = false
-        isInteractiveSession = false
+        runState = .idle
         exitStatus = nil
         preflightError = nil
         pendingPermissions = []

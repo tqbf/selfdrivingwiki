@@ -491,5 +491,60 @@ struct RemoteChatSessionTests {
         #expect(session.isRunning == false)
         #expect(session.isGenerating == false)
     }
+
+    // MARK: - ChatRunState FSM integration
+
+    @Test @MainActor func runState_reflectsFullLifecycle() {
+        let session = RemoteChatSession(chatID: "chat-life")
+
+        func state(_ running: Bool, _ generating: Bool, _ awaiting: Bool) -> ChatStateUpdate {
+            ChatStateUpdate(
+                isRunning: running, isGenerating: generating,
+                isAwaitingGenerationSlot: awaiting,
+                preflightError: nil, thinkingOption: nil, usageData: nil,
+                logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        }
+
+        // idle → queued → thinking → generating → idle
+        session.ingest(.chatState(chatID: "chat-life", update: state(false, false, false)))
+        #expect(session.runState == .idle)
+
+        session.ingest(.chatState(chatID: "chat-life", update: state(false, false, true)))
+        #expect(session.runState == .queued)
+        // Verify shim reads at the queued step (most-novel factory mapping).
+        #expect(session.isAwaitingGenerationSlot == true)
+        #expect(session.isRunning == false)
+        #expect(session.isInteractiveSession == false)
+        #expect(session.activeChatID == nil)
+
+        session.ingest(.chatState(chatID: "chat-life", update: state(true, false, false)))
+        #expect(session.runState == .thinking)
+        #expect(session.activeChatID == "chat-life")
+
+        session.ingest(.chatState(chatID: "chat-life", update: state(true, true, false)))
+        #expect(session.runState == .generating)
+        #expect(session.activeChatID == "chat-life")
+
+        session.ingest(.chatState(chatID: "chat-life", update: state(false, false, false)))
+        #expect(session.runState == .idle)
+        #expect(session.activeChatID == nil)
+    }
+
+    @Test @MainActor func markNotLive_resetsRunStateToIdle() {
+        let session = RemoteChatSession(chatID: "chat-evict")
+        session.ingest(.chatState(chatID: "chat-evict", update: ChatStateUpdate(
+            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(session.runState == .generating)
+
+        session.markNotLive()
+
+        #expect(session.runState == .idle)
+        #expect(session.isRunning == false)
+        #expect(session.isGenerating == false)
+        #expect(session.isInteractiveSession == false)
+        #expect(session.activeChatID == nil)
+    }
 }
 #endif
