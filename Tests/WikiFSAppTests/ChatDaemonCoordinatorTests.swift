@@ -89,6 +89,33 @@ struct ChatDaemonCoordinatorTests {
         #expect(!coord.anyChatRunning)
     }
 
+    @Test func runningStateToken_bumpsOnRunningStateChange() {
+        let coord = makeCoordinator()
+        let before = coord.runningStateToken
+
+        // Start → token bumps.
+        coord.ingestForTesting(.chatState(chatID: "chat-run", update: ChatStateUpdate(
+            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        let afterStart = coord.runningStateToken
+        #expect(afterStart == before + 1)
+
+        // Duplicate running envelope (no change) → token does NOT bump.
+        coord.ingestForTesting(.chatState(chatID: "chat-run", update: ChatStateUpdate(
+            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(coord.runningStateToken == afterStart)
+
+        // Stop → token bumps again.
+        coord.ingestForTesting(.chatState(chatID: "chat-run", update: ChatStateUpdate(
+            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(coord.runningStateToken == afterStart + 1)
+    }
+
     @Test func isChatRunning_reflectsOpenSessionRunFlag() {
         // An open session that reports running via hydrate also counts.
         let coord = makeCoordinator()
@@ -266,6 +293,60 @@ struct ChatDaemonCoordinatorTests {
         await coord.rehydrate(chatID: "chat-idle")
         #expect(coord.session(for: "chat-idle").activeChatID == nil)
         #expect(coord.isChatRunning("chat-idle") == false)
+    }
+
+    // MARK: - runningStateToken (rehydrate path)
+
+    @Test func rehydrateRunning_bumpsRunningStateToken() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = ChatSessionState(
+            chatID: "chat-run", events: [],
+            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let before = coord.runningStateToken
+        await coord.rehydrate(chatID: "chat-run")
+        #expect(coord.runningStateToken == before + 1)
+        #expect(coord.isChatRunning("chat-run"))
+    }
+
+    @Test func rehydrateIdle_doesNotBumpTokenWhenAlreadyIdle() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = ChatSessionState(
+            chatID: "chat-idle", events: [],
+            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let before = coord.runningStateToken
+        await coord.rehydrate(chatID: "chat-idle")
+        // Was idle, stays idle → no change → no bump.
+        #expect(coord.runningStateToken == before)
+    }
+
+    @Test func rehydrateFailure_bumpsTokenWhenClearingPriorLiveness() async {
+        // A chat that was running (token already bumped) then gets a rehydrate
+        // failure (daemon evicted the session). Clearing the stale liveness
+        // claim must bump the token so the sidebar drops "responding…".
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = ChatSessionState(
+            chatID: "chat-evicted", events: [],
+            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coord.rehydrate(chatID: "chat-evicted")
+        let afterRunning = coord.runningStateToken
+        #expect(coord.isChatRunning("chat-evicted"))
+
+        // Now the daemon evicts the session — rehydrate throws.
+        stub.shouldThrow = true
+        await coord.rehydrate(chatID: "chat-evicted")
+        #expect(coord.runningStateToken == afterRunning + 1)
+        // Both liveness sources clear: runningChatIDs via setChatRunning, and
+        // the session's isRunning via markNotLive (which now clears the flags).
+        #expect(!coord.isChatRunning("chat-evicted"))
     }
 
     // MARK: - Helpers

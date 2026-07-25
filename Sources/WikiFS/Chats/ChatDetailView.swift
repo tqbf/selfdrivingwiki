@@ -1707,7 +1707,6 @@ struct ChatOutlineView: View {
                                             Text(response)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
-                                                .lineLimit(3)
                                                 .multilineTextAlignment(.leading)
                                         }
                                     }

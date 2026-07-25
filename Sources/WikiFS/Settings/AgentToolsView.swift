@@ -22,6 +22,12 @@ struct AgentToolsView: View {
     @State private var renameDraft: String = ""
 
     var body: some View {
+        // Touch the daemon's running-state token so SwiftUI re-renders (and
+        // re-evaluates each row's "responding…" badge) when a chat starts or
+        // stops. `runningStateToken` is read here — in the tracked body —
+        // because `isChatRunning(_:)` is called from the NSTableView data
+        // source, which SwiftUI can't observe.
+        let _ = chatDaemon?.runningStateToken
         VStack(spacing: 0) {
             chatsHeader
             chatSearchBar

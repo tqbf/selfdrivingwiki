@@ -55,6 +55,14 @@ public final class ChatDaemonCoordinator {
     /// (e.g. one started via `wikictl`) that the user hasn't opened here.
     private var runningChatIDs: Set<String> = []
 
+    /// Bumped whenever `runningChatIDs` changes, so SwiftUI views that badge
+    /// chats (the sidebar list) re-render when a chat starts or stops running.
+    /// `runningChatIDs` is private and read only inside `isChatRunning(_:)`,
+    /// which the table data source calls *outside* SwiftUI's tracked body — so
+    /// a dedicated observable signal is the only way the sidebar learns a chat
+    /// finished (otherwise the "responding…" badge sticks forever).
+    public private(set) var runningStateToken: Int = 0
+
     private var routerTask: Task<Void, Never>?
 
     /// Key for the draft (.newChat) session — `chatID == nil` at the view level.
@@ -109,17 +117,26 @@ public final class ChatDaemonCoordinator {
         // Track the running set from state envelopes so the sidebar can badge
         // chats the daemon is running even without an open app session.
         if envelope.kind == .chatState, let update = envelope.chatStateUpdate {
-            if update.isRunning || update.isGenerating {
-                runningChatIDs.insert(chatID)
-            } else {
-                runningChatIDs.remove(chatID)
-            }
+            setChatRunning(chatID, running: update.isRunning || update.isGenerating)
         }
         // Deliver to the open session if one exists.
         sessions[chatID]?.ingest(envelope)
     }
 
     // MARK: - Sidebar liveness aggregate
+
+    /// The single mutator for `runningChatIDs`. Updates the set and bumps
+    /// `runningStateToken` **only when membership actually changes**, so every
+    /// liveness transition flows through one place (both the event-router
+    /// `route()` and `rehydrate()`). Centralizing this guarantees the
+    /// observable signal always fires — forgetting the token bump in a new
+    /// call site would silently stick the sidebar "responding…" badge.
+    private func setChatRunning(_ chatID: String, running: Bool) {
+        let didChange = running
+            ? runningChatIDs.insert(chatID).inserted
+            : runningChatIDs.remove(chatID) != nil
+        if didChange { runningStateToken &+= 1 }
+    }
 
     /// True if the daemon reports this chat as running/generating. Backs the
     /// sidebar + chats-list live indicator (replaces
@@ -213,11 +230,7 @@ public final class ChatDaemonCoordinator {
         do {
             let state = try await client.chatSessionState(chatID)
             session.hydrate(from: state)
-            if state.isRunning || state.isGenerating {
-                runningChatIDs.insert(chatID)
-            } else {
-                runningChatIDs.remove(chatID)
-            }
+            setChatRunning(chatID, running: state.isRunning || state.isGenerating)
         } catch {
             // A rehydrate failure (e.g. the daemon evicted the session, so
             // `chatSessionState` throws `noSession`) is non-fatal — but the
@@ -227,7 +240,7 @@ public final class ChatDaemonCoordinator {
             // `ChatDetailView` renders that empty stream instead of the
             // persisted transcript.
             session.markNotLive()
-            runningChatIDs.remove(chatID)
+            setChatRunning(chatID, running: false)
             DebugLog.agent("ChatDaemonCoordinator.rehydrate failed for \(chatID): \(error) — marked not live")
         }
     }
