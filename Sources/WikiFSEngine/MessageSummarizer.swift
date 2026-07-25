@@ -80,6 +80,26 @@ public enum MessageSummarizer {
         }
     }
 
+    /// The message whose summary doubles as the CHAT-level summary
+    /// (`chats.summary`, issue #411): the FIRST summarizable message in the
+    /// chat. PURE — `messages` must be in store order.
+    ///
+    /// `chats.summary` is not a summary of the whole conversation; it is the
+    /// gist of the opening answer, shown as the chats-list row subtitle. Rather
+    /// than compute it separately (the pre-#411-unification design, which always
+    /// truncated regardless of the summarizer mode), both hosts now MIRROR the
+    /// first message's cached summary into the chat row. That gives one writer,
+    /// one condensing policy, and — in Model mode — zero extra model calls: the
+    /// chat summary is a copy of a per-message summary that was computed anyway.
+    ///
+    /// Returns nil when no message has summarizable text.
+    public static func chatSummaryMessageID(in messages: [ChatMessage]) -> PageID? {
+        messages.first { msg in
+            guard let text = textToSummarize(from: msg.event) else { return false }
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.id
+    }
+
     /// Run a one-shot model summarization via the injected `AgentBackend`
     /// (chat-summary plan §4.3). Mirrors `ACPExtractionClient.convert`: start a
     /// session with `modelSystemPrompt`, send ONE turn, collect `.assistantText`

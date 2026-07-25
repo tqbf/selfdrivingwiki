@@ -6,11 +6,18 @@ import Testing
 
 /// Tests for the chat-summary feature (issue #411).
 ///
+/// `chats.summary` is the chats-list row subtitle — the gist of the OPENING
+/// answer, not a summary of the whole conversation. It is no longer computed
+/// separately: it MIRRORS the first summarizable message's `chat_messages.summary`,
+/// so it inherits that summarizer's mode (Default ⇒ truncated extract, Model ⇒
+/// the model's sentence verbatim). Before the unification the launcher wrote its
+/// own always-truncated version, which abbreviated the subtitle even in Model mode.
+///
 /// Three layers:
 ///   - **Pure extract** — `ChatSummary.summaryExtract(from:maxLength:)` is a
 ///     pure function; these tests run in the fast tier.
-///   - **Static event-selection** — `AgentLauncher.firstSummaryText(from:)`
-///     iterates `[AgentEvent]` without a live launcher; fast tier.
+///   - **Source selection** — `MessageSummarizer.chatSummaryMessageID(in:)`
+///     picks which message feeds the chat row; pure, fast tier.
 ///   - **Store round-trip** — `updateChatSummary` + `listChats()` on a real
 ///     SQLite DB; tagged `.integration` (opens a real store).
 @Suite(.timeLimit(.minutes(5)))
@@ -50,44 +57,57 @@ struct ChatSummaryTests {
         #expect(result == "Short text.")
     }
 
-    // MARK: - Static event selection: AgentLauncher.firstSummaryText
+    // MARK: - Chat-summary source selection: MessageSummarizer.chatSummaryMessageID
 
-    @Test func firstSummaryText_assistantText_extractsFirstSentence() {
-        let events: [AgentEvent] = [
+    /// Build a `ChatMessage` list from events with deterministic ids ("m0", "m1", …).
+    private func messages(_ events: [AgentEvent]) -> [ChatMessage] {
+        events.enumerated().map { idx, event in
+            ChatMessage(
+                id: PageID(rawValue: "m\(idx)"), chatID: PageID(rawValue: "chat"),
+                seq: idx, event: event, createdAt: Date(timeIntervalSince1970: 0))
+        }
+    }
+
+    @Test func chatSummaryMessageID_picksFirstAssistantMessage() {
+        // The chat subtitle mirrors the FIRST assistant response's summary —
+        // later assistant turns never overwrite it.
+        let msgs = messages([
             .userText("question"),
-            .assistantText("First sentence here. Second sentence omitted."),
-        ]
-        let result = AgentLauncher.firstSummaryText(from: events)
-        #expect(result == "First sentence here.")
+            .assistantText("First answer."),
+            .assistantText("Second answer."),
+        ])
+        #expect(MessageSummarizer.chatSummaryMessageID(in: msgs) == PageID(rawValue: "m1"))
     }
 
-    @Test func firstSummaryText_resultEvent_extractsFromResultText() {
-        let events: [AgentEvent] = [
+    @Test func chatSummaryMessageID_acceptsResultEvent() {
+        // Agents that emit everything in .result still seed the chat summary.
+        let msgs = messages([
             .toolUse(name: "Bash", inputSummary: "ls"),
-            .result(isError: false, text: "The answer is 42. More details follow."),
-        ]
-        let result = AgentLauncher.firstSummaryText(from: events)
-        #expect(result == "The answer is 42.")
+            .result(isError: false, text: "The answer is 42."),
+        ])
+        #expect(MessageSummarizer.chatSummaryMessageID(in: msgs) == PageID(rawValue: "m1"))
     }
 
-    @Test func firstSummaryText_onlyToolEvents_returnsNil() {
-        let events: [AgentEvent] = [
+    @Test func chatSummaryMessageID_skipsWhitespaceOnlyText() {
+        // A blank assistant message is not a summary source — the next one is.
+        let msgs = messages([
+            .assistantText("   "),
+            .assistantText("Real answer."),
+        ])
+        #expect(MessageSummarizer.chatSummaryMessageID(in: msgs) == PageID(rawValue: "m1"))
+    }
+
+    @Test func chatSummaryMessageID_onlyNonAssistantEvents_returnsNil() {
+        let msgs = messages([
             .userText("question"),
             .toolUse(name: "Bash", inputSummary: "ls"),
             .toolResult(isError: false, summary: "file.txt"),
-        ]
-        #expect(AgentLauncher.firstSummaryText(from: events) == nil)
+        ])
+        #expect(MessageSummarizer.chatSummaryMessageID(in: msgs) == nil)
     }
 
-    @Test func firstSummaryText_emptyEvents_returnsNil() {
-        #expect(AgentLauncher.firstSummaryText(from: []) == nil)
-    }
-
-    @Test func firstSummaryText_emptyAssistantText_returnsNil() {
-        let events: [AgentEvent] = [
-            .assistantText("   "),
-        ]
-        #expect(AgentLauncher.firstSummaryText(from: events) == nil)
+    @Test func chatSummaryMessageID_emptyMessages_returnsNil() {
+        #expect(MessageSummarizer.chatSummaryMessageID(in: []) == nil)
     }
 
     // MARK: - Store round-trip (integration)

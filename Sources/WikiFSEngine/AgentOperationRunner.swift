@@ -107,9 +107,6 @@ public enum AgentOperationRunner {
             onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) -> Void) in
                 return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
             },
-            onSummary: chat.map { chat -> (@MainActor (PageID, String) -> Void) in
-                return { [weak store] id, summary in store?.updateChatSummary(chatID: id, summary: summary) }
-            },
             onMessageSummary: chat.map { chat -> (@MainActor (PageID) -> Void) in
                 return { [weak store] id in
                     Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
@@ -471,9 +468,6 @@ public enum AgentOperationRunner {
             onTranscript: { [weak store] events in
                 store?.appendChatEvents(chatID: chatID, events: events)
             },
-            onSummary: { [weak store] id, summary in
-                store?.updateChatSummary(chatID: id, summary: summary)
-            },
             onMessageSummary: { [weak store] id in
                 Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
             },
@@ -601,6 +595,12 @@ public enum AgentOperationRunner {
     /// **Idempotency (AC.6):** only messages with `summary == nil` are
     /// summarized — the store query is the compute-once guard. Re-firing the
     /// sink (e.g. on a second turn) is a no-op for already-summarized rows.
+    ///
+    /// **Chat-level summary (issue #411):** the FIRST summarizable message's
+    /// summary is mirrored into `chats.summary` (the chats-list subtitle) as it
+    /// is written. This is the only writer of that column — the launcher no
+    /// longer computes its own always-truncated version, which is what made the
+    /// subtitle abbreviate even in Model mode.
     @MainActor
     private static func summarizePendingMessages(
         chatID: PageID, store: WikiStoreModel?, launcher: AgentLauncher
@@ -618,6 +618,8 @@ public enum AgentOperationRunner {
             msg.summary == nil
                 && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
         }
+        // The message whose summary doubles as `chats.summary` (issue #411).
+        let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
         DebugLog.ingest("summarizePendingMessages: chatID=\(chatID.rawValue) mode=\(mode) pin=\(summarizerPin) pending=\(pending.count)")
 
         guard !pending.isEmpty else {
@@ -636,6 +638,10 @@ public enum AgentOperationRunner {
                 chatID: chatID, messageID: msg.id,
                 summary: summary, kind: .defaultTruncation)
             DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=defaultTruncation")
+            if msg.id == chatSummaryMessageID {
+                store.updateChatSummary(chatID: chatID, summary: summary)
+                DebugLog.ingest("summarizePendingMessages: mirrored chat summary from first message")
+            }
         }
         case .model:
             // Off-main via a detached Task. The config + pending messages are
@@ -647,7 +653,7 @@ public enum AgentOperationRunner {
                 await Self.runModelSummarization(
                     chatID: chatID, pending: pending, config: config,
                     containerDir: containerDir, credentialStore: credentialStore,
-                    store: store)
+                    store: store, chatSummaryMessageID: chatSummaryMessageID)
             }
         }
     }
@@ -656,11 +662,15 @@ public enum AgentOperationRunner {
     /// (chat-summary plan §4.3 + §6.4). Runs off-main for the ACP session(s);
     /// marshals each write back to the `@MainActor` store. Called from a
     /// `Task` so it doesn't block `finish()`.
+    ///
+    /// `chatSummaryMessageID` is the message whose summary is also mirrored into
+    /// `chats.summary` — VERBATIM, since the model already wrote a one-sentence
+    /// summary and eliding it would chop the answer.
     @MainActor
     private static func runModelSummarization(
         chatID: PageID, pending: [ChatMessage], config: AgentProvidersConfig,
         containerDir: URL, credentialStore: any ACPCredentialStore,
-        store: WikiStoreModel
+        store: WikiStoreModel, chatSummaryMessageID: PageID?
     ) async {
         guard let profile = MessageSummarizer.resolveProfile(
             config: config, credentialStore: credentialStore) else {
@@ -684,6 +694,10 @@ public enum AgentOperationRunner {
                 chatID: chatID, messageID: msg.id,
                 summary: summary, kind: .model)
             DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=model")
+            if msg.id == chatSummaryMessageID {
+                store.updateChatSummary(chatID: chatID, summary: summary)
+                DebugLog.ingest("runModelSummarization: mirrored chat summary from first message")
+            }
         }
     }
 }
