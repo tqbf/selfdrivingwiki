@@ -1252,9 +1252,9 @@ public final class AgentLauncher {
             // Create a temporary backend to attempt resume
             let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
             if let acpBackend = tempBackend as? ACPBackend {
-                DebugLog.agent("run: attempting to resume ACP session \(sessionId) for queue item \(queueItemID)")
+                DebugLog.agent("run: attempting to resume ACP session \(sessionId.rawValue) for queue item \(queueItemID)")
                 do {
-                    if let handle = try await acpBackend.resume(sessionID: sessionId, profile: BackendProfile(
+                    if let handle = try await acpBackend.resume(sessionID: sessionId.rawValue, profile: BackendProfile(
                     providerHints: [:],
                     scratchDirectory: scratch,
                     isReadOnly: false,
@@ -1413,7 +1413,7 @@ public final class AgentLauncher {
                     do {
                         if let item = try queueStore.getItem(queueItemID) {
                             var updatedPayload = item.payload
-                            updatedPayload.acpSessionId = sessionId.value
+                            updatedPayload.acpSessionId = AcpSessionID(rawValue: sessionId.value)
                             try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
                             DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID)")
                         }
@@ -2862,10 +2862,10 @@ public final class AgentLauncher {
         chatID: String? = nil,
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
-        priorAcpSessionId: String? = nil,
+        priorAcpSessionId: AcpSessionID? = nil,
         chatOverrideProviderId: String? = nil,
         chatOverrideModelId: String? = nil,
-        onAcpSessionId: (@MainActor (String?) -> Void)? = nil,
+        onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
@@ -3085,19 +3085,19 @@ public final class AgentLauncher {
         // support it), fall through to the fresh-start + preamble path below.
         var resumedSession: SessionHandle? = nil
         if let priorAcpSessionId {
-            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId) for chat \(chatID ?? "?")")
+            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId.rawValue) for chat \(chatID ?? "?")")
             do {
                 if let handle = try await backend.resume(
-                    sessionID: priorAcpSessionId,
+                    sessionID: priorAcpSessionId.rawValue,
                     profile: profile
                 ) {
                     resumedSession = handle
-                    DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId)")
+                    DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId.rawValue)")
                 } else {
-                    DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId), will start fresh")
+                    DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId.rawValue), will start fresh")
                 }
             } catch {
-                DebugLog.agent("startInteractiveQuery: resume threw for session \(priorAcpSessionId): \(error), will start fresh")
+                DebugLog.agent("startInteractiveQuery: resume threw for session \(priorAcpSessionId.rawValue): \(error), will start fresh")
             }
             // If we had a prior session ID but resume failed, clear it so
             // future continues don't keep retrying a dead session.
@@ -3137,7 +3137,7 @@ public final class AgentLauncher {
                 // re-seeding a preamble.
                 if let acpBackend = backend as? ACPBackend {
                     if let sessionId = await acpBackend.currentResumableSessionId() {
-                        onAcpSessionId?(sessionId.value)
+                        onAcpSessionId?(AcpSessionID(rawValue: sessionId.value))
                         DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID ?? "?")")
                     }
                 }

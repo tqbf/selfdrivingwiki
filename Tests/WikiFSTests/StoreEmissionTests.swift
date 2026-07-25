@@ -453,7 +453,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-123")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "acp-123"))
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)
         #expect(events.last?.change == .updated)

@@ -678,7 +678,7 @@ public protocol WikiStore: Sendable {
     /// Write or clear the ACP session ID for resume (#830). Pass `nil` to
     /// clear (terminal teardown / permanent resume failure). Bumps
     /// `updated_at`.
-    func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) throws
+    func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) throws
 
     /// Write or clear the per-chat model override (composer `ProviderSelector`
     /// pin — outranks both the "chat" stage pin and the global default

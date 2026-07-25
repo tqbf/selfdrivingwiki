@@ -4265,7 +4265,7 @@ public final class WikiStoreModel {
     /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
     /// at spawn time (persist) and on resume failure (clear). No manual reload
     /// — the bus fires `reloadFromStore()` async after the store write.
-    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) {
+    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) {
         do {
             try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: acpSessionId)
         } catch {

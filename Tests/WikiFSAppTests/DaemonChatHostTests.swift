@@ -68,10 +68,10 @@ struct DaemonChatHostTests {
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
 
         let chat = try store.createChat(kind: .edit, title: "Test")
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "session-abc-123")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "session-abc-123"))
 
         let fetched = try store.getChat(id: chat.id)
-        #expect(fetched.acpSessionId == "session-abc-123")
+        #expect(fetched.acpSessionId == AcpSessionID(rawValue: "session-abc-123"))
 
         // Clearing works too
         try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: nil)

@@ -6394,14 +6394,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `updated_at`. Routes through `mutate(event:_:)` so it emits a
     /// `.chat .updated` event. Pass `nil` to clear (terminal teardown /
     /// permanent resume failure).
-    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) throws {
+    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
             try db.execute(sql: """
             UPDATE chats SET acp_session_id = ?, updated_at = ?
             WHERE id = ?;
-            """, arguments: [acpSessionId, Date().timeIntervalSince1970,
+            """, arguments: [acpSessionId?.rawValue, Date().timeIntervalSince1970,
                             chatID.rawValue])
             guard db.changesCount > 0 else { throw WikiStoreError.notFound(chatID) }
         }
@@ -6801,7 +6801,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             messageCount: row["msg_count"],
             summary: summary,
             summaryAt: summaryAt,
-            acpSessionId: acpSessionId,
+            acpSessionId: acpSessionId.map { AcpSessionID(rawValue: $0) },
             modelProviderId: modelProviderId,
             modelId: modelId
         )

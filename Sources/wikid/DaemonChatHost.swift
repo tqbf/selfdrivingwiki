@@ -256,7 +256,7 @@ final class DaemonChatHost: @unchecked Sendable {
         let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
         let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
 
-        DebugLog.agent("DaemonChatHost.continueChat: history=\(history.count) priorAcpSession=\(priorAcpSessionId ?? "nil")")
+        DebugLog.agent("DaemonChatHost.continueChat: history=\(history.count) priorAcpSession=\(priorAcpSessionId?.rawValue ?? "nil")")
 
         let wikiIDCapture = wikiID
         await launcher.startInteractiveQuery(
@@ -505,7 +505,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Private: store sink handlers
 
     private func handleAcpSessionId(
-        chatID: PageID, sessionId: String?, wikiID: String
+        chatID: PageID, sessionId: AcpSessionID?, wikiID: String
     ) {
         guard let store = storeResolver(wikiID) else { return }
         do {

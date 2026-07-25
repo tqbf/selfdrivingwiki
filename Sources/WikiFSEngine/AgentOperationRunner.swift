@@ -91,7 +91,7 @@ public enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
-            onAcpSessionId: chat.map { chat -> (@MainActor (String?) -> Void) in
+            onAcpSessionId: chat.map { chat -> (@MainActor (AcpSessionID?) -> Void) in
                 return { [weak store] sessionId in
                     guard let store else { return }
                     if let sessionId {
@@ -441,7 +441,7 @@ public enum AgentOperationRunner {
         // #830: Read the chat's prior ACP session ID so startInteractiveQuery
         // can attempt resume before falling back to the fresh-start + preamble.
         let priorAcpSessionId = store.getChat(id: chatID)?.acpSessionId
-        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId ?? "nil")")
+        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId?.rawValue ?? "nil")")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
         // flips ChatDetailView to live for this tab (seq continues, title

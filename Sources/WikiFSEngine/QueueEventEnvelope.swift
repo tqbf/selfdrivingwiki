@@ -34,7 +34,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     // Chat-specific fields (Phase C). nil for queue kinds.
     public let chatID: String?
-    public let acpSessionId: String?
+    public let acpSessionId: AcpSessionID?
     public let chatStateData: Data?
 
     public init(kind: Kind, item: QueueItem? = nil, itemID: QueueItem.ID? = nil,
@@ -43,7 +43,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
                 logURL: URL? = nil, debugURL: URL? = nil,
                 queue: QueueKind? = nil, runState: QueueRunState? = nil,
                 pendingPermissionJSON: String? = nil,
-                chatID: String? = nil, acpSessionId: String? = nil,
+                chatID: String? = nil, acpSessionId: AcpSessionID? = nil,
                 chatStateData: Data? = nil) {
         self.kind = kind
         self.item = item
@@ -200,7 +200,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     /// Build a `.chatAcpSessionId` envelope for the #830 session-id writeback.
     public static func chatAcpSessionId(
-        chatID: String, sessionId: String?
+        chatID: String, sessionId: AcpSessionID?
     ) -> QueueEventEnvelope {
         QueueEventEnvelope(
             kind: .chatAcpSessionId, chatID: chatID, acpSessionId: sessionId)

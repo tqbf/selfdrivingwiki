@@ -14,11 +14,11 @@ struct ACPChatResumeTests {
     /// Thread-safe box for the `onAcpSessionId` callback's values.
     private final class SessionIdRecorder: @unchecked Sendable {
         private let lock = NSLock()
-        private var _values: [String?] = []
-        func record(_ value: String?) {
+        private var _values: [AcpSessionID?] = []
+        func record(_ value: AcpSessionID?) {
             lock.lock(); _values.append(value); lock.unlock()
         }
-        var values: [String?] {
+        var values: [AcpSessionID?] {
             lock.lock(); defer { lock.unlock() }
             return _values
         }
@@ -77,7 +77,7 @@ struct ACPChatResumeTests {
             systemPrompt: "",
             wikictlDirectory: "/tmp",
             chatID: "chat-1",
-            priorAcpSessionId: "prior-session-id",
+            priorAcpSessionId: AcpSessionID(rawValue: "prior-session-id"),
             onAcpSessionId: { recorder.record($0) },
             onLock: {},
             onUnlock: {}
@@ -114,7 +114,7 @@ struct ACPChatResumeTests {
             systemPrompt: "",
             wikictlDirectory: "/tmp",
             chatID: "chat-1",
-            priorAcpSessionId: "prior-session-id",
+            priorAcpSessionId: AcpSessionID(rawValue: "prior-session-id"),
             onAcpSessionId: { recorder.record($0) },
             onLock: {},
             onUnlock: {}

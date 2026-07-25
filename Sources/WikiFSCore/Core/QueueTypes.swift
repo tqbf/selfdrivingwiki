@@ -82,14 +82,14 @@ public struct QueueItemPayload: Codable, Sendable {
     public var lintPageIDs: [PageID]?
 
     /// ACP session ID for crash-resume. Set after session start, cleared on completion.
-    public var acpSessionId: String?
+    public var acpSessionId: AcpSessionID?
 
     public init(
         sourceIDs: [PageID],
         stageRouting: [String: String]? = nil,
         chainedItemID: String? = nil,
         lintPageIDs: [PageID]? = nil,
-        acpSessionId: String? = nil
+        acpSessionId: AcpSessionID? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting

@@ -354,14 +354,14 @@ struct RemoteChatSessionTests {
 
     @Test @MainActor func chatAcpSessionIdEnvelopeRoundTrip() throws {
         let envelope = QueueEventEnvelope.chatAcpSessionId(
-            chatID: "chat-3", sessionId: "session-xyz")
+            chatID: "chat-3", sessionId: AcpSessionID(rawValue: "session-xyz"))
 
         let data = try JSONEncoder().encode(envelope)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
 
         #expect(decoded.kind == .chatAcpSessionId)
         #expect(decoded.chatID == "chat-3")
-        #expect(decoded.acpSessionId == "session-xyz")
+        #expect(decoded.acpSessionId == AcpSessionID(rawValue: "session-xyz"))
     }
 
     @Test @MainActor func queueEventsStillDecodeAfterChatKindsAdded() throws {
