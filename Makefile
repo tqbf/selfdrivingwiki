@@ -121,7 +121,7 @@ NOTES_FILE       ?=
 .PHONY: all deps build check check-release test test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
-        version keychain mutate mutate-scope lint lint-baseline hooks
+        version keychain mutate mutate-scope lint lint-baseline lint-analyze hooks
 
 all: build
 
@@ -136,6 +136,7 @@ help:
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
 	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
 	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
+	@echo "  lint-analyze      SwiftLint analyzer: unused decls/imports (advisory, slow, not in CI)"
 	@echo "  hooks             Install .githooks (pre-commit try? guard + git-lfs shims)"
 	@echo "  mutate            Run swift-mutation-testing (full — see .swift-mutation-testing.yml)"
 	@echo "  mutate-scope      Scoped mutation run: make mutate-scope SOURCES_PATH=Sources/Foo"
@@ -358,6 +359,39 @@ lint-baseline:
 	  && { echo "✗ baseline still contains absolute paths — it will not match on CI"; exit 1; } \
 	  || true
 	@echo "✓ baseline rewritten — review the diff, the count should only go DOWN"
+
+# Analyzer rules (unused_declaration, unused_import). ADVISORY — deliberately
+# not wired into CI and deliberately not part of `make lint`.
+#
+# Analyzer rules need a full compiler log, so this does a from-scratch build
+# into .build/analyze (a separate build path, so it never invalidates the
+# incremental .build you work out of) and then runs a whole-program analysis
+# over it. Budget on the order of ten-plus minutes for the pair; that cost is
+# the entire reason this is a manual target rather than a gate.
+#
+# `swift build -v` is what makes this work at all: SwiftLint's --compiler-log-path
+# parser wants the real swiftc invocations, which SwiftPM only prints in verbose
+# mode. A log from an up-to-date build is EMPTY (nothing recompiles, nothing is
+# printed) and the analysis silently finds nothing, so the clean build is
+# load-bearing, not incidental.
+#
+# Read the output with judgement — see .swiftlint-analyze.yml for the known
+# blind spots. A hit is a lead, not a verdict.
+lint-analyze:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	@$(MAKE) --no-print-directory version prompts
+	@mkdir -p tmp/analyze
+	@echo "→ clean build into .build/analyze (verbose, for the compiler log)…"
+	@rm -rf .build/analyze
+	@swift build --build-tests --build-path .build/analyze -v \
+	  > tmp/analyze/build-verbose.log 2>&1 \
+	  || { echo "✗ build failed — see tmp/analyze/build-verbose.log"; exit 1; }
+	@printf '→ captured %s swiftc invocations; analyzing (this is the slow part)…\n' \
+	  "$$(grep -c 'bin/swiftc' tmp/analyze/build-verbose.log)"
+	@swiftlint analyze --quiet --config .swiftlint-analyze.yml \
+	  --compiler-log-path tmp/analyze/build-verbose.log || true
+	@echo "✓ analyzer run complete (advisory — nothing here fails a build)"
 
 # Point git at .githooks/. That directory also carries copies of the four
 # git-lfs shims (post-checkout, post-commit, post-merge, pre-push) — without
