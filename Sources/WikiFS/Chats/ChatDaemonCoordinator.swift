@@ -10,11 +10,11 @@ import WikiFSEngine
 /// registry + routing + rehydration logic is unit-testable without a live XPC
 /// connection.
 public protocol ChatDaemonCommands: AnyObject, Sendable {
-    func startChat(_ request: ChatStartRequest) async throws -> String
+    func startChat(_ request: ChatStartRequest) async throws -> PageID
     func continueChat(_ request: ChatContinueRequest) async throws
-    func sendChatMessage(chatID: String, message: String) async throws
-    func stopChat(_ chatID: String) async throws
-    func chatSessionState(_ chatID: String) async throws -> ChatSessionState
+    func sendChatMessage(chatID: PageID, message: String) async throws
+    func stopChat(_ chatID: PageID) async throws
+    func chatSessionState(_ chatID: PageID) async throws -> ChatSessionState
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -120,11 +120,10 @@ public final class ChatDaemonCoordinator {
         }
     }
 
-    /// `chatID` arrives in wire form (a ULID string) off the daemon's envelope
-    /// stream. This is the boundary where it becomes a `PageID` — nothing past
-    /// here handles a raw chat-id string.
-    private func route(chatID rawChatID: String, envelope: QueueEventEnvelope) {
-        let chatID = PageID(rawValue: rawChatID)
+    /// chatID arrives in wire form (a `PageID`) off the daemon's envelope
+    /// stream — the sink already decoded it from the envelope's `chatID`
+    /// field, so nothing past here handles a raw chat-id string.
+    private func route(chatID: PageID, envelope: QueueEventEnvelope) {
         // Track the running set from state envelopes so the sidebar can badge
         // chats the daemon is running even without an open app session.
         if envelope.kind == .chatState, let update = envelope.chatStateUpdate {
@@ -187,46 +186,46 @@ public final class ChatDaemonCoordinator {
     public func startChat(
         wikiID: String, firstMessage: String,
         providerId: String? = nil, modelId: String? = nil
-    ) async throws -> String {
+    ) async throws -> PageID {
         try await client.startChat(ChatStartRequest(
             wikiID: wikiID, firstMessage: firstMessage, providerId: providerId, modelId: modelId))
     }
 
     /// Continue a persisted chat with a new user turn.
-    public func continueChat(wikiID: String, chatID: String, message: String) async throws {
+    public func continueChat(wikiID: String, chatID: PageID, message: String) async throws {
         try await client.continueChat(ChatContinueRequest(wikiID: wikiID, chatID: chatID, message: message))
     }
 
     /// Send a follow-up turn to an active chat session.
-    public func sendMessage(chatID: String, message: String) async throws {
+    public func sendMessage(chatID: PageID, message: String) async throws {
         try await client.sendChatMessage(chatID: chatID, message: message)
     }
 
     /// Stop/cancel the active chat turn. Errors are logged (best-effort).
-    public func stop(chatID: String) async {
+    public func stop(chatID: PageID) async {
         do { try await client.stopChat(chatID) }
-        catch { DebugLog.agent("ChatDaemonCoordinator.stop failed for \(chatID): \(error)") }
+        catch { DebugLog.agent("ChatDaemonCoordinator.stop failed for \(chatID.rawValue): \(error)") }
     }
 
     /// Resolve a pending permission request (approve/reject). Errors logged.
-    public func resolvePermission(chatID: String, optionId: String, approve: Bool) async {
+    public func resolvePermission(chatID: PageID, optionId: String, approve: Bool) async {
         do {
             try await client.resolveChatPermission(
                 ChatPermissionResolveRequest(chatID: chatID, optionId: optionId, approve: approve))
         } catch {
-            DebugLog.agent("ChatDaemonCoordinator.resolvePermission failed for \(chatID): \(error)")
+            DebugLog.agent("ChatDaemonCoordinator.resolvePermission failed for \(chatID.rawValue): \(error)")
         }
     }
 
     /// Set the thinking-effort config option on a live chat session via the
     /// daemon's `setChatConfigOption` XPC method. Errors are logged (the UI
     /// already flipped optimistically; a `chatState` envelope reconciles).
-    public func setThinkingEffort(chatID: String, value: String) async {
+    public func setThinkingEffort(chatID: PageID, value: String) async {
         do {
             try await client.setChatConfigOption(
                 ChatConfigOptionRequest(chatID: chatID, option: "thought_level", value: value))
         } catch {
-            DebugLog.agent("ChatDaemonCoordinator.setThinkingEffort failed for \(chatID): \(error)")
+            DebugLog.agent("ChatDaemonCoordinator.setThinkingEffort failed for \(chatID.rawValue): \(error)")
         }
     }
 
@@ -245,7 +244,7 @@ public final class ChatDaemonCoordinator {
         session.onSetChatConfigOption = { option, value in
             do {
                 try await client.setChatConfigOption(
-                    ChatConfigOptionRequest(chatID: chatID.rawValue, option: option, value: value))
+                    ChatConfigOptionRequest(chatID: chatID, option: option, value: value))
             } catch {
                 DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
             }
@@ -258,7 +257,7 @@ public final class ChatDaemonCoordinator {
     public func rehydrate(chatID: PageID) async {
         let session = self.session(for: chatID)
         do {
-            let state = try await client.chatSessionState(chatID.rawValue)
+            let state = try await client.chatSessionState(chatID)
             session.hydrate(from: state)
             setChatGenerating(chatID, generating: state.isGenerating)
         } catch {

@@ -31,10 +31,10 @@ public struct ChatStartRequest: Codable, Sendable {
 
 /// Reply to `startChat`: the assigned chat ULID + an optional preflight error.
 public struct ChatStartReply: Codable, Sendable {
-    public let chatID: String?
+    public let chatID: PageID?
     public let error: String?
 
-    public init(chatID: String?, error: String?) {
+    public init(chatID: PageID?, error: String?) {
         self.chatID = chatID
         self.error = error
     }
@@ -46,10 +46,10 @@ public struct ChatStartReply: Codable, Sendable {
 /// the SAME chat row.
 public struct ChatContinueRequest: Codable, Sendable {
     public let wikiID: String
-    public let chatID: String
+    public let chatID: PageID
     public let message: String
 
-    public init(wikiID: String, chatID: String, message: String) {
+    public init(wikiID: String, chatID: PageID, message: String) {
         self.wikiID = wikiID
         self.chatID = chatID
         self.message = message
@@ -67,11 +67,11 @@ public struct ChatErrorReply: Codable, Sendable {
 
 /// Resolve a pending permission request for a chat (approve/reject).
 public struct ChatPermissionResolveRequest: Codable, Sendable {
-    public let chatID: String
+    public let chatID: PageID
     public let optionId: String
     public let approve: Bool
 
-    public init(chatID: String, optionId: String, approve: Bool) {
+    public init(chatID: PageID, optionId: String, approve: Bool) {
         self.chatID = chatID
         self.optionId = optionId
         self.approve = approve
@@ -82,13 +82,13 @@ public struct ChatPermissionResolveRequest: Codable, Sendable {
 /// restarting it. Sent by the client; the daemon forwards to the launcher's
 /// ACP backend (`session/set_config_option`). Reply is `ChatErrorReply`.
 public struct ChatConfigOptionRequest: Codable, Sendable {
-    public let chatID: String
+    public let chatID: PageID
     /// The ACP config option id (e.g. `"thought_level"`).
     public let option: String
     /// The value id to set (e.g. `"high"`).
     public let value: String
 
-    public init(chatID: String, option: String, value: String) {
+    public init(chatID: PageID, option: String, value: String) {
         self.chatID = chatID
         self.option = option
         self.value = value
@@ -100,7 +100,7 @@ public struct ChatConfigOptionRequest: Codable, Sendable {
 /// from the daemon's held-alive launcher (or from the persisted store if the
 /// launcher was evicted).
 public struct ChatSessionState: Codable, Sendable {
-    public let chatID: String
+    public let chatID: PageID
     /// The live transcript mirror (persistable events only — matching the
     /// store's `chat_messages` rows). Non-persistable streaming deltas are
     /// lossy by design; the finalized `.assistantText` row is the source of
@@ -132,7 +132,7 @@ public struct ChatSessionState: Codable, Sendable {
     public let currentProcessID: Int?
 
     public init(
-        chatID: String,
+        chatID: PageID,
         events: [AgentEvent],
         isRunning: Bool,
         isGenerating: Bool,

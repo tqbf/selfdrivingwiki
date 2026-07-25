@@ -173,9 +173,9 @@ public final class RemoteChatSession {
     /// Called by the app's chat-event router (which demuxes from
     /// `DaemonQueueEventSink`).
     func ingest(_ envelope: QueueEventEnvelope) {
-        // Envelopes carry the wire form; convert at this boundary rather than
-        // letting raw chat-id strings leak past it.
-        guard envelope.chatID == chatID.rawValue else { return }
+        // Envelopes carry the typed chat-id; compare against the session's
+        // `PageID` (the draft has none and is never a wire target).
+        guard envelope.chatID == chatID.pageID else { return }
         switch envelope.kind {
         case .chatEvent:
             if let event = envelope.chatAgentEvent {

@@ -262,7 +262,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
 
     /// Start a new chat on the daemon. Returns the assigned chat ULID.
     @discardableResult
-    public func startChat(_ request: ChatStartRequest) async throws -> String {
+    public func startChat(_ request: ChatStartRequest) async throws -> PageID {
         let requestData = try JSONEncoder().encode(request)
         return try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -279,7 +279,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             guard let chatID = dict["chatID"] as? String else {
                 throw DaemonXPCError.unexpectedReply
             }
-            return chatID
+            return PageID(rawValue: chatID)
         }
     }
 
@@ -300,9 +300,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     }
 
     /// Send a follow-up turn to an active chat session.
-    public func sendChatMessage(chatID: String, message: String) async throws {
+    public func sendChatMessage(chatID: PageID, message: String) async throws {
         let requestData = try JSONEncoder().encode([
-            "chatID": chatID, "message": message
+            "chatID": chatID.rawValue, "message": message
         ])
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -318,19 +318,19 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     }
 
     /// Stop/cancel the active chat turn.
-    public func stopChat(_ chatID: String) async throws {
+    public func stopChat(_ chatID: PageID) async throws {
         try await withTimeout {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.stopChat(chatID: chatID) { cont.resume() }
+                self.proxy.stopChat(chatID: chatID.rawValue) { cont.resume() }
             }
         }
     }
 
     /// Rehydrate a chat's live state after (re)connect.
-    public func chatSessionState(_ chatID: String) async throws -> ChatSessionState {
+    public func chatSessionState(_ chatID: PageID) async throws -> ChatSessionState {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.chatSessionState(chatID: chatID) { data in
+                self.proxy.chatSessionState(chatID: chatID.rawValue) { data in
                     cont.resume(returning: data)
                 }
             }

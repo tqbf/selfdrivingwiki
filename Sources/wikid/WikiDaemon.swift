@@ -662,7 +662,7 @@ final class WikiDaemon: @unchecked Sendable {
                 let reply = ChatErrorReply(error: "invalid request")
                 return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
             }
-            try await host.sendChatMessage(chatID: chatID, message: message)
+            try await host.sendChatMessage(chatID: PageID(rawValue: chatID), message: message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
@@ -675,7 +675,7 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     /// Stop a chat.
-    func stopChat(chatID: String) async {
+    func stopChat(chatID: PageID) async {
         #if canImport(WikiFSEngine)
         if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }) {
             await host.stopChat(chatID: chatID)
@@ -684,7 +684,7 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     /// Get the chat session state. Returns JSON `ChatSessionState`.
-    func chatSessionStateData(chatID: String) async -> Data {
+    func chatSessionStateData(chatID: PageID) async -> Data {
         #if canImport(WikiFSEngine)
         do {
             let host = try await ensureChatHost()
@@ -793,9 +793,9 @@ final class WikiDaemon: @unchecked Sendable {
         // `chatID` is included because chat envelopes are per-conversation and
         // correlating a drop to its chat is the whole point of this diagnostic.
         if sinks.isEmpty {
-            DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") — no sinks registered (drop)")
+            DebugLog.store("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID?.rawValue ?? "nil") — no sinks registered (drop)")
         } else {
-            DebugLog.verbose("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID ?? "nil") sinks=\(sinks.count)")
+            DebugLog.verbose("wikid: pushChatEnvelope kind=\(envelope.kind.rawValue) chatID=\(envelope.chatID?.rawValue ?? "nil") sinks=\(sinks.count)")
         }
         for sink in sinks {
             sink.deliverEvent(data)

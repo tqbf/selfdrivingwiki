@@ -48,12 +48,12 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Session registry (guarded by `queue`)
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid.chat")
-    private var sessions: [String: ChatSession] = [:]
-    private var statePollTasks: [String: Task<Void, Never>] = [:]
+    private var sessions: [PageID: ChatSession] = [:]
+    private var statePollTasks: [PageID: Task<Void, Never>] = [:]
 
     private struct ChatSession {
         let wikiID: String
-        let chatID: String
+        let chatID: PageID
         let launcher: AgentLauncher
     }
 
@@ -96,7 +96,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     /// Get an existing launcher for a chat, or create a new one.
-    private func getOrCreateLauncher(chatID: String, wikiID: String) async -> AgentLauncher {
+    private func getOrCreateLauncher(chatID: PageID, wikiID: String) async -> AgentLauncher {
         if let existing = queue.sync(execute: { sessions[chatID]?.launcher }) {
             return existing
         }
@@ -118,7 +118,7 @@ final class DaemonChatHost: @unchecked Sendable {
     func startChat(
         wikiID: String, firstMessage: String,
         providerId: String? = nil, modelId: String? = nil
-    ) async throws -> String {
+    ) async throws -> PageID {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -141,7 +141,7 @@ final class DaemonChatHost: @unchecked Sendable {
         let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
 
         // 3. Create the launcher + register the session.
-        let launcher = await getOrCreateLauncher(chatID: chat.id.rawValue, wikiID: wikiID)
+        let launcher = await getOrCreateLauncher(chatID: chat.id, wikiID: wikiID)
 
         // 4. Start the interactive session.
         let chatIDPage = chat.id
@@ -183,10 +183,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
         // 5. Wire the event stream (after startInteractiveQuery so
         //    resetRunArtifacts doesn't clear it).
-        await wireEventStream(chatID: chat.id.rawValue, launcher: launcher)
+        await wireEventStream(chatID: chat.id, launcher: launcher)
 
         // 6. Start the state-change poll.
-        startStatePoll(for: chat.id.rawValue, launcher: launcher)
+        startStatePoll(for: chat.id, launcher: launcher)
 
         // 7. Preflight failure → rollback the chat row.
         let preflightError = await MainActor.run { launcher.preflightError }
@@ -196,7 +196,7 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.preflightFailed(preflightError ?? "unknown")
         }
 
-        return chat.id.rawValue
+        return chat.id
     }
 
     // MARK: - Continue a persisted chat
@@ -204,7 +204,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Continue a chat with a new user turn. Reads the history + `acpSessionId`
     /// from the store, builds the adaptive preamble, and starts a fresh
     /// interactive session writing to the SAME chat row.
-    func continueChat(wikiID: String, chatID: String, message: String) async throws {
+    func continueChat(wikiID: String, chatID: PageID, message: String) async throws {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -214,8 +214,8 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.emptyMessage
         }
 
-        let chatIDPage = PageID(rawValue: chatID)
-        DebugLog.agent("DaemonChatHost.continueChat: chatID=\(chatID) msg=\"\(trimmed.prefix(80))\"")
+        let chatIDPage = chatID
+        DebugLog.agent("DaemonChatHost.continueChat: chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\"")
 
         // RC4: per-chat takeover — only refuse mid-generation on THIS chat.
         // No cross-chat stopAgent (each chat has its own launcher).
@@ -228,7 +228,7 @@ final class DaemonChatHost: @unchecked Sendable {
                 isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot)
         }
         if decision == .refused {
-            DebugLog.agent("DaemonChatHost.continueChat: refused — mid-generation on chat \(chatID)")
+            DebugLog.agent("DaemonChatHost.continueChat: refused — mid-generation on chat \(chatID.rawValue)")
             throw DaemonChatError.midGeneration
         }
 
@@ -267,7 +267,7 @@ final class DaemonChatHost: @unchecked Sendable {
             wikiRoot: "",
             systemPrompt: systemPromptBody,
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            chatID: chatID,
+            chatID: chatID.rawValue,
             historySeed: history.map(\.event),
             priorAcpSessionId: priorAcpSessionId,
             chatOverrideProviderId: chatRow.modelProviderId,
@@ -305,10 +305,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Send a message to an active chat. If the session died between turns
     /// (RC1), re-route to the continueChat path which re-spawns.
-    func sendChatMessage(chatID: String, message: String) async throws {
+    func sendChatMessage(chatID: PageID, message: String) async throws {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
-            throw DaemonChatError.noSession(chatID)
+            throw DaemonChatError.noSession(chatID.rawValue)
         }
 
         // RC1: detect dead session.
@@ -317,14 +317,14 @@ final class DaemonChatHost: @unchecked Sendable {
         }
 
         if isAlive {
-            DebugLog.agent("DaemonChatHost.sendChatMessage: alive — sending turn to chat \(chatID)")
+            DebugLog.agent("DaemonChatHost.sendChatMessage: alive — sending turn to chat \(chatID.rawValue)")
             await MainActor.run {
                 session.launcher.sendInteractiveMessage(message)
             }
         } else {
             // RC1: re-route to continueChat (re-invokes startInteractiveQuery
             // which re-seeds sinks).
-            DebugLog.agent("DaemonChatHost.sendChatMessage: DEAD session — re-routing to continueChat for \(chatID)")
+            DebugLog.agent("DaemonChatHost.sendChatMessage: DEAD session — re-routing to continueChat for \(chatID.rawValue)")
             try await continueChat(
                 wikiID: session.wikiID, chatID: chatID, message: message)
         }
@@ -334,10 +334,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Stop the active turn and end the session. The launcher is retained in
     /// the registry (D1: no idle eviction for Phase C).
-    func stopChat(chatID: String) async {
+    func stopChat(chatID: PageID) async {
         let session = queue.sync { sessions[chatID] }
         guard let session else { return }
-        DebugLog.agent("DaemonChatHost.stopChat: stopping chat \(chatID)")
+        DebugLog.agent("DaemonChatHost.stopChat: stopping chat \(chatID.rawValue)")
         await MainActor.run {
             session.launcher.stopAgent()
         }
@@ -348,10 +348,10 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Return the live state of a chat for client rehydration. If the daemon
     /// still has the launcher, reads from it; otherwise throws (the client
     /// falls back to reading from its local store).
-    func chatSessionState(chatID: String) async throws -> ChatSessionState {
+    func chatSessionState(chatID: PageID) async throws -> ChatSessionState {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
-            throw DaemonChatError.noSession(chatID)
+            throw DaemonChatError.noSession(chatID.rawValue)
         }
 
         let launcher = session.launcher
@@ -368,8 +368,8 @@ final class DaemonChatHost: @unchecked Sendable {
                 preflightError: launcher.preflightError,
                 thinkingOption: launcher.thinkingOption,
                 usageData: usageData,
-                logFileURL: launcher.logFileURL(forChat: chatID),
-                debugFolderURL: launcher.debugFolderURL(forChat: chatID),
+                logFileURL: launcher.logFileURL(forChat: chatID.rawValue),
+                debugFolderURL: launcher.debugFolderURL(forChat: chatID.rawValue),
                 runKindRaw: launcher.runningKind.map { "\($0)" },
                 runStartedAt: launcher.runStartedAt,
                 stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
@@ -381,10 +381,10 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Resolve a pending permission
 
     /// Forward a permission resolution to the launcher's backend.
-    func resolvePermission(chatID: String, optionId: String, approve: Bool) async {
+    func resolvePermission(chatID: PageID, optionId: String, approve: Bool) async {
         let session = queue.sync { sessions[chatID] }
         guard let session else { return }
-        DebugLog.agent("DaemonChatHost.resolvePermission: chat=\(chatID) option=\(optionId) approve=\(approve)")
+        DebugLog.agent("DaemonChatHost.resolvePermission: chat=\(chatID.rawValue) option=\(optionId) approve=\(approve)")
         await session.launcher.resolvePendingPermission(optionId: optionId)
     }
 
@@ -394,12 +394,12 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chatID`, without restarting it. Forwards to the launcher's generic
     /// `setConfigOption(configId:value:)`, which calls the ACP backend's
     /// `session/set_config_option`. Throws if no live session is held.
-    func setChatConfigOption(chatID: String, option: String, value: String) async throws {
+    func setChatConfigOption(chatID: PageID, option: String, value: String) async throws {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
-            throw DaemonChatError.noSession(chatID)
+            throw DaemonChatError.noSession(chatID.rawValue)
         }
-        DebugLog.agent("DaemonChatHost.setChatConfigOption: chat=\(chatID) option=\(option) value=\(value)")
+        DebugLog.agent("DaemonChatHost.setChatConfigOption: chat=\(chatID.rawValue) option=\(option) value=\(value)")
         await MainActor.run {
             session.launcher.setConfigOption(configId: option, value: value)
         }
@@ -408,7 +408,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Test accessors
 
     /// Whether the host currently holds a live session for `chatID`.
-    func hasLiveSession(_ chatID: String) -> Bool {
+    func hasLiveSession(_ chatID: PageID) -> Bool {
         queue.sync { sessions[chatID] != nil }
     }
 
@@ -421,7 +421,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Set `onAgentEvent` on the launcher so every streamed event is pushed
     /// to the client. Called after `startInteractiveQuery` (which clears it
     /// via `resetRunArtifacts`).
-    private func wireEventStream(chatID: String, launcher: AgentLauncher) async {
+    private func wireEventStream(chatID: PageID, launcher: AgentLauncher) async {
         await MainActor.run {
             let push = self.pushEvent
             launcher.onAgentEvent = { event in
@@ -439,7 +439,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Start a 150ms poll that pushes `ChatStateUpdate` envelopes when the
     /// launcher's run flags change. Mirrors the existing `pendingPollTask`
     /// pattern in AgentLauncher.
-    private func startStatePoll(for chatID: String, launcher: AgentLauncher) {
+    private func startStatePoll(for chatID: PageID, launcher: AgentLauncher) {
         // Cancel any existing poll for this chat.
         queue.sync { statePollTasks[chatID]?.cancel() }
 
@@ -475,7 +475,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     @MainActor
-    private func pushStateUpdate(chatID: String, launcher: AgentLauncher) {
+    private func pushStateUpdate(chatID: PageID, launcher: AgentLauncher) {
         let usageData = launcher.runTotalUsage.flatMap { usage in
             DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
         }
@@ -486,8 +486,8 @@ final class DaemonChatHost: @unchecked Sendable {
             preflightError: launcher.preflightError,
             thinkingOption: launcher.thinkingOption,
             usageData: usageData,
-            logFileURL: launcher.logFileURL(forChat: chatID),
-            debugFolderURL: launcher.debugFolderURL(forChat: chatID),
+            logFileURL: launcher.logFileURL(forChat: chatID.rawValue),
+            debugFolderURL: launcher.debugFolderURL(forChat: chatID.rawValue),
             runKindRaw: launcher.runningKind.map { "\($0)" },
             runStartedAt: launcher.runStartedAt,
             stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
@@ -497,7 +497,7 @@ final class DaemonChatHost: @unchecked Sendable {
         // update (running=false gen=false) never appears here, the daemon never
         // observed the session end and nothing downstream can clear the badge.
         DebugLog.chatLive(
-            "1.daemon.push chat=\(chatID) running=\(launcher.isRunning) "
+            "1.daemon.push chat=\(chatID.rawValue) running=\(launcher.isRunning) "
             + "gen=\(launcher.isGenerating) awaiting=\(launcher.isAwaitingGenerationSlot)")
         pushEvent(.chatState(chatID: chatID, update: update))
     }
@@ -512,7 +512,7 @@ final class DaemonChatHost: @unchecked Sendable {
             try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionId)
             // Push the session-id writeback to the client (#830).
             pushEvent(.chatAcpSessionId(
-                chatID: chatID.rawValue, sessionId: sessionId))
+                chatID: chatID, sessionId: sessionId))
         } catch {
             DebugLog.store("DaemonChatHost: updateChatAcpSessionId failed: \(error)")
         }
