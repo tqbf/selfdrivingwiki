@@ -106,7 +106,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 ext: staged.ext,
                 displayPath: ingestSourcePath(for: source),
                 name: source.effectiveName,
-                sourceID: source.id.rawValue
+                sourceID: source.id
             ))
         }
 
@@ -299,7 +299,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     }
 
     private func ingestSourcePath(for source: SourceSummary) -> String {
-        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
+        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext)
         return "sources/by-id/\(leaf)"
     }
 

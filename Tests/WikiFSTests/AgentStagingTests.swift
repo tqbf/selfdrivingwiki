@@ -15,45 +15,45 @@ struct AgentStagingTests {
   }
 
   @Test func shellSafeLeafPreservesSimpleAsciiStem() {
-    #expect(AgentStaging.shellSafeLeaf(name: "Neuralwatt Cloud Platform", sourceID: "01KXYMP7J6HZ3E34ZZX02HKS1F", ext: "html")
+    #expect(AgentStaging.shellSafeLeaf(name: "Neuralwatt Cloud Platform", sourceID: PageID(rawValue: "01KXYMP7J6HZ3E34ZZX02HKS1F"), ext: "html")
             == "Neuralwatt-Cloud-Platform--01KXYMP7J6HZ3E34ZZX02HKS1F.html")
-    #expect(AgentStaging.shellSafeLeaf(name: "Trip Report", sourceID: "01ABCDEF", ext: "pdf")
+    #expect(AgentStaging.shellSafeLeaf(name: "Trip Report", sourceID: PageID(rawValue: "01ABCDEF"), ext: "pdf")
             == "Trip-Report--01ABCDEF.pdf")
-    #expect(AgentStaging.shellSafeLeaf(name: "Home", sourceID: "01KV6EAH", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: "Home", sourceID: PageID(rawValue: "01KV6EAH"), ext: "md")
             == "Home--01KV6EAH.md")
   }
 
   @Test func shellSafeLeafReplacesSpacesAndShellMetacharactersWithDashes() {
     // Spaces and shell metacharacters (; & $ ` ( ) | < > \ " ' ! * ? [ ] { })
     // all become '-'. Runs of '-' collapse, ends trimmed.
-    #expect(AgentStaging.shellSafeLeaf(name: "Cost & Revenue (Q3)", sourceID: "01K", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: "Cost & Revenue (Q3)", sourceID: PageID(rawValue: "01K"), ext: "md")
             == "Cost-Revenue-Q3--01K.md")
-    #expect(AgentStaging.shellSafeLeaf(name: "name with $vars", sourceID: "01K", ext: "pdf")
+    #expect(AgentStaging.shellSafeLeaf(name: "name with $vars", sourceID: PageID(rawValue: "01K"), ext: "pdf")
             == "name-with-vars--01K.pdf")
     // The shell metacharacters " ` | ; are all replaced with '-'.
-    #expect(AgentStaging.shellSafeLeaf(name: "a\"b`c|d;e", sourceID: "01K", ext: "txt")
+    #expect(AgentStaging.shellSafeLeaf(name: "a\"b`c|d;e", sourceID: PageID(rawValue: "01K"), ext: "txt")
             == "a-b-c-d-e--01K.txt")
   }
 
   @Test func shellSafeLeafReplacesPathSeparatorsWithDashes() {
     // `escapeTitle` already replaces '/' and ':' with '-' (FilenameEscaping.swift).
-    #expect(AgentStaging.shellSafeLeaf(name: "a/b:c", sourceID: "01K", ext: "txt")
+    #expect(AgentStaging.shellSafeLeaf(name: "a/b:c", sourceID: PageID(rawValue: "01K"), ext: "txt")
             == "a-b-c--01K.txt")
     // Leading '.' is prefixed with '_' by escapeTitle (the '.' is kept, the
     // '_' prepended). Both '_' and '.' are in the shell-safe allowed set, so
     // the leaf `_.hidden--01K.md` matches `^[A-Za-z0-9._-]+$`.
-    #expect(AgentStaging.shellSafeLeaf(name: ".hidden", sourceID: "01K", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: ".hidden", sourceID: PageID(rawValue: "01K"), ext: "md")
             == "_.hidden--01K.md")
   }
 
   @Test func shellSafeLeafFallsBackToUntitledForEmptyOrAllMetacharName() {
     // `escapeTitle` returns "untitled" for an empty stem. A name consisting
     // entirely of disallowed chars collapses to empty → "untitled".
-    #expect(AgentStaging.shellSafeLeaf(name: "", sourceID: "01K", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: "", sourceID: PageID(rawValue: "01K"), ext: "md")
             == "untitled--01K.md")
-    #expect(AgentStaging.shellSafeLeaf(name: "  ", sourceID: "01K", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: "  ", sourceID: PageID(rawValue: "01K"), ext: "md")
             == "untitled--01K.md")
-    #expect(AgentStaging.shellSafeLeaf(name: "$$$", sourceID: "01K", ext: "md")
+    #expect(AgentStaging.shellSafeLeaf(name: "$$$", sourceID: PageID(rawValue: "01K"), ext: "md")
             == "untitled--01K.md")
   }
 
@@ -64,19 +64,19 @@ struct AgentStagingTests {
     // pseudocode — filtration, not replacement, keeps extensions tidy).
     // Upstream `SourceSummary.ext` is already lowercased with no leading dot,
     // but `shellSafeLeaf` stays correct even for adversarial ext input.
-    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: "01K", ext: "MD")
+    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: PageID(rawValue: "01K"), ext: "MD")
             == "Doc--01K.md")  // lowercased
-    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: "01K", ext: ".md")
+    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: PageID(rawValue: "01K"), ext: ".md")
             == "Doc--01K..md")  // '.' kept (allowed); still shell-safe
-    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: "01K", ext: "pdf ")
+    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: PageID(rawValue: "01K"), ext: "pdf ")
             == "Doc--01K.pdf")  // trailing space filtered out
     // A weird extension with shell metacharacters is sanitized by filtering
     // the offending char out — the result is shell-safe (regex matches).
-    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: "01K", ext: "md;rm")
+    #expect(AgentStaging.shellSafeLeaf(name: "Doc", sourceID: PageID(rawValue: "01K"), ext: "md;rm")
             == "Doc--01K.mdrm")
     let shellSafePattern = try NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")
     for ext in ["MD", ".md", "pdf ", "md;rm", "md`rm", "md$rm"] {
-      let leaf = AgentStaging.shellSafeLeaf(name: "Doc", sourceID: "01K", ext: ext)
+      let leaf = AgentStaging.shellSafeLeaf(name: "Doc", sourceID: PageID(rawValue: "01K"), ext: ext)
       let range = NSRange(location: 0, length: leaf.utf16.count)
       #expect(shellSafePattern.firstMatch(in: leaf, range: range) != nil,
               "leaf \(leaf) for ext \(ext) is not shell-safe")
@@ -85,7 +85,7 @@ struct AgentStagingTests {
 
   @Test func shellSafeLeafOmitsExtensionWhenEmpty() {
     // No trailing dot when ext is empty (consistent with FilenameEscaping).
-    #expect(AgentStaging.shellSafeLeaf(name: "Notes", sourceID: "01K", ext: "")
+    #expect(AgentStaging.shellSafeLeaf(name: "Notes", sourceID: PageID(rawValue: "01K"), ext: "")
             == "Notes--01K")
   }
 
@@ -95,8 +95,8 @@ struct AgentStagingTests {
     // distinct full ULIDs always produce distinct leaves even with identical
     // names. (Repo scenario: multi-file drag-drop allocating ULIDs in a tight
     // loop — same ms, same effectiveName if the filenames match, but unique IDs.)
-    let leaf1 = AgentStaging.shellSafeLeaf(name: "Same Name", sourceID: "01KXYMP7J6HZ3E34ZZX02HKS1F", ext: "md")
-    let leaf2 = AgentStaging.shellSafeLeaf(name: "Same Name", sourceID: "01KXYMP7J6HZ3E34ZZX02HKS1G", ext: "md")
+    let leaf1 = AgentStaging.shellSafeLeaf(name: "Same Name", sourceID: PageID(rawValue: "01KXYMP7J6HZ3E34ZZX02HKS1F"), ext: "md")
+    let leaf2 = AgentStaging.shellSafeLeaf(name: "Same Name", sourceID: PageID(rawValue: "01KXYMP7J6HZ3E34ZZX02HKS1G"), ext: "md")
     #expect(leaf1 != leaf2)
     // Distinct ULIDs → distinct leaves.
     #expect(leaf1 == "Same-Name--01KXYMP7J6HZ3E34ZZX02HKS1F.md")
@@ -123,9 +123,9 @@ struct AgentStagingTests {
     try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: scratch) }
 
-    let sources: [(bytes: Data, ext: String, name: String, sourceID: String)] = [
-      (Data("first".utf8),  "md",   "Neuralwatt Cloud Platform", "01KXYMP7J6HZ3E34ZZX02HKS1F"),
-      (Data("second".utf8), "pdf",  "MCR Protocol",               "01KXYMKF1EF820Y5KZ6FTBAQRS"),
+    let sources: [(bytes: Data, ext: String, name: String, sourceID: PageID)] = [
+      (Data("first".utf8),  "md",   "Neuralwatt Cloud Platform", PageID(rawValue: "01KXYMP7J6HZ3E34ZZX02HKS1F")),
+      (Data("second".utf8), "pdf",  "MCR Protocol",               PageID(rawValue: "01KXYMKF1EF820Y5KZ6FTBAQRS")),
     ]
     let paths = try AgentStaging.stageSources(sources, in: scratch)
 
@@ -174,7 +174,7 @@ struct AgentStagingTests {
       ("", "md"),                         // empty → untitled stem
       ("a\"b`c|d;e$f(g)h!i", "md"),
     ]
-    let sources = cases.map { (Data("x".utf8), $0.ext, $0.name, ulid) }
+    let sources = cases.map { (Data("x".utf8), $0.ext, $0.name, PageID(rawValue: ulid)) }
     let paths = try AgentStaging.stageSources(sources, in: scratch)
 
     let shellSafePattern = try NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")

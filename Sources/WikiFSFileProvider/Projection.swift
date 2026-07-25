@@ -1198,8 +1198,8 @@ struct Projection {
         let humanName = source.displayName ?? source.filename
         let name = isByName
             ? FilenameEscaping.byNameSourceFilename(
-                filename: humanName, ext: "md", sourceID: source.id.rawValue)
-            : FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: "md")
+                filename: humanName, ext: "md", sourceID: source.id)
+            : FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
         let size = contentData?.count ?? SourceMarkdownFormat.fileContent(for: head).utf8.count
         return .file(
@@ -1225,8 +1225,8 @@ struct Projection {
         let humanName = file.displayName ?? file.filename
         let name = isByName
             ? FilenameEscaping.byNameSourceFilename(
-                filename: humanName, ext: file.ext, sourceID: file.id.rawValue)
-            : FilenameEscaping.byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
+                filename: humanName, ext: file.ext, sourceID: file.id)
+            : FilenameEscaping.byIDSourceFilename(sourceID: file.id, ext: file.ext)
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
         let metaKey = isByName
             ? "\(humanName)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
@@ -1397,8 +1397,8 @@ struct Projection {
             let hasSibling = heads[entry.id] != nil
                 && (entry.mime.map { !MimeType.isText($0) } ?? false)
             let file = hasSibling
-                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: entry.id)
-                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: entry.id)
+                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: PageID(rawValue: entry.id))
+                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: PageID(rawValue: entry.id))
             let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: entry.humanName)
             sourceByName[entry.humanName] = target
             sourceByID[entry.id.uppercased()] = target

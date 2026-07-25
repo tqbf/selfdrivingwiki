@@ -56,7 +56,7 @@ struct QuotaFallbackIntegrationTests {
             ext: "md",
             displayPath: "sources/by-id/large.md",
             name: "Large Source",
-            sourceID: "01FAKE01KQ8HDDR3ZXK72XHG6R"
+            sourceID: PageID(rawValue: "01FAKE01KQ8HDDR3ZXK72XHG6R")
         )
     }
 

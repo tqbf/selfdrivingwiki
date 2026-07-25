@@ -142,7 +142,7 @@ struct ProjectionTests {
 
         // by-name uses FilenameEscaping.byNameSourceFilename(filename:ext:sourceID:)
         let expectedName = FilenameEscaping.byNameSourceFilename(
-            filename: source.filename, ext: "md", sourceID: sourceID)
+            filename: source.filename, ext: "md", sourceID: PageID(rawValue: sourceID))
         #expect(node.name == expectedName)
         // parent is sourcesByName
         #expect(node.parent == Projection.Identity.sourcesByName)

@@ -3988,7 +3988,7 @@ public final class WikiStoreModel {
             }
             let filename = file.filename.lowercased()
             let byIDLeaf = FilenameEscaping
-                .byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
+                .byIDSourceFilename(sourceID: file.id, ext: file.ext)
                 .lowercased()
             let path = "sources/by-id/\(byIDLeaf)"
             let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
