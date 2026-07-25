@@ -305,7 +305,7 @@ manually when changing hot logic (relational / boolean / arithmetic mutators).
 
 Budget ~10 min of cold sandbox build before the first mutant runs (the tool
 copies the repo without `.build`), then ~9s per mutant. A `Sources/WikiFSTypes`
-scope is ~35 min for 93 mutants.
+scope is ~30 min for 72 mutants (87.1%, stock 1.3.0).
 
 `Sources/WikiFSTypes/MutationTestingSupport.swift` is **load-bearing and must
 not be deleted**. The tool rewrites mutated function bodies into
