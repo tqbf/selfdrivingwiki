@@ -77,7 +77,27 @@ struct ChatDetailView: View {
     /// false, it sources from the persisted `store.chatMessages(chatID:)`.
     private var isLiveChat: Bool {
         guard let chatID else { return false }
-        return remoteSession.activeChatID == chatID.rawValue
+        return remoteSession.activeChatID == chatID
+    }
+
+    /// TEMPORARY (chat transcript freezes mid-stream): seam 7 of 8 — which
+    /// SOURCE this surface is rendering from. This is the discriminator the
+    /// other seams can't give: `live=false` means the transcript is coming from
+    /// `persistedMessages` (which only reloads on `.task(id:)` /
+    /// `store.messageVersion`), so a frozen transcript is a liveness bug in the
+    /// mirror. `live=true` with a growing `liveEvents` but a frozen screen is a
+    /// differ bug, and seam 8 says which.
+    private var liveDebugKey: String {
+        // Built in steps: as one chained interpolation the type checker times
+        // out (`unable to type-check this expression in reasonable time`).
+        let id = chatID?.rawValue ?? "draft"
+        let active = remoteSession.activeChatID?.rawValue ?? "nil"
+        let state = String(describing: remoteSession.runState)
+        let liveCount = remoteSession.events.count
+        let persistedCount = persistedMessages.count
+        let displayCount = displayMessages.count
+        return "chat=\(id) live=\(isLiveChat) activeChatID=\(active) runState=\(state) "
+            + "liveEvents=\(liveCount) persisted=\(persistedCount) display=\(displayCount)"
     }
 
     /// Pure source-of-truth selector (D2): the live session streams from
@@ -141,8 +161,12 @@ struct ChatDetailView: View {
     /// True only when THIS surface is the active live stream — so a persisted
     /// chat never shows the "Waiting for the Agent…" placeholder even while its
     /// launcher is generating a different chat.
+    /// Keys off `isAnswering`, not `isLive`: a warm session between turns is
+    /// live (its transcript is the mirror's) but nothing is running, so it must
+    /// not show "Waiting for the Agent…". This is the same conflation that
+    /// pinned the sidebar "responding…" badge on for the life of a session.
     private var transcriptIsRunning: Bool {
-        isLiveChat && remoteSession.isRunning
+        isLiveChat && remoteSession.runState.isAnswering
     }
 
     var body: some View {
@@ -209,7 +233,7 @@ struct ChatDetailView: View {
                 // daemon's held-alive launcher (or the persisted rows once the
                 // launcher was evicted). Best-effort — a rehydrate failure
                 // leaves the session on its last-known state.
-                await coordinator.rehydrate(chatID: chatID.rawValue)
+                await coordinator.rehydrate(chatID: chatID)
             } else {
                 persistedMessages = []
                 // Omnibox "Ask" action (#288): if a pending question was set
@@ -229,6 +253,13 @@ struct ChatDetailView: View {
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
+        }
+        // TEMPORARY (chat transcript freezes mid-stream): seam 7 of 8. Keyed on
+        // a composed string so it emits one line per real transition rather
+        // than one per body pass; `initial: true` captures the state the
+        // surface opened in.
+        .onChange(of: liveDebugKey, initial: true) { _, key in
+            DebugLog.chatLive("7.detail \(key)")
         }
         // Reload persisted messages when the store changes (e.g. a new message
         // appended to a persisted chat — D3 continues append here, and this keeps
@@ -426,6 +457,7 @@ struct ChatDetailView: View {
                     }
                     ChatTranscriptView(
                         events: displayMessages,
+                        transcriptID: chatID.map(TranscriptID.chat),
                         timestamps: displayTimestamps,
                         emptyStateMessage: transcriptEmptyMessage,
                         isRunning: transcriptIsRunning,

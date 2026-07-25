@@ -37,16 +37,24 @@ public final class RemoteChatSession {
 
     // MARK: - Backward-compatible run-flag shims (computed from runState)
 
-    public var isRunning: Bool { runState == .thinking || runState == .generating }
-    public var isGenerating: Bool { runState == .generating }
+    /// Mirrors `AgentLauncher.isRunning` — "the agent process is alive", which
+    /// for an interactive chat is true *across turns*. NOT "a turn is in
+    /// flight"; use `isGenerating` (or `runState.isAnswering`) for that.
+    public var isRunning: Bool { runState.isLive }
+    /// Mirrors `AgentLauncher.isGenerating` — a turn is in flight, covering the
+    /// thinking phase as well as streaming. The flag every spinner keys off.
+    public var isGenerating: Bool { runState.isAnswering }
     public var isAwaitingGenerationSlot: Bool { runState == .queued }
-    public var isInteractiveSession: Bool { runState.isActive }
+    public var isInteractiveSession: Bool { runState.isLive }
     /// The chat id this mirror currently reflects as the LIVE session, or nil
     /// when this chat is not the daemon's active session (persisted/idle).
     /// Derived from `runState` so the `ChatDetailView` source-of-truth rule
     /// (`activeChatID == chatID`) flips a chat live precisely when the daemon
     /// is running it.
-    public var activeChatID: String? { runState.isActive ? chatID : nil }
+    /// `PageID?`, not `String?` — so `ChatDetailView`'s liveness rule compares
+    /// two chat ids rather than two strings, and the draft (which has no
+    /// `PageID`) can never satisfy it.
+    public var activeChatID: PageID? { runState.isLive ? chatID.pageID : nil }
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
     public var runStartedAt: Date?
@@ -80,13 +88,13 @@ public final class RemoteChatSession {
     /// The chat's most-recent run's log file URL (pure disk resolve).
     public var logFileURL: URL? {
         guard let chatID = activeChatID else { return nil }
-        return AgentLauncher.logFileURLStatic(forChat: chatID)
+        return AgentLauncher.logFileURLStatic(forChat: chatID.rawValue)
     }
 
     /// The chat's debug folder URL.
     public var debugFolderURL: URL? {
         guard let chatID = activeChatID else { return nil }
-        return AgentLauncher.debugFolderURLStatic(forChat: chatID)
+        return AgentLauncher.debugFolderURLStatic(forChat: chatID.rawValue)
     }
 
     /// Available thinking-effort choices (derived from `thinkingOption`).
@@ -94,11 +102,36 @@ public final class RemoteChatSession {
         thinkingOption?.choices ?? []
     }
 
+    // MARK: - Private: streaming-row bookkeeping
+
+    /// Which kind of row (if any) `events.last` is still accumulating from
+    /// streamed delta chunks. A delta extends that row instead of starting a
+    /// new one; a *finished* row is never extended by the next block.
+    ///
+    /// An enum rather than a pair of booleans: the two states are mutually
+    /// exclusive (a row cannot be mid-assistant-text and mid-thinking at once),
+    /// so booleans would make that impossible combination representable and
+    /// oblige every branch to remember to clear the other one — the same
+    /// denormalized-flags trap `ChatRunState` exists to close.
+    private enum StreamingRow {
+        /// No row is accumulating; the next delta starts a fresh one.
+        case none
+        /// `events.last` is an `.assistantText` row built from `.assistantTextDelta`.
+        case assistant
+        /// `events.last` is a `.thinking` row built from `.thinkingDelta`.
+        case thinking
+    }
+
+    /// `@ObservationIgnored`: internal merge bookkeeping, not view state. It
+    /// changes on every delta and no view reads it, so tracking it would
+    /// invalidate the transcript on writes nothing renders.
+    @ObservationIgnored private var streamingRow: StreamingRow = .none
+
     // MARK: - Identity
 
-    public let chatID: String
+    public let chatID: ChatSessionKey
 
-    public init(chatID: String) {
+    public init(chatID: ChatSessionKey) {
         self.chatID = chatID
         // A fresh mirror knows NOTHING about the daemon yet, so it must not
         // claim liveness: `runState` defaults to `.idle`, which makes the
@@ -119,6 +152,7 @@ public final class RemoteChatSession {
     /// always renderable; an empty live stream is not).
     func markNotLive() {
         runState = .idle
+        streamingRow = .none
     }
 
     // MARK: - Envelope ingestion
@@ -127,7 +161,9 @@ public final class RemoteChatSession {
     /// Called by the app's chat-event router (which demuxes from
     /// `DaemonQueueEventSink`).
     func ingest(_ envelope: QueueEventEnvelope) {
-        guard envelope.chatID == chatID else { return }
+        // Envelopes carry the wire form; convert at this boundary rather than
+        // letting raw chat-id strings leak past it.
+        guard envelope.chatID == chatID.rawValue else { return }
         switch envelope.kind {
         case .chatEvent:
             if let event = envelope.chatAgentEvent {
@@ -163,8 +199,17 @@ public final class RemoteChatSession {
 
     /// Apply a full state snapshot (from `chatSessionState` rehydration).
     func hydrate(from state: ChatSessionState) {
-        events = state.events
-        eventTimestamps = Array(repeating: Date(), count: state.events.count)
+        // Same contract as `mergeOrAppendEvent`: a rehydrated history is one of
+        // the "OTHER consumers of the raw stream" `mergingStreamDeltas` names,
+        // so raw `.assistantTextDelta`/`.thinkingDelta` chunks in the snapshot
+        // must be folded here too — otherwise a rehydrate would re-break a
+        // transcript the live path had already assembled correctly. Idempotent:
+        // an already-merged array contains no deltas and passes through.
+        let merged = AgentEvent.mergingStreamDeltas(state.events)
+        events = merged
+        eventTimestamps = Array(repeating: Date(), count: merged.count)
+        // The snapshot is a complete history, not a row mid-flight.
+        streamingRow = .none
         runState = .from(isRunning: state.isRunning,
                           isGenerating: state.isGenerating,
                           isAwaitingSlot: state.isAwaitingGenerationSlot)
@@ -182,38 +227,89 @@ public final class RemoteChatSession {
 
     // MARK: - Private: event merge logic
 
-    /// Mirror `AgentLauncher.mergeOrAppend` for the remote case: delta
-    /// continuations replace the last event; everything else appends.
+    /// Mirror `AgentLauncher.mergeOrAppend` for the remote case: streamed
+    /// deltas coalesce into the in-progress row, and a final full-text event
+    /// replaces that row rather than duplicating it.
+    ///
+    /// **Folding the deltas is not cosmetic — without it the transcript renders
+    /// nothing at all.** The daemon streams a turn as `.assistantTextDelta` /
+    /// `.thinkingDelta` chunks, and both are `isInternalTranscriptEvent`, so
+    /// `transcriptVisible` filters every one of them out. Appending them raw
+    /// (the old `default:` branch) produced hundreds of events that the
+    /// transcript could not show: a live chat sat frozen on its user message
+    /// and tool-call rows while `events` climbed past 500, and the reply only
+    /// appeared after switching away and back — which re-read the *persisted*
+    /// rows, where the daemon had written properly coalesced text.
+    ///
+    /// `AgentEvent.mergingStreamDeltas` states the contract this satisfies:
+    /// "any OTHER consumer of the raw stream (queue transcripts, rehydrated
+    /// histories) must apply it too, or a streamed reply renders as one row per
+    /// word-fragment." This mirror is such a consumer. The logic here is the
+    /// incremental (event-at-a-time) form of that same fold; the two must stay
+    /// in step.
     private func mergeOrAppendEvent(_ event: AgentEvent) {
         let now = Date()
         switch event {
+        case .assistantTextDelta(let delta):
+            if streamingRow == .assistant, case .assistantText(let existing) = events.last {
+                // Keep the original timestamp — the row's "first seen" time.
+                events[events.count - 1] = .assistantText(existing + delta)
+            } else {
+                events.append(.assistantText(delta))
+                eventTimestamps.append(now)
+            }
+            streamingRow = .assistant
+
         case .assistantText(let text):
-            // If the last event is also .assistantText and the new text
-            // starts with the old text (delta continuation), replace.
-            if let last = events.last, case .assistantText(let existing) = last,
-               text.hasPrefix(existing) {
-                events[events.count - 1] = event
-                if !eventTimestamps.isEmpty {
-                    eventTimestamps[eventTimestamps.count - 1] = now
-                }
+            // The authoritative full text for a block we were streaming
+            // replaces the in-progress row instead of appending a duplicate.
+            if streamingRow == .assistant, case .assistantText = events.last {
+                replaceLastEvent(with: event, at: now)
+            } else if let last = events.last, case .assistantText(let existing) = last,
+                      text.hasPrefix(existing) {
+                // Providers that resend cumulative full text (no delta events)
+                // still collapse onto one row.
+                replaceLastEvent(with: event, at: now)
             } else {
                 events.append(event)
                 eventTimestamps.append(now)
             }
+            streamingRow = .none
+
+        case .thinkingDelta(let delta):
+            if streamingRow == .thinking, case .thinking(let existing) = events.last {
+                events[events.count - 1] = .thinking(existing + delta)
+            } else {
+                events.append(.thinking(delta))
+                eventTimestamps.append(now)
+            }
+            streamingRow = .thinking
+
         case .thinking(let text):
-            if let last = events.last, case .thinking(let existing) = last,
-               text.hasPrefix(existing) {
-                events[events.count - 1] = event
-                if !eventTimestamps.isEmpty {
-                    eventTimestamps[eventTimestamps.count - 1] = now
-                }
+            if streamingRow == .thinking, case .thinking = events.last {
+                replaceLastEvent(with: event, at: now)
+            } else if let last = events.last, case .thinking(let existing) = last,
+                      text.hasPrefix(existing) {
+                replaceLastEvent(with: event, at: now)
             } else {
                 events.append(event)
                 eventTimestamps.append(now)
             }
+            streamingRow = .none
+
         default:
             events.append(event)
             eventTimestamps.append(now)
+            streamingRow = .none
+        }
+    }
+
+    /// Overwrite the last event, keeping `eventTimestamps` parallel.
+    private func replaceLastEvent(with event: AgentEvent, at now: Date) {
+        guard !events.isEmpty else { return }
+        events[events.count - 1] = event
+        if !eventTimestamps.isEmpty {
+            eventTimestamps[eventTimestamps.count - 1] = now
         }
     }
 
@@ -347,6 +443,7 @@ public final class RemoteChatSession {
         events = []
         eventTimestamps = []
         runState = .idle
+        streamingRow = .none
         exitStatus = nil
         preflightError = nil
         pendingPermissions = []

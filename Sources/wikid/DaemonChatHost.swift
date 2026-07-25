@@ -479,6 +479,12 @@ final class DaemonChatHost: @unchecked Sendable {
             stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
             lastActivityAt: launcher.lastActivityAt,
             currentProcessID: launcher.currentProcessID.map(Int.init))
+        // TEMPORARY (stuck "responding…" badge): seam 1 of 6. If the terminal
+        // update (running=false gen=false) never appears here, the daemon never
+        // observed the session end and nothing downstream can clear the badge.
+        DebugLog.chatLive(
+            "1.daemon.push chat=\(chatID) running=\(launcher.isRunning) "
+            + "gen=\(launcher.isGenerating) awaiting=\(launcher.isAwaitingGenerationSlot)")
         pushEvent(.chatState(chatID: chatID, update: update))
     }
 

@@ -20,8 +20,10 @@ import WikiFSCore
 /// contract): new events are inserted into the live DOM via `appendRows`, and an
 /// in-place growth of the last row is patched via `replaceLastRow`, rather than a
 /// full reload — so an in-progress text selection survives a streaming run. A
-/// count *decrease* (a reset) or a `showsInternals` change (which changes which
-/// underlying events are visible) forces a full rebuild.
+/// count *decrease* (a reset), a `showsInternals` change (which changes which
+/// underlying events are visible), or a `transcriptID` change (the events now
+/// describe a different conversation entirely) forces a full rebuild.
+///
 /// A versioned request to scroll the chat transcript to a user turn. Mirrors the
 /// reader's anchor-version pattern: `version` bumps to signal a new request;
 /// `turnIndex` is the 0-based index among the `.chat-user` rows the transcript
@@ -42,6 +44,23 @@ struct ChatHighlightRequest: Equatable {
     let quote: String
 }
 
+/// Identity of the transcript a `ChatWebView` renders — the key its
+/// incremental differ uses to decide whether the DOM it already built belongs
+/// to the same conversation as the incoming `events`.
+///
+/// Namespaced by case rather than a bare `String`, so an id from one space can
+/// never compare equal to an id from another: chat rows and queue items are
+/// both ULIDs, and a raw-string key would silently treat a collision as "same
+/// transcript" — precisely the failure this type exists to prevent.
+enum TranscriptID: Hashable, Sendable {
+    /// A chat's persisted row (`ChatDetailView` → `ChatTranscriptView`). The
+    /// draft composer (`chatID == nil`) has no transcript to render, so there
+    /// is deliberately no draft case.
+    case chat(PageID)
+    /// A queue item's activity feed (`ActivityWindowView`).
+    case queueItem(QueueItem.ID)
+}
+
 struct ChatWebView: NSViewRepresentable {
     /// `.activityFeed` is the inspector look (labeled rows, tool calls,
     /// diagnostics). `.chat` is the Query page look (right-aligned capsule
@@ -53,6 +72,23 @@ struct ChatWebView: NSViewRepresentable {
 
     let events: [AgentEvent]
     let style: VisualStyle
+    /// Identity of the transcript these `events` belong to (a chat ULID, a
+    /// queue item id, …). The coordinator renders **incrementally** — it
+    /// appends only `events[renderedCount...]` — which is only sound while
+    /// successive `events` arrays are successive states of the SAME transcript.
+    ///
+    /// SwiftUI reuses an `NSViewRepresentable`'s view + coordinator whenever
+    /// structural identity is unchanged, and switching between two chat tabs
+    /// (or two queue items) does not change structural identity — the branch of
+    /// the enclosing `switch` is the same, only the associated value differs.
+    /// Without this key the differ would splice transcript B's tail onto
+    /// transcript A's DOM (`count > renderedCount` → append) or patch only the
+    /// last row (`count == renderedCount`), leaving the previous chat's
+    /// messages on screen and freezing subsequent streaming appends.
+    ///
+    /// A change forces a full rebuild. `nil` (the default) opts out — for
+    /// call sites that render exactly one transcript for the view's lifetime.
+    var transcriptID: TranscriptID? = nil
     /// A value that, when it changes, forces a full rebuild rather than an
     /// append — for callers whose event→visible-row filtering can change
     /// retroactively (e.g. `AgentQueueView`'s "Show internals" toggle).
@@ -135,7 +171,8 @@ struct ChatWebView: NSViewRepresentable {
         context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
         context.coordinator.renderContext = renderContext
-        context.coordinator.reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
+        context.coordinator.reload(events: events, showsInternals: showsInternals,
+                                   timestamps: timestamps, transcriptID: transcriptID)
         return webView
     }
 
@@ -148,7 +185,8 @@ struct ChatWebView: NSViewRepresentable {
         if let handler = webView.configuration.urlSchemeHandler(forURLScheme: BlobSchemeHandler.scheme) as? BlobSchemeHandler {
             handler.store = blobStore
         }
-        context.coordinator.apply(events: events, showsInternals: showsInternals, timestamps: timestamps)
+        context.coordinator.apply(events: events, showsInternals: showsInternals,
+                                  timestamps: timestamps, transcriptID: transcriptID)
         // Outline click → scroll the i-th user bubble into view. Only fires when
         // the version advances, so unrelated re-renders (streaming) don't re-scroll.
         if let req = scrollRequest, req.version != context.coordinator.appliedScrollVersion {
@@ -193,6 +231,12 @@ struct ChatWebView: NSViewRepresentable {
         var appliedHighlightVersion: Int = -1
         private var renderedCount = 0
         private var renderedShowsInternals: Bool?
+        /// The `transcriptID` the currently-rendered DOM was built from. When
+        /// the incoming id differs, the incremental differ's anchors
+        /// (`renderedCount`/`renderedEvents`/`renderedLastEvent`) describe a
+        /// *different* transcript and must not be used — see
+        /// `ChatWebView.transcriptID`.
+        private var renderedTranscriptID: TranscriptID?
         private var isLoaded = false
         private var pendingEvents: [AgentEvent] = []
         /// Pending timestamps to render once the page finishes loading (stashed by
@@ -214,9 +258,34 @@ struct ChatWebView: NSViewRepresentable {
         /// the current `WikiRenderContext` (or nil → constant-true behavior).
         private func currentContext() -> WikiRenderContext? { renderContext?() }
 
-        func reload(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = []) {
+        /// Pure predicate for "this render pass cannot append/patch — rebuild
+        /// the whole document". Extracted so the three rebuild triggers are
+        /// testable without a WebKit view tree.
+        ///
+        /// - A `transcriptID` change means the DOM belongs to a different
+        ///   transcript entirely (chat tab switch, queue item switch).
+        /// - A `showsInternals` change retroactively changes which events are
+        ///   visible, so previously-rendered rows are wrong.
+        /// - A count *decrease* is the reset contract (`events = []`).
+        ///
+        /// `nonisolated`: a pure predicate over value types, so tests can call
+        /// it without hopping to the main actor (same discipline as
+        /// `ChatDetailView.displayMessages`).
+        nonisolated static func needsFullReload(
+            transcriptID: TranscriptID?, renderedTranscriptID: TranscriptID?,
+            showsInternals: Bool, renderedShowsInternals: Bool?,
+            eventCount: Int, renderedCount: Int
+        ) -> Bool {
+            if transcriptID != renderedTranscriptID { return true }
+            if showsInternals != renderedShowsInternals { return true }
+            return eventCount < renderedCount
+        }
+
+        func reload(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = [],
+                    transcriptID: TranscriptID? = nil) {
             renderedCount = 0
             renderedShowsInternals = showsInternals
+            renderedTranscriptID = transcriptID
             renderedLastEvent = nil
             renderedEvents = events
             self.timestamps = timestamps
@@ -226,19 +295,39 @@ struct ChatWebView: NSViewRepresentable {
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
         }
 
-        func apply(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = []) {
+        func apply(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = [],
+                   transcriptID: TranscriptID? = nil) {
             self.timestamps = timestamps
-            if renderedShowsInternals != showsInternals {
-                reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
+            // Checked BEFORE the `isLoaded` guard, so a transcript switch that
+            // lands mid-load also replaces `pendingEvents` — otherwise
+            // `didFinish` would render the PREVIOUS transcript's rows and seed
+            // `renderedCount` from them, and the new chat would then be diffed
+            // against a DOM it never produced.
+            //
+            // This also hoists the count-decrease check above the guard, where
+            // it used to sit below. That is a no-op rather than a behavior
+            // change: `reload` sets `renderedCount = 0` and `isLoaded = false`
+            // together, and only `didFinish` sets either back — so while
+            // unloaded `renderedCount` is always 0 and `count < 0` is
+            // unreachable.
+            if Self.needsFullReload(
+                transcriptID: transcriptID, renderedTranscriptID: renderedTranscriptID,
+                showsInternals: showsInternals, renderedShowsInternals: renderedShowsInternals,
+                eventCount: events.count, renderedCount: renderedCount) {
+                // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
+                DebugLog.chatLive(
+                    "8.web.reload count=\(events.count) renderedCount=\(renderedCount)")
+                reload(events: events, showsInternals: showsInternals,
+                       timestamps: timestamps, transcriptID: transcriptID)
                 return
             }
             guard isLoaded else {
+                // TEMPORARY: rows arriving before the shell finishes loading are
+                // stashed, not drawn. A run of these with no `8.web.didFinish`
+                // after them means the shell load never completed.
+                DebugLog.chatLive("8.web.pending count=\(events.count)")
                 pendingEvents = events
                 pendingTimestamps = timestamps
-                return
-            }
-            if events.count < renderedCount {
-                reload(events: events, showsInternals: showsInternals, timestamps: timestamps)
                 return
             }
             guard events.count > renderedCount else {
@@ -264,6 +353,12 @@ struct ChatWebView: NSViewRepresentable {
                renderedEvents.count > 0 {
                 replaceLastRow(prevLast, at: renderedEvents.count - 1, isStreaming: false, allEvents: events, context: context)
             }
+            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8. The
+            // `from` index is the tell — a non-zero `from` on a chat's FIRST
+            // append means rows 0..<from were never drawn (the missing
+            // "thinking" rows before "read").
+            DebugLog.chatLive(
+                "8.web.append from=\(renderedCount) to=\(events.count)")
             appendRows(Array(events[renderedCount...]), startingIndex: renderedCount, context: context)
             renderedCount = events.count
             renderedLastEvent = events.last
@@ -272,6 +367,8 @@ struct ChatWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
+            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
+            DebugLog.chatLive("8.web.didFinish pending=\(pendingEvents.count)")
             let toRender = pendingEvents
             pendingEvents = []
             pendingTimestamps = []

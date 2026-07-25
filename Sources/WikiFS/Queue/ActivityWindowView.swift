@@ -633,6 +633,11 @@ struct ActivityWindowView: View {
             ChatWebView(
                 events: events,
                 style: .activityFeed,
+                // Selecting a different queue item reuses this representable's
+                // web view + coordinator (same structural identity, different
+                // associated value), so the differ needs the item id to know
+                // the DOM it built belongs to a different run.
+                transcriptID: .queueItem(item.id),
                 showsInternals: false,
                 onWikiLink: wikiLinkHandler(for: item.wikiID),
                 // Resolve ghost-link coloring + blob serving from THIS item's

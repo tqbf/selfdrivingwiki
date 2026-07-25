@@ -389,7 +389,7 @@ struct WikiFSApp: App {
             }
             // Phase C4: chat runs on the daemon — check the coordinator's
             // aggregate rather than a per-wiki chat launcher.
-            if chatDaemonCoordinator?.anyChatRunning == true {
+            if chatDaemonCoordinator?.anyChatGenerating == true {
                 return "A chat session"
             }
             return nil

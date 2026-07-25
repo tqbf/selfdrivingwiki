@@ -36,7 +36,7 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 ///
 /// **Live indicator aggregate:** the coordinator tracks the set of chatIDs the
 /// daemon reports as running (from `chatState` envelopes), even for chats the
-/// app has not opened. `isChatRunning(_:)` / `anyChatRunning` back the sidebar
+/// app has not opened. `isChatGenerating(_:)` / `anyChatGenerating` back the sidebar
 /// + chats-list "responding…" indicators that previously read
 /// `chatLauncher.activeChatID` / `chatLauncher.isRunning`.
 @MainActor
@@ -46,27 +46,34 @@ public final class ChatDaemonCoordinator {
     private let client: ChatDaemonCommands
     private let eventSink: DaemonQueueEventSink
 
-    /// chatID → mirror session. The draft (.newChat) state uses `draftKey`.
-    private var sessions: [String: RemoteChatSession] = [:]
+    /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
+    private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
 
-    /// chatIDs the daemon currently reports as running/generating (from
-    /// `chatState` envelopes), regardless of whether the app has an open
-    /// session for them. Lets the sidebar badge a chat the daemon is running
-    /// (e.g. one started via `wikictl`) that the user hasn't opened here.
-    private var runningChatIDs: Set<String> = []
+    /// chatIDs the daemon currently reports as **generating** (from `chatState`
+    /// envelopes), regardless of whether the app has an open session for them.
+    /// Lets the sidebar badge a chat the daemon is answering (e.g. one started
+    /// via `wikictl`) that the user hasn't opened here.
+    ///
+    /// Deliberately NOT `isRunning`. For an interactive chat session
+    /// `AgentLauncher.isRunning` means "the agent process is alive **across
+    /// turns**" (see its declaration: "SPAWN COMMIT: process is alive.
+    /// isRunning = true (process alive across turns)"), so it stays true while
+    /// the session sits idle waiting for your next message. `isGenerating` is
+    /// the per-turn flag — set when a message is sent, cleared on the terminal
+    /// `.result`/`.messageStop` — and `AgentLauncher` states the contract
+    /// outright: "Every UI spinner / Stop affordance keys off this rather than
+    /// the raw `isRunning`."
+    private var generatingChatIDs: Set<PageID> = []
 
-    /// Bumped whenever `runningChatIDs` changes, so SwiftUI views that badge
-    /// chats (the sidebar list) re-render when a chat starts or stops running.
-    /// `runningChatIDs` is private and read only inside `isChatRunning(_:)`,
+    /// Bumped whenever `generatingChatIDs` changes, so SwiftUI views that badge
+    /// chats (the sidebar list) re-render when a chat starts or stops
+    /// answering. The set is private and read only inside `isChatGenerating(_:)`,
     /// which the table data source calls *outside* SwiftUI's tracked body — so
     /// a dedicated observable signal is the only way the sidebar learns a chat
     /// finished (otherwise the "responding…" badge sticks forever).
     public private(set) var runningStateToken: Int = 0
 
     private var routerTask: Task<Void, Never>?
-
-    /// Key for the draft (.newChat) session — `chatID == nil` at the view level.
-    static let draftKey = "__wiki_draft_chat__"
 
     init(client: ChatDaemonCommands, eventSink: DaemonQueueEventSink) {
         // Intentionally non-`public` — `DaemonQueueEventSink` is internal, so
@@ -81,8 +88,8 @@ public final class ChatDaemonCoordinator {
 
     /// Get-or-create the `RemoteChatSession` for a chat id. `nil` chatID
     /// returns the shared draft-state session (the `.newChat` composer).
-    public func session(for chatID: String?) -> RemoteChatSession {
-        let key = chatID ?? Self.draftKey
+    public func session(for chatID: PageID?) -> RemoteChatSession {
+        let key: ChatSessionKey = chatID.map(ChatSessionKey.chat) ?? .draft
         if let existing = sessions[key] { return existing }
         let session = RemoteChatSession(chatID: key)
         wireSessionCallbacks(session)
@@ -92,13 +99,13 @@ public final class ChatDaemonCoordinator {
 
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a
     /// fresh draft). The daemon's own session is unaffected.
-    public func discard(chatID: String?) {
-        sessions.removeValue(forKey: chatID ?? Self.draftKey)
+    public func discard(chatID: PageID?) {
+        sessions.removeValue(forKey: chatID.map(ChatSessionKey.chat) ?? .draft)
     }
 
     /// Replace the draft session with a fresh one (used by "start new chat").
     public func resetDraft() {
-        sessions[Self.draftKey] = RemoteChatSession(chatID: Self.draftKey)
+        sessions[.draft] = RemoteChatSession(chatID: .draft)
     }
 
     // MARK: - Event routing
@@ -113,46 +120,62 @@ public final class ChatDaemonCoordinator {
         }
     }
 
-    private func route(chatID: String, envelope: QueueEventEnvelope) {
+    /// `chatID` arrives in wire form (a ULID string) off the daemon's envelope
+    /// stream. This is the boundary where it becomes a `PageID` — nothing past
+    /// here handles a raw chat-id string.
+    private func route(chatID rawChatID: String, envelope: QueueEventEnvelope) {
+        let chatID = PageID(rawValue: rawChatID)
         // Track the running set from state envelopes so the sidebar can badge
         // chats the daemon is running even without an open app session.
         if envelope.kind == .chatState, let update = envelope.chatStateUpdate {
-            setChatRunning(chatID, running: update.isRunning || update.isGenerating)
+            // TEMPORARY (stuck "responding…" badge): seam 2 of 6. Seam 1 firing
+            // without this one means the envelope never crossed XPC into the
+            // app — an event-sink blackout, not a UI bug (cf. #904/#907).
+            DebugLog.chatLive(
+                "2.app.route chat=\(chatID) running=\(update.isRunning) "
+                + "gen=\(update.isGenerating) awaiting=\(update.isAwaitingGenerationSlot)")
+            setChatGenerating(chatID, generating: update.isGenerating)
         }
         // Deliver to the open session if one exists.
-        sessions[chatID]?.ingest(envelope)
+        sessions[.chat(chatID)]?.ingest(envelope)
     }
 
     // MARK: - Sidebar liveness aggregate
 
-    /// The single mutator for `runningChatIDs`. Updates the set and bumps
+    /// The single mutator for `generatingChatIDs`. Updates the set and bumps
     /// `runningStateToken` **only when membership actually changes**, so every
-    /// liveness transition flows through one place (both the event-router
-    /// `route()` and `rehydrate()`). Centralizing this guarantees the
-    /// observable signal always fires — forgetting the token bump in a new
-    /// call site would silently stick the sidebar "responding…" badge.
-    private func setChatRunning(_ chatID: String, running: Bool) {
-        let didChange = running
-            ? runningChatIDs.insert(chatID).inserted
-            : runningChatIDs.remove(chatID) != nil
+    /// transition flows through one place (both the event-router `route()` and
+    /// `rehydrate()`). Centralizing this guarantees the observable signal
+    /// always fires — forgetting the token bump in a new call site would
+    /// silently stick the sidebar "responding…" badge.
+    private func setChatGenerating(_ chatID: PageID, generating: Bool) {
+        let didChange = generating
+            ? generatingChatIDs.insert(chatID).inserted
+            : generatingChatIDs.remove(chatID) != nil
         if didChange { runningStateToken &+= 1 }
+        // TEMPORARY (stuck "responding…" badge): seam 3 of 8.
+        DebugLog.chatLive(
+            "3.app.setGenerating chat=\(chatID) generating=\(generating) didChange=\(didChange) "
+            + "token=\(runningStateToken) set=[\(generatingChatIDs.map(\.rawValue).sorted().joined(separator: ","))]")
     }
 
-    /// True if the daemon reports this chat as running/generating. Backs the
-    /// sidebar + chats-list live indicator (replaces
-    /// `chatLauncher.activeChatID == id && chatLauncher.isRunning`).
-    public func isChatRunning(_ chatID: String) -> Bool {
-        if runningChatIDs.contains(chatID) { return true }
-        if let s = sessions[chatID], s.isRunning || s.isGenerating { return true }
+    /// True while the daemon is actively answering this chat. Backs the sidebar
+    /// + chats-list "responding…" indicator.
+    ///
+    /// Keys off `isGenerating`, never `isRunning` — see `generatingChatIDs` for
+    /// why (an interactive session's process stays alive between turns, so
+    /// `isRunning` would pin the badge on for the life of the session).
+    public func isChatGenerating(_ chatID: PageID) -> Bool {
+        if generatingChatIDs.contains(chatID) { return true }
+        if let s = sessions[.chat(chatID)], s.isGenerating { return true }
         return false
     }
 
-    /// True if any chat is running/generating on the daemon. Backs the
-    /// menu-bar / app-level "is the agent busy" check that previously read
-    /// `session.chatLauncher.isRunning`.
-    public var anyChatRunning: Bool {
-        if !runningChatIDs.isEmpty { return true }
-        return sessions.values.contains { $0.isRunning || $0.isGenerating }
+    /// True if any chat is currently being answered on the daemon. Backs the
+    /// app-level "is the agent busy" check (the ⌘Q confirmation).
+    public var anyChatGenerating: Bool {
+        if !generatingChatIDs.isEmpty { return true }
+        return sessions.values.contains { $0.isGenerating }
     }
 
     // MARK: - Commands (wrap DaemonWorkloadClient)
@@ -209,13 +232,14 @@ public final class ChatDaemonCoordinator {
     /// of being a local-only optimistic flip. Skipped for the draft session
     /// (no real chatID to target).
     private func wireSessionCallbacks(_ session: RemoteChatSession) {
-        let chatID = session.chatID
-        guard chatID != Self.draftKey else { return }
+        // The draft has no daemon-side session to target, and now says so in
+        // the type: `.draft` has no `PageID`.
+        guard let chatID = session.chatID.pageID else { return }
         let client = self.client
         session.onSetChatConfigOption = { option, value in
             do {
                 try await client.setChatConfigOption(
-                    ChatConfigOptionRequest(chatID: chatID, option: option, value: value))
+                    ChatConfigOptionRequest(chatID: chatID.rawValue, option: option, value: value))
             } catch {
                 DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
             }
@@ -225,12 +249,12 @@ public final class ChatDaemonCoordinator {
     /// Rehydrate a session from the daemon's live state. Call on view appear
     /// and whenever the active chat changes so the mirror reflects the
     /// daemon's held-alive launcher (or the persisted rows once evicted).
-    public func rehydrate(chatID: String) async {
+    public func rehydrate(chatID: PageID) async {
         let session = self.session(for: chatID)
         do {
-            let state = try await client.chatSessionState(chatID)
+            let state = try await client.chatSessionState(chatID.rawValue)
             session.hydrate(from: state)
-            setChatRunning(chatID, running: state.isRunning || state.isGenerating)
+            setChatGenerating(chatID, generating: state.isGenerating)
         } catch {
             // A rehydrate failure (e.g. the daemon evicted the session, so
             // `chatSessionState` throws `noSession`) is non-fatal — but the
@@ -240,7 +264,7 @@ public final class ChatDaemonCoordinator {
             // `ChatDetailView` renders that empty stream instead of the
             // persisted transcript.
             session.markNotLive()
-            setChatRunning(chatID, running: false)
+            setChatGenerating(chatID, generating: false)
             DebugLog.agent("ChatDaemonCoordinator.rehydrate failed for \(chatID): \(error) — marked not live")
         }
     }

@@ -35,6 +35,10 @@ struct ChatsListView: NSViewControllerRepresentable {
         let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
         let needs = vc.needsReload(visible)
         DebugLog.tabs("ChatsListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
+        // TEMPORARY (stuck "responding…" badge): seam 5 of 6. Seam 4 firing
+        // without this one means `AgentToolsView`'s re-render did not reach the
+        // representable (an unchanged-input short-circuit above us).
+        DebugLog.chatLive("5.sidebar.updateNSVC rows=\(visible.count) needsReload=\(needs)")
         if needs {
             vc.reloadData(from: visible)
         } else {
@@ -77,7 +81,7 @@ final class ChatsListViewController: NSViewController {
     var tableView: ChatsNSTableView!
     var store: WikiStoreModel?
     /// The daemon coordinator (Phase C4) — drives the per-row live indicator
-    /// via `isChatRunning(_:)`.
+    /// via `isChatGenerating(_:)`.
     var chatDaemon: ChatDaemonCoordinator?
     var callbacks: ChatsListCallbacks?
 
@@ -86,6 +90,9 @@ final class ChatsListViewController: NSViewController {
     private var lastSignature = ""
     /// Re-entrancy guard: selecting a row programmatically must not loop back.
     private var isReconcilingHighlight = false
+    /// TEMPORARY (stuck "responding…" badge): last live set reported by
+    /// `logLiveState`, so the trace emits one line per transition.
+    private var loggedLiveIDs: Set<PageID> = []
 
     override func loadView() {
         scrollView = NSScrollView()
@@ -132,6 +139,7 @@ final class ChatsListViewController: NSViewController {
         lastCount = rows.count
         lastSignature = signature(rows)
         tableView.reloadData()
+        logLiveState("reload", reconfigured: rows.count, candidates: rows.count)
     }
 
     /// Re-evaluate the live ("responding…") indicator on visible rows WITHOUT
@@ -141,14 +149,38 @@ final class ChatsListViewController: NSViewController {
     /// selection/scroll glitches of a full table rebuild.
     func reconfigureLiveState() {
         let range = tableView.rows(in: tableView.visibleRect)
-        guard range.length > 0 else { return }
+        guard range.length > 0 else {
+            logLiveState("reconfigure", reconfigured: 0, candidates: 0)
+            return
+        }
+        var reconfigured = 0
+        var candidates = 0
         for row in range.location..<(range.location + range.length) {
             guard row < items.count else { continue }
+            candidates += 1
             if let cell = tableView.view(atColumn: 0, row: row,
                                           makeIfNecessary: false) as? ChatsCellView {
                 cell.configure(chat: items[row], isLive: isLive(items[row]))
+                reconfigured += 1
             }
         }
+        logLiveState("reconfigure", reconfigured: reconfigured, candidates: candidates)
+    }
+
+    /// TEMPORARY (stuck "responding…" badge): seam 6 of 6 — what the rows were
+    /// actually told. Emits only when the live set changes, so the trace stays
+    /// one line per real transition instead of one per re-render.
+    ///
+    /// `reconfigured < candidates` means a visible row was skipped because its
+    /// cell was not materialized (`makeIfNecessary: false`) — the badge would
+    /// then keep whatever it was last configured with.
+    private func logLiveState(_ reason: String, reconfigured: Int, candidates: Int) {
+        let live = Set(items.map(\.id).filter { chatDaemon?.isChatGenerating($0) ?? false })
+        guard live != loggedLiveIDs else { return }
+        loggedLiveIDs = live
+        DebugLog.chatLive(
+            "6.sidebar.\(reason) live=[\(live.map(\.rawValue).sorted().joined(separator: ","))] "
+            + "reconfigured=\(reconfigured)/\(candidates)")
     }
 
     private func signature(_ rows: [ChatSummary]) -> String {
@@ -212,7 +244,7 @@ final class ChatsListViewController: NSViewController {
     /// check with the coordinator's per-chat aggregate, which also covers chats
     /// the daemon is running that the app hasn't opened).
     private func isLive(_ chat: ChatSummary) -> Bool {
-        chatDaemon?.isChatRunning(chat.id.rawValue) ?? false
+        chatDaemon?.isChatGenerating(chat.id) ?? false
     }
 }
 
