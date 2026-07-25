@@ -303,6 +303,28 @@ Config lives in `.swift-mutation-testing.yml`. Install the tool once:
 (`mutation-report.json` etc.) and the cache are gitignored. Not in CI — run
 manually when changing hot logic (relational / boolean / arithmetic mutators).
 
+Budget ~10 min of cold sandbox build before the first mutant runs (the tool
+copies the repo without `.build`), then ~9s per mutant. A `Sources/WikiFSTypes`
+scope is ~30 min for 72 mutants (87.1%, stock 1.3.0).
+
+`Sources/WikiFSTypes/MutationTestingSupport.swift` is **load-bearing and must
+not be deleted**. The tool rewrites mutated function bodies into
+`switch __swiftMutationTestingID { case "<id>": … default: … }` and references
+that symbol unqualified, so it has to be in scope in every mutated module. The
+tool injects its own copy into the alphabetically-first `Sources/` directory —
+here `CSQLite`, a `.systemLibrary` target SPM compiles no sources for — so
+without our own declaration every mutant fails to compile and reports
+`Unviable` (#823, #860). `make mutate` guards this, and also rejects a
+locally-patched `0.0.0-dev` tool build, which declares a *second* copy in
+`WikiFSTypes` and re-breaks the run via duplicate declaration.
+
+Read survivors with the noise in mind: `RemoveSideEffects` on `os_log` wrappers
+and on lock acquire/release is unkillable by construction, not a test gap
+(that's why `DebugLog.swift` is excluded). Real signal looks like the
+`ULID.swift` survivors — `*1000` → `/1000` and `ms == lastTimestamp` → `!=`
+both surviving means nothing pins timestamp encoding or same-millisecond
+monotonicity.
+
 **Python / pdf2md** (from `tools/pdf2md`):
 ```
 uv run pytest tests/                                     # unit + fast integration (60, never hangs)

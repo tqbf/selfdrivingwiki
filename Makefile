@@ -121,7 +121,7 @@ NOTES_FILE       ?=
 .PHONY: all deps build check check-release test test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
-        version keychain mutate mutate-scope lint lint-baseline lint-analyze hooks
+        version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
 
 all: build
 
@@ -293,12 +293,24 @@ test-fast-release: deps prompts version keychain
 # Reports are written to mutation-report.json (+ .html / sonar-*.json if
 # uncommented in the config); the result cache lives in
 # .swift-mutation-testing-cache/. Both are gitignored.
+#
+# Expect ~10 min of cold sandbox build before the first mutant runs: the tool
+# copies the repo WITHOUT .build and recompiles the whole dependency graph.
+# After that each mutant costs one ~9s test run.
+#
+# THE VERSION GUARD BELOW IS LOAD-BEARING. Viable mutants depend on
+# Sources/WikiFSTypes/MutationTestingSupport.swift declaring
+# __swiftMutationTestingID (see that file, and #823/#860). A locally-patched
+# build of the tool — which reports 0.0.0-dev — injects its own declaration into
+# that same target, and the duplicate makes every mutant Unviable again. Stock
+# 1.3.0 injects into Sources/CSQLite, a .systemLibrary target SPM compiles no
+# sources for, so its copy is inert and the two never collide. Prefer stock.
 
-mutate: deps prompts version keychain
+mutate: deps prompts version keychain check-mutate-tool
 	swift-mutation-testing
 	@echo "✓ mutation testing complete — see mutation-report.json"
 
-mutate-scope: deps prompts version keychain
+mutate-scope: deps prompts version keychain check-mutate-tool
 	@if [ -z "$(SOURCES_PATH)" ]; then \
 	  echo "✗ SOURCES_PATH is required. Example:"; \
 	  echo "    make mutate-scope SOURCES_PATH=Sources/WikiFSTypes"; \
@@ -306,6 +318,25 @@ mutate-scope: deps prompts version keychain
 	fi
 	swift-mutation-testing --sources-path "$(SOURCES_PATH)"
 	@echo "✓ mutation testing complete for $(SOURCES_PATH) — see mutation-report.json"
+
+check-mutate-tool:
+	@command -v swift-mutation-testing >/dev/null 2>&1 || { \
+	  echo "✗ swift-mutation-testing not found. Install with:"; \
+	  echo "    brew install ericodx/homebrew-tools/swift-mutation-testing"; exit 1; }
+	@test -f Sources/WikiFSTypes/MutationTestingSupport.swift || { \
+	  echo "✗ Sources/WikiFSTypes/MutationTestingSupport.swift is missing —"; \
+	  echo "  without it every mutant comes back Unviable (#823, #860)."; exit 1; }
+	@v=$$(swift-mutation-testing --version 2>/dev/null | awk '{print $$2}'); \
+	case "$$v" in \
+	  0.0.0-dev) \
+	    echo "✗ $$(command -v swift-mutation-testing) reports $$v (a local dev build)."; \
+	    echo "  It injects a second __swiftMutationTestingID into WikiFSTypes, which"; \
+	    echo "  collides with Sources/WikiFSTypes/MutationTestingSupport.swift and"; \
+	    echo "  makes every mutant Unviable. Use stock 1.3.0 from brew instead —"; \
+	    echo "  note ~/.local/bin precedes /opt/homebrew/bin on PATH."; exit 1;; \
+	  "") echo "⚠ could not determine swift-mutation-testing version — continuing";; \
+	  *) echo "✓ swift-mutation-testing $$v";; \
+	esac
 
 # ---------------------------------------------------------------------------
 # Lint — enforces the AGENTS.md "no bare try?" rule (see .swiftlint.yml)
