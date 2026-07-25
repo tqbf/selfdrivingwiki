@@ -25,9 +25,13 @@ struct AgentToolsView: View {
         // Touch the daemon's running-state token so SwiftUI re-renders (and
         // re-evaluates each row's "responding…" badge) when a chat starts or
         // stops. `runningStateToken` is read here — in the tracked body —
-        // because `isChatRunning(_:)` is called from the NSTableView data
+        // because `isChatGenerating(_:)` is called from the NSTableView data
         // source, which SwiftUI can't observe.
         let _ = chatDaemon?.runningStateToken
+        // TEMPORARY (stuck "responding…" badge): seam 4 of 6. A token bump at
+        // seam 3 with no matching line here means the read above did not
+        // register with Observation, so the sidebar is never invalidated.
+        let _ = DebugLog.chatLive("4.sidebar.body token=\(chatDaemon?.runningStateToken ?? -1)")
         VStack(spacing: 0) {
             chatsHeader
             chatSearchBar

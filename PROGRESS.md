@@ -1,5 +1,155 @@
 # Progress log
 
+## refactor: ChatRunState as a real FSM; ChatSessionKey replaces the string chat id
+
+**Goal:** the stuck-badge bug was a symptom — `isRunning` vs `isGenerating` is
+still a flag cluster, and the chat id was still a bare `String` with a sentinel
+for the draft. Both are the modeling rules in AGENTS.md applied to the code that
+motivated them.
+
+**ChatRunState — what was wrong.** The first version was a *lossy* mapping,
+which is how an FSM reintroduces the bug it was meant to prevent:
+
+* `.thinking` was defined as `isRunning && !isGenerating`. `setGenerating(true)`
+  fires at **turn start** (`sendInteractiveMessage: turn start`), not at first
+  token — so `isGenerating` already covers the thinking phase, and
+  `isRunning && !isGenerating` for an interactive chat *only ever* means "warm,
+  between turns". The case was misnamed for its sole reachable input, and that
+  misnomer is what taught the sidebar to badge a warm session as "responding…".
+* `if isRunning` was tested **before** `isAwaitingSlot`. A turn queued on the
+  generation gate has both flags set, so `.queued` was swallowed and reported as
+  `.thinking` — `isAwaitingGenerationSlot` read false exactly when it was true.
+
+**What changed:** cases are now `idle` / `queued` / `warm` / `answering`, with
+precedence `answering → queued → warm → idle` (narrowest claim wins), and two
+derived predicates that keep the two questions apart at the source: `isLive`
+("render the streaming mirror, not the persisted rows") and `isAnswering`
+("every spinner, badge, and Stop affordance"). All eight boolean combinations
+are pinned by test rather than sampled, the two regressions above named
+explicitly.
+
+**Behavior changes (deliberate, both tested):**
+1. `.queued` is now **live**. It previously reported `isRunning == false` /
+   `activeChatID == nil`, which sent the chat surface to the persisted rows
+   mid-conversation while a turn waited on the gate.
+2. `ChatDetailView.transcriptIsRunning` keys off `isAnswering`, not `isRunning`.
+   With the corrected shims `isRunning` means "session alive", so leaving it
+   would have shown "Waiting for the Agent…" on a warm idle chat — trading one
+   conflation for another.
+
+**ChatSessionKey.** `RemoteChatSession.chatID` was a `String`, and the draft
+composer was spelled `"__wiki_draft_chat__"` — a sentinel sharing a namespace
+with real chat ULIDs, so "is this the draft?" was a comparison against a magic
+constant every call site had to remember. It is now
+`ChatSessionKey.draft` / `.chat(PageID)`; `activeChatID` is `PageID?`; the
+coordinator's registry, generating-set, and public API all take `PageID`. The
+`.draft` case carries no `PageID`, so a draft **cannot** satisfy the
+`activeChatID == chatID` liveness rule even by accident — previously it could in
+principle, since `activeChatID` returned the sentinel.
+
+**The wire stays `String`.** `QueueEventEnvelope` and the XPC request DTOs are
+unchanged; conversion happens at exactly two boundaries (`ChatDaemonCoordinator.route`,
+`RemoteChatSession.ingest`). The compiler enforced that line repeatedly while
+the tests were being migrated — every place the app-side type leaked onto the
+wire failed to build.
+
+## fix: Chat transcript froze mid-stream and bled messages between chats
+
+**Goal:** three reported symptoms — a live chat's responses never appeared as
+they streamed; switching to another pane and back made them all appear at once;
+and messages from one chat showed up inside another just by clicking between
+them.
+
+**Root cause:** one bug, in view identity. `WikiDetailView.detailContent`
+renders every chat from the same `switch` branch (`case .chat(let id)`), and a
+differing associated value does **not** change SwiftUI structural identity — so
+chat A → chat B reused a single `ChatDetailView` instance and, under it, a
+single `ChatWebView` `WKWebView` + `Coordinator`. That coordinator renders
+*incrementally* (it appends only `events[renderedCount...]` so an in-progress
+text selection survives streaming), and its anchors — `renderedCount`,
+`renderedEvents`, `renderedLastEvent` — described whichever chat was rendered
+last. What you saw depended entirely on how the two chats' event counts
+compared: B larger ⇒ B's tail spliced onto A's DOM; B equal ⇒ A's transcript
+with one row swapped; B smaller ⇒ a full reload, which looked correct. Landing
+on a chat with a stale-high `renderedCount` also froze streaming outright —
+`count > renderedCount` never became true, so `appendRows` never fired even
+though events were reaching the model. Switching to a *page* tab is a different
+`_ConditionalContent` branch, which tore the view down and rebuilt it — the
+"click another pane and come back" workaround.
+
+**What changed:** `ChatWebView` gained a `transcriptID` input and rebuilds when
+it changes. The three rebuild triggers (identity change, `showsInternals`
+toggle, count decrease) are now one pure `nonisolated static needsFullReload`,
+testable without a WebKit view tree. The identity check runs *before* the
+`isLoaded` guard so a switch landing mid-load also replaces `pendingEvents` —
+otherwise `didFinish` would render the previous transcript and seed
+`renderedCount` from it. `ActivityWindowView` was the same bug class (selecting
+a different queue item reused the coordinator) and passes `.queueItem(item.id)`.
+`WikiDetailView` also puts `.id(chatID)` on the chat surface: the transcript fix
+alone left the `@State` leak, where `persistedMessages` rendered under the wrong
+chat's title and `attachments`/`queuedMessages` would fire on the *next* chat's
+turn.
+
+**`TranscriptID` is a namespaced enum**, not a `String` — chat rows and queue
+items are both ULIDs, so a raw-string key would let a collision read as "same
+transcript", the exact failure the field exists to prevent. Pinned by a test.
+
+**Ruled out:** the `ChatRunState` FSM (#912) was the initial suspect, since it
+converted five stored run flags into computed shims and computed properties are
+a classic observation trap. It is not implicated — `withObservationTracking`
+around `activeChatID`/`isRunning` fires correctly, because the `@Observable`
+macro tracks the stored `runState` the getters read.
+
+## fix: Stuck "responding…" badge — `isRunning` is not "is answering"
+
+**Goal:** the sidebar badge latched on and never cleared after a chat replied.
+
+**Root cause:** the app misread a correct daemon signal. Six `os_log` seams
+across the pipeline (daemon push → XPC route → coordinator set → sidebar body →
+representable update → row reconfigure) showed every stage firing in ~0ms and in
+the right order, which cleared the UI layer and pointed upstream. The trace:
+
+```
+10:42:41.116  1.daemon.push running=true gen=true
+10:42:41.116  2.app.route   running=true gen=true
+10:42:47.214  6.sidebar.reload live=[01KYD5YE…] reconfigured=5/5   ← badge ON, correct
+10:43:05.616  1.daemon.push running=true gen=false                 ← turn ends, session warm
+   …no further pushes: nothing changed, so the fingerprint didn't change.
+```
+
+For an **interactive** chat, `AgentLauncher.isRunning` means "the agent process
+is alive ACROSS TURNS" (its own comment: "SPAWN COMMIT: process is alive.
+isRunning = true (process alive across turns)"), so it stays true while the
+session idles waiting for the next message. `isGenerating` is the per-turn flag,
+and `AgentLauncher` states the contract outright: "Every UI spinner / Stop
+affordance keys off this rather than the raw `isRunning`."
+
+`ChatDaemonCoordinator` did `setChatRunning(chatID, running: update.isRunning ||
+update.isGenerating)` — where the `isRunning` disjunct dominates — so the badge
+keyed on *process liveness* rather than *answering*, pinning it on for the life
+of the session. The `gen=false` push at 10:43:05 was the signal that should have
+cleared it, OR'd away.
+
+**What changed:** the badge keys off `isGenerating` alone, and the names no
+longer invite the misreading — `runningChatIDs` → `generatingChatIDs`,
+`isChatRunning` → `isChatGenerating`, `anyChatRunning` → `anyChatGenerating`,
+and the session fallback `s.isRunning || s.isGenerating` → `s.isGenerating`.
+Four existing tests failed, all four having encoded the bug (`isRunning: true,
+isGenerating: false` expecting the badge on); they now assert the real contract,
+plus two new regression tests replaying the exact log sequence.
+
+**Behavior note:** `anyChatGenerating` also gates the ⌘Q confirmation, so
+quitting with a warm-but-idle chat session no longer prompts. That reads correct
+(daemon work deliberately survives app quit — see the comment directly below the
+call site), but it is a change beyond the badge.
+
+**Worth naming:** this is the `ChatRunState` FSM problem one layer up.
+`isRunning` carries two meanings — "process alive" and "work in flight" — so no
+mapping of `(isRunning, isGenerating, isAwaitingSlot)` can separate them, and the
+FSM inherited the ambiguity: `.thinking` means both "processing before the first
+token" and "idle between turns". Distinguishing them properly needs a new signal
+from the daemon, not a better mapping.
+
 ## fix: Chat summary abbreviated even when a summarizer model was pinned
 
 **Goal:** the chats-list row subtitle was always a truncated first sentence

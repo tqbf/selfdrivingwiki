@@ -28,6 +28,16 @@ public enum DebugLog {
     /// edit-guard events). Distinct from `tabs` (sidebar/tab/open) so editor
     /// events surface cleanly in Console.app.
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
+    /// The chat run-state → sidebar "responding…" badge pipeline, end to end:
+    /// the daemon's `pushStateUpdate`, the app's envelope `route`, the
+    /// coordinator's `runningChatIDs` membership + `runningStateToken` bump,
+    /// and the sidebar table's re-render path. Its own category so the trace
+    /// reads as one ordered story instead of being interleaved with `agent`
+    /// (per-event streaming) and `store` (everything else).
+    ///
+    ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatlive"' \
+    ///              --style compact --info --last 10m
+    public static func chatLive(_ message: @autoclosure () -> String) { emit("chatlive", message()) }
 
     // MARK: - try? replacement
 
@@ -132,6 +142,7 @@ public enum DebugLog {
         "fileprovider": Logger(subsystem: subsystem, category: "fileprovider"),
         "reader": Logger(subsystem: subsystem, category: "reader"),
         "editor": Logger(subsystem: subsystem, category: "editor"),
+        "chatlive": Logger(subsystem: subsystem, category: "chatlive"),
     ]
 
     // `.default` is the "notice" level (persisted by `log show`); `.debug` is

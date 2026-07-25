@@ -10,6 +10,12 @@ struct ChatTranscriptView: View {
     /// The transcript-visible events to render (caller pre-filters via
     /// `[AgentEvent].transcriptVisible`).
     let events: [AgentEvent]
+    /// Identity of the conversation `events` belongs to, forwarded to
+    /// `ChatWebView` so its incremental differ rebuilds instead of splicing
+    /// when this view is reused for a different chat (see
+    /// `ChatWebView.transcriptID`). `nil` for the draft composer, which never
+    /// reaches the web view (it renders the empty-state placeholder).
+    var transcriptID: TranscriptID? = nil
     /// Wall-clock timestamps parallel to `events` (after the same filtering).
     /// `nil` entries produce no "Worked for" footer. Used to render the
     /// duration metadata under assistant responses.
@@ -63,6 +69,7 @@ struct ChatTranscriptView: View {
                 ChatWebView(
                     events: visibleEvents,
                     style: .chat,
+                    transcriptID: transcriptID,
                     onWikiLink: onWikiLink,
                     renderContext: renderContext,
                     blobStore: blobStore,

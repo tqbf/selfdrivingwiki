@@ -224,11 +224,24 @@ struct WikiDetailView: View {
             ChatDetailView(
                 chatID: chatID,
                 store: store,
-                remoteSession: chatDaemon.session(for: chatID?.rawValue),
+                remoteSession: chatDaemon.session(for: chatID),
                 coordinator: chatDaemon,
                 session: session,
                 fileProvider: fileProvider
             )
+            // Give each chat its own view identity. Both chat tabs render from
+            // the SAME `switch` branch (`case .chat(let id)`), and a differing
+            // associated value does not change structural identity — so without
+            // this, switching from chat A to chat B reuses one `ChatDetailView`
+            // instance and every `@State` it owns carries over: chat A's
+            // `persistedMessages` render under chat B's title, and A's
+            // `attachments`/`queuedMessages` would be sent on B's next turn.
+            //
+            // Switching to a *page* tab and back already forced a rebuild (a
+            // different `switch` branch is a different `_ConditionalContent`
+            // case), which is why that route showed the correct transcript —
+            // this makes chat→chat behave the same way.
+            .id(chatID)
         } else {
             chatDaemonUnavailable
         }

@@ -25,6 +25,48 @@ PROGRESS.md" and trust it's up to speed with this codebase.
 * Use the macos-design skill to make sure the UI we come up with makes sense as a modern
   macOS app, with modern professional macOS idioms. Keep things simple.
 
+## Modeling rules
+
+* **Avoid stringly-typed variables.** A bare `String` (or `String?`) that
+  actually means "a chat id" / "a queue item id" / "a provider name" makes two
+  different id spaces compare equal, lets a typo pass the type checker, and
+  gives the reader no idea what values are legal. Wrap it: a `RawRepresentable`
+  struct (`PageID`) when it's one id space, an `enum` when it's a closed set of
+  cases, and a **namespaced enum** when one field must carry ids from several
+  spaces (`TranscriptID.chat(PageID)` / `.queueItem(QueueItem.ID)` — the case
+  tag is what makes a chat ULID unable to collide with a queue ULID). Same for
+  file paths (`URL`), durations (`Duration`), and raw enum-backed strings —
+  convert at the boundary, not at every use site.
+
+  **A sentinel string is the same smell.** `ChatSessionKey.draft` /
+  `.chat(PageID)` replaced a `String` key whose draft was spelled
+  `"__wiki_draft_chat__"`: that sentinel shared a namespace with real chat
+  ULIDs, so "is this the draft?" was a comparison against a magic constant that
+  every call site had to remember. Give the special case its own case, and the
+  compiler asks the question for you — `.draft` carries no `PageID`, so a draft
+  cannot satisfy an id comparison even by accident.
+
+* **Prefer enums (or named constants) over magic numbers.** A bare literal at a
+  use site — `if attempt > 3`, `rowHeight = 36`, `case 2: …` — hides both its
+  meaning and the fact that the same number is load-bearing somewhere else. If
+  it names one of a closed set of choices, make it an `enum`; if it's a tuning
+  value, hoist it to a named `static let` in the type or metrics enum that owns
+  it (`ChatMetrics`, `PageEditorMetrics`) so the name carries the rationale and
+  there is exactly one place to change it. The same goes for raw values
+  crossing a boundary: decode into an `enum` at the edge rather than comparing
+  integers or strings downstream.
+
+* **Prefer a finite state machine over a cluster of flags.** Several
+  `Bool`/optional properties that are really one lifecycle are a denormalized
+  enum: they can encode impossible combinations, and every write site has to
+  remember to update all of them coherently (see `ChatRunState`, which replaced
+  `isRunning`/`isGenerating`/`isAwaitingGenerationSlot`/`isInteractiveSession`/
+  `activeChatID` after a missed write in one of them shipped a bug). Model the
+  states as an `enum`, make it the single stored source of truth, and derive
+  the flags as computed properties — impossible states stop being
+  representable, and a missed write site becomes a compile error rather than an
+  incoherent runtime state.
+
 ## Design skills — sources
 
 The three design skills above are vendored in this repo at
