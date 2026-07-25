@@ -109,6 +109,11 @@ public final class RemoteChatSession {
     func markNotLive() {
         activeChatID = nil
         isInteractiveSession = false
+        // Fully relinquish the liveness claim — `isChatRunning` also checks
+        // these session-local flags, so leaving them set would keep the sidebar
+        // "responding…" badge after the daemon evicts the session.
+        isRunning = false
+        isGenerating = false
     }
 
     // MARK: - Envelope ingestion

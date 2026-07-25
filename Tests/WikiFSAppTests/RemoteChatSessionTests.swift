@@ -486,6 +486,10 @@ struct RemoteChatSessionTests {
         session.markNotLive()
         #expect(session.activeChatID == nil)
         #expect(session.isInteractiveSession == false)
+        // The running flags must also clear — `isChatRunning` checks them, so
+        // leaving them set would stick the sidebar "responding…" badge.
+        #expect(session.isRunning == false)
+        #expect(session.isGenerating == false)
     }
 }
 #endif

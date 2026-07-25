@@ -35,7 +35,14 @@ struct ChatsListView: NSViewControllerRepresentable {
         let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
         let needs = vc.needsReload(visible)
         DebugLog.tabs("ChatsListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
-        if needs { vc.reloadData(from: visible) }
+        if needs {
+            vc.reloadData(from: visible)
+        } else {
+            // The store signature is unchanged, but a chat may have started or
+            // stopped running (signaled by `runningStateToken`). Re-evaluate
+            // the live badge on visible rows without a full reload.
+            vc.reconfigureLiveState()
+        }
         vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
         if let pending = store.pendingSidebarReveal, case .chat(let id) = pending {
             _ = vc.revealAndSelect(id: id)
@@ -125,6 +132,23 @@ final class ChatsListViewController: NSViewController {
         lastCount = rows.count
         lastSignature = signature(rows)
         tableView.reloadData()
+    }
+
+    /// Re-evaluate the live ("responding…") indicator on visible rows WITHOUT
+    /// a full reload. Called from `updateNSViewController` when the store
+    /// signature is unchanged but the daemon's running set changed (a chat just
+    /// started or finished). Cheaper than `reloadData()` and avoids the
+    /// selection/scroll glitches of a full table rebuild.
+    func reconfigureLiveState() {
+        let range = tableView.rows(in: tableView.visibleRect)
+        guard range.length > 0 else { return }
+        for row in range.location..<(range.location + range.length) {
+            guard row < items.count else { continue }
+            if let cell = tableView.view(atColumn: 0, row: row,
+                                          makeIfNecessary: false) as? ChatsCellView {
+                cell.configure(chat: items[row], isLive: isLive(items[row]))
+            }
+        }
     }
 
     private func signature(_ rows: [ChatSummary]) -> String {
