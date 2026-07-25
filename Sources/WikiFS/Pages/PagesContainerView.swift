@@ -177,6 +177,15 @@ struct PagesContainerView: View {
             onRename: { summary in beginRename(summary) },
             onDelete: { ids in
                 for id in ids { store.delete(id) }
+                // If a deleted page was the home page, clear the stale
+                // homePageID so the Home button doesn't linger as dead UI.
+                if let homeID = session.descriptor.homePageID,
+                   ids.contains(homeID) {
+                    registry.setHomePage(id: session.wikiID, pageID: nil)
+                    var d = session.descriptor
+                    d.homePageID = nil
+                    session.updateDescriptor(d)
+                }
             },
             onSetHomePage: { pageID in
                 registry.setHomePage(id: session.wikiID, pageID: pageID)
