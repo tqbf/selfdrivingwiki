@@ -33,45 +33,78 @@ public enum ULID {
         return set
     }()
 
-    /// Lock for the monotonic counter and last timestamp. Protected by `lock`;
-    /// `nonisolated(unsafe)` is correct because the lock serializes all access.
-    private static let lock = NSLock()
-    private nonisolated(unsafe) static var lastTimestamp: UInt64 = 0
-    private nonisolated(unsafe) static var lastRandom: [UInt8] = [UInt8](repeating: 0, count: 10)
+    /// A ULID generator with its own independent monotonic state.
+    ///
+    /// Monotonicity (same-millisecond incrementing of the random component) is
+    /// per-generator, matching the ULID spec. Callers that need an isolated
+    /// sequence — notably tests — own a `Generator` instance instead of the
+    /// process-global `ULID.generate()`, so concurrent generators running at
+    /// other timestamps can't perturb their ordering. `@unchecked Sendable` is
+    /// correct because `lock` serializes all access to the mutable state.
+    public final class Generator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastTimestamp: UInt64 = 0
+        private var lastRandom: [UInt8] = [UInt8](repeating: 0, count: 10)
 
-    /// Generate a new 26-character ULID string. Guaranteed lexicographically
-    /// sortable: within the same millisecond the random component increments
-    /// monotonically instead of re-randomizing.
+        public init() {}
+
+        /// Generate a new 26-character ULID at `timestamp`. Guaranteed
+        /// lexicographically sortable: within the same millisecond the random
+        /// component increments monotonically instead of re-randomizing.
+        /// - Parameter timestamp: the moment to encode; defaults to now.
+        public func next(
+            at timestamp: Date = Date(),
+            using generator: inout some RandomNumberGenerator
+        ) -> String {
+            let ms = UInt64(max(0, timestamp.timeIntervalSince1970) * 1000)
+
+            let random: [UInt8] = lock.withLock {
+                if ms == lastTimestamp {
+                    // Same ms: increment the random component for monotonicity.
+                    lastRandom = ULID.incrementBytes(lastRandom)
+                } else {
+                    // New ms: fresh random bytes.
+                    lastTimestamp = ms
+                    for i in 0..<10 {
+                        lastRandom[i] = UInt8.random(in: 0...255, using: &generator)
+                    }
+                }
+                return lastRandom
+            }
+
+            var b = [UInt8](repeating: 0, count: 16)
+            for i in 0..<6 {
+                b[i] = UInt8((ms >> (8 * (5 - i))) & 0xFF)
+            }
+            for i in 0..<10 {
+                b[6 + i] = random[i]
+            }
+            return ULID.encodeBase32(b)
+        }
+
+        /// Convenience overload using the system RNG.
+        public func next(at timestamp: Date = Date()) -> String {
+            var rng = SystemRandomNumberGenerator()
+            return next(at: timestamp, using: &rng)
+        }
+    }
+
+    /// Process-wide monotonic generator backing the static `generate` API. A
+    /// single shared instance means the same single-lock serialization as the
+    /// previous static implementation, so every existing `ULID.generate()`
+    /// caller sees identical ordering behavior.
+    private static let shared = Generator()
+
+    /// Generate a new 26-character ULID string. Delegates to the shared
+    /// generator, preserving the original single-lock monotonicity for every
+    /// caller.
     /// - Parameter timestamp: the moment to encode; defaults to now. Exposed so
     ///   tests can pin increasing timestamps and assert lexicographic ordering.
     public static func generate(
         at timestamp: Date = Date(),
         using generator: inout some RandomNumberGenerator
     ) -> String {
-        let ms = UInt64(max(0, timestamp.timeIntervalSince1970) * 1000)
-
-        let bytes: [UInt8] = lock.withLock {
-            if ms == lastTimestamp {
-                // Same ms: increment the random component for monotonicity.
-                lastRandom = incrementBytes(lastRandom)
-            } else {
-                // New ms: fresh random bytes.
-                lastTimestamp = ms
-                for i in 0..<10 {
-                    lastRandom[i] = UInt8.random(in: 0...255, using: &generator)
-                }
-            }
-            var b = [UInt8](repeating: 0, count: 16)
-            for i in 0..<6 {
-                b[i] = UInt8((ms >> (8 * (5 - i))) & 0xFF)
-            }
-            for i in 0..<10 {
-                b[6 + i] = lastRandom[i]
-            }
-            return b
-        }
-
-        return encodeBase32(bytes)
+        shared.next(at: timestamp, using: &generator)
     }
 
     /// Increment a 10-byte big-endian integer in place, returning the new array.

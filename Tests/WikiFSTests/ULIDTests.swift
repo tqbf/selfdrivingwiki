@@ -13,9 +13,9 @@ import WikiFSTypes
 /// `inout some RandomNumberGenerator` specifically so this is testable
 /// without sleeping.
 ///
-/// `.serialized` because `ULID` has static monotonic state (`lastTimestamp` /
-/// `lastRandom`); parallel same-ms calls from different tests would interleave
-/// and break the invariants these tests assert.
+/// `.serialized` for stability: the monotonicity tests use isolated
+/// `ULID.Generator` instances, but keeping the suite serialized avoids any
+/// residual timing sensitivity across the timestamp-encoding round-trip checks.
 @Suite(.serialized)
 struct ULIDTests {
 
@@ -104,13 +104,15 @@ struct ULIDTests {
     // Kills `ms == lastTimestamp` → `!=` (54:19) and negate (54:16).
 
     @Test func sameMillisecondGeneratesStrictlyIncreasingULIDs() {
-        // Use a distinctive timestamp to avoid static-state collision with
-        // other tests. 1_111_111 s is ~Jan 13, 1970 — nothing else uses it.
+        // A private generator isolates our monotonic sequence from concurrent
+        // `ULID.generate()` calls (now-time) in other suites, which would reset
+        // the shared global state mid-loop and break ordering.
+        let gen = ULID.Generator()
         let date = Date(timeIntervalSince1970: 1_111_111)
         var rng = SeededRNG(42)
         var ulids: [String] = []
         for _ in 0..<20 {
-            ulids.append(ULID.generate(at: date, using: &rng))
+            ulids.append(gen.next(at: date, using: &rng))
         }
         for i in 1..<ulids.count {
             #expect(ulids[i] > ulids[i - 1])
@@ -118,13 +120,15 @@ struct ULIDTests {
     }
 
     @Test func newTimestampSeedsFreshRandomFromGenerator() {
-        // The first ULID at a new timestamp must take the fresh-random branch,
+        // A fresh generator starts with lastTimestamp == 0, so the first call at
+        // any real timestamp deterministically takes the fresh-random branch,
         // consuming 10 bytes from `generator`. If the conditional is mutated
         // (`==` → `!=` or negated), the increment branch runs instead and the
         // generator is never consulted — the random component won't match.
+        let gen = ULID.Generator()
         let date = Date(timeIntervalSince1970: 2_222_222)
         var rng = SeededRNG(99)
-        let ulid = ULID.generate(at: date, using: &rng)
+        let ulid = gen.next(at: date, using: &rng)
 
         // Predict the same 10 bytes from an identical seed.
         var predictRng = SeededRNG(99)
@@ -138,16 +142,18 @@ struct ULIDTests {
     // MARK: - Carry propagation (kills `b[i] < 0xFF` at ULID.swift:82)
 
     @Test func carryAcrossByteBoundaryPreservesOrdering() {
-        // Generate enough same-ms ULIDs to cross at least one 0xFF→0x00
-        // boundary in the random component (512 guarantees two full cycles of
-        // the least-significant byte). If `b[i] < 0xFF` is mutated to `<=` or
-        // another relational, the carry is lost and the sequence breaks
-        // monotonicity at that boundary.
+        // A private generator isolates the sequence from concurrent global
+        // `ULID.generate()` calls (see above). Generate enough same-ms ULIDs to
+        // cross at least one 0xFF→0x00 boundary in the random component (512
+        // guarantees two full cycles of the least-significant byte). If
+        // `b[i] < 0xFF` is mutated to `<=` or another relational, the carry is
+        // lost and the sequence breaks monotonicity at that boundary.
+        let gen = ULID.Generator()
         let date = Date(timeIntervalSince1970: 3_333_333)
         var rng = SeededRNG(7)
-        var prev = ULID.generate(at: date, using: &rng)
+        var prev = gen.next(at: date, using: &rng)
         for _ in 0..<512 {
-            let next = ULID.generate(at: date, using: &rng)
+            let next = gen.next(at: date, using: &rng)
             #expect(next > prev)
             prev = next
         }
