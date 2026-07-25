@@ -98,13 +98,6 @@ struct WikiFSApp: App {
     /// (called on disconnect/reconnect) can re-wire it.
     private var sessionLookupBox: SessionLookupBox?
 
-    /// Manages the wikid LaunchAgent via `launchctl` (replaces SMAppService).
-    /// The daemon is an unsandboxed binary — no entitlements, no provisioning
-    /// profile. The app generates the LaunchAgent plist at runtime and
-    /// bootstraps it via `launchctl bootstrap gui/<uid> <path>`. The daemon
-    /// survives app quit (launchd manages it independently).
-    private let daemonManager: DaemonLaunchAgentManager?
-
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
     // causes only one to win the NSApplication.shared.delegate slot; accessing the
@@ -276,14 +269,12 @@ struct WikiFSApp: App {
         // reads the app group container directly via filesystem permissions.
         // The daemon survives app quit. Best-effort: in dev mode (`swift run`)
         // the bootstrap still works (the plist points at the container
-        // binary), wikictl falls back to direct file access if the daemon
-        // isn't running.
-        // #876: bootout before bootstrap so a stale daemon (running an old
-        // binary after a rebuild) is always unloaded and restarted fresh — a
-        // plain bootstrap returns "already loaded" and leaves the old daemon.
-        let manager = DaemonLaunchAgentManager(containerDirectory: directory)
-        manager.bootoutAndBootstrap()
-        self.daemonManager = manager
+        // The daemon is an embedded XPC service (Contents/XPCServices/wikid.xpc).
+        // macOS launches it on demand when the app connects via
+        // NSXPCConnection(serviceName:) and terminates it when the app quits.
+        // No LaunchAgent or launchctl needed — the old bootout+bootstrap path
+        // conflicted with the embedded service (both claimed the same mach
+        // service name, and the plist pointed at wrong binary paths).
 
         // Call bootstrap directly from init.
         print("SDW: calling bootstrapApp from init")
@@ -331,8 +322,8 @@ struct WikiFSApp: App {
             registry: registry,
             openWindowBridge: openWindowBridge,
             backgroundIngestCoordinator: backgroundIngestCoordinator,
-            daemonRestartHandler: { [daemonManager] in
-                daemonManager?.restart()
+            daemonRestartHandler: { [healthMonitor] in
+                healthMonitor.restart()
             },
             daemonHealthMonitor: healthMonitor)
         statusController.start()
@@ -409,13 +400,9 @@ struct WikiFSApp: App {
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
         }
-        appDelegate.unregisterDaemon = { [daemonManager] in
-            // The daemon survives app quit — launchd manages it independently
-            // (KeepAlive + RunAtLoad). We do NOT bootout on terminate; the
-            // daemon keeps running so extraction/ingestion/chat survive the
-            // app quitting (the whole point of the daemon architecture). The
-            // "Restart Daemon" menu item uses launchctl kickstart when needed.
-            _ = daemonManager
+        appDelegate.unregisterDaemon = {
+            // The daemon is an embedded XPC service — macOS terminates it
+            // automatically when the app quits. No launchd cleanup needed.
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {

@@ -6,9 +6,13 @@ import WikiFSCore
 
 /// App-level coordinator for daemon connection health (#878).
 ///
-/// Owns the recurring 30 s health-ping loop + the XPC invalidation handler.
-/// Exposes `@Observable` `state` that drives the menu-bar icon badge and the
-/// in-app disconnected/reconnected banner.
+/// Owns the recurring 30 s health-ping loop, the XPC invalidation/interruption
+/// handlers, and the manual ``restart()`` action. Exposes `@Observable` `state`
+/// that drives the menu-bar icon badge and the in-app disconnected/reconnected
+/// banner.
+///
+/// The daemon is an **embedded XPC service** — macOS launches it on demand and
+/// terminates it when the app quits. No LaunchAgent or `launchctl` is involved.
 ///
 /// **State machine:**
 /// ```
@@ -97,6 +101,25 @@ final class DaemonHealthMonitor {
         isMonitoring = false
     }
 
+    /// Manually restart the daemon connection (the "Restart Daemon" menu
+    /// action). Invalidates the current connection — macOS terminates the
+    /// embedded XPC service — then immediately attempts to reconnect, which
+    /// launches a fresh service instance. Falls back to the local engine via
+    /// `onDisconnect` during the brief gap.
+    func restart() {
+        guard isMonitoring else { return }
+        DebugLog.store("wikid: manual restart — invalidating connection")
+        connection?.invalidate()
+        connection = nil
+        setState(.disconnected)
+        onDisconnect?()
+        // Force an immediate reconnect instead of waiting for the next ping.
+        let timeout = healthCheckTimeout
+        Task { [weak self] in
+            await self?.performHealthPing(timeout: timeout)
+        }
+    }
+
     // MARK: - State transitions
 
     private func setState(_ newState: DaemonConnectionState) {
@@ -163,12 +186,12 @@ final class DaemonHealthMonitor {
 
     /// Called when the XPC connection is invalidated (daemon process exited).
     /// Transitions to `.disconnected` and fires `onDisconnect` so the app
-    /// swaps to a local engine.
+    /// swaps to a local engine. Does NOT cancel the ping loop — the next
+    /// iteration sees `connection == nil` and attempts to reconnect (macOS
+    /// auto-launches a fresh embedded XPC service on the new connection).
     private func handleInvalidation() {
         guard isMonitoring else { return }
         DebugLog.store("wikid: XPC connection invalidated — daemon process exited")
-        healthPingTask?.cancel()
-        healthPingTask = nil
         connection = nil
         setState(.disconnected)
         onDisconnect?()

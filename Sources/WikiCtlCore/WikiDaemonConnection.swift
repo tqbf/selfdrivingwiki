@@ -90,15 +90,17 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         self.connection = connection
     }
 
-    /// Connect to the daemon. The connection auto-launches via launchd if the
-    /// daemon isn't running.
+    /// Connect to the daemon as an **embedded XPC service** bundled in
+    /// `Contents/XPCServices/wikid.xpc`. macOS launches the service on demand
+    /// when the connection is resumed and terminates it when the app quits —
+    /// no LaunchAgent or `launchctl` needed.
     ///
     /// The `WikiDaemonProtocol` interface is set up with the
     /// `WikiDaemonEventSink` sub-interface on the `registerEventSink(_:)`
     /// selector, so XPC creates a proxy for the sink parameter (bidirectional
     /// XPC) rather than trying to serialize it.
     public static func connect() throws -> WikiDaemonConnection {
-        let connection = NSXPCConnection(machServiceName: serviceName)
+        let connection = NSXPCConnection(serviceName: serviceName)
         let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
         let sinkInterface = NSXPCInterface(with: WikiDaemonEventSink.self)
         daemonInterface.setInterface(
