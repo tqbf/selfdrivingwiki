@@ -41,6 +41,8 @@ public enum ULID {
     /// process-global `ULID.generate()`, so concurrent generators running at
     /// other timestamps can't perturb their ordering. `@unchecked Sendable` is
     /// correct because `lock` serializes all access to the mutable state.
+    // `lock` serializes all access to `lastTimestamp`/`lastRandom`.
+    // swiftlint:disable:next unchecked_sendable
     public final class Generator: @unchecked Sendable {
         private let lock = NSLock()
         private var lastTimestamp: UInt64 = 0
