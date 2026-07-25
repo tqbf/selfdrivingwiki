@@ -88,7 +88,27 @@ public final class RemoteChatSession {
 
     public init(chatID: String) {
         self.chatID = chatID
-        self.activeChatID = chatID
+        // A fresh mirror knows NOTHING about the daemon yet, so it must not
+        // claim liveness: `activeChatID` is daemon-derived state, set only by
+        // `hydrate`/`applyStateUpdate` from the run flags (see the property's
+        // doc comment). Seeding it with `chatID` here made every newly-opened
+        // chat pass `ChatDetailView.isLiveChat`, which then rendered this
+        // mirror's empty `events` INSTEAD of the persisted rows — a chat with
+        // a full transcript showed "Ask a question to start a chat." whenever
+        // rehydration couldn't correct the claim (the daemon throws
+        // `noSession` for any chat whose launcher it has evicted).
+        self.activeChatID = nil
+    }
+
+    /// Drop this mirror's liveness claim: the daemon is not running this chat,
+    /// so `ChatDetailView` must fall back to the persisted rows. Called by
+    /// `ChatDaemonCoordinator.rehydrate` when the state fetch fails — an
+    /// evicted session is indistinguishable from a transport error here, and
+    /// "not live" is the safe answer for both (the persisted transcript is
+    /// always renderable; an empty live stream is not).
+    func markNotLive() {
+        activeChatID = nil
+        isInteractiveSession = false
     }
 
     // MARK: - Envelope ingestion

@@ -464,5 +464,28 @@ struct RemoteChatSessionTests {
         #expect(session.activeChatID == nil)
         #expect(session.isRunning == false)
     }
+
+    @Test @MainActor func freshSessionIsNotLiveUntilDaemonSaysSo() {
+        // Regression: `init` used to seed `activeChatID = chatID`, so a brand
+        // new mirror passed `ChatDetailView.isLiveChat` with an empty `events`
+        // array — the view then rendered that empty live stream instead of the
+        // chat's persisted rows.
+        let session = RemoteChatSession(chatID: "chat-fresh")
+        #expect(session.activeChatID == nil)
+        #expect(session.isInteractiveSession == false)
+    }
+
+    @Test @MainActor func markNotLiveRelinquishesLivenessClaim() {
+        let session = RemoteChatSession(chatID: "chat-evicted")
+        session.ingest(.chatState(chatID: "chat-evicted", update: ChatStateUpdate(
+            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
+        #expect(session.activeChatID == "chat-evicted")
+
+        session.markNotLive()
+        #expect(session.activeChatID == nil)
+        #expect(session.isInteractiveSession == false)
+    }
 }
 #endif
