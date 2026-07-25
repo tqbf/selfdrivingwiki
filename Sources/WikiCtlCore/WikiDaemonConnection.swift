@@ -77,9 +77,10 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         self.connection = connection
     }
 
-    /// Connect to the daemon XPC service. The system launches the XPC service
-    /// (from `Contents/XPCServices/wikid.xpc`) on-demand when the first message
-    /// is sent — no LaunchAgent plist or launchctl required.
+    /// Connect to the daemon as an **embedded XPC service** bundled in
+    /// `Contents/XPCServices/wikid.xpc`. macOS launches the service on demand
+    /// when the connection is resumed and terminates it when the app quits —
+    /// no LaunchAgent or `launchctl` needed.
     ///
     /// The `WikiDaemonProtocol` interface is set up with the
     /// `WikiDaemonEventSink` sub-interface on the `registerEventSink(_:)`
@@ -158,6 +159,22 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     /// need main-actor isolation must hop themselves.
     public func setInvalidationHandler(_ handler: @escaping @Sendable () -> Void) {
         connection.invalidationHandler = handler
+    }
+
+    /// Install an interruption handler on the underlying `NSXPCConnection`.
+    /// Fires when the daemon *process* dies but the connection remains usable —
+    /// launchd auto-relaunches the mach service on the next message, so the
+    /// SAME connection transparently reconnects to a FRESH daemon instance.
+    /// Unlike invalidation, interruption is not terminal, so the app must NOT
+    /// tear down; instead it re-establishes per-process state (re-registering
+    /// its event sink, which the new daemon instance does not have) — otherwise
+    /// every pushed chat/queue envelope is silently dropped (#904).
+    ///
+    /// Only one handler may be set per connection (XPC replaces the prior one).
+    /// The handler is `@Sendable` (fires on an XPC-internal queue); callers that
+    /// need main-actor isolation must hop themselves.
+    public func setInterruptionHandler(_ handler: @escaping @Sendable () -> Void) {
+        connection.interruptionHandler = handler
     }
 
     /// Invalidate the connection explicitly (e.g. before building a new one

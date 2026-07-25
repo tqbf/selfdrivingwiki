@@ -41,8 +41,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private let openWindowBridge: OpenWindowBridge
     /// Restarts the wikid daemon by invalidating the XPC connection +
     /// reconnecting. Injected from `WikiFSApp` (owns the
-    /// `DaemonHealthMonitor`). Called by the "Restart Daemon" menu item when
-    /// the daemon is stale (running an old binary after the app was rebuilt).
+    /// `DaemonHealthMonitor`). Called by the "Restart Daemon" menu item.
     private var daemonRestartHandler: (() -> Void)?
     /// The daemon health monitor (#878). When the daemon is `.disconnected`,
     /// the status item icon swaps to `exclamation.triangle` so the user sees
