@@ -53,7 +53,7 @@ struct SessionManagerTests {
         let manager = makeSessionManager(dir: dir)
         let descriptor = registry.wikis.first!
 
-        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session = try! manager.session(for: descriptor.id, descriptor: descriptor)
 
         #expect(session.wikiID == descriptor.id)
         #expect(session.store.eventBus != nil)
@@ -67,8 +67,8 @@ struct SessionManagerTests {
         let manager = makeSessionManager(dir: dir)
         let descriptor = registry.wikis.first!
 
-        let session1 = manager.session(for: descriptor.id, descriptor: descriptor)
-        let session2 = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session1 = try! manager.session(for: descriptor.id, descriptor: descriptor)
+        let session2 = try! manager.session(for: descriptor.id, descriptor: descriptor)
 
         // Two calls with the same wiki ID return the IDENTICAL instance.
         #expect(session1 === session2)
@@ -87,8 +87,8 @@ struct SessionManagerTests {
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
-        let session1 = manager.session(for: descriptor1.id, descriptor: descriptor1)
-        let session2 = manager.session(for: descriptor2.id, descriptor: descriptor2)
+        let session1 = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
+        let session2 = try! manager.session(for: descriptor2.id, descriptor: descriptor2)
 
         // Different wiki IDs get distinct sessions.
         #expect(session1 !== session2)
@@ -105,7 +105,7 @@ struct SessionManagerTests {
         let manager = makeSessionManager(dir: dir)
         let descriptor = registry.wikis.first!
 
-        _ = manager.session(for: descriptor.id, descriptor: descriptor)
+        _ = try! manager.session(for: descriptor.id, descriptor: descriptor)
         #expect(manager.sessions[descriptor.id] != nil)
 
         manager.releaseSession(for: descriptor.id)
@@ -120,7 +120,7 @@ struct SessionManagerTests {
         let manager = makeSessionManager(dir: dir)
         let descriptor = registry.wikis.first!
 
-        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session = try! manager.session(for: descriptor.id, descriptor: descriptor)
         // releaseSession should call flushPendingSaves on the store before
         // removing — we can't easily observe the flush (no public dirty flag),
         // but we verify the session is gone and no crash occurs.
@@ -146,8 +146,8 @@ struct SessionManagerTests {
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
-        _ = manager.session(for: descriptor1.id, descriptor: descriptor1)
-        _ = manager.session(for: descriptor2.id, descriptor: descriptor2)
+        _ = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
+        _ = try! manager.session(for: descriptor2.id, descriptor: descriptor2)
 
         // flushAllSessions should flush both sessions' pending saves without
         // removing them from the cache — no crash, sessions still present.
@@ -174,8 +174,8 @@ struct SessionManagerTests {
         let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
-        let session1 = manager.session(for: descriptor1.id, descriptor: descriptor1)
-        let session2 = manager.session(for: descriptor2.id, descriptor: descriptor2)
+        let session1 = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
+        let session2 = try! manager.session(for: descriptor2.id, descriptor: descriptor2)
 
         // Two sessions have distinct GenerationGate instances.
         #expect(session1.generationGate !== session2.generationGate)
@@ -193,7 +193,7 @@ struct SessionManagerTests {
         let manager = makeSessionManager(dir: dir)
         let descriptor = registry.wikis.first!
 
-        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session = try! manager.session(for: descriptor.id, descriptor: descriptor)
 
         // No frontmost ID set yet → nil.
         #expect(manager.frontmostSession == nil)
@@ -247,7 +247,7 @@ struct SessionManagerTests {
         #expect(manager.pendingWikiLinks[descriptor.id] != nil)
 
         // Creating the session transfers the stash onto it.
-        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session = try! manager.session(for: descriptor.id, descriptor: descriptor)
 
         #expect(session.pendingWikiLink?.url == url)
         #expect(session.pendingWikiLink?.openInNewTab == true)
@@ -262,9 +262,122 @@ struct SessionManagerTests {
         let descriptor = registry.wikis.first!
 
         // No stash → the new session's pendingWikiLink is nil.
-        let session = manager.session(for: descriptor.id, descriptor: descriptor)
+        let session = try! manager.session(for: descriptor.id, descriptor: descriptor)
 
         #expect(session.pendingWikiLink == nil)
+    }
+
+    // MARK: - Store-open failure (issue #881 — no in-memory fallback)
+
+    /// When the on-disk store cannot be opened, `session(for:)` records a
+    /// user-visible error in `openErrors` and rethrows — no silent in-memory
+    /// fallback that would show an empty wiki.
+    @Test func testSessionOpenFailureRecordsErrorAndRethrows() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = registry.wikis.first!
+
+        struct StoreOpenFailure: Error {}
+        // Inject a store factory that always throws — simulates a corrupt /
+        // unopenable DB without filesystem tricks.
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            makeStore: { _ in throw StoreOpenFailure() })
+
+        #expect(throws: StoreOpenFailure.self) {
+            _ = try manager.session(for: descriptor.id, descriptor: descriptor)
+        }
+
+        // The error is recorded for the wiki so RootScene can render it.
+        #expect(manager.openError(for: descriptor.id) != nil)
+        // No session was cached.
+        #expect(manager.sessions[descriptor.id] == nil)
+    }
+
+    /// `clearOpenError(for:)` removes the recorded error so a Retry can attempt
+    /// a fresh open.
+    @Test func testClearOpenErrorRemovesRecordedError() {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = registry.wikis.first!
+
+        struct StoreOpenFailure: Error {}
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            makeStore: { _ in throw StoreOpenFailure() })
+
+        #expect(throws: StoreOpenFailure.self) {
+            _ = try manager.session(for: descriptor.id, descriptor: descriptor)
+        }
+        #expect(manager.openError(for: descriptor.id) != nil)
+
+        manager.clearOpenError(for: descriptor.id)
+        #expect(manager.openError(for: descriptor.id) == nil)
+    }
+
+    /// A successful open after a prior failure clears the recorded error
+    /// (recovery path — Retry button → healthy DB).
+    @Test func testSuccessfulOpenClearsRecordedError() throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = registry.wikis.first!
+
+        struct StoreOpenFailure: Error {}
+        // First throw, then succeed on retry. `@unchecked Sendable` with an
+        // internal NSLock — the `makeStore` closure is `@Sendable`.
+        final class FailingToggle: @unchecked Sendable {
+            private let lock = NSLock()
+            private var shouldFail = true
+            /// Returns true the first time (consume the failure), then false.
+            func consume() -> Bool {
+                lock.withLock {
+                    if shouldFail { shouldFail = false; return true }
+                    return false
+                }
+            }
+        }
+        let toggle = FailingToggle()
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try! makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            makeStore: { url in
+                if toggle.consume() { throw StoreOpenFailure() }
+                return try StoreBackend.current.makeStore(databaseURL: url)
+            })
+
+        // First attempt fails and records an error.
+        #expect(throws: StoreOpenFailure.self) {
+            _ = try manager.session(for: descriptor.id, descriptor: descriptor)
+        }
+        #expect(manager.openError(for: descriptor.id) != nil)
+
+        // Clear error (Retry button), then the next attempt succeeds.
+        manager.clearOpenError(for: descriptor.id)
+        let session = try manager.session(for: descriptor.id, descriptor: descriptor)
+        // A successful open clears any recorded error.
+        #expect(manager.openError(for: descriptor.id) == nil)
+        #expect(manager.sessions[descriptor.id] != nil)
+        #expect(session.wikiID == descriptor.id)
     }
 }
 

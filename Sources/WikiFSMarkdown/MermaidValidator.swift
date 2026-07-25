@@ -174,7 +174,7 @@ public final class MermaidValidator: @unchecked Sendable {
     /// `mermaid.js` is used by the reader for rendering.
     public static func loadDefault() -> MermaidValidator? {
         if let url = Bundle.main.url(forResource: "mermaid", withExtension: "js"),
-           let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty {
+           let src = DebugLog.trying("load mermaid.js", operation: { try String(contentsOf: url, encoding: .utf8) }), !src.isEmpty {
             return MermaidValidator(jsSource: src)
         }
         let exeDir = Bundle.main.executableURL?.deletingLastPathComponent()
@@ -182,7 +182,7 @@ public final class MermaidValidator: @unchecked Sendable {
         guard let exeDir else { return nil }
         let candidate = exeDir.deletingLastPathComponent()
             .appendingPathComponent("Resources/mermaid.js")
-        guard let src = try? String(contentsOf: candidate, encoding: .utf8), !src.isEmpty else {
+        guard let src = DebugLog.trying("load mermaid.js from Resources", operation: { try String(contentsOf: candidate, encoding: .utf8) }), !src.isEmpty else {
             return nil
         }
         return MermaidValidator(jsSource: src)

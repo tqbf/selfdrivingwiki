@@ -39,11 +39,14 @@ APP_NAME="Self Driving Wiki"
 APP_TARGET_NAME="WikiFS"
 EXT_NAME="WikiFSFileProvider"
 CTL_NAME="wikictl"
-# wikid — the XPC daemon (plans/multi-wiki-daemon.md). Bundled under
-# Contents/Helpers so launchd can run it with the app's signing identity
-# (avoids kTCCServiceSystemPolicyAppData prompts — a standalone .build binary
-# has a different cdhash per rebuild, invalidating TCC trust each time).
+# wikid — the XPC daemon (plans/multi-wiki-daemon.md). Bundled as a proper
+# XPC service at Contents/XPCServices/wikid.xpc so the system manages its
+# lifecycle (no LaunchAgent, no launchctl, no stale-daemon races). Being a
+# bundle means the provisioning profile embeds properly (codesign CLI can
+# embed profiles in bundles, not bare Mach-Os), so the daemon can carry
+# App Group + keychain entitlements — no AMFI kills, no TCC prompts.
 DAEMON_NAME="wikid"
+DAEMON_BUNDLE_ID="${DAEMON_BUNDLE_ID:-com.selfdrivingwiki.wikid}"
 # podcast-token-helper: the FairPlay/Mescal signer for Apple Podcasts transcripts
 # (dlopens the private PodcastsFoundation framework in an isolated process). Bundled
 # under Contents/Helpers beside wikictl; WikiFSCore spawns it via Process. Private
@@ -92,12 +95,24 @@ APPEX_MACOS="${APPEX_CONTENTS}/MacOS"
 # at a stable bundle-relative path; it is ALSO copied to build/wikictl for the
 # Phase A gate to invoke directly.
 HELPERS_DIR="${CONTENTS}/Helpers"
+# XPC services directory — wikid.xpc lives here so the system manages its
+# lifecycle (auto-launch on first NSXPCConnection, termination on idle).
+XPC_SERVICES_DIR="${CONTENTS}/XPCServices"
+DAEMON_XPC="${XPC_SERVICES_DIR}/wikid.xpc"
+DAEMON_XPC_CONTENTS="${DAEMON_XPC}/Contents"
+DAEMON_XPC_MACOS="${DAEMON_XPC_CONTENTS}/MacOS"
 
 # Entitlements are GENERATED into build/ from the identifiers above, so the team
 # prefix + App Group always track signing/local.config (no stale committed file
 # baked to one developer's team). Written just before codesign.
 APP_ENTITLEMENTS="${BUILD_DIR}/WikiFS.entitlements"
 EXT_ENTITLEMENTS="${BUILD_DIR}/WikiFSFileProvider.entitlements"
+# wikid XPC service entitlements — generated per-developer (same formula as
+# the app entitlements). With a real provisioning profile, these allow the
+# daemon to access the App Group container + shared keychain WITHOUT TCC
+# prompts or AMFI kills (the bare-Mach-O limitation that forced stripping
+# ALL entitlements in the LaunchAgent era is gone — bundles embed profiles).
+DAEMON_ENTITLEMENTS="${BUILD_DIR}/wikid.entitlements"
 VERSION="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)"
 if [ -z "${VERSION}" ] && [ -f VERSION ]; then VERSION="$(sed -n '1p' VERSION | tr -d '[:space:]')"; fi
 VERSION="${VERSION:-0.0.0}"
@@ -145,18 +160,18 @@ done
 # ---------------------------------------------------------------------------
 echo "→ assembling ${APP_BUNDLE}"
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}" "${DAEMON_XPC_MACOS}"
 cp "${APP_BIN}" "${MACOS_DIR}/${APP_NAME}"
 cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
-# wikid daemon — bundled beside wikictl so launchd launches the SIGNED binary
-# (a standalone .build binary prompts on every rebuild — different cdhash resets
-# TCC trust). The daemon is unsandboxed: NO entitlements (AMFI kills a bare
-# Mach-O that has entitlements but no embedded provisioning profile). It reads
-# the app group container directly via filesystem permissions. The LaunchAgent
-# plist is generated at RUNTIME by DaemonLaunchAgentManager (the app knows the
-# correct container + bundle paths for any developer).
-cp "${DAEMON_BIN}" "${HELPERS_DIR}/${DAEMON_NAME}"
+# wikid daemon — bundled as an XPC service (Contents/XPCServices/wikid.xpc).
+# The system manages its lifecycle: auto-launches on first
+# NSXPCConnection(serviceName:), terminates after idle. No LaunchAgent plist,
+# no launchctl, no stale-daemon races. Being a bundle means the provisioning
+# profile embeds properly (codesign CLI can embed profiles in bundles), so
+# the daemon can carry App Group + keychain entitlements — no AMFI kills, no
+# TCC prompts. See plans/xpc-service-migration.md.
+cp "${DAEMON_BIN}" "${DAEMON_XPC_MACOS}/${DAEMON_NAME}"
 # Also drop a copy at build/wikictl for the Phase A gate to invoke directly.
 cp "${CTL_BIN}" "${BUILD_DIR}/${CTL_NAME}"
 # podcast-token-helper alongside wikictl (spawned via Process for transcript
@@ -216,6 +231,17 @@ EOF
 }
 write_id_sidecar "${RESOURCES_DIR}"
 write_id_sidecar "${BUILD_DIR}"
+# The wikid daemon is a SANDBOXED bundled XPC service. It cannot read the outer
+# app's Contents/Resources sidecar (outside its sandbox container), and a nested
+# XPC service's Bundle.main custom Info.plist keys don't surface reliably — so
+# without a sidecar it falls through to the group.org.sockpuppet.wiki default and
+# reads the WRONG App Group container (empty registry → "No store for wikiID" at
+# ingest; stale 1-provider agent config). Drop the sidecar into the daemon's OWN
+# Contents/Resources, which it can always read; WikiIdentifiers resolves it via
+# its executable's ../Resources candidate. MUST be written BEFORE `codesign
+# wikid.xpc` so it's sealed into the daemon bundle. (#887 follow-up.)
+mkdir -p "${DAEMON_XPC_CONTENTS}/Resources"
+write_id_sidecar "${DAEMON_XPC_CONTENTS}/Resources"
 # Bundle the pdf2md PEP 723 script alongside wikictl so PdfExtractionService
 # can spawn it at ingest time.
 if [ -f "${PDF2MD_SRC}" ]; then
@@ -396,6 +422,44 @@ cat > "${APPEX_CONTENTS}/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# wikid.xpc Info.plist. CFBundlePackageType=XPC! and the XPCService dict make
+# the system treat this bundle as an on-demand XPC service. ServiceType=
+# Application launches ONE instance per connecting app and ties its lifetime
+# to that app — the service terminates when the app exits (or on idle). This
+# is what we want: the daemon must NOT survive app quit. NOTE: ServiceType
+# controls instancing/lifetime only. The daemon runs UN-sandboxed (see
+# DAEMON_ENTITLEMENTS below — no com.apple.security.app-sandbox) because it must
+# spawn user-configured agent CLIs at arbitrary paths, which App Sandbox forbids.
+cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>${DAEMON_BUNDLE_ID}</string>
+	<key>CFBundleExecutable</key><string>${DAEMON_NAME}</string>
+	<key>CFBundleName</key><string>wikid</string>
+	<key>CFBundlePackageType</key><string>XPC!</string>
+	<key>CFBundleShortVersionString</key><string>${VERSION}</string>
+	<key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
+	<!-- App Group / File Provider ids, read by WikiIdentifiers via -->
+	<!-- Bundle.main.object(forInfoDictionaryKey:). MUST match the app + -->
+	<!-- appex plists (lines ~351/409) — as a bundled XPC service the -->
+	<!-- daemon's Bundle.main is wikid.xpc, so without these it falls -->
+	<!-- through to the group.org.sockpuppet.wiki default and reads the -->
+	<!-- WRONG App Group container ("No store for wikiID …" at ingest). -->
+	<key>WIKIAppGroupID</key><string>${APP_GROUP}</string>
+	<key>WIKIFileProviderID</key><string>${EXT_BUNDLE_ID}</string>
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+	</dict>
+</dict>
+</plist>
+PLIST
+
 # ---------------------------------------------------------------------------
 # Codesign
 # ---------------------------------------------------------------------------
@@ -451,11 +515,11 @@ if [ "${REAL_SIGNING}" = "1" ]; then
 	<array>
 		<string>${APP_GROUP}</string>
 	</array>
-	<!-- Shared keychain access group so the un-sandboxed wikid daemon (bundled
-	     at Contents/Helpers/wikid) can read the ACP/Extraction/Zotero secrets
-	     this app wrote. The access group MUST begin with the Team ID prefix;
-	     the provisioning profile authorizes the <TEAM_ID>.* wildcard. The same
-	     group string is baked into KeychainSecretStore at build time
+	<!-- Shared keychain access group so the wikid XPC service (bundled
+	     at Contents/XPCServices/wikid.xpc) can read the ACP/Extraction/Zotero
+	     secrets this app wrote. The access group MUST begin with the Team ID
+	     prefix; the provisioning profile authorizes the <TEAM_ID>.* wildcard.
+	     The same group string is baked into KeychainSecretStore at build time
 	     (tools/keychaingen → GeneratedKeychain.swift) and into the generated
 	     wikid entitlements below. See plans/keychain-sharing.md. -->
 	<key>keychain-access-groups</key>
@@ -483,9 +547,58 @@ PLIST
 </dict>
 </plist>
 PLIST
+  cat > "${DAEMON_ENTITLEMENTS}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.application-identifier</key>
+	<string>${TEAM_ID}.${DAEMON_BUNDLE_ID}</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>${TEAM_ID}</string>
+	<!-- UN-sandboxed, like the main app. The daemon's core job is spawning
+	     USER-CONFIGURED agent CLIs (claude-acp via the bundled bun, opencode from
+	     Homebrew, custom provider binaries) that live at arbitrary paths anywhere
+	     on the system. App Sandbox confines a process to its own .xpc bundle +
+	     container, so a sandboxed daemon can execute NONE of them (not even the
+	     bundled bun, which lives in the app bundle outside the .xpc) → ingestion
+	     is impossible. It also can't reach the SHARED App Group container: inside
+	     the sandbox `homeDirectoryForCurrentUser` is the sandbox home, so the
+	     literal container path lands in an empty sandbox-local dir with no wikis
+	     ("No store for wikiID"). Un-sandboxing restores both. This reverts the
+	     app-sandbox that the #887 XPC migration added; the daemon still reaches
+	     the shared DB via the App Group container and secrets via the keychain
+	     access group — same boundaries the un-sandboxed app already uses.
+	     `com.apple.security.app-sandbox` is intentionally ABSENT. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>${APP_GROUP}</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>${KEYCHAIN_ACCESS_GROUP}</string>
+	</array>
+</dict>
+</plist>
+PLIST
   echo "→ embedding provisioning profiles"
   cp "${APP_PROFILE}" "${CONTENTS}/embedded.provisionprofile"
   cp "${EXT_PROFILE}" "${APPEX_CONTENTS}/embedded.provisionprofile"
+  # Embed the daemon profile if it exists (same pattern as the appex profile —
+  # codesign embeds it into the .xpc bundle, which AMFI checks at exec).
+  if [ -f "${DAEMON_PROFILE}" ]; then
+    cp "${DAEMON_PROFILE}" "${DAEMON_XPC_CONTENTS}/embedded.provisionprofile"
+  else
+    # LOUD warning: without the daemon profile the sandbox + App Group +
+    # keychain entitlements below can't be signed in, so the fallback signs
+    # the .xpc WITHOUT entitlements. The daemon then runs un-sandboxed AND
+    # can't reach the App Group container / shared keychain — failing far from
+    # this cause. See signing/README.md for generating wikid.provisionprofile.
+    echo "⚠️  ${DAEMON_PROFILE} missing — wikid.xpc will be signed WITHOUT"
+    echo "⚠️  entitlements (not sandboxed, no App Group / keychain access)."
+    echo "⚠️  Run signing/setup.sh to generate it, or the daemon will fail to"
+    echo "⚠️  reach the shared container at runtime."
+  fi
 
   # Inside-out: sign nested Mach-O (the wikictl helper + the .appex) first, then
   # the outer app. wikictl needs no entitlements — it's an un-sandboxed helper
@@ -493,14 +606,23 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
-  # wikid daemon — unsandboxed, NO entitlements. AMFI kills a bare Mach-O
-  # that carries entitlements without an embedded provisioning profile;
-  # the daemon reads the app group container via filesystem permissions.
-  echo "→ codesign wikid daemon (${IDENTITY})"
-  codesign --force --timestamp=none \
-    --identifier com.selfdrivingwiki.wikid \
-    --sign "${IDENTITY}" \
-    "${HELPERS_DIR}/${DAEMON_NAME}"
+  # wikid XPC service — sign the BUNDLE (not the bare Mach-O). With the
+  # embedded provisioning profile + entitlements, the daemon can access the
+  # App Group container + shared keychain WITHOUT TCC prompts or AMFI kills.
+  # Inside-out: sign wikid.xpc BEFORE the outer app (same as the .appex).
+  echo "→ codesign wikid.xpc (${IDENTITY})"
+  if [ -f "${DAEMON_PROFILE}" ]; then
+    codesign --force --timestamp=none \
+      --entitlements "${DAEMON_ENTITLEMENTS}" \
+      --sign "${IDENTITY}" \
+      "${DAEMON_XPC}"
+  else
+    # No daemon profile → ad-hoc sign without entitlements (dev fallback).
+    codesign --force --timestamp=none \
+      --identifier "${DAEMON_BUNDLE_ID}" \
+      --sign "${IDENTITY}" \
+      "${DAEMON_XPC}"
+  fi
   # pdf2md is a plain script bundled in Helpers/ — must also be signed, or the
   # outer app's seal fails ("code object is not signed at all").
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
@@ -552,7 +674,7 @@ PLIST
 else
   echo "→ ad-hoc codesign (File Provider extension will NOT load)"
   codesign --force --sign - "${HELPERS_DIR}/${CTL_NAME}"
-  codesign --force --sign - "${HELPERS_DIR}/${DAEMON_NAME}"
+  codesign --force --sign - --identifier "${DAEMON_BUNDLE_ID}" "${DAEMON_XPC}"
   if [ -f "${HELPERS_DIR}/${PDF2MD_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PDF2MD_NAME}"
   fi

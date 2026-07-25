@@ -29,6 +29,62 @@ public enum DebugLog {
     /// events surface cleanly in Console.app.
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
 
+    // MARK: - try? replacement
+
+    /// Visible alternative to bare `try?`: runs a throwing closure, and on
+    /// failure logs via `.store` so the error is visible in Console.app before
+    /// returning `nil`. Use in place of `try?` to satisfy the
+    /// `silent_try_optional` SwiftLint rule without a full `do/catch` block.
+    ///
+    ///     // Before (rule violation):
+    ///     let pages = (try? store.listPages()) ?? []
+    ///     // After:
+    ///     let pages = DebugLog.trying("listPages", operation: { try store.listPages() }) ?? []
+    ///
+    /// `@discardableResult` so fire-and-forget calls (`try? store.vacuum()`)
+    /// become `DebugLog.trying("vacuum", operation: { try store.vacuum() })` without a `_ =`.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure () -> String,
+        operation: () throws -> T
+    ) -> T? {
+        do { return try operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Async variant for `try? await`.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure @Sendable () -> String,
+        operation: @Sendable () async throws -> T
+    ) async -> T? {
+        do { return try await operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Optional-returning overload — flattens `T??` to `T?` to match `try?`
+    /// semantics. When the operation returns an optional, Swift prefers this
+    /// overload (the generic `T` binds to the wrapped type), avoiding the
+    /// double-optional that the base overload would produce.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure () -> String,
+        operation: () throws -> T?
+    ) -> T? {
+        do { return try operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Async + optional-returning overload.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure @Sendable () -> String,
+        operation: @Sendable () async throws -> T?
+    ) async -> T? {
+        do { return try await operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
     /// When true, high-frequency diagnostic logs (per-event `pushQueueEvent`/
     /// `pushChatEnvelope`, etc.) are emitted. Off by default to avoid flooding
     /// Console.app during active extraction/ingestion — the daemon pushes one

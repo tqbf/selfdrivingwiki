@@ -61,6 +61,8 @@ func shell(_ command: String) -> String? {
 /// whitespace trimmed, surrounding double quotes stripped). Same rules as
 /// WikiIdentifiers.parseKV. Returns nil when the file is absent/unreadable.
 func parseLocalConfig(_ path: String) -> [String: String]? {
+    // Config file may be absent on first run — nil is the expected fallback.
+    // swiftlint:disable:next silent_try_optional
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
     var out: [String: String] = [:]
     for raw in text.split(whereSeparator: \.isNewline) {
@@ -132,6 +134,8 @@ if useStdout {
     exit(0)
 }
 
+// Output may not exist yet on first run — empty string is the expected fallback.
+// swiftlint:disable:next silent_try_optional
 let existingContent = (try? String(contentsOfFile: outputPath, encoding: .utf8)) ?? ""
 if output == existingContent {
     // No change — skip writing to avoid touching the file's mtime (which would

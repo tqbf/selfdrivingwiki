@@ -115,6 +115,8 @@ final class WikiChangeBridge {
     /// flush unless cancelled. The returned handle cancels the `Task`.
     private func schedule(_ work: @escaping () -> Void) -> ChangeCoalescer.Handle {
         let task = Task { @MainActor in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: Self.coalesceWindow)
             guard !Task.isCancelled else { return }
             work()

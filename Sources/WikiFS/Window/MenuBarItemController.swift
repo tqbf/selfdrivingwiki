@@ -39,9 +39,9 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// status bar menu opens (or focuses) that wiki's window — even in
     /// accessory mode when no windows are visible.
     private let openWindowBridge: OpenWindowBridge
-    /// Restarts the wikid daemon (embedded XPC service). Injected from
-    /// `WikiFSApp` — invalidates the current connection so macOS launches a
-    /// fresh service instance. Called by the "Restart Daemon" menu item.
+    /// Restarts the wikid daemon by invalidating the XPC connection +
+    /// reconnecting. Injected from `WikiFSApp` (owns the
+    /// `DaemonHealthMonitor`). Called by the "Restart Daemon" menu item.
     private var daemonRestartHandler: (() -> Void)?
     /// The daemon health monitor (#878). When the daemon is `.disconnected`,
     /// the status item icon swaps to `exclamation.triangle` so the user sees
@@ -400,11 +400,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         activateWikiWindow()
     }
 
-    /// Restart the wikid daemon via `launchctl kickstart`. Used when the
-    /// daemon is stale (running an old binary after the app was rebuilt) —
-    /// avoids a full app restart. Delegates to the injected
-    /// `daemonRestartHandler` (which calls
-    /// `DaemonHealthMonitor.restart()`).
+    /// Restarts the wikid daemon by invalidating the XPC connection +
+    /// reconnecting (the system relaunches the XPC service on-demand).
+    /// Delegates to the injected `daemonRestartHandler` (which calls
+    /// `DaemonHealthMonitor.forceReconnect()`).
     @objc private func restartDaemon(_ sender: NSMenuItem?) {
         DebugLog.store("wikid: restart requested")
         daemonRestartHandler?()
@@ -564,6 +563,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         setAnimationFrame(filled: false)
         animationTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 if Task.isCancelled { break }
                 isFilled.toggle()
@@ -666,15 +667,27 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Transient hint
 
+    private var lastHintMessage: String?
+    
     /// Show a brief popover below the status item, anchored to its button.
     /// Auto-dismisses after 2.5 seconds, or when the user clicks elsewhere
-    /// (`.transient` behavior), or when the menu opens (`menuNeedsUpdate`
+    /// (`.semitransient` behavior), or when the menu opens (`menuNeedsUpdate`
     /// calls `dismissHint`).
     private func showTransientHint(message: String, symbol: String) {
+        // #622: If the same message is already showing, just extend the timer
+        // to avoid visual flicker during batch operations.
+        if hintPopover?.isShown == true, lastHintMessage == message {
+            startHintDismissTimer()
+            return
+        }
+
         dismissHint()
+        lastHintMessage = message
 
         let popover = NSPopover()
-        popover.behavior = .transient
+        // .semitransient is more robust than .transient when the app is
+        // performing other UI updates (like spinners) that might steal focus.
+        popover.behavior = .semitransient
         popover.contentSize = NSSize(width: 220, height: 40)
         popover.contentViewController = NSHostingController(
             rootView: QueueHintView(message: message, symbol: symbol)
@@ -684,7 +697,14 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         hintPopover = popover
 
+        startHintDismissTimer()
+    }
+
+    private func startHintDismissTimer() {
+        hintDismissTask?.cancel()
         hintDismissTask = Task { @MainActor [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             self?.dismissHint()
@@ -697,6 +717,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         hintDismissTask = nil
         hintPopover?.close()
         hintPopover = nil
+        lastHintMessage = nil
     }
 }
 
@@ -711,7 +732,7 @@ private struct QueueHintView: View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.accentColor)
             Text(message)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.primary)

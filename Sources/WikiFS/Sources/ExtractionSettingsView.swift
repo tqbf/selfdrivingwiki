@@ -1,7 +1,6 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
-import WikiFSEngine
 
 /// Settings for PDF→Markdown extraction — the second Settings scene tab. Picks
 /// the backend (Local pdf2md / Claude / Gemini / Docling Serve) and configures
@@ -313,11 +312,11 @@ struct ExtractionSettingsView: View {
     private func persistAll() {
         var config = ExtractionConfig.load(from: containerDirectory)
         writeConfig(into: &config)
-        try? config.save(to: containerDirectory)
+        DebugLog.trying("save extraction config", operation: { try config.save(to: containerDirectory) })
 
-        try? credentialStore.setSecret(anthropicKeyText.isEmpty ? nil : anthropicKeyText, .anthropicAPIKey)
-        try? credentialStore.setSecret(geminiKeyText.isEmpty ? nil : geminiKeyText, .geminiAPIKey)
-        try? credentialStore.setSecret(doclingTokenText.isEmpty ? nil : doclingTokenText, .doclingServeToken)
+        DebugLog.trying("set Anthropic API key", operation: { try credentialStore.setSecret(anthropicKeyText.isEmpty ? nil : anthropicKeyText, .anthropicAPIKey) })
+        DebugLog.trying("set Gemini API key", operation: { try credentialStore.setSecret(geminiKeyText.isEmpty ? nil : geminiKeyText, .geminiAPIKey) })
+        DebugLog.trying("set Docling token", operation: { try credentialStore.setSecret(doclingTokenText.isEmpty ? nil : doclingTokenText, .doclingServeToken) })
     }
 
     /// Write every non-secret draft into `config`.

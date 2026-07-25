@@ -215,7 +215,7 @@ public struct AnthropicExtractionClient: MarkdownExtractor {
     /// `stop_reason: "refusal"`, `.emptyOutput` on no text, `.decoding` on a
     /// malformed body.
     public static func decode(data: Data) throws -> DecodedExtraction {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let obj = DebugLog.trying("decode", operation: { try JSONSerialization.jsonObject(with: data) as? [String: Any] }) else {
             throw Error.decoding("not a JSON object")
         }
         let stopReason = obj["stop_reason"] as? String

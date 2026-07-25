@@ -1,12 +1,16 @@
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 #if canImport(WikiFSEngine)
 import WikiFSEngine
 #endif
 
-/// The mach service name registered with launchd. Must match the `Label` in the
-/// launchd plist and the `WikiDaemonConnection.serviceName` in the client.
-let WikiDaemonMachServiceName = "com.selfdrivingwiki.wikid"
+/// The XPC service name — must match the bundle identifier in the wikid.xpc
+/// Info.plist and `WikiDaemonConnection.serviceName` in the client. The system
+/// resolves this to `Contents/XPCServices/wikid.xpc` in the app bundle and
+/// launches the service on-demand when a client connects via
+/// `NSXPCConnection(serviceName:)`.
+let WikiDaemonServiceName = "com.selfdrivingwiki.wikid"
 
 #if os(macOS)
 
@@ -37,6 +41,14 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
 
         let exporter = WikiDaemonExporter(daemon: daemon)
         newConnection.exportedObject = exporter
+
+        // #622: Use the connection's invalidation handler to unregister the
+        // sink when the app disconnects. This replaces the problematic weak-ref
+        // approach and ensures the strong sink proxy is cleaned up.
+        newConnection.invalidationHandler = { [weak exporter] in
+            exporter?.unregisterSink()
+        }
+
         newConnection.resume()
         return true
     }
@@ -46,9 +58,20 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
 /// `WikiDaemon`. Each method serializes JSON `Data` over XPC.
 final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendable {
     private let daemon: WikiDaemon
+    private let lock = NSLock()
+    private var sinkID: UUID?
 
     init(daemon: WikiDaemon) {
         self.daemon = daemon
+    }
+
+    /// Unregister the sink associated with this connection. Called by the
+    /// invalidation handler.
+    func unregisterSink() {
+        let id = lock.withLock { sinkID }
+        if let id {
+            daemon.unregisterEventSink(id: id)
+        }
     }
 
     func listWikis(reply: @escaping (Data) -> Void) {
@@ -87,7 +110,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // MARK: - Workload: event sink registration (Phase 0)
 
     func registerEventSink(_ sink: WikiDaemonEventSink) {
-        daemon.registerEventSink(sink)
+        // Hold the lock across registration so that if the connection's
+        // invalidation handler fires concurrently, unregisterSink blocks
+        // until sinkID is set — preventing an orphaned strong sink ref.
+        lock.lock()
+        defer { lock.unlock() }
+        sinkID = daemon.registerEventSink(sink)
     }
 
     // MARK: - Workload: queue snapshot (Phase 0 — scaffold)
@@ -114,11 +142,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
                 let id = try await engine.enqueue(req)
                 let envelope: [String: String?] = ["id": id, "error": nil]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
                 let envelope: [String: String?] = ["id": nil, "error": error.localizedDescription]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -127,7 +155,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func cancelItem(id: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 await engine.cancelItem(id)
             }
             sendableReply.reply()
@@ -137,7 +165,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func cancelAllInFlight(reply: @escaping (Int) -> Void) {
         let sendableReply = SendableIntReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let count = await engine.cancelAllInFlight()
                 sendableReply.reply(count)
             } else {
@@ -153,11 +181,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let engine = try await daemon.ensureQueueEngine()
                 try await engine.retryItem(id)
                 let envelope: [String: String?] = ["error": nil]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
                 let envelope: [String: String?] = ["error": error.localizedDescription]
-                let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -166,7 +194,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func pauseQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.pause(queueKind)
             }
@@ -177,7 +205,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func resumeQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.resume(queueKind)
             }
@@ -188,7 +216,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func haltQueue(queue: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine(),
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
                let queueKind = QueueKind(rawValue: queue) {
                 await engine.halt(queueKind)
             }
@@ -199,7 +227,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 await engine.reorderItem(id: id, beforeItemID: beforeItemID)
             }
             sendableReply.reply()
@@ -209,7 +237,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) {
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let result = await engine.hasActiveWork(for: wikiID)
                 sendableReply.reply(result)
             } else {
@@ -221,10 +249,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            guard let engine = try? await daemon.ensureQueueEngine() else {
+            guard let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) else {
                 let envelope: [String: Any] = ["success": false,
                                                "error": "daemon queue engine unavailable"]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
                 return
             }
@@ -232,12 +262,16 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             switch result {
             case .success:
                 let envelope: [String: Any] = ["success": true]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
             case .failure(let error):
                 let envelope: [String: Any] = ["success": false,
                                                "error": error.localizedDescription]
-                let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+                let data = (DebugLog.trying("JSONSerialization.data", operation: {
+                    try JSONSerialization.data(withJSONObject: envelope)
+                })) ?? Data()
                 sendableReply.reply(data)
             }
         }
@@ -246,9 +280,9 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let events = await engine.loadTranscript(for: itemID)
-                let data = (try? JSONEncoder().encode(events)) ?? Data()
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(events) })) ?? Data()
                 sendableReply.reply(data)
             } else {
                 sendableReply.reply(Data())
@@ -259,13 +293,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            if let engine = try? await daemon.ensureQueueEngine() {
+            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
                 let snapshots = await engine.loadAllActivitySnapshots()
                 var data: [String: QueueEngine.ActivitySnapshotData] = [:]
                 for (id, snapshot) in snapshots {
                     data[id] = QueueEngine.ActivitySnapshotData(from: snapshot)
                 }
-                let result = (try? JSONEncoder().encode(data)) ?? Data()
+                let result = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(data) })) ?? Data()
                 sendableReply.reply(result)
             } else {
                 sendableReply.reply(Data())
@@ -334,7 +368,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
     func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["id": nil, "error": "queue engine unavailable on Linux"]
-        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
         reply(data)
     }
 
@@ -343,7 +377,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func retryItem(id: String, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "queue engine unavailable on Linux"]
-        let data = (try? JSONEncoder().encode(envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
         reply(data)
     }
 
@@ -355,7 +389,9 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
         let envelope: [String: Any] = ["success": false, "error": "queue engine unavailable on Linux"]
-        let data = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+        let data = (DebugLog.trying("JSONSerialization.data", operation: {
+            try JSONSerialization.data(withJSONObject: envelope)
+        })) ?? Data()
         reply(data)
     }
 
@@ -365,22 +401,22 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
     func startChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func continueChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func sendChatMessage(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
-        reply((try? JSONEncoder().encode(envelope)) ?? Data())
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
     #endif
 }
@@ -410,17 +446,25 @@ private struct SendableBoolReply: @unchecked Sendable {
 
 // MARK: - Main
 
-// Resolve the App Group container path WITHOUT calling
-// DatabaseLocation.appGroupContainerDirectory() directly — that function
-// builds the literal path ~/Library/Group Containers/<id>/ and accessing it
-// from a launchd-started daemon triggers kTCCServiceSystemPolicyAppData
-// ("wikid would like to access data from other apps") on every rebuild
-// (the code signature hash changes per build, resetting TCC trust).
+// Resolve the App Group container path. The daemon reaches the SHARED group
+// container through the security API —
+// `containerURL(forSecurityApplicationGroupIdentifier:)`, via
+// `DatabaseLocation.extensionContainerDirectory()` — which the
+// `application-groups` entitlement maps to the real
+// `~/Library/Group Containers/<id>/` the app writes to. This is robust whether
+// or not the daemon is sandboxed.
 //
-// Instead: accept the container path from (1) a --container arg, or (2) the
-// WIKI_CONTAINER_DIR env var (set by the launchd plist). If neither is
-// present, fall back to DatabaseLocation (the prompt will appear once, then
-// the user approves and it sticks in TCC).
+// History (#887): the XPC migration briefly sandboxed the daemon AND resolved
+// the container via `appGroupContainerDirectory()`, whose LITERAL
+// `homeDirectoryForCurrentUser/Library/Group Containers/<id>` path resolves to
+// the SANDBOX home inside a sandbox — an empty sandbox-local dir with no
+// `wikis.json` → every ingest failed "No store for wikiID". The daemon is now
+// un-sandboxed (it must spawn arbitrary agent CLIs), but the security-API
+// resolution is kept as the explicit, correct way to reach the shared container.
+//
+// Precedence: (1) a `--container` arg or (2) `WIKI_CONTAINER_DIR` env (dev, set
+// by `make install-daemon`), then (3) the security-API shared container, then
+// (4) the literal path as a last resort (dev build with no app-group entitlement).
 let containerDirectory: URL
 if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }),
    FileManager.default.fileExists(atPath: argPath) {
@@ -428,34 +472,56 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
 } else if let envPath = ProcessInfo.processInfo.environment["WIKI_CONTAINER_DIR"],
           FileManager.default.fileExists(atPath: envPath) {
     containerDirectory = URL(fileURLWithPath: envPath, isDirectory: true)
+} else if let shared = DatabaseLocation.extensionContainerDirectory() {
+    containerDirectory = shared
 } else {
     containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
 }
+
+// Diagnostic: log the RESOLVED App Group id + container the daemon will use.
+// The group id comes from `WikiIdentifiers.appGroupID` (read from the id sidecar
+// bundled in the daemon's own Contents/Resources). If that sidecar is missing,
+// resolution falls back to the `group.org.sockpuppet.wiki` default → a container
+// with NO wikis → "No store for wikiID" at ingest. This line is the fastest way
+// to see that mismatch: grep for `appGroup=` and confirm it matches the app's
+// real group, and `container=` points at ~/Library/Group Containers (not a
+// sandbox-local path). (#887.)
+DebugLog.store("wikid: resolved appGroup=\(WikiIdentifiers.appGroupID) container=\(containerDirectory.path)")
 
 let daemon = WikiDaemon(containerDirectory: containerDirectory)
 
 let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 
-// The daemon is always launched via launchd (the `MachServices` key in the
-// plist registers the mach service name). `NSXPCListener(machServiceName:)`
-// registers with launchd so clients connecting via
-// `NSXPCConnection(machServiceName:)` reach this listener.
+// The daemon is a bundled XPC service (Contents/XPCServices/wikid.xpc). The
+// system creates the listener and passes connections to it. We obtain the
+// singleton service listener via `NSXPCListener.service()`, set our delegate,
+// and resume. For a service listener, `resume()` never returns — it hands
+// control to the system's run loop, which is ideal for the XPC service's
+// main() function. No `RunLoop.current.run()` needed.
 //
-// Direct-run without launchd does NOT work: the mach service isn't
-// registered, and `NSXPCListenerEndpoint` can't be serialized to a file
-// (it must pass through an existing XPC connection — a chicken-and-egg
-// problem). Use `make install-daemon` for both development and production.
-let listener = NSXPCListener(machServiceName: WikiDaemonMachServiceName)
+// Clients connect via `NSXPCConnection(serviceName: WikiDaemonServiceName)`.
+// The system auto-launches the service on the first connection and terminates
+// it after idle (no LaunchAgent plist, no launchctl, no stale-daemon races).
+let listener = NSXPCListener.service()
 listener.delegate = delegate
-listener.resume()
 
-DebugLog.store("wikid: daemon started, serving on \(WikiDaemonMachServiceName)")
+// Emit the startup log + start the #878 liveness heartbeat BEFORE resume() —
+// `resume()` on a service listener never returns (it hands control to the
+// system's run loop), so anything after it is unreachable in production. The
+// "XPC service started" log line in particular is the first thing an operator
+// greps for to confirm the service launched.
+DebugLog.store("wikid: XPC service started, serving on \(WikiDaemonServiceName)")
 
 // #878: start the liveness heartbeat (logs every 60 s so an operator can
 // confirm the daemon is alive + see its current load in Console.app).
 daemon.startHeartbeat()
 
-// Keep the process alive until launchd stops it (IdleTimeout) or a signal arrives.
+listener.resume()
+
+// Unreachable in production — `listener.resume()` above never returns. Kept as
+// a fallback for non-XPC execution contexts (tests, direct invocation for
+// debugging), where `service()` returns a listener whose `resume()` does not
+// block.
 RunLoop.current.run()
 
 #else // Linux
@@ -481,6 +547,8 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     // Linux default — a conventional XDG-style data directory.
     let home = FileManager.default.homeDirectoryForCurrentUser
     let defaultDir = home.appendingPathComponent(".local/share/selfdrivingwiki", isDirectory: true)
+    // Directory creation is idempotent — failure is acceptable (directory may already exist).
+    // swiftlint:disable:next silent_try_optional
     try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
     containerDirectory = defaultDir
 }
@@ -504,8 +572,10 @@ func writeResponse(_ string: String) {
 }
 
 while let line = readLine() {
-    let parsed: [String: Any]? = line.data(using: .utf8).flatMap {
-        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    let parsed: [String: Any]? = line.data(using: .utf8).flatMap { data in
+        DebugLog.trying("JSONSerialization.jsonObject", operation: {
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        })
     }
     let id = parsed?["id"]
     guard let req = parsed,
@@ -513,7 +583,7 @@ while let line = readLine() {
     else {
         // Reconstruct the response with the id if we have one, else -1.
         let resp: [String: Any] = ["id": id ?? -1, "error": "invalid request"]
-        if let data = try? JSONSerialization.data(withJSONObject: resp),
+        if let data = DebugLog.trying("JSONSerialization.data", operation: { try JSONSerialization.data(withJSONObject: resp) }),
            let str = String(data: data, encoding: .utf8) {
             writeResponse(str)
         }
@@ -577,7 +647,7 @@ while let line = readLine() {
         resp["result"] = result as Any
     }
 
-    if let data = try? JSONSerialization.data(withJSONObject: resp),
+    if let data = DebugLog.trying("JSONSerialization.data", operation: { try JSONSerialization.data(withJSONObject: resp) }),
        let str = String(data: data, encoding: .utf8) {
         writeResponse(str)
     }

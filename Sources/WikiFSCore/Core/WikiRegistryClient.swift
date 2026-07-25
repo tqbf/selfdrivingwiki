@@ -98,7 +98,7 @@ public final class WikiRegistryClient {
         let fm = FileManager.default
         let main = databaseURL(forWikiID: id).path
         for suffix in ["", "-wal", "-shm"] {
-            try? fm.removeItem(at: URL(fileURLWithPath: main + suffix))
+            DebugLog.trying("clearStaleRegistry", operation: { try fm.removeItem(at: URL(fileURLWithPath: main + suffix)) })
         }
     }
 
@@ -136,7 +136,7 @@ public final class WikiRegistryClient {
             let descriptor = WikiDescriptor.make(displayName: "My Wiki")
             createDatabaseIfNeeded(for: descriptor)
             registry.add(descriptor)
-            try? registry.save(to: containerDirectory)
+            DebugLog.trying("migrateSingleWiki", operation: { try registry.save(to: containerDirectory) })
         }
         wikis = registry.wikis
         if activateNow, let first = registry.mostRecentlyUsed {
@@ -182,7 +182,7 @@ public final class WikiRegistryClient {
 
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.add(descriptor)
-        try? registry.save(to: containerDirectory)
+        DebugLog.trying("createWiki", operation: { try registry.save(to: containerDirectory) })
         wikis = registry.wikis
 
         await registerDomain?(descriptor.id, descriptor.displayName)
@@ -199,7 +199,7 @@ public final class WikiRegistryClient {
         guard id != activeWikiID else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.touch(id: id)
-        try? registry.save(to: containerDirectory)
+        DebugLog.trying("selectWiki", operation: { try registry.save(to: containerDirectory) })
         wikis = registry.wikis
         activeWikiID = id
     }
@@ -210,7 +210,7 @@ public final class WikiRegistryClient {
         guard !trimmed.isEmpty else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.rename(id: id, to: trimmed)
-        try? registry.save(to: containerDirectory)
+        DebugLog.trying("renameWiki", operation: { try registry.save(to: containerDirectory) })
         wikis = registry.wikis
         await renameDomain?(id, trimmed)
     }
@@ -221,7 +221,7 @@ public final class WikiRegistryClient {
         guard descriptorExists(id) else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.setHomePage(id: id, pageID: pageID)
-        try? registry.save(to: containerDirectory)
+        DebugLog.trying("setHomePage", operation: { try registry.save(to: containerDirectory) })
         wikis = registry.wikis
     }
 
@@ -290,7 +290,7 @@ public final class WikiRegistryClient {
 
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.remove(id: id)
-        try? registry.save(to: containerDirectory)
+        DebugLog.trying("deleteWiki", operation: { try registry.save(to: containerDirectory) })
         deleteDatabaseFiles(forWikiID: id)
         wikis = registry.wikis
 
@@ -412,11 +412,11 @@ public final class WikiRegistryClient {
                 let from = URL(fileURLWithPath: legacy.path + suffix)
                 let to = URL(fileURLWithPath: target.path + suffix)
                 if fm.fileExists(atPath: from.path) {
-                    try? fm.moveItem(at: from, to: to)
+                    DebugLog.trying("importLegacyWiki move sidecar", operation: { try fm.moveItem(at: from, to: to) })
                 }
             }
             registry.add(descriptor)
-            try? registry.save(to: containerDirectory)
+            DebugLog.trying("importLegacyWiki save", operation: { try registry.save(to: containerDirectory) })
         } catch {
             DebugLog.store("WikiRegistryClient: legacy migration failed: \(error)")
         }

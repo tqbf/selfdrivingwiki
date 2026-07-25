@@ -1,7 +1,6 @@
 import AppKit
 import WikiFSEngine
 import SwiftUI
-import WikiFSEngine
 import WebKit
 import WikiFSCore
 
@@ -349,7 +348,7 @@ struct ChatWebView: NSViewRepresentable {
                 html += Self.rowHTML(for: event, style: style, context: context, isFinal: true, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: absoluteIndex)
             }
             guard !html.isEmpty,
-                  let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
+                  let data = DebugLog.trying("serialize chat rows", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
             webView?.evaluateJavaScript("appendRows(\(jsonString))", completionHandler: nil)
@@ -367,7 +366,7 @@ struct ChatWebView: NSViewRepresentable {
         private func replaceLastRow(_ event: AgentEvent, at index: Int, isStreaming: Bool, allEvents: [AgentEvent], context: WikiRenderContext? = nil) {
             let ts = index < timestamps.count ? timestamps[index] : nil
             let html = Self.rowHTML(for: event, style: style, context: context, isFinal: !isStreaming, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: index)
-            guard let data = try? JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]),
+            guard let data = DebugLog.trying("serialize replaced row", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
             webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)

@@ -159,7 +159,7 @@ enum DefuddleExtractionService {
                     let writeHandle = stdinPipe.fileHandleForWriting
                     DispatchQueue.global(qos: .userInitiated).async {
                         writeHandle.write(htmlBytes)
-                        try? writeHandle.close()
+                        DebugLog.trying("close defuddle stdin", operation: { try writeHandle.close() })
                     }
                 }
             }
@@ -167,6 +167,8 @@ enum DefuddleExtractionService {
             // Timeout safety net. defuddle is sub-second, but a hung process
             // (e.g. stdin not closed, pathological input) must not hang ingestion.
             group.addTask {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: timeout)
                 return nil
             }
@@ -278,7 +280,7 @@ enum DefuddleExtractionService {
             let published: String?
             let wordCount: Int?
         }
-        guard let payload = try? JSONDecoder().decode(DefuddlePayload.self, from: data) else {
+        guard let payload = DebugLog.trying("decode defuddle payload", operation: { try JSONDecoder().decode(DefuddlePayload.self, from: data) }) else {
             DebugLog.extraction("[defuddle] parseJSON: decode failed (\(data.count) bytes)")
             return nil
         }
@@ -324,6 +326,10 @@ enum DefuddleExtractionService {
             defer { lock.unlock() }
             guard !registered else { return }
             registered = true
+            // Token discarded on purpose: `registered` makes this once-only for
+            // the life of the process, and the observer fires during app
+            // termination — there is no point at which we would detach it.
+            // swiftlint:disable:next discarded_notification_center_observer
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification,
                 object: nil, queue: .main

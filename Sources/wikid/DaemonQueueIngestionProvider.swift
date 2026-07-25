@@ -83,16 +83,16 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let stateMarkdown = daemonStateMarkdown(from: store)
 
         var sources: [OperationRequest.StagedSource] = []
-        let allSources = (try? store.listSources()) ?? []
+        let allSources = (DebugLog.trying("listSources", operation: { try store.listSources() })) ?? []
         for sourceID in sourceIDs {
             guard let source = allSources.first(where: { $0.id == sourceID }),
-                  let bytes = try? store.sourceContent(id: sourceID)
+                  let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) })
             else {
                 DebugLog.ingest("DaemonQueueIngestionProvider: skipping \(sourceID.rawValue) — source or bytes missing")
                 continue
             }
 
-            let head = try? store.processedMarkdownHead(sourceID: source.id)
+            let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: source.id) })
             let staged = Self.stagedBytesAndExt(
                 for: source,
                 originalBytes: bytes,
@@ -203,7 +203,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         DebugLog.ingest("DaemonQueueIngestionProvider.runLintPages: begin wikiID=\(wikiID) pages=\(pageIDs.count)")
 
-        let allPages = (try? store.listPages(sortBy: .lastUpdated)) ?? []
+        let allPages = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .lastUpdated) })) ?? []
         let pages: [(id: PageID, title: String)] = pageIDs.compactMap { id in
             guard let s = allPages.first(where: { $0.id == id }) else { return nil }
             return (id: id, title: s.title)

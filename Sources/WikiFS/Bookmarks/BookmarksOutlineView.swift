@@ -395,7 +395,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     private static func firstSidebarPayload(from pb: NSPasteboard) -> SidebarDragPayloadList? {
         let sidebarType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
         guard let data = pb.data(forType: sidebarType),
-              let list = try? JSONDecoder().decode(SidebarDragPayloadList.self, from: data) else {
+              let list = DebugLog.trying("decode bookmark drag payload", operation: { try JSONDecoder().decode(SidebarDragPayloadList.self, from: data) }) else {
             return nil
         }
         return list

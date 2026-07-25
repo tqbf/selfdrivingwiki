@@ -432,7 +432,7 @@ public actor QueueEventLog {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
 
-        guard let data = try? encoder.encode(record),
+        guard let data = DebugLog.trying("encode event", operation: { try encoder.encode(record) }),
               let newline = "\n".data(using: .utf8) else { return }
 
         do {
@@ -488,7 +488,7 @@ public actor QueueEventLog {
 
     /// Close the current file handle (if any) and reset state.
     private func closeHandle() {
-        try? fileHandle?.close()
+        DebugLog.trying("close fileHandle", operation: { try fileHandle?.close() })
         fileHandle = nil
         // Don't reset currentDate — it's only reset on open failure.
     }
@@ -497,10 +497,16 @@ public actor QueueEventLog {
     /// Parses the date from the filename (`queue-YYYY-MM-DD.jsonl`).
     private func pruneOldFiles() {
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(
-            at: logDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey]
-        ) else { return }
+        let entries: [URL]
+        do {
+            entries = try fm.contentsOfDirectory(
+                at: logDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey]
+            )
+        } catch {
+            DebugLog.store("QueueEventLog.contentsOfDirectory: \(error)")
+            return
+        }
 
         let now = dateProvider()
         let cutoff = now.addingTimeInterval(-Double(retentionDays * 86400))
@@ -518,7 +524,7 @@ public actor QueueEventLog {
 
             // If the file's date is older than the cutoff, delete it.
             if fileDate < cutoff {
-                try? fm.removeItem(at: entry)
+                DebugLog.trying("remove old log", operation: { try fm.removeItem(at: entry) })
                 DebugLog.store("QueueEventLog.pruneOldFiles: deleted \(entry.lastPathComponent)")
             }
         }

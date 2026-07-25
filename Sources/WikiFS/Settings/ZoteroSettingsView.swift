@@ -129,7 +129,7 @@ struct ZoteroSettingsView: View {
     }
 
     private func saveCredential() {
-        try? credentialStore.setAPIKey(apiKeyText.isEmpty ? nil : apiKeyText)
+        DebugLog.trying("set Zotero API key", operation: { try credentialStore.setAPIKey(apiKeyText.isEmpty ? nil : apiKeyText) })
     }
 
     private func saveConfig() {
@@ -138,7 +138,7 @@ struct ZoteroSettingsView: View {
         let trimmedDir = zoteroDirText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.libraryID = trimmedLibraryID.isEmpty ? nil : trimmedLibraryID
         config.zoteroDirOverride = trimmedDir.isEmpty ? nil : trimmedDir
-        try? config.save(to: containerDirectory)
+        DebugLog.trying("save config", operation: { try config.save(to: containerDirectory) })
     }
 
     private func chooseDirectory() {

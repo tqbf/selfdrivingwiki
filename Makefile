@@ -121,7 +121,7 @@ NOTES_FILE       ?=
 .PHONY: all deps build check check-release test test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
-        version keychain mutate mutate-scope
+        version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
 
 all: build
 
@@ -134,6 +134,10 @@ help:
 	@echo "  test              Run the SwiftPM test suite"
 	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
+	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
+	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
+	@echo "  lint-analyze      SwiftLint analyzer: unused decls/imports (advisory, slow, not in CI)"
+	@echo "  hooks             Install .githooks (pre-commit try? guard + git-lfs shims)"
 	@echo "  mutate            Run swift-mutation-testing (full — see .swift-mutation-testing.yml)"
 	@echo "  mutate-scope      Scoped mutation run: make mutate-scope SOURCES_PATH=Sources/Foo"
 	@echo "  prompts           Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md"
@@ -289,12 +293,24 @@ test-fast-release: deps prompts version keychain
 # Reports are written to mutation-report.json (+ .html / sonar-*.json if
 # uncommented in the config); the result cache lives in
 # .swift-mutation-testing-cache/. Both are gitignored.
+#
+# Expect ~10 min of cold sandbox build before the first mutant runs: the tool
+# copies the repo WITHOUT .build and recompiles the whole dependency graph.
+# After that each mutant costs one ~9s test run.
+#
+# THE VERSION GUARD BELOW IS LOAD-BEARING. Viable mutants depend on
+# Sources/WikiFSTypes/MutationTestingSupport.swift declaring
+# __swiftMutationTestingID (see that file, and #823/#860). A locally-patched
+# build of the tool — which reports 0.0.0-dev — injects its own declaration into
+# that same target, and the duplicate makes every mutant Unviable again. Stock
+# 1.3.0 injects into Sources/CSQLite, a .systemLibrary target SPM compiles no
+# sources for, so its copy is inert and the two never collide. Prefer stock.
 
-mutate: deps prompts version keychain
+mutate: deps prompts version keychain check-mutate-tool
 	swift-mutation-testing
 	@echo "✓ mutation testing complete — see mutation-report.json"
 
-mutate-scope: deps prompts version keychain
+mutate-scope: deps prompts version keychain check-mutate-tool
 	@if [ -z "$(SOURCES_PATH)" ]; then \
 	  echo "✗ SOURCES_PATH is required. Example:"; \
 	  echo "    make mutate-scope SOURCES_PATH=Sources/WikiFSTypes"; \
@@ -302,6 +318,119 @@ mutate-scope: deps prompts version keychain
 	fi
 	swift-mutation-testing --sources-path "$(SOURCES_PATH)"
 	@echo "✓ mutation testing complete for $(SOURCES_PATH) — see mutation-report.json"
+
+check-mutate-tool:
+	@command -v swift-mutation-testing >/dev/null 2>&1 || { \
+	  echo "✗ swift-mutation-testing not found. Install with:"; \
+	  echo "    brew install ericodx/homebrew-tools/swift-mutation-testing"; exit 1; }
+	@test -f Sources/WikiFSTypes/MutationTestingSupport.swift || { \
+	  echo "✗ Sources/WikiFSTypes/MutationTestingSupport.swift is missing —"; \
+	  echo "  without it every mutant comes back Unviable (#823, #860)."; exit 1; }
+	@v=$$(swift-mutation-testing --version 2>/dev/null | awk '{print $$2}'); \
+	case "$$v" in \
+	  0.0.0-dev) \
+	    echo "✗ $$(command -v swift-mutation-testing) reports $$v (a local dev build)."; \
+	    echo "  It injects a second __swiftMutationTestingID into WikiFSTypes, which"; \
+	    echo "  collides with Sources/WikiFSTypes/MutationTestingSupport.swift and"; \
+	    echo "  makes every mutant Unviable. Use stock 1.3.0 from brew instead —"; \
+	    echo "  note ~/.local/bin precedes /opt/homebrew/bin on PATH."; exit 1;; \
+	  "") echo "⚠ could not determine swift-mutation-testing version — continuing";; \
+	  *) echo "✓ swift-mutation-testing $$v";; \
+	esac
+
+# ---------------------------------------------------------------------------
+# Lint — enforces the AGENTS.md "no bare try?" rule (see .swiftlint.yml)
+# ---------------------------------------------------------------------------
+#
+# Scoped narrowly on purpose: only `custom_rules` is enabled, so this is a
+# correctness gate, not a Swift style gate. The 389 pre-existing violations are
+# grandfathered in .swiftlint-baseline.json; only NEW ones fail.
+
+lint:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	swiftlint lint --strict
+	@echo "✓ no new bare try? in Sources/ or tools/"
+
+# Re-snapshot the baseline. Run this after fixing try?s so the ratchet tightens.
+# The `baseline:` key must be stripped first: with it set, swiftlint filters
+# violations against the OLD baseline before writing, which would preserve
+# entries you just fixed. The temp config lives at the repo root because
+# `included:` paths resolve relative to the config file's directory.
+#
+# THE PATH-REWRITE STEP IS LOAD-BEARING — do not drop it. swiftlint writes
+# baseline entries keyed by ABSOLUTE file URL
+# (file:///Users/you/work/selfdrivingwiki/Sources/…). Baseline matching is
+# per-file, so an absolute baseline matches on the machine that generated it and
+# NOWHERE else: on CI the checkout is at /home/runner/work/… and every
+# grandfathered violation comes roaring back at once. This is invisible while
+# the baseline is empty ([] matches everywhere), which is why it only surfaced
+# the first time the file had real entries in it (PR #896).
+#
+# Rewriting the URLs to repo-relative paths makes the file portable; swiftlint
+# resolves them against the run's working directory. Verify a change here by
+# running `swiftlint lint --strict` from a `git worktree` at a DIFFERENT path —
+# a run from this directory passes either way and proves nothing.
+lint-baseline:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	@sed '/^baseline:/d' .swiftlint.yml > .swiftlint-regen.yml
+	@swiftlint lint --no-cache --config .swiftlint-regen.yml \
+	  --write-baseline .swiftlint-baseline.json >/dev/null 2>&1 || true
+	@rm -f .swiftlint-regen.yml
+	@python3 -c 'import json,pathlib,sys; \
+	p=pathlib.Path(".swiftlint-baseline.json"); \
+	root=pathlib.Path.cwd().as_uri().rstrip("/")+"/"; \
+	b=json.loads(p.read_text()); \
+	[e["violation"]["location"].__setitem__("file", e["violation"]["location"]["file"][len(root):]) \
+	  for e in b if e["violation"]["location"]["file"].startswith(root)]; \
+	p.write_text(json.dumps(b, indent=2) + "\n"); \
+	sys.stderr.write("  → %d entries, paths made repo-relative\n" % len(b))'
+	@grep -q 'file:///' .swiftlint-baseline.json \
+	  && { echo "✗ baseline still contains absolute paths — it will not match on CI"; exit 1; } \
+	  || true
+	@echo "✓ baseline rewritten — review the diff, the count should only go DOWN"
+
+# Analyzer rules (unused_declaration, unused_import). ADVISORY — deliberately
+# not wired into CI and deliberately not part of `make lint`.
+#
+# Analyzer rules need a full compiler log, so this does a from-scratch build
+# into .build/analyze (a separate build path, so it never invalidates the
+# incremental .build you work out of) and then runs a whole-program analysis
+# over it. Budget on the order of ten-plus minutes for the pair; that cost is
+# the entire reason this is a manual target rather than a gate.
+#
+# `swift build -v` is what makes this work at all: SwiftLint's --compiler-log-path
+# parser wants the real swiftc invocations, which SwiftPM only prints in verbose
+# mode. A log from an up-to-date build is EMPTY (nothing recompiles, nothing is
+# printed) and the analysis silently finds nothing, so the clean build is
+# load-bearing, not incidental.
+#
+# Read the output with judgement — see .swiftlint-analyze.yml for the known
+# blind spots. A hit is a lead, not a verdict.
+lint-analyze:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+	  echo "✗ swiftlint not found. Install with: brew install swiftlint"; exit 1; }
+	@$(MAKE) --no-print-directory version prompts
+	@mkdir -p tmp/analyze
+	@echo "→ clean build into .build/analyze (verbose, for the compiler log)…"
+	@rm -rf .build/analyze
+	@swift build --build-tests --build-path .build/analyze -v \
+	  > tmp/analyze/build-verbose.log 2>&1 \
+	  || { echo "✗ build failed — see tmp/analyze/build-verbose.log"; exit 1; }
+	@printf '→ captured %s swiftc invocations; analyzing (this is the slow part)…\n' \
+	  "$$(grep -c 'bin/swiftc' tmp/analyze/build-verbose.log)"
+	@swiftlint analyze --quiet --config .swiftlint-analyze.yml \
+	  --compiler-log-path tmp/analyze/build-verbose.log || true
+	@echo "✓ analyzer run complete (advisory — nothing here fails a build)"
+
+# Point git at .githooks/. That directory also carries copies of the four
+# git-lfs shims (post-checkout, post-commit, post-merge, pre-push) — without
+# them, setting core.hooksPath would silently disable Git LFS.
+hooks:
+	@git config core.hooksPath .githooks
+	@chmod +x .githooks/*
+	@echo "✓ core.hooksPath = .githooks (pre-commit try? guard active; git-lfs shims preserved)"
 
 # ---------------------------------------------------------------------------
 # Agent prompts (prompts/*.md → Sources/WikiFSCore/GeneratedPrompts.swift)
@@ -475,78 +604,53 @@ uninstall:
 register: install
 
 # ---------------------------------------------------------------------------
-# wikid daemon — launchd install/uninstall (plans/multi-wiki-daemon.md Phase 1B)
+# wikid daemon — bundled XPC service (plans/xpc-service-migration.md)
 # ---------------------------------------------------------------------------
 
-# wikid daemon — managed by launchctl (the app bootstraps it on launch via
-# DaemonLaunchAgentManager). The daemon is unsandboxed: NO entitlements (AMFI
-# kills a bare Mach-O that has entitlements but no embedded provisioning
-# profile). It reads the app group container directly via filesystem perms.
+# wikid is now a bundled XPC service (Contents/XPCServices/wikid.xpc). The
+# system manages its lifecycle: auto-launches on first
+# NSXPCConnection(serviceName:), terminates after idle. No LaunchAgent plist,
+# no launchctl, no DaemonLaunchAgentManager.
 #
-# `make install-daemon` is for dev-mode: signs the .build binary (ad-hoc or
-# dev cert), copies it to the container dir, installs a manual launchd plist
-# pointing at the container binary + sets WIKI_CONTAINER_DIR. Production:
-# the app generates the plist at runtime and bootstraps via launchctl.
+# `make install-daemon` is now for dev-mode only: it copies the .build wikid
+# binary to the container dir + sets WIKI_CONTAINER_DIR so you can `swift run`
+# the daemon directly for debugging (bypassing the XPC service bundle). In
+# production, `make build` bundles wikid.xpc inside the app and the system
+# launches it automatically.
 WIKID_BIN := $(shell swift build --show-bin-path)/wikid
-WIKID_PLIST := signing/com.selfdrivingwiki.wikid.plist
-WIKID_PLIST_DST := $(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist
 WIKID_SIGN_IDENTITY := $(shell grep '^DEV_IDENTITY=' signing/local.config 2>/dev/null | sed 's/DEV_IDENTITY=//; s/^"//; s/"$$//' || echo "-")
 WIKID_CONTAINER_DIR := $(HOME)/Library/Group Containers/$(shell grep '^APP_GROUP=' signing/local.config 2>/dev/null | sed 's/APP_GROUP=//; s/^"//; s/"$$//' || echo "group.org.sockpuppet.wiki")
-WIKID_UID := $(shell id -u)
 
 .PHONY: install-daemon uninstall-daemon daemon-status
 
-install-daemon: ## Dev-only: install wikid via a manual launchd plist (for .build binaries). Production: app bootstraps via launchctl.
+install-daemon: ## Dev-only: copy wikid .build binary to container dir for `swift run` debugging. Production: bundled as wikid.xpc inside the app.
 install-daemon:
 	@echo "→ Building wikid…"
 	@swift build --target wikid
 	@echo "→ Copying wikid binary to container dir…"
 	@mkdir -p "$(WIKID_CONTAINER_DIR)"
 	@cp "$(WIKID_BIN)" "$(WIKID_CONTAINER_DIR)/wikid"
-	@echo "→ Codesigning wikid + wikictl (identity: $(WIKID_SIGN_IDENTITY))…"
+	@echo "→ Codesigning wikid (identity: $(WIKID_SIGN_IDENTITY))…"
 	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
 		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_CONTAINER_DIR)/wikid" 2>/dev/null \
 		|| codesign --force --timestamp=none --sign - "$(WIKID_CONTAINER_DIR)/wikid"
-	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikictl \
-		--entitlements signing/wikictl.entitlements \
-		--sign "$(WIKID_SIGN_IDENTITY)" "$(dir $(WIKID_BIN))wikictl" 2>/dev/null \
-		|| codesign --force --timestamp=none --sign - "$(dir $(WIKID_BIN))wikictl"
-	@echo "→ Installing launchd plist (dev mode — may prompt for TCC once)…"
-	@mkdir -p $(dir $(WIKID_PLIST_DST))
-	@cp $(WIKID_PLIST) $(WIKID_PLIST_DST)
-	@# Replace the shell-wrapped ProgramArguments with the direct binary path.
-	@plutil -remove ProgramArguments -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
-	@plutil -insert ProgramArguments -array -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null || true
-	@plutil -insert ProgramArguments.0 -string "$(WIKID_CONTAINER_DIR)/wikid" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST)
-	@plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST) 2>/dev/null \
-		|| { plutil -insert EnvironmentVariables -xml '<dict/>' -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); \
-		     plutil -insert EnvironmentVariables.WIKI_CONTAINER_DIR -string "$(WIKID_CONTAINER_DIR)" -o $(WIKID_PLIST_DST) $(WIKID_PLIST_DST); }
-	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
-	@launchctl bootstrap gui/$(WIKID_UID) $(WIKID_PLIST_DST)
-	@echo "✓ wikid installed (dev mode). Production: app bootstraps via launchctl."
+	@echo "✓ wikid binary copied to container dir (dev mode)."
 	@echo "  Binary:     $(WIKID_CONTAINER_DIR)/wikid"
 	@echo "  Container:  $(WIKID_CONTAINER_DIR)"
-	@echo "  Plist:      $(WIKID_PLIST_DST)"
-	@echo "  Status:     make daemon-status"
+	@echo ""
+	@echo "  For dev-run:  WIKI_CONTAINER_DIR='$(WIKID_CONTAINER_DIR)' .build/debug/wikid"
+	@echo "  For prod:     make build (bundles wikid.xpc inside the app)"
 
-uninstall-daemon: ## Remove the wikid launchd agent
+uninstall-daemon: ## Remove the wikid binary from the container dir (LaunchAgent plist is no longer used)
 uninstall-daemon:
-	@launchctl bootout gui/$(WIKID_UID)/com.selfdrivingwiki.wikid 2>/dev/null || true
-	@launchctl unload $(WIKID_PLIST_DST) 2>/dev/null || true
-	@rm -f $(WIKID_PLIST_DST)
-	@echo "✓ wikid uninstalled."
+	@rm -f "$(WIKID_CONTAINER_DIR)/wikid"
+	@# Clean up any stale LaunchAgent plist from the pre-XPC era.
+	@rm -f "$(HOME)/Library/LaunchAgents/com.selfdrivingwiki.wikid.plist"
+	@echo "✓ wikid dev binary removed. (XPC service is bundled in the app — no uninstall needed for production.)"
 
-daemon-status: ## Show the wikid launchd agent status
+daemon-status: ## Show whether the wikid XPC service is running
 daemon-status:
-	@launchctl list | grep wikid || echo "wikid is not loaded."
-
-approve-daemon: ## Open System Settings → Full Disk Access (add "Self Driving Wiki" to suppress TCC prompts)
-approve-daemon:
-	@echo "→ Opening System Settings → Privacy & Security → Full Disk Access"
-	@echo "  Add 'Self Driving Wiki' (from /Applications) to suppress the"
-	@echo "  'wikid would like to access data from other apps' prompt."
-	@echo "  This is a ONE-TIME step — the grant persists across rebuilds."
-	@open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+	@ps aux | grep -w '[w]ikid' || echo "wikid XPC service is not running (it launches on-demand when the app connects)."
 
 # ---------------------------------------------------------------------------
 # Clean

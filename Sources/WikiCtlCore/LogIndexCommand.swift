@@ -43,7 +43,13 @@ public enum LogIndexCommand {
                 // the three-way-merge base; on first touch it's the snapshot
                 // at staging time, on subsequent touches the workspace keeps
                 // the original base via the UPDATE).
-                let baseVersion = (try? store.getWikiIndex())?.body ?? WikiIndex.defaultBody
+                let baseVersion: String
+                do {
+                    baseVersion = try store.getWikiIndex().body
+                } catch {
+                    DebugLog.store("log-index: getWikiIndex failed, using default body — \(error)")
+                    baseVersion = WikiIndex.defaultBody
+                }
                 try store.setWorkspaceIndexBody(
                     workspaceID: workspace, indexBody: body, indexBaseVersion: baseVersion)
                 return PageCommand.Result(output: "", didCommit: true)

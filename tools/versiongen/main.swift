@@ -122,6 +122,8 @@ if useStdout {
     exit(0)
 }
 
+// Output may not exist yet on first run — empty string is the expected fallback.
+// swiftlint:disable:next silent_try_optional
 let existingContent = (try? String(contentsOfFile: outputPath, encoding: .utf8)) ?? ""
 if output == existingContent {
     // No change — skip writing to avoid touching the file's mtime (which would

@@ -1,7 +1,6 @@
 import AppKit
 import WikiFSEngine
 import SwiftUI
-import WikiFSEngine
 import WikiFSCore
 
 /// The unified chat surface (D2, pillar 2). One view replaces the split

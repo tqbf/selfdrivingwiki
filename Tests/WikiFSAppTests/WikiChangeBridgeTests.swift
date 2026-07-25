@@ -32,13 +32,13 @@ struct WikiChangeBridgeTests {
     /// Helper: create a session for a wiki + return it.
     private func makeSession(
         wikiID: String, descriptor: WikiDescriptor, dir: URL
-    ) -> WikiSession {
+    ) throws -> WikiSession {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try! makeTestQueueEngine()
         let provider = StubExtractionProvider()
-        return WikiSession(
+        return try WikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: dir,
@@ -52,11 +52,11 @@ struct WikiChangeBridgeTests {
     /// the session's store received a `ResourceChangeEvent` — i.e. the store's
     /// `summaries` get rebuilt (a side effect of the bus subscription's
     /// reload path).
-    @Test func testFlushPokesSessionBusForMatchingWiki() async {
+    @Test func testFlushPokesSessionBusForMatchingWiki() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let descriptor = registry.wikis.first!
-        let session = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+        let session = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
@@ -82,7 +82,7 @@ struct WikiChangeBridgeTests {
     /// Two sessions with the SAME wiki ID both get poked by flush (multi-window:
     /// a second window over the same wiki shares the session, but the lookup
     /// returns all matching sessions — verify the bridge iterates them all).
-    @Test func testFlushPokesAllMatchingSessions() async {
+    @Test func testFlushPokesAllMatchingSessions() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let descriptor = registry.wikis.first!
@@ -90,8 +90,8 @@ struct WikiChangeBridgeTests {
         // Two sessions for the SAME wiki ID (simulates two windows over one
         // wiki — in practice they share one session, but the bridge must
         // handle the lookup returning multiple).
-        let session1 = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
-        let session2 = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+        let session1 = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+        let session2 = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
@@ -115,7 +115,7 @@ struct WikiChangeBridgeTests {
     }
 
     /// A session with a DIFFERENT wiki ID is not poked.
-    @Test func testFlushDoesNotPokeNonMatchingSessions() async {
+    @Test func testFlushDoesNotPokeNonMatchingSessions() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let descriptorA = registry.wikis.first!
@@ -125,8 +125,8 @@ struct WikiChangeBridgeTests {
         let urlB = dir.appendingPathComponent("\(descriptorB.id).sqlite", isDirectory: false)
         _ = try? GRDBWikiStore(databaseURL: urlB)
 
-        let sessionA = makeSession(wikiID: descriptorA.id, descriptor: descriptorA, dir: dir)
-        let sessionB = makeSession(wikiID: descriptorB.id, descriptor: descriptorB, dir: dir)
+        let sessionA = try makeSession(wikiID: descriptorA.id, descriptor: descriptorA, dir: dir)
+        let sessionB = try makeSession(wikiID: descriptorB.id, descriptor: descriptorB, dir: dir)
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
@@ -151,11 +151,11 @@ struct WikiChangeBridgeTests {
     /// The bridge always signals the File Provider, even for a wiki with no
     /// matching session — the bridge should not crash and should not poke any
     /// bus (no matching sessions).
-    @Test func testFlushSignalsFileProviderForAnyWiki() async {
+    @Test func testFlushSignalsFileProviderForAnyWiki() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let descriptor = registry.wikis.first!
-        let session = makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+        let session = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)

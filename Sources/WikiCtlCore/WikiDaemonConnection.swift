@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import WikiFSCore
+import WikiDaemonContract
 
 /// Connection states for the wikid daemon. Drives the menu-bar icon badge
 /// and the in-app disconnected/reconnected banner. All transitions are logged
@@ -15,21 +16,6 @@ public enum DaemonConnectionState: String, Sendable, Equatable {
     /// A reconnect attempt is in flight (between a failed probe and the next
     /// one). The app is still on the local fallback.
     case reconnecting
-}
-
-/// Errors from the daemon XPC client.
-public enum WikiDaemonError: Error, LocalizedError {
-    case connectionFailed
-    case unexpectedReply
-
-    public var errorDescription: String? {
-        switch self {
-        case .connectionFailed:
-            return "Could not connect to the wikid daemon. Is it running? (make install-daemon)"
-        case .unexpectedReply:
-            return "The wikid daemon returned an unexpected reply."
-        }
-    }
 }
 
 /// Thread-safe single-resume wrapper for a `CheckedContinuation`. The first
@@ -54,9 +40,10 @@ private final class HealthCheckResumeBox: @unchecked Sendable {
     }
 }
 
-/// Thin XPC client for the `wikid` daemon. Connects via the mach service name
-/// registered with launchd; `NSXPCConnection` auto-launches the daemon on first
-/// use when it's installed as a LaunchAgent.
+/// Thin XPC client for the `wikid` daemon. Connects via the XPC service name
+/// (resolves to `Contents/XPCServices/wikid.xpc` in the app bundle);
+/// `NSXPCConnection` auto-launches the XPC service on first use — no
+/// LaunchAgent, no launchctl.
 ///
 /// `WikiDescriptor` values are serialized to JSON `Data` for transport (XPC
 /// `@objc` protocols require `NSSecureCoding`-compatible types; `Data` bridges
@@ -69,8 +56,8 @@ private final class HealthCheckResumeBox: @unchecked Sendable {
 /// immutable `let`. This mirrors `DaemonWorkloadClient`'s conformance.
 public final class WikiDaemonConnection: @unchecked Sendable {
 
-    /// The mach service name — must match the launchd plist `Label` and
-    /// `MachServices` key.
+    /// The XPC service name — must match the `CFBundleIdentifier` in the
+    /// wikid.xpc Info.plist.
     public static let serviceName = "com.selfdrivingwiki.wikid"
 
     private let connection: NSXPCConnection
@@ -140,6 +127,9 @@ public final class WikiDaemonConnection: @unchecked Sendable {
             // registered, or a half-open connection). This is what guarantees
             // the method always returns within `timeout`.
             Task {
+                // Task.sleep only throws CancellationError, expected when the
+                // health check completes before the timeout fires — not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .seconds(timeout))
                 box.resume(false, cont)
             }
@@ -200,9 +190,11 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
             proxy.listWikis { data in
-                if let wikis = try? JSONDecoder().decode([WikiDescriptor].self, from: data) {
+                do {
+                    let wikis = try JSONDecoder().decode([WikiDescriptor].self, from: data)
                     cont.resume(returning: wikis)
-                } else {
+                } catch {
+                    DebugLog.store("listWikis: malformed XPC reply — \(error)")
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                 }
             }
@@ -218,9 +210,11 @@ public final class WikiDaemonConnection: @unchecked Sendable {
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                     return
                 }
-                if let descriptor = try? JSONDecoder().decode(WikiDescriptor.self, from: data) {
+                do {
+                    let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
                     cont.resume(returning: descriptor)
-                } else {
+                } catch {
+                    DebugLog.store("createWiki: malformed XPC reply — \(error)")
                     cont.resume(throwing: WikiDaemonError.unexpectedReply)
                 }
             }
@@ -256,7 +250,12 @@ public final class WikiDaemonConnection: @unchecked Sendable {
                     cont.resume(returning: nil)
                     return
                 }
-                cont.resume(returning: try? JSONDecoder().decode(WikiDescriptor.self, from: data))
+                do {
+                    cont.resume(returning: try JSONDecoder().decode(WikiDescriptor.self, from: data))
+                } catch {
+                    DebugLog.store("resolveWiki: malformed XPC reply — \(error)")
+                    cont.resume(returning: nil)
+                }
             }
         }
     }
@@ -275,7 +274,13 @@ public final class WikiDaemonConnection: @unchecked Sendable {
 
     /// Close the daemon's held-open store for a wiki.
     public func closeStore(wikiID: String) async {
-        guard let proxy = try? daemonProxy() else { return }
+        let proxy: WikiDaemonProtocol
+        do {
+            proxy = try daemonProxy()
+        } catch {
+            DebugLog.store("closeStore: no daemon proxy (\(error)) — nothing to close")
+            return
+        }
         await withCheckedContinuation { cont in
             proxy.closeStore(wikiID: wikiID) {
                 cont.resume()

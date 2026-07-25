@@ -21,7 +21,7 @@ import Security
 ///   - the file → DataProtection migration moving a real item (it is a no-op when
 ///     `GeneratedKeychain.accessGroup` is empty; on a configured machine it
 ///     requires entitlements the test runner lacks);
-///   - the daemon (bundled at `Contents/Helpers/wikid`) reading a key the app
+///   - the daemon (bundled at `Contents/XPCServices/wikid.xpc`) reading a key the app
 ///     wrote, which is the actual Phase B/C unblock this change delivers.
 struct KeychainSecretStoreTests {
 

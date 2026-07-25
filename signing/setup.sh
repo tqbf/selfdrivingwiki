@@ -66,6 +66,10 @@ if [ -z "${PREFIX}" ]; then
 fi
 BUNDLE_ID="${PREFIX}.WikiFS"
 EXT_BUNDLE_ID="${PREFIX}.WikiFS.FileProvider"
+# The wikid XPC service bundle id is a FIXED constant, NOT derived from PREFIX:
+# it must equal WikiDaemonConnection.serviceName (the name the client connects
+# to via NSXPCConnection(serviceName:)) and DAEMON_BUNDLE_ID in build.sh.
+DAEMON_BUNDLE_ID="com.selfdrivingwiki.wikid"
 APP_GROUP="${APP_GROUP:-group.${PREFIX}.wiki}"
 say "Using:"
 echo "    app bundle id : ${BUNDLE_ID}"
@@ -211,7 +215,10 @@ ensure_bundle() {  # ident, name -> echoes resource id
 }
 APP_RES="$(ensure_bundle "${BUNDLE_ID}" "Self Driving Wiki")"
 EXT_RES="$(ensure_bundle "${EXT_BUNDLE_ID}" "Self Driving Wiki File Provider")"
-ok "bundle ids ready (app=${APP_RES} ext=${EXT_RES})"
+# The sandboxed wikid XPC service also needs an App ID + App Groups capability
+# so its provisioning profile can authorize the application-groups entitlement.
+DAEMON_RES="$(ensure_bundle "${DAEMON_BUNDLE_ID}" "Self Driving Wiki Daemon")"
+ok "bundle ids ready (app=${APP_RES} ext=${EXT_RES} daemon=${DAEMON_RES})"
 TEAM_ID="$(asc bundle-ids list --output json | jget "next((b['attributes'].get('seedId','') for b in d['data'] if b['id']=='${APP_RES}'),'')")"
 [ -n "${TEAM_ID}" ] || die "could not determine Team/Seed ID."
 ok "team / seed id: ${TEAM_ID}"
@@ -226,6 +233,7 @@ cat <<MANUAL
   │   1. + → App Groups → Identifier: ${APP_GROUP}
   │   2. Open '${BUNDLE_ID}' → App Groups → Edit → tick ${APP_GROUP} → Save
   │   3. Open '${EXT_BUNDLE_ID}' → same → Save
+  │   4. Open '${DAEMON_BUNDLE_ID}' → same → Save
   └────────────────────────────────────────────────────────────────────────┘
 MANUAL
 printf 'Press Return once the App Group is created AND bound to both bundle ids… '
@@ -247,8 +255,9 @@ make_profile() {  # name, bundle-res-id, out-path
   asc profiles download --id "${pid}" --output "${out}" >/dev/null
   say "downloaded $(basename "${out}")"
 }
-make_profile "Self Driving Wiki Dev"              "${APP_RES}" "${SIGNING_DIR}/WikiFS.provisionprofile"
-make_profile "Self Driving Wiki FileProvider Dev" "${EXT_RES}" "${SIGNING_DIR}/WikiFSFileProvider.provisionprofile"
+make_profile "Self Driving Wiki Dev"              "${APP_RES}"    "${SIGNING_DIR}/WikiFS.provisionprofile"
+make_profile "Self Driving Wiki FileProvider Dev" "${EXT_RES}"    "${SIGNING_DIR}/WikiFSFileProvider.provisionprofile"
+make_profile "Self Driving Wiki Daemon Dev"       "${DAEMON_RES}" "${SIGNING_DIR}/wikid.provisionprofile"
 
 # Verify the App Group made it into the app profile.
 if security cms -D -i "${SIGNING_DIR}/WikiFS.provisionprofile" 2>/dev/null | grep -q "${APP_GROUP}"; then
@@ -267,6 +276,7 @@ DEV_IDENTITY="${DEV_IDENTITY}"
 DIST_IDENTITY="${DIST_IDENTITY}"
 BUNDLE_ID="${BUNDLE_ID}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID}"
+DAEMON_BUNDLE_ID="${DAEMON_BUNDLE_ID}"
 APP_GROUP="${APP_GROUP}"
 CFG
 ok "wrote ${CONFIG_OUT}"

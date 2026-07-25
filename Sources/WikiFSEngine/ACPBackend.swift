@@ -941,6 +941,8 @@ public actor ACPBackend: AgentBackend {
             // Process death is detected separately by `sendPrompt` throwing.
             let watchdogTask = Task { [client, sessionId, completionFlag, processHealth] in
                 while !Task.isCancelled {
+                    // Task.sleep only throws CancellationError — expected, not actionable.
+                    // swiftlint:disable:next silent_try_optional
                     try? await Task.sleep(for: .seconds(pollInterval))
                     if Task.isCancelled { return }
                     // Phase 2: if the prompt task already detected process death
@@ -965,7 +967,7 @@ public actor ACPBackend: AgentBackend {
                             continuation.yield(event)
                         }
                         continuation.finish()
-                        try? await client.cancelSession(sessionId: sessionId)
+                        await DebugLog.trying("cancelSession (turn ceiling exceeded)", operation: { try await client.cancelSession(sessionId: sessionId) })
                         return
                     }
                 }
@@ -1075,7 +1077,7 @@ public actor ACPBackend: AgentBackend {
                     // lifecycle event, not a hidden failure — mirrors the
                     // existing `try?` call sites at the watchdog ceiling and
                     // `onTermination`).
-                    try? await client.cancelSession(sessionId: sessionId)
+                    await DebugLog.trying("cancelSession (sendPrompt cancelled)", operation: { try await client.cancelSession(sessionId: sessionId) })
                 }
                 defer {
                     drainTask.cancel()
@@ -1159,7 +1161,7 @@ public actor ACPBackend: AgentBackend {
                     watchdogTask.cancel()
                     recoveryRef.cancel()   // ★ #615: tear down the grace timer on stopAgent
                     Task { [client, sessionId] in
-                        try? await client.cancelSession(sessionId: sessionId)
+                        await DebugLog.trying("cancelSession (stopAgent)", operation: { try await client.cancelSession(sessionId: sessionId) })
                     }
                 }
                 // .finished: natural turn end, nothing to do.
@@ -1362,7 +1364,7 @@ public actor ACPBackend: AgentBackend {
             warm.notificationFanout.finish()
             // Cancel any in-flight prompt for the session being torn down.
             if let record {
-                try? await warm.client.cancelSession(sessionId: record.sessionId)
+                await DebugLog.trying("cancelSession (warm termination)", operation: { try await warm.client.cancelSession(sessionId: record.sessionId) })
             }
             await warm.client.terminate()
             warm.permissionDelegate.fireOnExit(status: 0)
@@ -1370,7 +1372,7 @@ public actor ACPBackend: AgentBackend {
         } else if let record {
             // No warm process (pre-Phase-1 path or process already gone) —
             // cancel + terminate via the session's own client reference.
-            try? await record.client.cancelSession(sessionId: record.sessionId)
+            await DebugLog.trying("cancelSession (no warm process)", operation: { try await record.client.cancelSession(sessionId: record.sessionId) })
             await record.client.terminate()
             record.permissionDelegate.fireOnExit(status: 0)
         }
@@ -1414,7 +1416,7 @@ public actor ACPBackend: AgentBackend {
         // `request_permission` never leaks its `CheckedContinuation`.
         record.permissionDelegate.cancelAllPending()
         // Cancel any in-flight prompt best-effort.
-        try? await record.client.cancelSession(sessionId: record.sessionId)
+        await DebugLog.trying("cancelSession (closeSession)", operation: { try await record.client.cancelSession(sessionId: record.sessionId) })
         // If the agent supports session/close, free the session context.
         // Otherwise degrade gracefully — the session context is leaked until
         // the process terminates (fine for Phase 1: one process per run).

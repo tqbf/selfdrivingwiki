@@ -80,13 +80,13 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case .progress(let id, let line):
             self.init(kind: .progress, itemID: id, line: line)
         case .transcript(let id, let agentEvent):
-            let data = try? JSONEncoder().encode(agentEvent)
+            let data = DebugLog.trying("encode agentEvent", operation: { try JSONEncoder().encode(agentEvent) })
             self.init(kind: .transcript, itemID: id, agentEventData: data)
         case .usage(let id, let usage):
-            let data = try? JSONEncoder().encode(usage)
+            let data = DebugLog.trying("encode usage", operation: { try JSONEncoder().encode(usage) })
             self.init(kind: .usage, itemID: id, usageData: data)
         case .liveUsage(let id, let usage):
-            let data = try? JSONEncoder().encode(usage)
+            let data = DebugLog.trying("encode liveUsage", operation: { try JSONEncoder().encode(usage) })
             self.init(kind: .liveUsage, itemID: id, usageData: data)
         case .runPaths(let id, let logURL, let debugURL):
             self.init(kind: .runPaths, itemID: id, logURL: logURL, debugURL: debugURL)
@@ -100,8 +100,8 @@ public struct QueueEventEnvelope: Codable, Sendable {
                     "toolName": perm.toolName as Any,
                     "inputSummary": perm.inputSummary as Any
                 ]
-                return (try? JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: dict))).flatMap { value in
-                    (try? JSONSerialization.data(withJSONObject: value)).flatMap { String(data: $0, encoding: .utf8) }
+                return DebugLog.trying("JSONSerialization permission", operation: { try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: dict)) }).flatMap { value in
+                    DebugLog.trying("JSONSerialization data", operation: { try JSONSerialization.data(withJSONObject: value) }).flatMap { String(data: $0, encoding: .utf8) }
                 } ?? "{}"
             }
             self.init(kind: .pendingPermission, itemID: id, pendingPermissionJSON: json)
@@ -134,15 +134,15 @@ public struct QueueEventEnvelope: Codable, Sendable {
             return .progress(itemID, line: line)
         case .transcript:
             guard let itemID, let agentEventData,
-                  let event = try? JSONDecoder().decode(AgentEvent.self, from: agentEventData) else { return nil }
+                  let event = DebugLog.trying("decode AgentEvent", operation: { try JSONDecoder().decode(AgentEvent.self, from: agentEventData) }) else { return nil }
             return .transcript(itemID, event)
         case .usage:
             guard let itemID, let usageData,
-                  let usage = try? JSONDecoder().decode(SessionUsage.self, from: usageData) else { return nil }
+                  let usage = DebugLog.trying("decode SessionUsage", operation: { try JSONDecoder().decode(SessionUsage.self, from: usageData) }) else { return nil }
             return .usage(itemID, usage)
         case .liveUsage:
             guard let itemID, let usageData,
-                  let usage = try? JSONDecoder().decode(SessionUsage.self, from: usageData) else { return nil }
+                  let usage = DebugLog.trying("decode SessionUsage (live)", operation: { try JSONDecoder().decode(SessionUsage.self, from: usageData) }) else { return nil }
             return .liveUsage(itemID, usage)
         case .runPaths:
             guard let itemID else { return nil }
@@ -172,7 +172,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     /// Build a `.chatEvent` envelope carrying one streamed `AgentEvent` for a chat.
     public static func chatEvent(chatID: String, event: AgentEvent) -> QueueEventEnvelope {
-        let data = (try? JSONEncoder().encode(event)) ?? Data()
+        let data = DebugLog.trying("encode chatEvent", operation: { try JSONEncoder().encode(event) }) ?? Data()
         return QueueEventEnvelope(
             kind: .chatEvent, agentEventData: data, chatID: chatID)
     }
@@ -180,14 +180,14 @@ public struct QueueEventEnvelope: Codable, Sendable {
     /// Decode the `AgentEvent` from a `.chatEvent` envelope.
     public var chatAgentEvent: AgentEvent? {
         guard kind == .chatEvent, let agentEventData else { return nil }
-        return try? JSONDecoder().decode(AgentEvent.self, from: agentEventData)
+        return DebugLog.trying("decode chatAgentEvent", operation: { try JSONDecoder().decode(AgentEvent.self, from: agentEventData) })
     }
 
     /// Build a `.chatState` envelope carrying run-flag changes.
     public static func chatState(
         chatID: String, update: ChatStateUpdate
     ) -> QueueEventEnvelope {
-        let data = (try? JSONEncoder().encode(update)) ?? Data()
+        let data = DebugLog.trying("encode chatState", operation: { try JSONEncoder().encode(update) }) ?? Data()
         return QueueEventEnvelope(
             kind: .chatState, chatID: chatID, chatStateData: data)
     }
@@ -195,7 +195,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
     /// Decode the `ChatStateUpdate` from a `.chatState` envelope.
     public var chatStateUpdate: ChatStateUpdate? {
         guard kind == .chatState, let chatStateData else { return nil }
-        return try? JSONDecoder().decode(ChatStateUpdate.self, from: chatStateData)
+        return DebugLog.trying("decode ChatStateUpdate", operation: { try JSONDecoder().decode(ChatStateUpdate.self, from: chatStateData) })
     }
 
     /// Build a `.chatAcpSessionId` envelope for the #830 session-id writeback.
@@ -220,11 +220,16 @@ public struct QueueEventEnvelope: Codable, Sendable {
                     ["optionId": opt.optionId, "name": opt.name, "kind": opt.kind]
                 }
             ]
-            return (try? JSONSerialization.jsonObject(
-                with: JSONSerialization.data(withJSONObject: dict))).flatMap { value in
-                (try? JSONSerialization.data(withJSONObject: value))
-                    .flatMap { String(data: $0, encoding: .utf8) }
-            } ?? "{}"
+            let jsonObject = DebugLog.trying("JSONSerialization chat permission", operation: {
+                try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: dict))
+            })
+            if let jsonObject, jsonObject is [String: Any] {
+                let data = DebugLog.trying("JSONSerialization data", operation: { try JSONSerialization.data(withJSONObject: jsonObject) })
+                if let data, let str = String(data: data, encoding: .utf8) {
+                    return str
+                }
+            }
+            return "{}"
         }
         return QueueEventEnvelope(
             kind: .chatPendingPermission, pendingPermissionJSON: json,

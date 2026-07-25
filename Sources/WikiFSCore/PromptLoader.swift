@@ -19,12 +19,14 @@ enum GeneratedPrompts {
         guard let url = Bundle.module.url(
             forResource: name, withExtension: "md",
             subdirectory: "Prompts"
-        ) ?? Bundle.module.url(forResource: name, withExtension: "md"),
-              let body = try? String(contentsOf: url, encoding: .utf8)
-        else {
-            fatalError("GeneratedPrompts: cannot load '\(name).md' from Bundle.module — check Package.swift resources declaration")
+        ) ?? Bundle.module.url(forResource: name, withExtension: "md") else {
+            fatalError("GeneratedPrompts: cannot find '\(name).md' in Bundle.module — check Package.swift resources declaration")
         }
-        return body
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            fatalError("GeneratedPrompts: cannot load '\(name).md' from \(url) — \(error)")
+        }
     }
 
     static let systemPromptDefault = load("system-prompt-default")

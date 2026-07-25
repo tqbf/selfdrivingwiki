@@ -38,7 +38,7 @@ struct WikiFSApp: App {
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
-    @State private var queueEngine: any QueueEngineClient
+    @State private var queueEngine: QueueEngineHotSwap
     /// App-wide extraction provider. Bridges the headless queue engine to the
     /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
     /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
@@ -57,6 +57,12 @@ struct WikiFSApp: App {
     @State private var showingLaunchLocationWarning: Bool
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
+    /// Issue #881: user-visible error shown when the local `queue.sqlite`
+    /// could not be opened at launch (no silent `:memory:` fallback). Drives
+    /// an alert over the main window so the user understands ingestion /
+    /// extraction are unavailable (instead of silently dropping every
+    /// enqueued item on restart).
+    @State private var queueStoreError: String?
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
@@ -86,13 +92,6 @@ struct WikiFSApp: App {
     /// the in-app disconnected/reconnected banner via its `@Observable` state.
     /// Owns the recurring 30 s health-ping loop + the XPC invalidation handler.
     @State private var healthMonitor = DaemonHealthMonitor()
-
-    /// The hot-swappable queue engine router (#878). Wraps whichever engine is
-    /// currently active (XPC proxy when the daemon is healthy, local
-    /// `QueueEngine` when it's not). All consumers (SessionManager,
-    /// MenuBarItemController, QueueActivityTracker) talk to this router, so a
-    /// mid-session swap is transparent.
-    private var queueEngineRouter: QueueEngineHotSwap?
 
     /// The session-lookup box, retained so the local-engine fallback factory
     /// (called on disconnect/reconnect) can re-wire it.
@@ -131,7 +130,7 @@ struct WikiFSApp: App {
         launchLocationWarning = warning
         _showingLaunchLocationWarning = State(initialValue: warning != nil)
 
-        let directory = (try? DatabaseLocation.appGroupContainerDirectory())
+        let directory = DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
         // The v0 legacy import is strictly FIRST-RUN-ONLY. We gate the whole chain
         // on an empty registry: only a genuine first run (no wikis yet) may pull
@@ -187,18 +186,23 @@ struct WikiFSApp: App {
         // Always construct a local engine first — it's the fallback if the
         // daemon isn't running (dev mode without `make install-daemon`) AND
         // the recovery target if the daemon dies mid-session.
-        let localEngine = Self.makeLocalQueueEngine(
+        let localEngineResult = Self.makeLocalQueueEngine(
             directory: directory,
             sessionBox: sessionBox,
             fileProviderBox: fileProviderBox,
             extractionProvider: extractionProvider)
 
+        // Issue #881: surface a user-visible error if `queue.sqlite` could not
+        // be opened (no silent `:memory:` fallback). `localEngine` may be an
+        // `UnavailableQueueEngine` — the app stays usable for browsing, but
+        // ingest/extract throw a clear error.
+        _queueStoreError = State(initialValue: localEngineResult.openError)
+
         // Wrap in the hot-swap router so a mid-session daemon death can swap
         // back to a fresh local engine transparently — all consumers
         // (SessionManager, MenuBarItemController, QueueActivityTracker) hold
         // the router, never the inner engine.
-        let router = QueueEngineHotSwap(localEngine)
-        queueEngineRouter = router
+        let router = QueueEngineHotSwap(localEngineResult.engine)
         activityTracker.attach(engine: router)
         Task { await activityTracker.rehydrate(from: router) }
         // #871 self-heal: poll the snapshot so a finished item still clears
@@ -206,7 +210,7 @@ struct WikiFSApp: App {
         // current engine, so this works across swaps.
         activityTracker.startSnapshotWatchdog(engine: router)
 
-        let queueEngine: any QueueEngineClient = router
+        let queueEngine = router
 
         _queueEngine = State(initialValue: queueEngine)
         _extractionProvider = State(initialValue: extractionProvider)
@@ -260,24 +264,15 @@ struct WikiFSApp: App {
             DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
         }
 
-        // Bootstrap the wikid daemon via launchctl. The app generates the
-        // LaunchAgent plist at runtime (it knows the container path + the
-        // app bundle path), writes it to ~/Library/LaunchAgents/, and runs
-        // `launchctl bootout` then `launchctl bootstrap`. The daemon is
-        // unsandboxed — no entitlements (AMFI killed the old entitled binary
-        // because the bare Mach-O had no embedded provisioning profile). It
-        // reads the app group container directly via filesystem permissions.
-        // The daemon survives app quit. Best-effort: in dev mode (`swift run`)
-        // the bootstrap still works (the plist points at the container
-        // The daemon is an embedded XPC service (Contents/XPCServices/wikid.xpc).
-        // macOS launches it on demand when the app connects via
-        // NSXPCConnection(serviceName:) and terminates it when the app quits.
-        // No LaunchAgent or launchctl needed — the old bootout+bootstrap path
-        // conflicted with the embedded service (both claimed the same mach
-        // service name, and the plist pointed at wrong binary paths).
+        // The wikid daemon is now a bundled XPC service
+        // (Contents/XPCServices/wikid.xpc). The system auto-launches it on
+        // first NSXPCConnection(serviceName:) — no LaunchAgent, no launchctl,
+        // no plist management. The connection is established in
+        // `connectToDaemon()` from the main WindowGroup's .task. If the daemon
+        // isn't available yet, the app starts on a local QueueEngine and the
+        // DaemonHealthMonitor retries until the XPC service responds.
 
         // Call bootstrap directly from init.
-        print("SDW: calling bootstrapApp from init")
         bootstrapApp()
     }
 
@@ -322,8 +317,13 @@ struct WikiFSApp: App {
             registry: registry,
             openWindowBridge: openWindowBridge,
             backgroundIngestCoordinator: backgroundIngestCoordinator,
-            daemonRestartHandler: { [healthMonitor] in
-                healthMonitor.restart()
+            daemonRestartHandler: { [weak healthMonitor] in
+                // For a bundled XPC service, "restart" = invalidate the
+                // current connection + let the health monitor reconnect (the
+                // system relaunches the service on the next
+                // NSXPCConnection(serviceName:)). If the daemon is currently
+                // connected, this forces a disconnect→reconnect cycle.
+                healthMonitor?.forceReconnect()
             },
             daemonHealthMonitor: healthMonitor)
         statusController.start()
@@ -401,8 +401,11 @@ struct WikiFSApp: App {
             // re-dispatches on its own when the app reconnects.
         }
         appDelegate.unregisterDaemon = {
-            // The daemon is an embedded XPC service — macOS terminates it
-            // automatically when the app quits. No launchd cleanup needed.
+            // The daemon is a bundled XPC service — the system manages its
+            // lifecycle (auto-launch on demand, idle termination). We do
+            // nothing on app terminate; the daemon's XPC service exits when
+            // the app exits (or on idle timeout). Extraction/ingestion/chat
+            // that were in-flight are resumed on next app launch.
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
@@ -419,6 +422,11 @@ struct WikiFSApp: App {
     /// from the main WindowGroup's `.task`. If the daemon is healthy, swaps the
     /// queue engine router from the local fallback to the XPC proxy and starts
     /// the health monitor. Never blocks the main thread.
+    ///
+    /// #885 startup race fix: if the initial connection fails (the XPC service
+    /// may not be available yet on first launch or mid-replacement), the
+    /// health monitor's retry loop is started so the app keeps trying until the
+    /// service responds — instead of silently staying on the local engine.
     @MainActor
     private static var didConnectDaemon = false
     @MainActor
@@ -431,15 +439,26 @@ struct WikiFSApp: App {
         let fileProviderBoxValue = fileProviderBox
         let extractionProviderValue = extractionProvider
 
-        Task { [weak healthMonitor, weak queueEngineRouter] in
-            guard let conn = try? WikiDaemonConnection.connect() else {
-                DebugLog.store("WikiFSApp: daemon not available — staying on local QueueEngine")
+        // Wire the health monitor's disconnect/reconnect closures BEFORE the
+        // connection attempt so they're ready whether the initial connect
+        // succeeds or fails (#885 — the retry loop fires onReconnect).
+        configureHealthMonitor(
+            directory: directory,
+            sessionBox: sessionBox,
+            fileProviderBoxValue: fileProviderBoxValue,
+            extractionProviderValue: extractionProviderValue)
+
+        Task { [weak healthMonitor] in
+            guard let conn = DebugLog.trying("connect daemon", operation: { try WikiDaemonConnection.connect() }) else {
+                DebugLog.store("WikiFSApp: daemon not available — starting retry loop (#885)")
+                healthMonitor?.startRetrying()
                 return
             }
             let healthy = await conn.healthCheck()
             guard healthy else {
-                DebugLog.store("WikiFSApp: daemon health check failed — staying on local QueueEngine")
+                DebugLog.store("WikiFSApp: daemon health check failed — starting retry loop (#885)")
                 conn.invalidate()
+                healthMonitor?.startRetrying()
                 return
             }
 
@@ -451,70 +470,75 @@ struct WikiFSApp: App {
                     workloadClient.registerEventSink(eventSink)
                     let proxy = XPCQueueEngineProxy(
                         workloadClient: workloadClient, eventSink: eventSink)
-                    queueEngineRouter?.swap(to: proxy)
-
-                    // Phase C4: the coordinator owns chat sessions over the
-                    // same connection + event sink.
+                    queueEngine.swap(to: proxy)
                     chatDaemonCoordinator = ChatDaemonCoordinator(
                         client: workloadClient, eventSink: eventSink)
-
-                    // Wire the health monitor: on disconnect, swap back to a
-                    // fresh local engine; on reconnect, swap to a new XPC proxy.
-                    // WikiFSApp is a struct (value type), so there's no retain
-                    // cycle — the closures capture the router (a class ref)
-                    // and directory/box values by value.
-                    let router = queueEngineRouter
-                    healthMonitor?.onDisconnect = {
-                        DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
-                        let local = Self.makeLocalQueueEngine(
-                            directory: directory,
-                            sessionBox: sessionBox,
-                            fileProviderBox: fileProviderBoxValue,
-                            extractionProvider: extractionProviderValue)
-                        router?.swap(to: local)
-                        chatDaemonCoordinator = nil
-                    }
-                    healthMonitor?.onReconnect = { newConn in
-                        DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
-                        do {
-                            let workloadClient = try DaemonWorkloadClient(connection: newConn)
-                            let eventSink = DaemonQueueEventSink()
-                            workloadClient.registerEventSink(eventSink)
-                            let proxy = XPCQueueEngineProxy(
-                                workloadClient: workloadClient, eventSink: eventSink)
-                            router?.swap(to: proxy)
-                            chatDaemonCoordinator = ChatDaemonCoordinator(
-                                client: workloadClient, eventSink: eventSink)
-                        } catch {
-                            DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
-                        }
-                    }
-                    // #904: on interruption the daemon process was replaced but
-                    // the connection is still live (launchd relaunch). The fresh
-                    // daemon has no event sink registered, so re-register on the
-                    // SAME connection — otherwise all pushed chat/queue envelopes
-                    // are dropped and live chat streams / queue updates go dark.
-                    healthMonitor?.onInterrupt = { conn in
-                        DebugLog.store("WikiFSApp: daemon interrupted — re-registering event sink on same connection")
-                        do {
-                            let workloadClient = try DaemonWorkloadClient(connection: conn)
-                            let eventSink = DaemonQueueEventSink()
-                            workloadClient.registerEventSink(eventSink)
-                            let proxy = XPCQueueEngineProxy(
-                                workloadClient: workloadClient, eventSink: eventSink)
-                            router?.swap(to: proxy)
-                            chatDaemonCoordinator = ChatDaemonCoordinator(
-                                client: workloadClient, eventSink: eventSink)
-                        } catch {
-                            DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
-                        }
-                    }
-
                     healthMonitor?.start(connection: conn)
                 } catch {
                     DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
                     conn.invalidate()
+                    healthMonitor?.startRetrying()
                 }
+            }
+        }
+    }
+
+    /// Wire the health monitor's disconnect/reconnect closures. Called before
+    /// the initial connection attempt so the retry loop (#885) has the engine-
+    /// swap logic ready. The closures capture the router (a class ref) and
+    /// directory/box values by value — WikiFSApp is a struct (no retain cycle).
+    @MainActor
+    private func configureHealthMonitor(
+        directory: URL,
+        sessionBox: SessionLookupBox,
+        fileProviderBoxValue: FileProviderBox,
+        extractionProviderValue: any QueueExtractionProvider
+    ) {
+        healthMonitor.onDisconnect = {
+            DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
+            let local = Self.makeLocalQueueEngine(
+                directory: directory,
+                sessionBox: sessionBox,
+                fileProviderBox: fileProviderBoxValue,
+                extractionProvider: extractionProviderValue)
+            if let disconnectError = local.openError {
+                DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
+            }
+            queueEngine.swap(to: local.engine)
+            chatDaemonCoordinator = nil
+        }
+        healthMonitor.onReconnect = { newConn in
+            DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
+            do {
+                let workloadClient = try DaemonWorkloadClient(connection: newConn)
+                let eventSink = DaemonQueueEventSink()
+                workloadClient.registerEventSink(eventSink)
+                let proxy = XPCQueueEngineProxy(
+                    workloadClient: workloadClient, eventSink: eventSink)
+                queueEngine.swap(to: proxy)
+                chatDaemonCoordinator = ChatDaemonCoordinator(
+                    client: workloadClient, eventSink: eventSink)
+            } catch {
+                DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
+            }
+        }
+        // #904: on interruption the XPC service was replaced but the connection
+        // is still live. The fresh service has no event sink registered, so
+        // re-register on the SAME connection — otherwise all pushed chat/queue
+        // envelopes are dropped and live chat streams go dark.
+        healthMonitor.onInterrupt = { conn in
+            DebugLog.store("WikiFSApp: daemon interrupted — re-registering event sink on same connection")
+            do {
+                let workloadClient = try DaemonWorkloadClient(connection: conn)
+                let eventSink = DaemonQueueEventSink()
+                workloadClient.registerEventSink(eventSink)
+                let proxy = XPCQueueEngineProxy(
+                    workloadClient: workloadClient, eventSink: eventSink)
+                queueEngine.swap(to: proxy)
+                chatDaemonCoordinator = ChatDaemonCoordinator(
+                    client: workloadClient, eventSink: eventSink)
+            } catch {
+                DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
             }
         }
     }
@@ -522,23 +546,34 @@ struct WikiFSApp: App {
     /// Construct a local `QueueEngine` as the fallback for when the daemon is
     /// unavailable or has died mid-session. Extracted from the former inline
     /// init() block so it can be called on initial launch AND on disconnect.
+    ///
+    /// - Returns: A tuple of the engine to wire into the hot-swap router and an
+    ///   optional user-visible error message. When the on-disk `queue.sqlite`
+    ///   cannot be opened, the engine is an `UnavailableQueueEngine` (so the app
+    ///   stays usable for browsing but ingest/extract throw a clear error) and
+    ///   `openError` carries the failure reason for the app-level alert (issue
+    ///   #881 — no silent `:memory:` fallback that drops every item on restart).
     @MainActor
     private static func makeLocalQueueEngine(
         directory: URL,
         sessionBox: SessionLookupBox,
         fileProviderBox: FileProviderBox,
         extractionProvider: any QueueExtractionProvider
-    ) -> QueueEngine {
+    ) -> (engine: any QueueEngineClient, openError: String?) {
         DebugLog.store("WikiFSApp: constructing local QueueEngine fallback")
-        let queueDBURL = (try? DatabaseLocation.queueDatabaseURL())
+        let queueDBURL = DebugLog.trying("resolve queue database URL", operation: { try DatabaseLocation.queueDatabaseURL() })
             ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
         let queueStore: QueueStore
         do {
             queueStore = try QueueStore(databaseURL: queueDBURL)
         } catch {
-            DebugLog.store("QueueEngine: failed to open queue.sqlite — using in-memory: \(error)")
-            // swiftlint:disable:next force_try
-            queueStore = try! QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+            // Issue #881: no in-memory fallback. Surface a user-visible error
+            // and use an `UnavailableQueueEngine` so the app stays usable for
+            // browsing while ingest/extract throw a clear error (instead of
+            // silently dropping every enqueued item on restart).
+            let reason = "Could not open the queue database at \(queueDBURL.path). Ingestion and extraction will be unavailable until this is resolved. \(error)"
+            DebugLog.store("QueueEngine: failed to open queue.sqlite — queue unavailable: \(error)")
+            return (UnavailableQueueEngine(reason: reason), reason)
         }
         let ingestionProvider = AppQueueIngestionProvider(
             sessionBox: sessionBox,
@@ -574,7 +609,7 @@ struct WikiFSApp: App {
         Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
         Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
         Task { await localEngine.start() }
-        return localEngine
+        return (localEngine, nil)
     }
 
     var body: some Scene {
@@ -629,6 +664,22 @@ struct WikiFSApp: App {
                 Button("OK", role: .cancel) {}
             } message: { warning in
                 Text(warning.message)
+            }
+            // Issue #881: surface a queue-database open failure (the local
+            // `queue.sqlite` could not be opened). No silent in-memory
+            // fallback — ingestion / extraction are unavailable until the
+            // underlying issue is resolved.
+            .alert(
+                "Queue Database Unavailable",
+                isPresented: Binding(
+                    get: { queueStoreError != nil },
+                    set: { if !$0 { queueStoreError = nil } }
+                ),
+                presenting: queueStoreError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
             }
             // Keep the bridge's Darwin observations in lockstep with the wiki
             // set: a freshly-created wiki's CLI writes must be heard; a

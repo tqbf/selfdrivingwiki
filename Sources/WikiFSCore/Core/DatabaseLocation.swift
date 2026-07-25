@@ -126,9 +126,9 @@ public enum DatabaseLocation {
     /// `Home` in the container — the gate only needs a Home page present).
     public static func migrateFromApplicationSupportIfNeeded() {
         let fm = FileManager.default
-        guard let container = try? appGroupContainerURL() else { return }
+        guard let container = DebugLog.trying("migrateFromApplicationSupport", operation: { try appGroupContainerURL() }) else { return }
         guard !fm.fileExists(atPath: container.path) else { return }
-        guard let source = try? applicationSupportURL(),
+        guard let source = DebugLog.trying("migrateFromApplicationSupport source", operation: { try applicationSupportURL() }),
               fm.fileExists(atPath: source.path) else { return }
 
         // Checkpoint the source so all committed data lives in the main file.

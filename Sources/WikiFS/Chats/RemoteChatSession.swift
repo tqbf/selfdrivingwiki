@@ -113,7 +113,7 @@ public final class RemoteChatSession {
             // Parse the pending-permission JSON (best-effort).
             if let json = envelope.pendingPermissionJSON,
                let data = json.data(using: .utf8),
-               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+               let dict = DebugLog.trying("parse pending permission", operation: { try JSONSerialization.jsonObject(with: data) as? [String: Any] }) {
                 let toolCallId = dict["toolCallId"] as? String ?? ""
                 let title = dict["title"] as? String
                 let toolName = dict["toolName"] as? String
@@ -198,7 +198,7 @@ public final class RemoteChatSession {
         preflightError = update.preflightError
         thinkingOption = update.thinkingOption
         if let usageData = update.usageData,
-           let usage = try? JSONDecoder().decode(SessionUsage.self, from: usageData) {
+           let usage = DebugLog.trying("decode session usage", operation: { try JSONDecoder().decode(SessionUsage.self, from: usageData) }) {
             runTotalUsage = usage
         }
         if let raw = update.runKindRaw {
@@ -219,7 +219,7 @@ public final class RemoteChatSession {
     /// Same resolution the daemon's chat launcher uses, so an app-side write
     /// is visible to the next `startChat` / `continueChat` on the daemon.
     public func resolveProvidersContainerDirectory() -> URL {
-        (try? DatabaseLocation.appGroupContainerDirectory())
+        DebugLog.trying("resolve providers container", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
     }
 

@@ -149,7 +149,7 @@ public enum MarkdownFolderReader {
         fileOps: any FileOperations,
         found: inout [(relativePath: String, url: URL)]
     ) {
-        guard let children = try? fileOps.listDirectory(at: directory) else { return }
+        guard let children = DebugLog.trying("list directory", operation: { try fileOps.listDirectory(at: directory) }) else { return }
 
         for child in children {
             if fileOps.isHiddenFile(at: child) { continue }
@@ -182,7 +182,7 @@ extension MarkdownFolderReader {
         }
 
         public func isDirectory(at url: URL) -> Bool {
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            DebugLog.trying("isDirectory", operation: { try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory ?? false }) ?? false
         }
 
         public func readContents(at url: URL) throws -> Data {

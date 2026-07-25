@@ -132,14 +132,16 @@ final class FileProviderFacade: ChangeSignaler {
         let domain = domain(id: id, displayName: displayName)
 
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
-            try? await NSFileProviderManager.remove(domain)
+            do { try await NSFileProviderManager.remove(domain) }
+            catch { DebugLog.fileprovider("registerDomain: re-enumerate remove failed: \(error)") }
         }
 
         // Schema migration: tear down the old domain so the daemon picks up
         // the new container layout (e.g. `files` → `sources` rename).
         if needsDomainMigration {
             DebugLog.fileprovider("registerDomain: removing \(id) for schema migration")
-            try? await NSFileProviderManager.remove(domain)
+            do { try await NSFileProviderManager.remove(domain) }
+            catch { DebugLog.fileprovider("registerDomain: migration remove failed: \(error)") }
         }
 
         var attemptsMade = 0
@@ -169,6 +171,8 @@ final class FileProviderFacade: ChangeSignaler {
                 return true
 
             case .retry:
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: DomainRegistrationPolicy.retryBackoff)
 
             case .failed:
@@ -193,8 +197,10 @@ final class FileProviderFacade: ChangeSignaler {
         // Run the call in a detached task and extract only the Sendable
         // raw-value strings before returning to the main actor.
         let domainIDs = await Task.detached {
-            (try? await NSFileProviderManager.domains())?
-                .map(\.identifier.rawValue) ?? []
+            let domains: [NSFileProviderDomain]
+            do { domains = try await NSFileProviderManager.domains() }
+            catch { DebugLog.fileprovider("isRegistered: list domains failed: \(error)"); domains = [] }
+            return domains.map(\.identifier.rawValue)
         }.value
         return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
     }
@@ -576,6 +582,8 @@ final class FileProviderFacade: ChangeSignaler {
         signalCoalescer = ChangeCoalescer(
             schedule: { work in
                 let task = Task { @MainActor in
+                    // Task.sleep only throws CancellationError — expected, not actionable.
+                    // swiftlint:disable:next silent_try_optional
                     try? await Task.sleep(for: Self.signalCoalesceWindow)
                     guard !Task.isCancelled else { return }
                     work()
@@ -627,6 +635,8 @@ final class FileProviderFacade: ChangeSignaler {
                 }
             }
             Task {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: timeout)
                 await MainActor.run {
                     resolution.finish()
@@ -665,6 +675,8 @@ final class FileProviderFacade: ChangeSignaler {
                 }
             }
             Task {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: timeout)
                 await MainActor.run {
                     resolution.fail(MountResolutionError.timedOut)

@@ -205,7 +205,7 @@ struct ActivityWindowView: View {
     @ViewBuilder
     private var sidebar: some View {
         let active = activeItems
-        let recent = Array(recentItems.prefix(30))
+        let recent = Array(recentItems.prefix(200))
         // Precompute all @Observable-derived display data ONCE, so the
         // ForEach row body reads only plain values. This eliminates the
         // per-row swift_task_isMainExecutorImpl isolation checks that

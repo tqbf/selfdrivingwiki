@@ -133,6 +133,13 @@ public final class WikiSession {
     /// DBs), and create the per-session launchers. If the store has no pages,
     /// seeds a Home page and wires it as the wiki's home page (#315).
     ///
+    /// - Throws: If the on-disk store cannot be opened (e.g. a corrupt DB the
+    ///   migration self-heal couldn't repair), the underlying `WikiStoreError`
+    ///   is rethrown. There is **no in-memory fallback** — the caller
+    ///   (`SessionManager`) records the error and surfaces a user-visible
+    ///   message so the user understands their data isn't gone, the file just
+    ///   couldn't be opened (issue #881).
+    ///
     /// - Parameters:
     ///   - wikiID: The wiki's ULID.
     ///   - descriptor: The registry descriptor (display name / home page).
@@ -158,7 +165,7 @@ public final class WikiSession {
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
-    ) {
+    ) throws {
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
@@ -170,57 +177,38 @@ public final class WikiSession {
 
         let url = containerDirectory.appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
         let model: WikiStoreModel
-        // Captured across both store-open branches (file-backed + in-memory
-        // fallback) so the Phase 1 Tantivy shadow service can read from the
+        // Captured so the Phase 1 Tantivy shadow service can read from the
         // same `WikiStore` the model wraps (the model keeps it `private`).
         var shadowStore: WikiStore?
-        do {
-            // `var`: the bus is set via the protocol's computed setter, which
-            // the compiler treats as mutating through the `WikiStore`
-            // existential.
-            var store = try makeStore(url)
-            // Attach the per-wiki event bus BEFORE the model is created, so the
-            // model's `.external`→reload subscription (in its init) sees it. The
-            // File Provider signaler and the change bridge subscribe to the
-            // same bus from the app layer. See `plans/event-bus.md`.
-            store.eventBus = WikiEventBus(wikiID: wikiID)
-            shadowStore = store
-            model = WikiStoreModel(store: store)
-            // Seed a Home page when the store is empty (mirrors
-            // `openActive` lines 334–341 + `createWiki`'s #315
-            // linkage: a freshly-seeded Home page becomes the wiki's home
-            // page when none is set yet).
-            if model.summaries.isEmpty, let homeID = model.newPage(title: "Home") {
-                if sessionDescriptor.homePageID == nil {
-                    sessionDescriptor.homePageID = homeID
-                }
+        // Open the on-disk store. There is NO in-memory fallback anymore
+        // (issue #881): a failure here is rethrown so `SessionManager` can
+        // surface a user-visible error instead of silently showing an empty
+        // wiki (which made users think their data was gone).
+        // `var`: the bus is set via the protocol's computed setter, which
+        // the compiler treats as mutating through the `WikiStore`
+        // existential.
+        var store = try makeStore(url)
+        // Attach the per-wiki event bus BEFORE the model is created, so the
+        // model's `.external`→reload subscription (in its init) sees it. The
+        // File Provider signaler and the change bridge subscribe to the
+        // same bus from the app layer. See `plans/event-bus.md`.
+        store.eventBus = WikiEventBus(wikiID: wikiID)
+        shadowStore = store
+        model = WikiStoreModel(store: store)
+        // Seed a Home page when the store is empty (mirrors
+        // `openActive` lines 334–341 + `createWiki`'s #315
+        // linkage: a freshly-seeded Home page becomes the wiki's home
+        // page when none is set yet).
+        if model.summaries.isEmpty, let homeID = model.newPage(title: "Home") {
+            if sessionDescriptor.homePageID == nil {
+                sessionDescriptor.homePageID = homeID
             }
-            // Off-main snapshot reads (debounced search) go through a
-            // read-only pool over the same file. Only for real file-backed
-            // DBs — a second connection to `:memory:` would see a different,
-            // empty database.
-            if FileManager.default.fileExists(atPath: url.path) {
-                model.readPool = WikiReadPool(databaseURL: url)
-            }
-        } catch {
-            // Opening the on-disk store failed (e.g. a corrupt DB the migration
-            // self-heal couldn't repair). Degrade to an ephemeral in-memory
-            // store so the app stays usable — the user sees an empty wiki rather
-            // than a crash, and the on-disk file is left untouched for recovery.
-            DebugLog.store("WikiSession: failed to open wiki \(wikiID), using in-memory: \(error)")
-            let memory: GRDBWikiStore
-            do {
-                memory = try GRDBWikiStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-            } catch {
-                // A fresh in-memory store builds only the current schema (no
-                // ladder, no existing data), so this is unreachable in practice.
-                // If it ever fails the process is unrecoverable — surface an
-                // actionable message instead of an opaque `try!` trap.
-                fatalError("WikiSession: in-memory fallback store failed to open for wiki \(wikiID): \(error)")
-            }
-            memory.eventBus = WikiEventBus(wikiID: wikiID)
-            shadowStore = memory
-            model = WikiStoreModel(store: memory)
+        }
+        // Off-main snapshot reads (debounced search) go through a read-only
+        // pool over the same file. Only for real file-backed DBs — a second
+        // connection to an in-memory DB would see a different, empty database.
+        if FileManager.default.fileExists(atPath: url.path) {
+            model.readPool = WikiReadPool(databaseURL: url)
         }
         self.store = model
         self.descriptor = sessionDescriptor

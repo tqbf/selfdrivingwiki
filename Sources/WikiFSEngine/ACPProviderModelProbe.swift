@@ -110,7 +110,7 @@ public struct ACPProviderModelProbe: Sendable {
         }
         // Sweep the probe CWD on every exit path (success / failure / cancel).
         // `defer` is fine here — synchronous file I/O.
-        defer { try? FileManager.default.removeItem(at: probeCWD) }
+        defer { DebugLog.trying("remove probeCWD", operation: { try FileManager.default.removeItem(at: probeCWD) }) }
 
         // Minimal env: process env merged with the provider's spawn env (the
         // `env.`-prefixed hints `resolveSpawnConfig` extracts). NO WIKI_DB /

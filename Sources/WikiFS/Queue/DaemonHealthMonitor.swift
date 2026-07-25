@@ -92,6 +92,55 @@ final class DaemonHealthMonitor {
         DebugLog.store("wikid: DaemonHealthMonitor started — state=.connected")
     }
 
+    /// #885 startup race fix: start the retry loop WITHOUT an existing
+    /// connection. The state starts as `.disconnected` and the health-ping loop
+    /// immediately tries to reconnect (the system launches the XPC service
+    /// on-demand via `NSXPCConnection(serviceName:)`). Used when the initial
+    /// `connectToDaemon()` fails — the app stays on the local QueueEngine until
+    /// the retry succeeds, at which point `onReconnect` fires and swaps to the
+    /// XPC proxy.
+    func startRetrying() {
+        stop()
+        isMonitoring = true
+        setState(.disconnected)
+        // `immediate: true` fires the first reconnect attempt right away rather
+        // than after a full ping interval — the retry loop should not make the
+        // user wait 30 s to recover from a failed initial connect.
+        startHealthPings(immediate: true)
+        DebugLog.store("wikid: DaemonHealthMonitor retry loop started — state=.disconnected")
+    }
+
+    /// Force a reconnect: invalidate the current connection (if any), then
+    /// immediately trigger a reconnect attempt. Used by the "Restart Daemon"
+    /// menu item — for a bundled XPC service, invalidating the connection +
+    /// reconnecting causes the system to relaunch the service. If the daemon
+    /// is currently `.connected`, this forces a disconnect→reconnect cycle.
+    func forceReconnect() {
+        DebugLog.store("wikid: forceReconnect requested")
+        let wasConnected = (state == .connected)
+        if let conn = connection {
+            conn.invalidate()
+            connection = nil
+        }
+        // Not monitoring yet — start the retry loop (which fires an immediate
+        // reconnect attempt).
+        guard isMonitoring else {
+            startRetrying()
+            return
+        }
+        // Already monitoring. Only fire `onDisconnect` if we were actually
+        // connected — re-firing it while already `.disconnected` would tear
+        // down a working local fallback engine and open a second one (the
+        // contract is: onDisconnect fires exactly once per disconnect).
+        if wasConnected {
+            setState(.disconnected)
+            onDisconnect?()
+        }
+        // Kick an immediate reconnect attempt instead of waiting a full ping
+        // interval — the whole point of "Restart Daemon" is a prompt recovery.
+        startHealthPings(immediate: true)
+    }
+
     /// Stop monitoring (cancel the ping loop, clear the connection reference).
     /// Does NOT change `state` — the caller decides the final state.
     func stop() {
@@ -99,25 +148,6 @@ final class DaemonHealthMonitor {
         healthPingTask = nil
         connection = nil
         isMonitoring = false
-    }
-
-    /// Manually restart the daemon connection (the "Restart Daemon" menu
-    /// action). Invalidates the current connection — macOS terminates the
-    /// embedded XPC service — then immediately attempts to reconnect, which
-    /// launches a fresh service instance. Falls back to the local engine via
-    /// `onDisconnect` during the brief gap.
-    func restart() {
-        guard isMonitoring else { return }
-        DebugLog.store("wikid: manual restart — invalidating connection")
-        connection?.invalidate()
-        connection = nil
-        setState(.disconnected)
-        onDisconnect?()
-        // Force an immediate reconnect instead of waiting for the next ping.
-        let timeout = healthCheckTimeout
-        Task { [weak self] in
-            await self?.performHealthPing(timeout: timeout)
-        }
     }
 
     // MARK: - State transitions
@@ -199,12 +229,23 @@ final class DaemonHealthMonitor {
 
     // MARK: - Recurring health ping (#878 BLOCKER 1.1)
 
-    private func startHealthPings() {
+    /// - Parameter immediate: when `true`, run the first health ping right away
+    ///   before entering the sleep loop. Used by `startRetrying` /
+    ///   `forceReconnect` so recovery doesn't wait a full `healthPingInterval`.
+    ///   The steady-state `start(connection:)` path leaves it `false` (the
+    ///   connection was just verified — no need to re-ping immediately).
+    private func startHealthPings(immediate: Bool = false) {
         healthPingTask?.cancel()
         let interval = healthPingInterval
         let timeout = healthCheckTimeout
         healthPingTask = Task { [weak self] in
+            if immediate {
+                guard !Task.isCancelled, let self else { return }
+                await self.performHealthPing(timeout: timeout)
+            }
             while !Task.isCancelled {
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
                 await self.performHealthPing(timeout: timeout)
@@ -233,11 +274,11 @@ final class DaemonHealthMonitor {
             return
         }
 
-        // No live connection — try to reconnect (launchd auto-launches the
-        // daemon on the new NSXPCConnection).
+        // No live connection — try to reconnect (the system auto-launches
+        // the XPC service on the new NSXPCConnection).
         setState(.reconnecting)
-        DebugLog.store("wikid: attempting reconnect via launchd auto-launch")
-        guard let newConn = try? WikiDaemonConnection.connect() else {
+        DebugLog.store("wikid: attempting reconnect via XPC service auto-launch")
+        guard let newConn = DebugLog.trying("reconnect daemon", operation: { try WikiDaemonConnection.connect() }) else {
             DebugLog.store("wikid: reconnect failed — still disconnected")
             setState(.disconnected)
             return

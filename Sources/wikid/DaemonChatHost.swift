@@ -131,7 +131,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
         // 2. Build wiki-state markdown + read the system prompt (RC2).
         let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
-        let systemPromptBody = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
+        let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
 
         // 3. Create the launcher + register the session.
         let launcher = await getOrCreateLauncher(chatID: chat.id.rawValue, wikiID: wikiID)
@@ -168,8 +168,10 @@ final class DaemonChatHost: @unchecked Sendable {
                     chatID: id, wikiID: wikiIDCapture, launcher: launcher)
             },
             onStreamingCheckpoint: { chatID, handle, event, isDraft in
-                (try? store.checkpointStreamingMessage(
-                    chatID: chatID, handle: handle, event: event, isDraft: isDraft)) != nil
+                (DebugLog.trying("checkpointStreamingMessage", operation: {
+                    try store.checkpointStreamingMessage(
+                        chatID: chatID, handle: handle, event: event, isDraft: isDraft)
+                })) != nil
             }
         )
 
@@ -184,7 +186,7 @@ final class DaemonChatHost: @unchecked Sendable {
         let preflightError = await MainActor.run { launcher.preflightError }
         if preflightError != nil {
             DebugLog.agent("DaemonChatHost.startChat: ROLLBACK chat=\(chat.id.rawValue) error=\(preflightError ?? "?")")
-            try? store.deleteChat(id: chat.id)
+            DebugLog.trying("deleteChat", operation: { try store.deleteChat(id: chat.id) })
             throw DaemonChatError.preflightFailed(preflightError ?? "unknown")
         }
 
@@ -243,7 +245,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
         // Build wiki-state markdown + system prompt (RC2).
         let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
-        let systemPromptBody = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
+        let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
 
         DebugLog.agent("DaemonChatHost.continueChat: history=\(history.count) priorAcpSession=\(priorAcpSessionId ?? "nil")")
 
@@ -279,8 +281,10 @@ final class DaemonChatHost: @unchecked Sendable {
                     chatID: id, wikiID: wikiIDCapture, launcher: launcher)
             },
             onStreamingCheckpoint: { chatID, handle, event, isDraft in
-                (try? store.checkpointStreamingMessage(
-                    chatID: chatID, handle: handle, event: event, isDraft: isDraft)) != nil
+                (DebugLog.trying("checkpointStreamingMessage", operation: {
+                    try store.checkpointStreamingMessage(
+                        chatID: chatID, handle: handle, event: event, isDraft: isDraft)
+                })) != nil
             }
         )
 
@@ -344,8 +348,8 @@ final class DaemonChatHost: @unchecked Sendable {
 
         let launcher = session.launcher
         return await MainActor.run {
-            let usageData = launcher.runTotalUsage.flatMap {
-                try? JSONEncoder().encode($0)
+            let usageData = launcher.runTotalUsage.flatMap { usage in
+                DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
             }
             return ChatSessionState(
                 chatID: chatID,
@@ -440,6 +444,8 @@ final class DaemonChatHost: @unchecked Sendable {
                     lastFingerprint = fingerprint
                     self?.pushStateUpdate(chatID: chatID, launcher: launcher)
                 }
+                // Task.sleep only throws CancellationError — expected, not actionable.
+                // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: .milliseconds(150))
             }
             // Final push after the session ends.
@@ -462,8 +468,8 @@ final class DaemonChatHost: @unchecked Sendable {
 
     @MainActor
     private func pushStateUpdate(chatID: String, launcher: AgentLauncher) {
-        let usageData = launcher.runTotalUsage.flatMap {
-            try? JSONEncoder().encode($0)
+        let usageData = launcher.runTotalUsage.flatMap { usage in
+            DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
         }
         let update = ChatStateUpdate(
             isRunning: launcher.isRunning,

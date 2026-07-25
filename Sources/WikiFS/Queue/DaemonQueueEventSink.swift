@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 import WikiFSEngine
 
@@ -10,26 +11,27 @@ import WikiFSEngine
 /// - **Chat envelopes** → a local `AsyncStream<(chatID, envelope)>` for
 ///   per-chat `RemoteChatSession` demux.
 ///
-/// RC7: uses its own `AsyncStream` + continuation (NOT a
-/// `QueueEventBroadcaster`, which does not exist as a reusable type).
+/// RC7: uses a `QueueEventBroadcaster` for queue events (multicast to all
+/// subscribers — Tracker, MenuBar, Notifier) and its own `AsyncStream` for
+/// chat envelopes.
 final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {
-    private let continuation: AsyncStream<QueueEvent>.Continuation
-    private let stream: AsyncStream<QueueEvent>
+    private let broadcaster = QueueEventBroadcaster()
 
     private let chatContinuation: AsyncStream<(String, QueueEventEnvelope)>.Continuation
     private let chatStream: AsyncStream<(String, QueueEventEnvelope)>
 
     override init() {
-        var continuation: AsyncStream<QueueEvent>.Continuation!
-        self.stream = AsyncStream { c in continuation = c }
-        self.continuation = continuation
-
         var chatContinuation: AsyncStream<(String, QueueEventEnvelope)>.Continuation!
         self.chatStream = AsyncStream { c in chatContinuation = c }
         self.chatContinuation = chatContinuation
     }
 
-    var events: AsyncStream<QueueEvent> { stream }
+    deinit {
+        broadcaster.finish()
+        chatContinuation.finish()
+    }
+
+    var events: AsyncStream<QueueEvent> { broadcaster.subscribe() }
 
     /// Chat envelopes from the daemon, demuxed by chatID. The app's chat
     /// session registry subscribes and routes each envelope to the matching
@@ -37,7 +39,7 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     var chatEnvelopes: AsyncStream<(String, QueueEventEnvelope)> { chatStream }
 
     func deliverEvent(_ payload: Data) {
-        guard let envelope = try? JSONDecoder().decode(QueueEventEnvelope.self, from: payload) else { return }
+        guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }
 
         // Route chat envelopes to the chat stream.
         if envelope.isChatEnvelope, let chatID = envelope.chatID {
@@ -45,9 +47,9 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
             return
         }
 
-        // Route queue events to the queue stream.
+        // Route queue events to the queue broadcaster.
         if let event = envelope.toQueueEvent() {
-            continuation.yield(event)
+            broadcaster.yield(event)
         }
     }
 }
