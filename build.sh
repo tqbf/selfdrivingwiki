@@ -336,6 +336,29 @@ if [ -f "Resources/mlx.metallib" ]; then
   ln -sf "../Resources/mlx.metallib" "${MACOS_DIR}/mlx.metallib"
 fi
 
+# SwiftPM module resources — the prompt .md files loaded at runtime via
+# GeneratedPrompts in PromptLoader. Without these, the File Provider extension
+# CRASHES on changeToken() → systemPromptVersion → SystemPrompt.defaultBody →
+# Bundle.module → fatalError, which kills the extension process, breaks ALL
+# getUserVisibleURL calls ("Couldn't communicate with a helper application"),
+# and silently disables Share / Reveal in Finder.
+#
+# We copy the Prompts/ directory directly into Contents/Resources/ (NOT the
+# .bundle at the bundle root) because codesign rejects unsealed contents at
+# the bundle root. PromptLoader.load() tries Bundle.main (which resolves to
+# Contents/Resources/ in .app/.appex) before falling back to Bundle.module
+# (which works in the SwiftPM .build context).
+SPM_RESOURCE_BUNDLE="${BIN_DIR}/WikiFS_WikiFSCore.bundle"
+if [ -d "${SPM_RESOURCE_BUNDLE}/Prompts" ]; then
+  mkdir -p "${APPEX_CONTENTS}/Resources"
+  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${RESOURCES_DIR}/"
+  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${APPEX_CONTENTS}/Resources/"
+  echo "  ✓ bundled prompt resources into app + extension"
+else
+  echo "  ⚠ SwiftPM resource bundle not found at ${SPM_RESOURCE_BUNDLE}" >&2
+  echo "    Run 'make prompts' then rebuild. Prompt loading will crash at runtime." >&2
+fi
+
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

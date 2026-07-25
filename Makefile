@@ -258,8 +258,20 @@ check-release: deps prompts version keychain
 	@echo "✓ compiles (release)"
 
 # Run the test suite.
+#
+# Orphan guard: `swift test` runs Swift Testing through a child
+# `swittpm-testing-helper`. If its `swift` parent is killed mid-run (e.g. a
+# timeout), the helper reparents to init and keeps grinding the full suite;
+# left behind, these accumulate and thrash subsequent runs. We pre-sweep any
+# stale helper for THIS repo's build dir before starting, and trap
+# EXIT/TERM/INT to reap it again on exit so a killed run can't leave one
+# behind. `[s]wiftpm-testing-helper` is the bracket trick so the reap never
+# matches its own command line; `$(CURDIR)/.build` scopes it to this repo so
+# it never touches other repos/worktrees.
 test: deps prompts version keychain
-	swift test
+	@trap 'pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build" 2>/dev/null || true' EXIT TERM INT; \
+	 pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build" 2>/dev/null || true; \
+	 swift test
 	@echo "✓ tests pass"
 
 # Fast test tier (debug) — skips the slow SQLite integration suites for quick

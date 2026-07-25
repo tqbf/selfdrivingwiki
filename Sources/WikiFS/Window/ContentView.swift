@@ -199,9 +199,13 @@ struct ContentView: View {
     }
 
     /// The active wiki's configured home page, if any (issue #280). `nil` hides
-    /// the omnibox home button.
+    /// the omnibox home button. Verifies the page still exists so a stale
+    /// `homePageID` (e.g. the page was deleted) hides the button instead of
+    /// leaving a dead Home button that silently does nothing.
     private var activeHomePageID: PageID? {
-        session.descriptor.homePageID
+        guard let id = session.descriptor.homePageID,
+              store.summaries.contains(where: { $0.id == id }) else { return nil }
+        return id
     }
 
     /// The selected-document/source detail pane, extracted so the `HStack`'s

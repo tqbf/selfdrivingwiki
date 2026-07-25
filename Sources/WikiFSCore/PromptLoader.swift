@@ -15,12 +15,21 @@ import Foundation
 enum GeneratedPrompts {
     /// Loads a prompt's verbatim bytes from the bundled resources.
     /// Fatal if the file is missing (build-time wiring bug).
+    ///
+    /// Tries `Bundle.main` first (which resolves to `Contents/Resources/` in
+    /// the .app/.appex context — build.sh copies the Prompts/ directory there),
+    /// then falls back to `Bundle.module` (the SwiftPM module resource bundle,
+    /// which works in the `.build` dev context). This dual-path approach is
+    /// needed because codesign rejects the .bundle at the .appex root, so the
+    /// SwiftPM-generated `Bundle.module` accessor can't find its bundle in a
+    /// signed .appex.
     private static func load(_ name: String) -> String {
-        guard let url = Bundle.module.url(
-            forResource: name, withExtension: "md",
-            subdirectory: "Prompts"
-        ) ?? Bundle.module.url(forResource: name, withExtension: "md") else {
-            fatalError("GeneratedPrompts: cannot find '\(name).md' in Bundle.module — check Package.swift resources declaration")
+        let url = Bundle.main.url(forResource: name, withExtension: "md", subdirectory: "Prompts")
+            ?? Bundle.main.url(forResource: name, withExtension: "md")
+            ?? Bundle.module.url(forResource: name, withExtension: "md", subdirectory: "Prompts")
+            ?? Bundle.module.url(forResource: name, withExtension: "md")
+        guard let url else {
+            fatalError("GeneratedPrompts: cannot find '\(name).md' in Bundle.main or Bundle.module — check Package.swift resources declaration and build.sh")
         }
         do {
             return try String(contentsOf: url, encoding: .utf8)
