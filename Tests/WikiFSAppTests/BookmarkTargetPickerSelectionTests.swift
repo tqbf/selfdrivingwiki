@@ -4,27 +4,30 @@ import Testing
 @testable import WikiFSEngine
 
 /// Tests for `BookmarkTargetPickerSheet.parentID(forSelection:)` — the
-/// sentinel-to-nil conversion that lets the picker offer a "Bookmarks" root
-/// destination (parentID == nil) alongside real folders (#243).
+/// `BookmarkFolderSelection` → parentID mapping. Root and a deselected picker
+/// map to `nil` (top level); a folder maps to its id (#243).
 @MainActor
 @Suite struct BookmarkTargetPickerSelectionTests {
 
-    @Test func rootSentinelMapsToNilParentID() {
-        #expect(BookmarkTargetPickerSheet.parentID(forSelection: "__bookmarks_root__") == nil)
+    @Test func rootSelectionMapsToNilParentID() {
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .root) == nil)
     }
 
-    @Test func realFolderIDPassesThrough() {
-        #expect(BookmarkTargetPickerSheet.parentID(forSelection: "01HZXAMPLE000FOLDER") == "01HZXAMPLE000FOLDER")
+    @Test func folderSelectionMapsToItsID() {
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder("01HZXAMPLE000FOLDER")) == "01HZXAMPLE000FOLDER")
     }
 
-    @Test func nilSelectionPassesThroughAsNil() {
+    @Test func nilSelectionMapsToNil() {
         // When the user taps to deselect everything, nil stays nil.
         #expect(BookmarkTargetPickerSheet.parentID(forSelection: nil) == nil)
     }
 
-    @Test func emptyStringPassesThrough() {
-        // Edge case: an empty (but non-nil) selection is not the sentinel.
-        #expect(BookmarkTargetPickerSheet.parentID(forSelection: "") == "")
+    @Test func rootDoesNotCollideWithFolderOfSameString() {
+        // The case tag — not a string comparison — distinguishes root from a
+        // folder whose id happens to spell the old sentinel. This is the bug
+        // class the enum exists to close.
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .root) == nil)
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder("__bookmarks_root__")) == "__bookmarks_root__")
     }
 }
 #endif
