@@ -32,6 +32,16 @@ final class FileProviderFacade: ChangeSignaler {
     private var activeWikiID: String?
     private var activeDisplayName: String?
 
+    /// The daemon's domain-lifecycle calls (add / remove / list), injected so the
+    /// lifecycle DECISIONS above them are testable without a live `fileproviderd`
+    /// — see `FileProviderDomainService`. Defaults to the real system service;
+    /// tests substitute a fake.
+    private let domainService: FileProviderDomainService
+
+    init(domainService: FileProviderDomainService = SystemFileProviderDomainService()) {
+        self.domainService = domainService
+    }
+
     // MARK: - Resource-change bus subscription (slice 2a)
     //
     // The store emits a `ResourceChangeEvent` at the write seam; the File
@@ -60,8 +70,12 @@ final class FileProviderFacade: ChangeSignaler {
     /// History:
     ///   2 — `files` container renamed to `sources` (source-by-name prefix shared)
     ///   1 — initial schema
-    private static let currentSchemaVersion = 2
-    private static let schemaVersionKey = "FileProviderDomainSchemaVersion"
+    /// Internal rather than private so lifecycle tests can put the process into a
+    /// known migration state instead of hardcoding the literal — a pending
+    /// migration changes what `registerDomain` does (it removes first), so tests
+    /// that don't say which state they're in are testing whichever one they got.
+    static let currentSchemaVersion = 2
+    static let schemaVersionKey = "FileProviderDomainSchemaVersion"
 
     /// Call ONCE at startup, before `registerAllDomains`.  If the stored schema
     /// version is stale, tears down every registered domain so the daemon
@@ -73,9 +87,8 @@ final class FileProviderFacade: ChangeSignaler {
 
         DebugLog.fileprovider("schema migration: \(stored) → \(Self.currentSchemaVersion) — removing \(wikiIDs.count) domain(s)")
         for id in wikiIDs {
-            let d = domain(id: id, displayName: id)
             do {
-                try await NSFileProviderManager.remove(d)
+                try await domainService.remove(id: id, reason: .schemaMigration)
                 DebugLog.fileprovider("schema migration: removed domain \(id)")
             } catch {
                 DebugLog.fileprovider("schema migration: remove domain \(id) failed: \(error.localizedDescription)")
@@ -129,10 +142,8 @@ final class FileProviderFacade: ChangeSignaler {
     /// is an async sleep — it never blocks the main actor.
     @discardableResult
     func registerDomain(id: String, displayName: String) async -> Bool {
-        let domain = domain(id: id, displayName: displayName)
-
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
-            do { try await NSFileProviderManager.remove(domain) }
+            do { try await domainService.remove(id: id, reason: .reenumerateHatch) }
             catch { DebugLog.fileprovider("registerDomain: re-enumerate remove failed: \(error)") }
         }
 
@@ -140,7 +151,7 @@ final class FileProviderFacade: ChangeSignaler {
         // the new container layout (e.g. `files` → `sources` rename).
         if needsDomainMigration {
             DebugLog.fileprovider("registerDomain: removing \(id) for schema migration")
-            do { try await NSFileProviderManager.remove(domain) }
+            do { try await domainService.remove(id: id, reason: .schemaMigration) }
             catch { DebugLog.fileprovider("registerDomain: migration remove failed: \(error)") }
         }
 
@@ -150,7 +161,7 @@ final class FileProviderFacade: ChangeSignaler {
             // racing add that won) must not error out the whole flow.
             if !(await isDomainRegistered(id: id)) {
                 do {
-                    try await NSFileProviderManager.add(domain)
+                    try await domainService.add(id: id, displayName: displayName)
                 } catch {
                     // Distinguish benign already-exists (the verify below confirms
                     // presence) from a real failure we must not bury: log it AND
@@ -192,16 +203,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// pure policy helper. A failed `domains()` call reads as "not present" so the
     /// retry loop keeps trying.
     private func isDomainRegistered(id: String) async -> Bool {
-        // NSFileProviderDomain is not Sendable, so calling domains() from a
-        // @MainActor context is a strict-concurrency error under Swift 6.
-        // Run the call in a detached task and extract only the Sendable
-        // raw-value strings before returning to the main actor.
-        let domainIDs = await Task.detached {
-            let domains: [NSFileProviderDomain]
-            do { domains = try await NSFileProviderManager.domains() }
-            catch { DebugLog.fileprovider("isRegistered: list domains failed: \(error)"); domains = [] }
-            return domains.map(\.identifier.rawValue)
-        }.value
+        let domainIDs = await domainService.domains().map(\.id)
         return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
     }
 
@@ -220,9 +222,8 @@ final class FileProviderFacade: ChangeSignaler {
     /// Remove ONE wiki's domain (on delete). Clears the cached active path if it
     /// belonged to that wiki.
     func removeDomain(id: String) async {
-        let domain = domain(id: id, displayName: id)
         do {
-            try await NSFileProviderManager.remove(domain)
+            try await domainService.remove(id: id, reason: .wikiDeleted)
             if activeWikiID == id {
                 activeWikiID = nil
                 path = nil
@@ -258,16 +259,32 @@ final class FileProviderFacade: ChangeSignaler {
         // we're registering from scratch (and could hit NSFileWriteFileExistsError
         // against a leftover replica). Those fail very differently — worth one
         // `domains()` call on an operation the user triggers by hand.
-        let wasRegistered = await isDomainRegistered(id: id)
+        let previousName = await domainService.displayName(for: id)
         DebugLog.fileprovider("""
             FileProviderFacade.renameDomain(\(id) → \(displayName)): \
-            in-place add; wasRegistered=\(wasRegistered), isActive=\(activeWikiID == id)
+            in-place add; wasRegistered=\(previousName != nil), \
+            daemonName=\(previousName ?? "<absent>"), isActive=\(activeWikiID == id)
             """)
         do {
-            try await NSFileProviderManager.add(domain(id: id, displayName: displayName))
+            try await domainService.add(id: id, displayName: displayName)
             if activeWikiID == id { activeDisplayName = displayName }
             status = "Renamed \(displayName)"
-            DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id)): display name now \(displayName)")
+
+            // Verify the upsert actually landed rather than trusting the header's
+            // word for it. `add` reports success by returning without throwing; a
+            // silently-ignored display-name update would look identical. Since the
+            // whole fix rests on documented-but-unobservable behaviour, confirm it
+            // against what the daemon now reports. Diagnostic only — the operation
+            // has already succeeded as far as the user is concerned.
+            let observed = await domainService.displayName(for: id)
+            if observed != displayName {
+                DebugLog.fileprovider("""
+                    FileProviderFacade.renameDomain(\(id)): MISMATCH — add succeeded but \
+                    daemon reports \(observed ?? "<absent>"), expected \(displayName)
+                    """)
+            } else {
+                DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id)): display name now \(displayName)")
+            }
         } catch {
             DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id) → \(displayName)): add failed: \(error)")
             status = "Rename \(displayName) failed: \(error.localizedDescription)"
