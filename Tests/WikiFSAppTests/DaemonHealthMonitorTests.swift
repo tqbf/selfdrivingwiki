@@ -65,6 +65,36 @@ struct DaemonHealthMonitorTests {
         conn.invalidate()
     }
 
+    @Test func interruptionReRegistersAndStaysConnected() async throws {
+        // #904: when the daemon process is REPLACED (launchd relaunch) the XPC
+        // connection is interrupted, not invalidated — it transparently
+        // reconnects to a fresh daemon instance that has no registered event
+        // sink. The monitor must fire `onInterrupt` (so the app re-registers)
+        // WITHOUT tearing down to the local engine or flapping the banner.
+        let monitor = DaemonHealthMonitor()
+        let conn = try #require(try? WikiDaemonConnection.connect())
+
+        var interruptFired = false
+        var disconnectFired = false
+        monitor.onInterrupt = { _ in interruptFired = true }
+        monitor.onDisconnect = { disconnectFired = true }
+
+        monitor.start(connection: conn)
+        #expect(monitor.state == .connected)
+
+        // Simulate the XPC interruption deterministically (mirrors the
+        // `_testSimulateInvalidation` pattern; avoids racing the XPC-internal
+        // queue under concurrent test load).
+        monitor._testSimulateInterruption()
+
+        #expect(interruptFired)          // app was told to re-register its sink
+        #expect(!disconnectFired)        // NOT treated as a disconnect
+        #expect(monitor.state == .connected)  // no banner flap
+        #expect(monitor.isMonitoring)
+
+        conn.invalidate()
+    }
+
     @Test func stopClearsMonitoring() throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())

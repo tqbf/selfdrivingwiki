@@ -502,6 +502,26 @@ struct WikiFSApp: App {
                             DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
                         }
                     }
+                    // #904: on interruption the daemon process was replaced but
+                    // the connection is still live (launchd relaunch). The fresh
+                    // daemon has no event sink registered, so re-register on the
+                    // SAME connection — otherwise all pushed chat/queue envelopes
+                    // are dropped and live chat streams / queue updates go dark.
+                    healthMonitor?.onInterrupt = { conn in
+                        DebugLog.store("WikiFSApp: daemon interrupted — re-registering event sink on same connection")
+                        do {
+                            let workloadClient = try DaemonWorkloadClient(connection: conn)
+                            let eventSink = DaemonQueueEventSink()
+                            workloadClient.registerEventSink(eventSink)
+                            let proxy = XPCQueueEngineProxy(
+                                workloadClient: workloadClient, eventSink: eventSink)
+                            router?.swap(to: proxy)
+                            chatDaemonCoordinator = ChatDaemonCoordinator(
+                                client: workloadClient, eventSink: eventSink)
+                        } catch {
+                            DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
+                        }
+                    }
 
                     healthMonitor?.start(connection: conn)
                 } catch {

@@ -44,6 +44,15 @@ final class DaemonHealthMonitor {
     /// invalidated).
     var onReconnect: ((WikiDaemonConnection) -> Void)?
 
+    /// Fired (on the main actor) when the daemon *process* is replaced while the
+    /// connection stays alive — launchd relaunches the mach service and the
+    /// `NSXPCConnection` transparently reconnects (an XPC *interruption*, not an
+    /// invalidation). The fresh daemon instance has no registered event sink, so
+    /// the app must re-register on the SAME connection or every pushed
+    /// chat/queue envelope is silently dropped (#904). State stays `.connected`
+    /// — this is not a disconnect. The closure receives the current connection.
+    var onInterrupt: ((WikiDaemonConnection) -> Void)?
+
     /// Fired (on the main actor) on EVERY state transition. Used by observers
     /// that don't need the full disconnect/reconnect flow — e.g. the menu-bar
     /// icon badge just needs to know the current state.
@@ -74,6 +83,7 @@ final class DaemonHealthMonitor {
         isMonitoring = true
         setState(.connected)
         installInvalidationHandler(connection)
+        installInterruptionHandler(connection)
         startHealthPings()
         DebugLog.store("wikid: DaemonHealthMonitor started — state=.connected")
     }
@@ -112,6 +122,14 @@ final class DaemonHealthMonitor {
         handleInvalidation()
     }
 
+    /// Test-only: directly trigger the interruption → re-register path as if the
+    /// XPC connection had been interrupted (daemon process replaced). Exposed so
+    /// tests can exercise it deterministically without a real `NSXPCConnection`
+    /// interruption (which fires asynchronously on an XPC-internal queue).
+    func _testSimulateInterruption() {
+        handleInterruption()
+    }
+
     private func installInvalidationHandler(_ conn: WikiDaemonConnection) {
         conn.setInvalidationHandler { [weak self] in
             // Fires on an XPC-internal queue — hop to the main actor.
@@ -119,6 +137,28 @@ final class DaemonHealthMonitor {
                 self?.handleInvalidation()
             }
         }
+    }
+
+    private func installInterruptionHandler(_ conn: WikiDaemonConnection) {
+        conn.setInterruptionHandler { [weak self] in
+            // Fires on an XPC-internal queue — hop to the main actor.
+            Task { @MainActor [weak self] in
+                self?.handleInterruption()
+            }
+        }
+    }
+
+    /// Called when the XPC connection is interrupted — the daemon process was
+    /// replaced (launchd relaunch) but the connection is still usable and has
+    /// transparently reconnected to a fresh daemon instance. That instance has
+    /// no registered event sink, so we re-register on the SAME connection via
+    /// `onInterrupt`. We deliberately stay `.connected` (no banner flap) and do
+    /// NOT tear down to the local engine — the daemon is up, just amnesiac about
+    /// our sink (#904).
+    private func handleInterruption() {
+        guard isMonitoring, let conn = connection else { return }
+        DebugLog.store("wikid: XPC connection interrupted — daemon replaced; re-registering event sink")
+        onInterrupt?(conn)
     }
 
     /// Called when the XPC connection is invalidated (daemon process exited).
@@ -183,6 +223,7 @@ final class DaemonHealthMonitor {
         if healthy {
             connection = newConn
             installInvalidationHandler(newConn)
+            installInterruptionHandler(newConn)
             setState(.connected)
             onReconnect?(newConn)
             DebugLog.store("wikid: reconnected — state=.connected")

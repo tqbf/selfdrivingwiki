@@ -169,6 +169,22 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         connection.invalidationHandler = handler
     }
 
+    /// Install an interruption handler on the underlying `NSXPCConnection`.
+    /// Fires when the daemon *process* dies but the connection remains usable —
+    /// launchd auto-relaunches the mach service on the next message, so the
+    /// SAME connection transparently reconnects to a FRESH daemon instance.
+    /// Unlike invalidation, interruption is not terminal, so the app must NOT
+    /// tear down; instead it re-establishes per-process state (re-registering
+    /// its event sink, which the new daemon instance does not have) — otherwise
+    /// every pushed chat/queue envelope is silently dropped (#904).
+    ///
+    /// Only one handler may be set per connection (XPC replaces the prior one).
+    /// The handler is `@Sendable` (fires on an XPC-internal queue); callers that
+    /// need main-actor isolation must hop themselves.
+    public func setInterruptionHandler(_ handler: @escaping @Sendable () -> Void) {
+        connection.interruptionHandler = handler
+    }
+
     /// Invalidate the connection explicitly (e.g. before building a new one
     /// for a reconnect attempt).
     public func invalidate() {
