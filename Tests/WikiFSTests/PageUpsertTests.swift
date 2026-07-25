@@ -51,9 +51,9 @@ struct PageUpsertTests {
         let store = try tempStore()
         let a = try store.createPage(title: "Dup")
         let b = try store.createPage(title: "Dup")
-        // `ULID.generate()` is NOT monotonic within a millisecond (80 independent
-        // random bits), so creation order does not guarantee ULID order — pick the
-        // actually-lowest ULID to assert against rather than assuming `a` < `b`.
+        // ULIDs are monotonic within a millisecond, but `a` and `b` may span
+        // a millisecond boundary depending on scheduling, so pick the actually-
+        // lowest ULID rather than assuming `a` < `b`.
         let lowest = a.id.rawValue < b.id.rawValue ? a.id : b.id
         let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Dup", body: "edited")
         #expect(outcome.id == lowest)
