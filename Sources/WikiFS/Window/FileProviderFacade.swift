@@ -233,14 +233,44 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    /// Refresh a registered domain's display name after a wiki rename. The
-    /// identifier stays stable, so remove+add is cosmetic from the extension's
-    /// point of view: both old and new domains map to the same `<ulid>.sqlite`.
+    /// Refresh a registered domain's display name after a wiki rename, IN PLACE.
+    ///
+    /// `add(domain)` is an upsert keyed by identifier: "if a domain with the same
+    /// identifier already exists, `addDomain` will update the display name and
+    /// hidden state of the domain and succeed" (`NSFileProviderManager.h`). So a
+    /// rename never needs the domain to leave the daemon.
+    ///
+    /// This used to remove+re-add, which was mislabelled "cosmetic" (see #919).
+    /// It is not: `remove(domain)` tears down the daemon's on-disk replica — the
+    /// same migration-strength reset `migrateDomainsIfNeeded` uses deliberately —
+    /// and the re-add can then fail with `NSFileWriteFileExistsError` if that
+    /// location still exists, leaving the wiki unregistered and unmounted with
+    /// only a `status` string to show for it. It also opened a window in which
+    /// the domain resolved to nothing at all for other FileProvider clients.
+    ///
+    /// Note this deliberately does NOT go through `registerDomain`, whose
+    /// add-if-absent guard would short-circuit on the already-present domain and
+    /// never apply the new name. No `activate` either: the identifier is stable
+    /// and the domain never leaves the daemon, so the mount path is unchanged.
     func renameDomain(id: String, displayName: String) async {
-        let wasActive = activeWikiID == id
-        await removeDomain(id: id)
-        if await registerDomain(id: id, displayName: displayName), wasActive {
-            await activate(id: id, displayName: displayName)
+        // Log whether the domain was already present: a present domain means this
+        // `add` is the documented in-place display-name update, an absent one means
+        // we're registering from scratch (and could hit NSFileWriteFileExistsError
+        // against a leftover replica). Those fail very differently — worth one
+        // `domains()` call on an operation the user triggers by hand.
+        let wasRegistered = await isDomainRegistered(id: id)
+        DebugLog.fileprovider("""
+            FileProviderFacade.renameDomain(\(id) → \(displayName)): \
+            in-place add; wasRegistered=\(wasRegistered), isActive=\(activeWikiID == id)
+            """)
+        do {
+            try await NSFileProviderManager.add(domain(id: id, displayName: displayName))
+            if activeWikiID == id { activeDisplayName = displayName }
+            status = "Renamed \(displayName)"
+            DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id)): display name now \(displayName)")
+        } catch {
+            DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id) → \(displayName)): add failed: \(error)")
+            status = "Rename \(displayName) failed: \(error.localizedDescription)"
         }
     }
 
