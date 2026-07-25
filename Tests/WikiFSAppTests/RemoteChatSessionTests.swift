@@ -302,14 +302,14 @@ struct RemoteChatSessionTests {
         let envelope = QueueEventEnvelope.chatPendingPermission(
             chatID: "chat-1",
             permission: PendingPermission(
-                toolCallId: "tc-1",
+                toolCallId: ToolCallID(rawValue: "tc-1"),
                 title: "Edit file",
                 toolName: "Edit",
                 inputSummary: "/path/to/file",
                 options: []))
         session.ingest(envelope)
         #expect(session.pendingPermissions.count == 1)
-        #expect(session.pendingPermissions[0].toolCallId == "tc-1")
+        #expect(session.pendingPermissions[0].toolCallId == ToolCallID(rawValue: "tc-1"))
         #expect(session.pendingPermissions[0].title == "Edit file")
     }
 

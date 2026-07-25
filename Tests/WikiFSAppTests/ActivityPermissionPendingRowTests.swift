@@ -48,7 +48,7 @@ struct ActivityPermissionPendingRowTests {
         inputSummary: String? = "/wiki/page.md"
     ) -> PendingPermission {
         PendingPermission(
-            toolCallId: "tc-test",
+            toolCallId: ToolCallID(rawValue: "tc-test"),
             title: "Edit file /wiki/page.md",
             toolName: toolName,
             inputSummary: inputSummary,
@@ -79,26 +79,26 @@ struct ActivityPermissionPendingRowTests {
     @Test("permissionPendingLabel prefers tool name, then input summary, then title")
     func labelPicksMostInformativeField() {
         let withTool = PendingPermission(
-            toolCallId: "tc-1", title: "t", toolName: "Edit file",
+            toolCallId: ToolCallID(rawValue: "tc-1"), title: "t", toolName: "Edit file",
             inputSummary: "/p.md", options: [])
         #expect(ActivityWindowView.permissionPendingLabel(for: withTool) == "Permission pending: Edit file")
 
         // Fall back to input summary when tool name is missing.
         let noTool = PendingPermission(
-            toolCallId: "tc-1", title: "t", toolName: nil,
+            toolCallId: ToolCallID(rawValue: "tc-1"), title: "t", toolName: nil,
             inputSummary: "/p.md", options: [])
         #expect(ActivityWindowView.permissionPendingLabel(for: noTool) == "Permission pending: /p.md")
 
         // Fall back to title when both tool name and input summary are missing.
         let titleOnly = PendingPermission(
-            toolCallId: "tc-1", title: "Write something", toolName: nil,
+            toolCallId: ToolCallID(rawValue: "tc-1"), title: "Write something", toolName: nil,
             inputSummary: nil, options: [])
         #expect(ActivityWindowView.permissionPendingLabel(for: titleOnly) == "Permission pending: Write something")
 
         // When the backend snapshot is sparse (all three nil/empty), the row
         // still renders a generic line — never silently empty.
         let sparse = PendingPermission(
-            toolCallId: "tc-1", title: nil, toolName: nil,
+            toolCallId: ToolCallID(rawValue: "tc-1"), title: nil, toolName: nil,
             inputSummary: nil, options: [])
         #expect(ActivityWindowView.permissionPendingLabel(for: sparse) == "Permission pending")
     }

@@ -437,7 +437,7 @@ struct QueueActivityTrackerIngestionTests {
         inputSummary: String? = "/wiki/page.md"
     ) -> PendingPermission {
         PendingPermission(
-            toolCallId: toolCallId,
+            toolCallId: ToolCallID(rawValue: toolCallId),
             title: "Edit file /wiki/page.md",
             toolName: toolName,
             inputSummary: inputSummary,

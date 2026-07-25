@@ -95,7 +95,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case .pendingPermission(let id, let permission):
             let json: String? = permission.map { perm in
                 let dict: [String: Any] = [
-                    "toolCallId": perm.toolCallId,
+                    "toolCallId": perm.toolCallId.rawValue,
                     "title": perm.title as Any,
                     "toolName": perm.toolName as Any,
                     "inputSummary": perm.inputSummary as Any
@@ -212,7 +212,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
     ) -> QueueEventEnvelope {
         let json: String? = permission.map { perm in
             let dict: [String: Any] = [
-                "toolCallId": perm.toolCallId,
+                "toolCallId": perm.toolCallId.rawValue,
                 "title": perm.title as Any,
                 "toolName": perm.toolName as Any,
                 "inputSummary": perm.inputSummary as Any,

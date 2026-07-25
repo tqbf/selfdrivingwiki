@@ -197,7 +197,7 @@ public final class RemoteChatSession {
                 let toolName = dict["toolName"] as? String
                 let inputSummary = dict["inputSummary"] as? String
                 pendingPermissions = [PendingPermission(
-                    toolCallId: toolCallId,
+                    toolCallId: ToolCallID(rawValue: toolCallId),
                     title: title, toolName: toolName,
                     inputSummary: inputSummary,
                     options: [])]
