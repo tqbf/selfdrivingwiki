@@ -107,11 +107,11 @@ struct RetryStuckRegressionTests {
     func readinessReturnsMessageWhenAllProvidersDisabled() async throws {
         let disabledProviders = AgentProvidersConfig(providers: [
             AgentProvider(
-                id: "claude-acp", label: "Claude",
+                id: ProviderID(rawValue: "claude-acp"), label: "Claude",
                 command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
                 enabled: false, isDefault: true),
             AgentProvider(
-                id: "hermes", label: "Hermes",
+                id: ProviderID(rawValue: "hermes"), label: "Hermes",
                 command: ["hermes", "acp"],
                 enabled: false, isDefault: false),
         ])
@@ -147,11 +147,11 @@ struct RetryStuckRegressionTests {
     func readinessFallsThroughWhenAnyProviderEnabled() async throws {
         let mixedConfig = AgentProvidersConfig(providers: [
             AgentProvider(
-                id: "claude-acp", label: "Claude",
+                id: ProviderID(rawValue: "claude-acp"), label: "Claude",
                 command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
                 enabled: false, isDefault: true),
             AgentProvider(
-                id: "hermes", label: "Hermes",
+                id: ProviderID(rawValue: "hermes"), label: "Hermes",
                 command: ["hermes", "acp"],
                 enabled: true, isDefault: false),
         ])
@@ -188,7 +188,7 @@ struct RetryStuckRegressionTests {
     func readinessIsConsistentAcrossCalls() async throws {
         let disabledConfig = AgentProvidersConfig(providers: [
             AgentProvider(
-                id: "opencode", label: "OpenCode",
+                id: ProviderID(rawValue: "opencode"), label: "OpenCode",
                 command: ["opencode", "acp"],
                 enabled: false, isDefault: true),
         ])

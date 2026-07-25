@@ -55,18 +55,18 @@ struct AddProviderSheetTests {
         // And the parent's config is structurally unchanged — only its
         // `existingIDs` snapshot was handed to the sheet.
         #expect(original.providers.count == 1)
-        #expect(original.providers.first?.id == "claude-acp")
+        #expect(original.providers.first?.id == ProviderID(rawValue: "claude-acp"))
     }
 
     // MARK: - AC.6 — seed returns [claudeAcpDefault]
 
     @Test func seedReturnsClaudeAcpDefaultOnly() {
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.providers.map(\.id) == ["claude-acp"])
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
         #expect(config.providers.first?.isDefault == true)
         // The default-model seed stays — the spawn refusal guard (#635)
         // still depends on it for day-one spawnability.
-        #expect(config.selectedModelId(forProvider: "claude-acp") == "sonnet")
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
     }
 
     @Test func normalizedEmptyReturnsClaudeAcpDefaultOnly() {
@@ -74,8 +74,8 @@ struct AddProviderSheetTests {
         // providers re-seeds the single Claude default at `init` (via the
         // `normalized()` call inside `init(providers:)`).
         let config = AgentProvidersConfig(providers: [])
-        #expect(config.providers.map(\.id) == ["claude-acp"])
-        #expect(config.defaultProvider.id == "claude-acp")
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
     }
 
     // MARK: - freshCustomID — collision loop
@@ -83,9 +83,9 @@ struct AddProviderSheetTests {
     @Test func freshCustomIDStartsAtCustomAndIncrements() {
         // No existing `custom` → "custom". Existing "custom" → "custom-2".
         // Existing "custom" + "custom-2" → "custom-3".
-        #expect(AddProviderModel(existingIDs: []).freshCustomID() == "custom")
-        #expect(AddProviderModel(existingIDs: ["custom"]).freshCustomID() == "custom-2")
-        #expect(AddProviderModel(existingIDs: ["custom", "custom-2"]).freshCustomID() == "custom-3")
+        #expect(AddProviderModel(existingIDs: []).freshCustomID() == ProviderID(rawValue: "custom"))
+        #expect(AddProviderModel(existingIDs: [ProviderID(rawValue: "custom")]).freshCustomID() == ProviderID(rawValue: "custom-2"))
+        #expect(AddProviderModel(existingIDs: [ProviderID(rawValue: "custom"), ProviderID(rawValue: "custom-2")]).freshCustomID() == ProviderID(rawValue: "custom-3"))
     }
 
     // MARK: - otherAgents excludes both existing AND detected
@@ -95,16 +95,16 @@ struct AddProviderSheetTests {
         // minus `detected` (shown in the "Installed on this Mac" section).
         // Pins the dedup contract so the user can't see a provider in two
         // sections at once.
-        let geminiAgent = ACPProviderCatalog.agents.first(where: { $0.id == "gemini" })!
-        let model = AddProviderModel(existingIDs: ["claude-acp"])  // claude added
+        let geminiAgent = ACPProviderCatalog.agents.first(where: { $0.id == ProviderID(rawValue: "gemini") })!
+        let model = AddProviderModel(existingIDs: [ProviderID(rawValue: "claude-acp")])  // claude added
         model.detected = [DiscoveredACPAgent(agent: geminiAgent, resolvedPath: "/x")]  // gemini detected
         model.isScanning = false
         let otherIDs = model.otherAgents.map(\.id)
-        #expect(!otherIDs.contains("claude-acp"))  // already added
-        #expect(!otherIDs.contains("gemini"))      // shown in detected
+        #expect(!otherIDs.contains(ProviderID(rawValue: "claude-acp")))  // already added
+        #expect(!otherIDs.contains(ProviderID(rawValue: "gemini")))      // shown in detected
         // The rest of the catalog is still present.
-        #expect(otherIDs.contains("hermes"))
-        #expect(otherIDs.contains("copilot"))
+        #expect(otherIDs.contains(ProviderID(rawValue: "hermes")))
+        #expect(otherIDs.contains(ProviderID(rawValue: "copilot")))
     }
 
     // MARK: - Query filter
@@ -118,14 +118,14 @@ struct AddProviderSheetTests {
         let model = AddProviderModel(existingIDs: [])
         model.detected = [
             DiscoveredACPAgent(
-                agent: ACPProviderCatalog.agents.first(where: { $0.id == "claude-acp" })!,
+                agent: ACPProviderCatalog.agents.first(where: { $0.id == ProviderID(rawValue: "claude-acp") })!,
                 resolvedPath: "/x"),
         ]
         model.isScanning = false
         model.query = "GEM"
         let otherIDs = model.otherAgents.map(\.id)
-        #expect(otherIDs.contains("gemini"))
-        #expect(!otherIDs.contains("hermes"))
+        #expect(otherIDs.contains(ProviderID(rawValue: "gemini")))
+        #expect(!otherIDs.contains(ProviderID(rawValue: "hermes")))
         // detectedFiltered — claude-acp's label "Claude" doesn't contain "gem",
         // so the detected section is empty under this query.
         #expect(model.detectedFiltered.isEmpty)

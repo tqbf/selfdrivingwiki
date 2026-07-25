@@ -219,7 +219,7 @@ import WikiFSCore
         // Pre-write a config whose DEFAULT provider is opencode with no model.
         // #663: `.opencodeDefault` was deleted; built inline.
         var opencodeDefault = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],

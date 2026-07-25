@@ -13,8 +13,8 @@ struct CompositeWorkerFactoryTests {
 
     // A fake factory that always returns the same provider ID + a no-op worker.
     private struct FakeFactory: QueueWorkerFactory {
-        let providerIDValue: String?
-        func providerID(for item: QueueItem) async -> String? { providerIDValue }
+        let providerIDValue: ProviderID?
+        func providerID(for item: QueueItem) async -> ProviderID? { providerIDValue }
         func worker(for item: QueueItem) async throws -> any QueueWorker {
             NoopWorker()
         }
@@ -26,8 +26,8 @@ struct CompositeWorkerFactoryTests {
 
     @Test("Routes extraction items to extraction factory")
     func routesExtractionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
@@ -40,13 +40,13 @@ struct CompositeWorkerFactoryTests {
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "local-pdf2md")
+        #expect(providerID == ProviderID(rawValue: "local-pdf2md"))
     }
 
     @Test("Routes ingestion items to ingestion factory")
     func routesIngestionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
@@ -59,13 +59,13 @@ struct CompositeWorkerFactoryTests {
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "default-ingest")
+        #expect(providerID == ProviderID(rawValue: "default-ingest"))
     }
 
     @Test("Routes extraction items to extraction factory")
     func routesTranscriptionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
@@ -78,12 +78,12 @@ struct CompositeWorkerFactoryTests {
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "local-pdf2md")
+        #expect(providerID == ProviderID(rawValue: "local-pdf2md"))
     }
 
     @Test("Missing factory returns nil provider ID")
     func missingFactoryReturnsNil() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory
         ])
@@ -911,7 +911,7 @@ struct QueueActivityTrackerInteractiveUsageTests {
 
 /// A stub factory that never dispatches (providerID returns nil).
 struct StubWorkerFactory: QueueWorkerFactory {
-    func providerID(for item: QueueItem) async -> String? { nil }
+    func providerID(for item: QueueItem) async -> ProviderID? { nil }
     func worker(for item: QueueItem) async throws -> any QueueWorker {
         struct W: QueueWorker { func execute(_ item: QueueItem) async throws {} }
         return W()
@@ -954,7 +954,7 @@ struct QueueActivityTrackerRehydrateTests {
                 queue: .ingestion, wikiID: "w1",
                 payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
             itemID = item.id
-            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markCompleted(id: itemID)
             let data = try JSONEncoder().encode(usage)
             let usageJSON = String(data: data, encoding: .utf8)!

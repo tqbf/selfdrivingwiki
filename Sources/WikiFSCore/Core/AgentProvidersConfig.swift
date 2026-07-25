@@ -224,7 +224,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     }
 
     /// Look up a provider by id.
-    public func provider(id: String) -> AgentProvider? {
+    public func provider(id: ProviderID) -> AgentProvider? {
         providers.first(where: { $0.id == id })
     }
 
@@ -242,12 +242,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// override) preserves today's stage-pin-then-global-default resolution.
     public func provider(forStage stage: String, chatOverrideProviderId: String? = nil) -> AgentProvider {
         if let chatOverrideProviderId, !chatOverrideProviderId.isEmpty,
-           let p = provider(id: chatOverrideProviderId), p.enabled {
+           // chatOverrideProviderId is a persisted String (ChatSummary.modelProviderId) — boundary.
+           let p = provider(id: ProviderID(rawValue: chatOverrideProviderId)), p.enabled {
             return p
         }
         if let pinnedId = stageProviderIds[stage],
            !pinnedId.isEmpty,
-           let p = provider(id: pinnedId), p.enabled {
+           // stageProviderIds is a persisted [String: String] dict — boundary.
+           let p = provider(id: ProviderID(rawValue: pinnedId)), p.enabled {
             return p
         }
         return selectedProvider()
@@ -306,7 +308,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// neuralwatt use case (`glm-5.2` / `glm-5.2-fast` / `glm-5.2-short` are
     /// one provider's variants) and keeps `providerHints` (spawn config)
     /// identical across phases — the warm subprocess is reused as-is.
-    public func modelId(forStage stage: String, fallbackProvider providerId: String) -> String? {
+    public func modelId(forStage stage: String, fallbackProvider providerId: ProviderID) -> String? {
         if let id = ingestStageModelIds[stage], !id.isEmpty { return id }
         return selectedModelId(forProvider: providerId)
     }
@@ -386,7 +388,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// The new config is `normalized`, so even a hand-crafted input keeps
     /// exactly one default. Mirrors the inline `setDefault` the Settings view
     /// used to own, now on the model so the composer selector shares it.
-    public func settingDefault(id: String) -> AgentProvidersConfig {
+    public func settingDefault(id: ProviderID) -> AgentProvidersConfig {
         var updated = providers
         for i in updated.indices {
             updated[i].isDefault = (updated[i].id == id)
@@ -418,15 +420,15 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `session/new`). Empty when none are cached yet → the picker shows its
     /// "models discovered on first chat" hint (v1 capture-from-session; on-demand
     /// probing is a later enhancement). PURE.
-    public func cachedModels(forProvider providerId: String) -> [CachedModelInfo] {
-        providerModels[providerId] ?? []
+    public func cachedModels(forProvider providerId: ProviderID) -> [CachedModelInfo] {
+        providerModels[providerId.rawValue] ?? []
     }
 
     /// The user's selected model id for `providerId`, or `nil` when none is set
     /// ("use the agent's default model"). PURE. Read by `ACPBackend.start` to
     /// decide whether to send `session/set_model`.
-    public func selectedModelId(forProvider providerId: String) -> String? {
-        guard let id = selectedModelIds[providerId], !id.isEmpty else { return nil }
+    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
+        guard let id = selectedModelIds[providerId.rawValue], !id.isEmpty else { return nil }
         return id
     }
 
@@ -434,14 +436,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// replaced by `models`. Called by the launcher after `backend.start`
     /// captures the agent's advertised `ModelsInfo`. The picker reads the result
     /// next load. Never writes secrets (only `CachedModelInfo`).
-    public func settingCachedModels(_ models: [CachedModelInfo], forProvider providerId: String) -> AgentProvidersConfig {
+    public func settingCachedModels(_ models: [CachedModelInfo], forProvider providerId: ProviderID) -> AgentProvidersConfig {
         var cache = providerModels
         if models.isEmpty {
-            cache.removeValue(forKey: providerId)
+            cache.removeValue(forKey: providerId.rawValue)
         } else {
-            cache[providerId] = models
+            cache[providerId.rawValue] = models
         }
-        DebugLog.store("AgentProvidersConfig.settingCachedModels: provider=\(providerId) count=\(models.isEmpty ? 0 : models.count)")
+        DebugLog.store("AgentProvidersConfig.settingCachedModels: provider=\(providerId.rawValue) count=\(models.isEmpty ? 0 : models.count)")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: cache,
@@ -456,14 +458,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `providerId` set (or cleared when `modelId` is nil/empty). Called by the
     /// chat-composer model picker; persisted by the launcher. A nil/empty
     /// selection = "use the agent's default" → today's behavior is unchanged.
-    public func settingSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+    public func settingSelectedModel(_ modelId: String?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         var selections = selectedModelIds
         if let modelId, !modelId.isEmpty {
-            selections[providerId] = modelId
+            selections[providerId.rawValue] = modelId
         } else {
-            selections.removeValue(forKey: providerId)
+            selections.removeValue(forKey: providerId.rawValue)
         }
-        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil")")
+        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId ?? "nil")")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -477,31 +479,31 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
 
     /// Whether `modelId` is favorited for `providerId`. PURE.
-    public func isFavoriteModel(_ modelId: String, forProvider providerId: String) -> Bool {
-        favoriteModelIds[providerId]?.contains(modelId) ?? false
+    public func isFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> Bool {
+        favoriteModelIds[providerId.rawValue]?.contains(modelId) ?? false
     }
 
     /// The favorited model ids for `providerId`, in favorite order. PURE.
-    public func favoriteModels(forProvider providerId: String) -> [String] {
-        favoriteModelIds[providerId] ?? []
+    public func favoriteModels(forProvider providerId: ProviderID) -> [String] {
+        favoriteModelIds[providerId.rawValue] ?? []
     }
 
     /// A PURE mutator: returns a NEW config with `modelId`'s favorite state
     /// toggled for `providerId`. Newly-favorited ids append (preserving order);
     /// removing the last favorite drops the provider key. Persisted by the
     /// launcher; the picker re-sorts favorites to the top on the next read.
-    public func togglingFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func togglingFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         var favorites = favoriteModelIds
-        var list = favorites[providerId] ?? []
+        var list = favorites[providerId.rawValue] ?? []
         if let idx = list.firstIndex(of: modelId) {
             list.remove(at: idx)
         } else {
             list.append(modelId)
         }
         if list.isEmpty {
-            favorites.removeValue(forKey: providerId)
+            favorites.removeValue(forKey: providerId.rawValue)
         } else {
-            favorites[providerId] = list
+            favorites[providerId.rawValue] = list
         }
         return AgentProvidersConfig(
             providers: providers,
@@ -563,8 +565,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             // set as default with no selection). See
             // `tmp/ingestion-stall-diagnosis.md` and
             // `SpawnModelGuard.validate(provider:modelId:)`.
-            if config.providers.first(where: { $0.isDefault && $0.id == "claude-acp" }) != nil,
-               config.selectedModelId(forProvider: "claude-acp") == nil {
+            if config.providers.first(where: { $0.isDefault && $0.id == ProviderID(rawValue: "claude-acp") }) != nil,
+               config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == nil {
                 DebugLog.store("AgentProvidersConfig.loadOrSeed: BACKFILL claude-acp default-model='sonnet'")
                 selectedModelIds = selectedModelIds.merging(
                     ["claude-acp": "sonnet"],

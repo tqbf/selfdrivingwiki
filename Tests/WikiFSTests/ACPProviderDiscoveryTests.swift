@@ -22,9 +22,9 @@ struct ACPProviderDiscoveryTests {
 
     @Test func discoversOnlyAgentsWhoseBinaryIsFound() {
         let catalog = [
-            KnownACPAgent(id: "a", label: "A", summary: "", detectExecutable: "a", command: ["a", "--acp"]),
-            KnownACPAgent(id: "b", label: "B", summary: "", detectExecutable: "b", command: ["b", "acp"]),
-            KnownACPAgent(id: "c", label: "C", summary: "", detectExecutable: "c", command: ["c", "--acp"]),
+            KnownACPAgent(id: ProviderID(rawValue: "a"), label: "A", summary: "", detectExecutable: "a", command: ["a", "--acp"]),
+            KnownACPAgent(id: ProviderID(rawValue: "b"), label: "B", summary: "", detectExecutable: "b", command: ["b", "acp"]),
+            KnownACPAgent(id: ProviderID(rawValue: "c"), label: "C", summary: "", detectExecutable: "c", command: ["c", "--acp"]),
         ]
         // "a" and "c" present, "b" missing.
         let resolve: (String) -> PathPreflight.Result = { exe in
@@ -35,7 +35,7 @@ struct ACPProviderDiscoveryTests {
             }
         }
         let found = ACPProviderDiscovery.discover(in: catalog, resolve: resolve)
-        #expect(found.map(\.agent.id) == ["a", "c"])
+        #expect(found.map(\.agent.id) == [ProviderID(rawValue: "a"), ProviderID(rawValue: "c")])
         #expect(found[0].resolvedPath == "/usr/local/bin/a")
         #expect(found[1].resolvedPath == "/opt/homebrew/bin/c")
     }
@@ -45,7 +45,7 @@ struct ACPProviderDiscoveryTests {
     }
 
     @Test func allMissingDiscoversNothing() {
-        let catalog = [KnownACPAgent(id: "a", label: "A", summary: "", detectExecutable: "a", command: ["a"])]
+        let catalog = [KnownACPAgent(id: ProviderID(rawValue: "a"), label: "A", summary: "", detectExecutable: "a", command: ["a"])]
         #expect(ACPProviderDiscovery.discover(in: catalog, resolve: { _ in .missing(reason: "nope") }).isEmpty)
     }
 
@@ -53,8 +53,8 @@ struct ACPProviderDiscoveryTests {
         // The default chat provider (Claude via the ACP wrapper) IS in the catalog;
         // the legacy `claude -p` CLI id is NOT (driven via ClaudeCLIBackend).
         #expect(!ACPProviderCatalog.agents.isEmpty)
-        #expect(ACPProviderCatalog.agents.contains(where: { $0.id == "claude-acp" }))
-        #expect(ACPProviderCatalog.agents.allSatisfy { $0.id != "claude" })
+        #expect(ACPProviderCatalog.agents.contains(where: { $0.id == ProviderID(rawValue: "claude-acp") }))
+        #expect(ACPProviderCatalog.agents.allSatisfy { $0.id != ProviderID(rawValue: "claude") })
         // Each catalog command's first element is its detect executable (convention).
         for agent in ACPProviderCatalog.agents {
             #expect(agent.command.first == agent.detectExecutable)
@@ -65,7 +65,7 @@ struct ACPProviderDiscoveryTests {
         // Claude via ACP runs through `bun` — a generic JS runtime. Finding `bun`
         // on PATH does NOT mean `@agentclientprotocol/claude-agent-acp` is
         // installed, so the catalog entry must be marked `autoDetectable: false`.
-        let claude = ACPProviderCatalog.agents.first(where: { $0.id == "claude-acp" })
+        let claude = ACPProviderCatalog.agents.first(where: { $0.id == ProviderID(rawValue: "claude-acp") })
         #expect(claude != nil)
         #expect(claude?.autoDetectable == false)
     }
@@ -75,10 +75,10 @@ struct ACPProviderDiscoveryTests {
         // appear in `discover()` output, even when its runtime is on PATH —
         // otherwise users see "Claude detected" just because they have bun.
         let catalog = [
-            KnownACPAgent(id: "claude-acp", label: "Claude", summary: "",
+            KnownACPAgent(id: ProviderID(rawValue: "claude-acp"), label: "Claude", summary: "",
                          detectExecutable: "bun", command: ["bun", "x", "pkg"],
                          autoDetectable: false),
-            KnownACPAgent(id: "gemini", label: "Gemini", summary: "",
+            KnownACPAgent(id: ProviderID(rawValue: "gemini"), label: "Gemini", summary: "",
                          detectExecutable: "gemini", command: ["gemini", "--acp"]),
         ]
         let resolve: (String) -> PathPreflight.Result = { exe in
@@ -86,7 +86,7 @@ struct ACPProviderDiscoveryTests {
             .found(path: "/usr/local/bin/\(exe)")
         }
         let found = ACPProviderDiscovery.discover(in: catalog, resolve: resolve)
-        #expect(found.map(\.agent.id) == ["gemini"])
+        #expect(found.map(\.agent.id) == [ProviderID(rawValue: "gemini")])
     }
 
     // MARK: - Live (this machine's PATH)

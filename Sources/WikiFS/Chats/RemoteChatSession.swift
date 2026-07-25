@@ -370,7 +370,7 @@ public final class RemoteChatSession {
 
     /// The user's persisted model selection for `providerId` (nil = agent
     /// default). Mirrors `AgentLauncher.selectedModelId(forProvider:)`.
-    public func selectedModelId(forProvider providerId: String) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -378,13 +378,13 @@ public final class RemoteChatSession {
     /// to the top of the picker). Mirrors
     /// `AgentLauncher.toggleFavoriteModel(_:forProvider:)`.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
             try updated.save(to: dir)
         } catch {
-            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
         }
         return updated
     }

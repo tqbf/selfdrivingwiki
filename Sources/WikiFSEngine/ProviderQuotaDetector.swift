@@ -5,7 +5,7 @@ import WikiFSTypes
 /// #727: the outcome of inspecting a provider error for quota exhaustion.
 /// `nil` means "not a quota error — handle normally."
 public struct QuotaSignal: Sendable, Equatable {
-    public let providerId: String
+    public let providerId: ProviderID
     public let resetTime: Date?
     public let kind: Kind
 
@@ -111,8 +111,9 @@ public enum ProviderQuotaDetector {
     /// - `.zai` → z.ai/GLM numeric code heuristic.
     /// - `.unknown` → run BOTH heuristics, return the first signal
     ///   (conservative — never drops a healthy provider).
-    public static func providerFamily(forProviderId providerId: String) -> ProviderFamily {
-        let lower = providerId.lowercased()
+    public static func providerFamily(forProviderId providerId: ProviderID) -> ProviderFamily {
+        // String-op boundary: substring test needs the raw String.
+        let lower = providerId.rawValue.lowercased()
         if lower.contains("claude") { return .claude }
         if lower.contains("glm") || lower.contains("zai") || lower.contains("z-ai") {
             return .zai
@@ -131,7 +132,7 @@ public enum ProviderQuotaDetector {
     /// - Parameter error: the raw error caught at the `sendPrompt` call site.
     ///   Only `ClientError.agentError(JSONRPCError)` carries quota signal.
     public static func detect(
-        providerId: String,
+        providerId: ProviderID,
         error: Error
     ) -> QuotaSignal? {
         // 1. Unwrap the JSONRPCError: only `.agentError` carries server-side
@@ -163,7 +164,7 @@ public enum ProviderQuotaDetector {
     /// `JSONRPCError.message`. The agent surfaces its server-side error text
     /// here.
     private static func detectClaude(
-        providerId: String,
+        providerId: ProviderID,
         rpc: JSONRPCError
     ) -> QuotaSignal? {
         let msg = rpc.message.lowercased()
@@ -205,7 +206,7 @@ public enum ProviderQuotaDetector {
     /// 3. `rpc.data?.value` — String (recurse message), Int (compare),
     ///    [String: Any] (look for error/code/error_code keys + next_flush_time).
     private static func detectZai(
-        providerId: String,
+        providerId: ProviderID,
         rpc: JSONRPCError
     ) -> QuotaSignal? {
         // 1. rpc.code
@@ -274,7 +275,7 @@ public enum ProviderQuotaDetector {
 
     /// Inspect `rpc.data?.value` for a z.ai quota code.
     private static func detectZaiFromData(
-        providerId: String,
+        providerId: ProviderID,
         value: Any,
         rpc: JSONRPCError
     ) -> QuotaSignal? {

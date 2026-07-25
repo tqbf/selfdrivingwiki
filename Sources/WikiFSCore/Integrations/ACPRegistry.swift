@@ -320,7 +320,9 @@ struct ACPRegistryClient: Sendable {
                 return nil
             }
             return KnownACPAgent(
-                id: agent.id,
+                // External registry JSON boundary: the decoded `agent.id` is a
+                // raw provider-name String — wrap it as ProviderID here.
+                id: ProviderID(rawValue: agent.id),
                 label: agent.name,
                 summary: agent.description ?? "",
                 detectExecutable: spawn.detect,

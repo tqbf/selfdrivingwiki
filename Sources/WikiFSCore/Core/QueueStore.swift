@@ -359,7 +359,8 @@ public final class QueueStore: @unchecked Sendable {
         let payloadText: String = row["payload"]
         let stateRaw: String = row["state"]
         let orderingKey: Int64 = row["ordering_key"]
-        let providerID: String? = row["provider_id"]
+        // SQL/Row boundary: the column is a raw TEXT String — wrap as ProviderID.
+        let providerID: ProviderID? = (row["provider_id"] as String?).map { ProviderID(rawValue: $0) }
         let attempt: Int = row["attempt"]
         let errorText: String? = row["error"]
         let createdAt: Int64 = row["created_at"]
@@ -527,7 +528,7 @@ public final class QueueStore: @unchecked Sendable {
     /// Transition an item from `.queued` → `.running`, recording the provider
     /// that claimed it and the start time. Throws if the item is not in
     /// `.queued` state.
-    public func markRunning(id: QueueItem.ID, providerID: String) throws {
+    public func markRunning(id: QueueItem.ID, providerID: ProviderID) throws {
         try validateTransition(id: id, allowedFrom: [.queued], to: .running)
         let now = Self.nowMillis()
 
@@ -541,7 +542,8 @@ public final class QueueStore: @unchecked Sendable {
                         finished_at = NULL, error = NULL
                     WHERE id = ?;
                     """,
-                    arguments: [providerID, now, id])
+                    // SQL argument boundary: bind the raw String.
+                    arguments: [providerID.rawValue, now, id])
             }
         }
     }

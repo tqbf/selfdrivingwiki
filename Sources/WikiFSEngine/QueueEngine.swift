@@ -39,7 +39,7 @@ public actor QueueEngine {
 
     /// In-memory mirror of per-provider active (running) counts, used for
     /// capacity checks during dispatch. Derived from `runningItems`.
-    private var providerActiveCounts: [String: Int] = [:]
+    private var providerActiveCounts: [ProviderID: Int] = [:]
 
     /// Wikis with an active (`.running`) ingestion item. Enforces the
     /// per-wiki invariant: at most one ingestion per wiki at a time.
@@ -879,7 +879,7 @@ public actor QueueEngine {
     // MARK: - In-memory state management
 
     /// Increment the active count for a provider.
-    private func incrementProviderCount(_ providerID: String) {
+    private func incrementProviderCount(_ providerID: ProviderID) {
         providerActiveCounts[providerID, default: 0] += 1
     }
 

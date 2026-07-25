@@ -40,7 +40,7 @@ struct ACPChatResumeTests {
         backend: FakeAgentBackend, dummyPath: String, tempDir: URL
     ) -> AgentLauncher {
         let provider = AgentProvider(
-            id: "test-acp", label: "TestACP", command: [dummyPath],
+            id: ProviderID(rawValue: "test-acp"), label: "TestACP", command: [dummyPath],
             env: [:], enabled: true, isDefault: true)
         let launcher = AgentLauncher()
         launcher.resolveBackend = { _, _, _ in backend }
@@ -48,7 +48,7 @@ struct ACPChatResumeTests {
         launcher.resolveSelectedProvider = { provider }
         let config = AgentProvidersConfig(
             providers: [provider],
-            selectedModelIds: [provider.id: "fake-model"])
+            selectedModelIds: [provider.id.rawValue: "fake-model"])
         try? config.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir

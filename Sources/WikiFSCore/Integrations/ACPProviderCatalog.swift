@@ -18,7 +18,7 @@ import Foundation
 /// verified against paseo's `acp-provider-catalog.ts`. Convention: `command[0]`
 /// equals `detectExecutable` (pinned by `ACPProviderDiscoveryTests`).
 public struct KnownACPAgent: Sendable, Equatable, Identifiable {
-    public let id: String                 // stable provider id, e.g. "gemini"
+    public let id: ProviderID            // stable provider id, e.g. "gemini"
     public let label: String              // UI label
     public let summary: String
     public let detectExecutable: String   // PATH binary whose presence = "installed"
@@ -33,7 +33,7 @@ public struct KnownACPAgent: Sendable, Equatable, Identifiable {
     public let autoDetectable: Bool
 
     public init(
-        id: String,
+        id: ProviderID,
         label: String,
         summary: String,
         detectExecutable: String,
@@ -61,7 +61,7 @@ public enum ACPProviderCatalog {
     /// synchronously for non-async contexts).
     public static let fallbackCatalog: [KnownACPAgent] = [
         KnownACPAgent(
-            id: "claude-acp",
+            id: ProviderID(rawValue: "claude-acp"),
             label: "Claude",
             summary: "Claude Code via the official ACP wrapper (bunx @agentclientprotocol/claude-agent-acp).",
             detectExecutable: "bun",
@@ -72,67 +72,67 @@ public enum ACPProviderCatalog {
             // discovers models via the refresh-probe button.
             autoDetectable: false),
         KnownACPAgent(
-            id: "gemini",
+            id: ProviderID(rawValue: "gemini"),
             label: "Gemini CLI",
             summary: "Google's official CLI for Gemini over ACP.",
             detectExecutable: "gemini",
             command: ["gemini", "--acp"]),
         KnownACPAgent(
-            id: "hermes",
+            id: ProviderID(rawValue: "hermes"),
             label: "Hermes",
             summary: "Nous Research self-improving AI agent over ACP.",
             detectExecutable: "hermes",
             command: ["hermes", "acp"]),
         KnownACPAgent(
-            id: "copilot",
+            id: ProviderID(rawValue: "copilot"),
             label: "GitHub Copilot",
             summary: "GitHub Copilot's coding agent over ACP.",
             detectExecutable: "copilot",
             command: ["copilot", "--acp"]),
         KnownACPAgent(
-            id: "kimi",
+            id: ProviderID(rawValue: "kimi"),
             label: "Kimi Code CLI",
             summary: "Moonshot AI's open-source terminal coding agent over ACP.",
             detectExecutable: "kimi",
             command: ["kimi", "acp"]),
         KnownACPAgent(
-            id: "cursor",
+            id: ProviderID(rawValue: "cursor"),
             label: "Cursor",
             summary: "Cursor's coding agent over ACP.",
             detectExecutable: "cursor-agent",
             command: ["cursor-agent", "acp"]),
         KnownACPAgent(
-            id: "kiro",
+            id: ProviderID(rawValue: "kiro"),
             label: "Kiro CLI",
             summary: "Amazon's AI coding agent with native ACP support.",
             detectExecutable: "kiro-cli",
             command: ["kiro-cli", "acp"]),
         KnownACPAgent(
-            id: "goose",
+            id: ProviderID(rawValue: "goose"),
             label: "Goose",
             summary: "A local, extensible, open source AI agent from Block.",
             detectExecutable: "goose",
             command: ["goose", "acp"]),
         KnownACPAgent(
-            id: "grok",
+            id: ProviderID(rawValue: "grok"),
             label: "Grok",
             summary: "xAI's Grok Build agentic coding CLI over ACP.",
             detectExecutable: "grok",
             command: ["grok", "agent", "stdio"]),
         KnownACPAgent(
-            id: "codewhale",
+            id: ProviderID(rawValue: "codewhale"),
             label: "CodeWhale",
             summary: "Terminal coding agent for DeepSeek V4 and open models.",
             detectExecutable: "codewhale",
             command: ["codewhale", "serve", "--acp"]),
         KnownACPAgent(
-            id: "kilo",
+            id: ProviderID(rawValue: "kilo"),
             label: "Kilo",
             summary: "The open source coding agent over ACP.",
             detectExecutable: "kilo",
             command: ["kilo", "acp"]),
         KnownACPAgent(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             summary: "Open-source terminal AI coding agent with multi-provider support.",
             detectExecutable: "opencode",

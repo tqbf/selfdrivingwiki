@@ -66,7 +66,7 @@ import ACPModel
     /// argv becomes `acpAgentArgs` (joined; the key goes through the Keychain
     /// store, tested separately).
     @Test func providerHintsFromResolvedCommand() {
-        let provider = AgentProvider(id: "claude-acp", label: "Claude")
+        let provider = AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude")
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/npx", "--yes", "@agentclientprotocol/claude-agent-acp"],
@@ -78,7 +78,7 @@ import ACPModel
     /// An empty resolved command yields an empty dict (→ `ACPBackend` throws
     /// `noAgentConfigured`).
     @Test func providerHintsEmptyWhenUnconfigured() {
-        let provider = AgentProvider(id: "x", label: "X")
+        let provider = AgentProvider(id: ProviderID(rawValue: "x"), label: "X")
         let hints = AgentBackendFactory.providerHints(
             provider: provider, resolvedCommand: [], apiKey: nil)
         #expect(hints.isEmpty)
@@ -87,7 +87,7 @@ import ACPModel
     /// Only the executable (no args) → `acpAgentPath` + `acpProviderId`
     /// (the provider id is always threaded, #727).
     @Test func providerHintsPathOnly() {
-        let provider = AgentProvider(id: "x", label: "X")
+        let provider = AgentProvider(id: ProviderID(rawValue: "x"), label: "X")
         let hints = AgentBackendFactory.providerHints(
             provider: provider, resolvedCommand: ["/bin/agent"], apiKey: nil)
         #expect(hints.count == 2)

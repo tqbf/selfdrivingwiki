@@ -47,7 +47,7 @@ struct AddProviderSheet: View {
     let onAddNeedsEditor: (AgentProvider) -> Void
 
     init(
-        existingIDs: Set<String>,
+        existingIDs: Set<ProviderID>,
         onAdd: @escaping (AgentProvider) -> Void,
         onAddNeedsEditor: @escaping (AgentProvider) -> Void
     ) {
@@ -364,9 +364,9 @@ final class AddProviderModel {
     /// dedupe against the catalog (rows in `existingIDs` show "✓ Added"
     /// instead of an Add button). Immutable for the sheet's lifetime — the
     /// parent passes a fresh snapshot at construction.
-    let existingIDs: Set<String>
+    let existingIDs: Set<ProviderID>
 
-    init(existingIDs: Set<String>) {
+    init(existingIDs: Set<ProviderID>) {
         self.existingIDs = existingIDs
     }
 
@@ -397,14 +397,14 @@ final class AddProviderModel {
     /// `custom` / `custom-2` / `custom-3` … — the existing collision-loop
     /// carried over from the old `addCustom()` so copied/pasted config IDs
     /// don't clash with the first custom provider a user adds.
-    func freshCustomID() -> String {
+    func freshCustomID() -> ProviderID {
         var id = "custom"
         var suffix = 1
-        while existingIDs.contains(id) {
+        while existingIDs.contains(ProviderID(rawValue: id)) {
             suffix += 1
             id = "custom-\(suffix)"
         }
-        return id
+        return ProviderID(rawValue: id)
     }
 
     private func matchesQuery(_ agent: KnownACPAgent) -> Bool {

@@ -40,7 +40,7 @@ struct ModelsConfigRecordTests {
             chatULID: "01HXY8ATQRTESTCHAT000",
             startedAt: startedAt,
             operationKind: "ingest",
-            providerId: "claude",
+            providerId: ProviderID(rawValue: "claude"),
             providerLabel: "Claude",
             selectedModelId: "claude-sonnet-4-5",
             thinkingEffort: thinking,
@@ -50,7 +50,7 @@ struct ModelsConfigRecordTests {
         #expect(record.schemaVersion == 1)
         #expect(record.chatULID == "01HXY8ATQRTESTCHAT000")
         #expect(record.operationKind == "ingest")
-        #expect(record.provider.id == "claude")
+        #expect(record.provider.id == ProviderID(rawValue: "claude"))
         #expect(record.provider.label == "Claude")
         #expect(record.selectedModelId == "claude-sonnet-4-5")
         #expect(record.thinkingEffort?.configId == "thought_level")
@@ -69,7 +69,7 @@ struct ModelsConfigRecordTests {
             chatULID: nil,
             startedAt: Date(),
             operationKind: "query",
-            providerId: "glm",
+            providerId: ProviderID(rawValue: "glm"),
             providerLabel: nil,
             selectedModelId: "",
             thinkingEffort: nil,
@@ -93,7 +93,7 @@ struct ModelsConfigRecordTests {
             chatULID: "01HTESTCHAT",
             startedAt: Date(timeIntervalSince1970: 1_753_000_000),
             operationKind: "ingest",
-            providerId: "claude",
+            providerId: ProviderID(rawValue: "claude"),
             providerLabel: "Claude",
             selectedModelId: "claude-sonnet-4-5",
             thinkingEffort: thinking,
@@ -112,7 +112,7 @@ struct ModelsConfigRecordTests {
         #expect(decoded.schemaVersion == 1)
         #expect(decoded.chatULID == "01HTESTCHAT")
         #expect(decoded.operationKind == "ingest")
-        #expect(decoded.provider == ModelsConfigRecord.ProviderInfo(id: "claude", label: "Claude"))
+        #expect(decoded.provider == ModelsConfigRecord.ProviderInfo(id: ProviderID(rawValue: "claude"), label: "Claude"))
         #expect(decoded.selectedModelId == "claude-sonnet-4-5")
         #expect(decoded.thinkingEffort?.configId == "thought_level")
         #expect(decoded.thinkingEffort?.currentValue == "high")
@@ -133,7 +133,7 @@ struct ModelsConfigRecordTests {
             chatULID: nil,
             startedAt: Date(),
             operationKind: "lint",
-            providerId: "glm",
+            providerId: ProviderID(rawValue: "glm"),
             providerLabel: nil,
             selectedModelId: nil,
             thinkingEffort: nil,
@@ -152,7 +152,7 @@ struct ModelsConfigRecordTests {
             chatULID: "C",
             startedAt: Date(timeIntervalSince1970: 1_753_000_000),
             operationKind: "ingest",
-            providerId: "p",
+            providerId: ProviderID(rawValue: "p"),
             providerLabel: "P",
             selectedModelId: "m",
             thinkingEffort: nil,
@@ -212,7 +212,7 @@ struct ModelsConfigRecordTests {
         #expect(decoded.phases[1].selectedModelId == "sonnet-4")
         // Top-level triple still present (the default applying to every phase
         // absent an override).
-        #expect(decoded.provider.id == "claude")
+        #expect(decoded.provider.id == ProviderID(rawValue: "claude"))
         // `selectedModelId` was absent at the top level here → nil (the agent
         // default applies; per-phase entries override).
         #expect(decoded.selectedModelId == nil)

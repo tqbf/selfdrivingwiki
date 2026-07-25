@@ -17,9 +17,10 @@ import Foundation
 /// always run via ACP.
 public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
 
-    /// Stable provider id. ACP providers use their catalog id (`"gemini"`,
-    /// `"hermes"`, …) or a user-chosen id.
-    public var id: String
+    /// Stable provider id — a backend name (e.g. `"claude-acp"`, `"gemini"`),
+    /// or a user-chosen id. `ProviderID` (not a bare `String`) so a typo cannot
+    /// silently select the wrong backend or collide with another id space.
+    public var id: ProviderID
 
     /// UI label (e.g. "Claude", "Gemini CLI").
     public var label: String
@@ -42,7 +43,7 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
     public var isDefault: Bool
 
     public init(
-        id: String,
+        id: ProviderID,
         label: String,
         command: [String]? = nil,
         env: [String: String] = [:],
@@ -66,7 +67,7 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
     /// to it when nothing is configured — a defensive safety net for a
     /// hand-edited/corrupt `agent-providers.json`.
     public static let claudeAcpDefault = AgentProvider(
-        id: "claude-acp",
+        id: ProviderID(rawValue: "claude-acp"),
         label: "Claude",
         command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
         env: [:],

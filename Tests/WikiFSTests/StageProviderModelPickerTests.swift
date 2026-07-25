@@ -18,15 +18,15 @@ struct StageProviderModelPickerTests {
         AgentProvidersConfig(
             providers: [
                 AgentProvider(
-                    id: "alpha", label: "Alpha",
+                    id: ProviderID(rawValue: "alpha"), label: "Alpha",
                     command: ["alpha", "acp"], env: [:],
                     enabled: true, isDefault: true),
                 AgentProvider(
-                    id: "beta", label: "Beta",
+                    id: ProviderID(rawValue: "beta"), label: "Beta",
                     command: ["beta", "acp"], env: [:],
                     enabled: true, isDefault: false),
                 AgentProvider(
-                    id: "gamma", label: "Gamma",
+                    id: ProviderID(rawValue: "gamma"), label: "Gamma",
                     command: ["gamma", "acp"], env: [:],
                     enabled: false, isDefault: false),
             ],
@@ -51,22 +51,22 @@ struct StageProviderModelPickerTests {
         let config = fixture
         // No pin → the global default (alpha).
         #expect(config.provider(forStage: "chat") == config.providers[0])
-        #expect(config.provider(forStage: "lint").id == "alpha")
-        #expect(config.provider(forStage: "planner").id == "alpha")
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "alpha"))
+        #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "alpha"))
     }
 
     @Test func providerForStageWithMissingPinReturnsGlobalDefault() {
         // A stage with NO entry at all behaves like the "" sentinel.
         let config = fixture
         #expect(config.stageProviderIds["chat"] == nil)
-        #expect(config.provider(forStage: "chat").id == "alpha")
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "alpha"))
     }
 
     // MARK: - Provider resolution: enabled pin → that provider
 
     @Test func providerForStageWithEnabledPinReturnsPinned() {
         let config = fixture.settingStageProvider("beta", forStage: "chat")
-        #expect(config.provider(forStage: "chat").id == "beta")
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "beta"))
     }
 
     // MARK: - Provider resolution: disabled pin → fall back to default
@@ -76,7 +76,7 @@ struct StageProviderModelPickerTests {
         // (the launcher never selects a disabled provider). This is the
         // critical guard against routing to a provider that can't spawn.
         let config = fixture.settingStageProvider("gamma", forStage: "lint")
-        #expect(config.provider(forStage: "lint").id == "alpha")
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "alpha"))
     }
 
     // MARK: - Model resolution: "" sentinel → provider's selectedModelId
@@ -107,7 +107,7 @@ struct StageProviderModelPickerTests {
         // A provider with no selectedModelId and no stage override → nil (the
         // agent's default model). Mirrors the legacy "no selection" behavior.
         let config = AgentProvidersConfig(
-            providers: [AgentProvider(id: "p", label: "P", command: ["p"], enabled: true, isDefault: true)])
+            providers: [AgentProvider(id: ProviderID(rawValue: "p"), label: "P", command: ["p"], enabled: true, isDefault: true)])
         #expect(config.modelId(forStage: "chat") == nil)
     }
 
@@ -128,8 +128,8 @@ struct StageProviderModelPickerTests {
         let config = fixture
             .settingStageProvider("beta", forStage: "chat")
             .settingStageProvider("beta", forStage: "planner")
-        #expect(config.provider(forStage: "chat").id == "beta")
-        #expect(config.provider(forStage: "lint").id == "alpha")
-        #expect(config.provider(forStage: "planner").id == "beta")
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "beta"))
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "alpha"))
+        #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "beta"))
     }
 }

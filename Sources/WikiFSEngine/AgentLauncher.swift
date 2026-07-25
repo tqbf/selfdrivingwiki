@@ -376,7 +376,7 @@ public final class AgentLauncher {
     /// next `resolveSelectedProvider()` call reads this, so the next chat
     /// session uses the chosen provider with no launcher change.
     @discardableResult
-    public func setDefaultProvider(id: String) -> AgentProvidersConfig {
+    public func setDefaultProvider(id: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingDefault(id: id)
         do {
@@ -396,17 +396,17 @@ public final class AgentLauncher {
     /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
     /// the model picker has the agent's advertised list on the next read.
     /// `@MainActor`; no return — the picker reads the cache next load.
-    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
+    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: ProviderID) {
         guard !models.isEmpty else { return }
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
-        DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save")
+        DebugLog.store("cacheDiscoveredModels: provider=\(providerId.rawValue) count=\(models.count) → save")
         do {
             try updated.save(to: dir)
         } catch {
             // #475/#492: the cached model list silently disappears on next launch
             // if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId)): \(error)")
+            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId.rawValue)): \(error)")
         }
     }
 
@@ -414,10 +414,10 @@ public final class AgentLauncher {
     /// the new config so the composer picker can update its bound state. A
     /// nil/empty `modelId` clears the selection ("use the agent's default").
     @discardableResult
-    public func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+    public func setSelectedModel(_ modelId: String?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
-        DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save")
+        DebugLog.store("setSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId ?? "nil") → save")
         do {
             try updated.save(to: dir)
         } catch {
@@ -457,7 +457,7 @@ public final class AgentLauncher {
     /// The user's persisted model selection for `providerId` (nil = "use the
     /// agent's default"). Read at spawn time so `ACPBackend.start` can call
     /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
-    public func selectedModelId(forProvider providerId: String) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -466,7 +466,7 @@ public final class AgentLauncher {
     /// display-only preference (favorites sort to the top of the picker); no
     /// effect on which model actually launches.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
@@ -474,7 +474,7 @@ public final class AgentLauncher {
         } catch {
             // #475/#492: the favorite toggle silently reverts if this write
             // throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
         }
         return updated
     }
@@ -1290,7 +1290,7 @@ public final class AgentLauncher {
         runningKind = operation.kind
         lastActivityAt = now
         runCommitedAt = now
-        runProviderLabel = provider.id
+        runProviderLabel = provider.id.rawValue
         openLogFiles(in: scratch)
         // Write the resolved provider/model/thinking snapshot to
         // `<scratch>/models.json` ONCE at ingestion start — a sibling of
@@ -1824,7 +1824,7 @@ public final class AgentLauncher {
                     wikiID: wikiID,
                     phaseName: "executor[\(sourceFile)]"
                 ) {
-                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted().first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
+                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted(by: { $0.rawValue < $1.rawValue }).first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
                     await capturePhaseUsage(backend: backend, session: session, providerLabel: execProvider.label)
                     if let acp = backend as? ACPBackend {
                         await acp.closeSession(session)
@@ -2271,7 +2271,7 @@ public final class AgentLauncher {
             case .quotaExhausted(let signal):
                 // Cancel the failed backend BEFORE re-entering the loop.
                 if !isPlannerBackend || provider.id != quotaFallback.plannerProviderId {
-                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: cancelling failed backend for \(signal.providerId)")
+                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: cancelling failed backend for \(signal.providerId.rawValue)")
                     await backend.cancel(SessionHandle(id: ""))
                 }
                 quotaFallback.markExhausted(signal.providerId,
@@ -2448,7 +2448,8 @@ public final class AgentLauncher {
             // (rare — quota usually surfaces at sendPrompt time, but some
             // agents reject at auth).
             if let signal = ProviderQuotaDetector.detect(
-                providerId: profile.providerHints[HintKey.acpProviderId.rawValue] ?? "unknown",
+                // Hint-dict boundary: providerHints is [String: String].
+                providerId: profile.providerHints[HintKey.acpProviderId.rawValue].map { ProviderID(rawValue: $0) } ?? ProviderID(rawValue: "unknown"),
                 error: error
             ) {
                 return .quotaExhausted(signal)
@@ -2727,7 +2728,7 @@ public final class AgentLauncher {
                 return nil
             }
         }
-        return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id))
+        return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id.rawValue))
     }
 
     /// Warning threshold for the "still working" check-in. When the agent has
@@ -2997,7 +2998,7 @@ public final class AgentLauncher {
         runningKind = operation.kind
         lastActivityAt = now
         runCommitedAt = now
-        runProviderLabel = provider.id
+        runProviderLabel = provider.id.rawValue
         openLogFiles(in: scratch)
         // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).

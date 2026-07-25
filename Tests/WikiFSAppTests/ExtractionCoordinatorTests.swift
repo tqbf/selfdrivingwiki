@@ -164,7 +164,7 @@ struct ExtractionCoordinatorTests {
 
         // Seed agent-providers.json so the provider exists + is enabled.
         let providersConfig = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["/nonexistent/claude"], enabled: true, isDefault: true)
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["/nonexistent/claude"], enabled: true, isDefault: true)
         ])
         try providersConfig.save(to: dir)
 

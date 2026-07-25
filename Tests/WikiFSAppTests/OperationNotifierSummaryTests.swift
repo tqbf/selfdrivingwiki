@@ -26,7 +26,7 @@ import WikiFSCore
                 lintPageIDs: lintPageIDs),
             state: .completed,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 0,
             error: nil,
             createdAt: 1000,

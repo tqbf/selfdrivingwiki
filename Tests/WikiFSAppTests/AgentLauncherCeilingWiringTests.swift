@@ -52,7 +52,7 @@ struct AgentLauncherCeilingWiringTests {
     /// `selectedModelId` is pre-seeded in the test config so the chat path's
     /// `SpawnModelGuard.validate` (which fires before `resolveBackend`) passes.
     private let noCommandProvider = AgentProvider(
-        id: "fake-no-cmd",
+        id: ProviderID(rawValue: "fake-no-cmd"),
         label: "FakeNoCommand",
         command: nil,
         env: [:],
@@ -75,7 +75,7 @@ struct AgentLauncherCeilingWiringTests {
         launcher.resolveSelectedProvider = { noCommandProvider }
         let config = AgentProvidersConfig(
             providers: [noCommandProvider],
-            selectedModelIds: [noCommandProvider.id: "fake-model"])
+            selectedModelIds: [noCommandProvider.id.rawValue: "fake-model"])
         do {
             try config.save(to: tempDir)
         } catch {

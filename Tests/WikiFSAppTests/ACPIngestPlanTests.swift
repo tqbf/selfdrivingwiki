@@ -246,7 +246,7 @@ import ACPModel
 
     @Test func testProviderHintsIncludesProviderEnv() {
         let provider = AgentProvider(
-            id: "hermes", label: "Hermes", command: ["hermes", "acp"],
+            id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"],
             env: ["ZAI_API_KEY": "secretish", "HERMES_MODE": "fast"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
@@ -263,7 +263,7 @@ import ACPModel
     /// construction (post-#604: planner/executor/finalizer all share this one
     /// resolution at the top of `runACPIngestPlannerExecutors`).
     @Test func testProviderHintsThreadsSelectedModelId() {
-        let provider = AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode", command: ["opencode", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/opencode", "acp"],
@@ -432,7 +432,7 @@ struct ACPIngestCollapsedRoutingTests {
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = {
             AgentProvider(
-                id: "fake-acp",
+                id: ProviderID(rawValue: "fake-acp"),
                 label: "Fake",
                 command: ["/usr/bin/true"],
                 env: [:],
@@ -442,7 +442,7 @@ struct ACPIngestCollapsedRoutingTests {
         }
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "fake-acp", label: "Fake",
+                AgentProvider(id: ProviderID(rawValue: "fake-acp"), label: "Fake",
                               command: ["/usr/bin/true"], enabled: true, isDefault: true)
             ],
             selectedModelIds: ["fake-acp": "fake-model"])

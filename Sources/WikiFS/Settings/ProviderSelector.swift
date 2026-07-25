@@ -107,7 +107,7 @@ struct ProviderSelector: View {
     /// override (`selectRow`) — it no longer touches the global default.
     private var current: AgentProvider {
         if let overrideProviderId = chatModelOverride?.providerId,
-           let p = config.provider(id: overrideProviderId), p.enabled {
+           let p = config.provider(id: ProviderID(rawValue: overrideProviderId)), p.enabled {
             return p
         }
         return config.provider(forStage: "chat")
@@ -313,7 +313,7 @@ struct ProviderSelector: View {
                     modelLabel: "Default",
                     modelDescription: nil,
                     isFavorite: false,
-                    id: "\(provider.id):default")
+                    id: "\(provider.id.rawValue):default")
             ]
             for model in models {
                 rows.append(SelectorRow(
@@ -322,7 +322,7 @@ struct ProviderSelector: View {
                     modelLabel: model.displayLabel,
                     modelDescription: model.description,
                     isFavorite: config.isFavoriteModel(model.modelId, forProvider: provider.id),
-                    id: "\(provider.id):\(model.modelId)"))
+                    id: "\(provider.id.rawValue):\(model.modelId)"))
             }
             return rows
         }
@@ -350,17 +350,17 @@ struct ProviderSelector: View {
     /// provider's global `selectedModelId` — so a chat pinned to a model the
     /// global default doesn't use still shows the right checkmark.
     private var selectedRowID: String? {
-        if let override = chatModelOverride, override.providerId == current.id {
+        if let override = chatModelOverride, override.providerId == current.id.rawValue {
             if let modelId = override.modelId {
-                return "\(current.id):\(modelId)"
+                return "\(current.id.rawValue):\(modelId)"
             }
-            return "\(current.id):default"
+            return "\(current.id.rawValue):default"
         }
         let selectedModel = config.selectedModelId(forProvider: current.id)
         if let selectedModel {
-            return "\(current.id):\(selectedModel)"
+            return "\(current.id.rawValue):\(selectedModel)"
         }
-        return "\(current.id):default"
+        return "\(current.id.rawValue):default"
     }
 
     // MARK: - Trigger
@@ -403,7 +403,7 @@ struct ProviderSelector: View {
     /// model when one is active, else the provider's global selection (via
     /// `modelSegment(for:)`), else "default".
     private var currentModelSegment: String {
-        if let override = chatModelOverride, override.providerId == current.id {
+        if let override = chatModelOverride, override.providerId == current.id.rawValue {
             guard let modelId = override.modelId else { return "default" }
             if let cached = config.cachedModels(forProvider: current.id)
                 .first(where: { $0.modelId == modelId }) {
@@ -446,14 +446,14 @@ struct ProviderSelector: View {
         // Split "providerId:modelId" (or "providerId:default"). The provider id
         // never contains a colon, so a first-split is safe.
         let parts = rowID.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2, let provider = config.provider(id: String(parts[0])) else { return }
+        guard parts.count == 2, let provider = config.provider(id: ProviderID(rawValue: String(parts[0]))) else { return }
         let modelId: String? = parts[1] == "default" ? nil : String(parts[1])
-        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
+        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id.rawValue) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
         switch remoteSession.chatID {
         case .draft:
-            remoteSession.pendingModelOverride = (provider.id, modelId)
+            remoteSession.pendingModelOverride = (provider.id.rawValue, modelId)
         case .chat(let pageID):
-            store.updateChatModelOverride(id: pageID, providerId: provider.id, modelId: modelId)
+            store.updateChatModelOverride(id: pageID, providerId: provider.id.rawValue, modelId: modelId)
         }
         isPresented = false
         searchText = ""

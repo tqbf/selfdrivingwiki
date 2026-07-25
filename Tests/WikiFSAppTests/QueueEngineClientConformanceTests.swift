@@ -128,7 +128,7 @@ struct QueueEngineClientConformanceTests {
 
 /// A no-op factory for test engines — never dispatches workers.
 private struct NoopWorkerFactory: QueueWorkerFactory {
-    func providerID(for item: QueueItem) async -> String? { nil }
+    func providerID(for item: QueueItem) async -> ProviderID? { nil }
     func worker(for item: QueueItem) async throws -> any QueueWorker {
         throw QueueIngestionError.noSources
     }

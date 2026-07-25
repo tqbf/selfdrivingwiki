@@ -255,7 +255,7 @@ struct QueueTranscriptionTests {
 
         let item = try store.getItem(id)
         // When dispatched, the providerID should be "transcript".
-        #expect(item?.providerID == "transcript")
+        #expect(item?.providerID == ProviderID(rawValue: "transcript"))
         store.close()
     }
 

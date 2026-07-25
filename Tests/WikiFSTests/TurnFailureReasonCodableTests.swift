@@ -11,7 +11,7 @@ struct TurnFailureReasonCodableTests {
     @Test("quotaExhausted with resetTime round-trips")
     func testQuotaExhaustedRoundTrip() throws {
         let date = Date(timeIntervalSince1970: 1753000000)
-        let reason = TurnFailureReason.quotaExhausted(provider: "claude-acp", resetTime: date)
+        let reason = TurnFailureReason.quotaExhausted(provider: ProviderID(rawValue: "claude-acp"), resetTime: date)
 
         let encoder = JSONEncoder()
         let data = try encoder.encode(reason)
@@ -23,7 +23,7 @@ struct TurnFailureReasonCodableTests {
 
     @Test("quotaExhausted with nil resetTime round-trips")
     func testQuotaExhaustedNilResetTime() throws {
-        let reason = TurnFailureReason.quotaExhausted(provider: "glm-acp", resetTime: nil)
+        let reason = TurnFailureReason.quotaExhausted(provider: ProviderID(rawValue: "glm-acp"), resetTime: nil)
 
         let encoder = JSONEncoder()
         let data = try encoder.encode(reason)
@@ -53,12 +53,12 @@ struct TurnFailureReasonCodableTests {
     @Test("Description and label render correctly")
     func testDescriptionAndLabel() {
         let date = Date(timeIntervalSince1970: 1753000000)
-        let reason = TurnFailureReason.quotaExhausted(provider: "claude-acp", resetTime: date)
+        let reason = TurnFailureReason.quotaExhausted(provider: ProviderID(rawValue: "claude-acp"), resetTime: date)
         #expect(reason.label == "Provider quota exhausted.")
         #expect(reason.description.contains("claude-acp"))
         #expect(reason.description.contains("quota exhausted"))
 
-        let noReset = TurnFailureReason.quotaExhausted(provider: "glm-acp", resetTime: nil)
+        let noReset = TurnFailureReason.quotaExhausted(provider: ProviderID(rawValue: "glm-acp"), resetTime: nil)
         #expect(noReset.description.contains("glm-acp"))
         #expect(!noReset.description.contains("until"))
     }

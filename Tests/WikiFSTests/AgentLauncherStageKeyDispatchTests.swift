@@ -53,40 +53,40 @@ struct AgentLauncherStageKeyDispatchTests {
         // ingest) resolves to the global default, NOT the lint pin.
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "def", label: "Def", command: ["d"], enabled: true, isDefault: true),
-                AgentProvider(id: "linter", label: "Linter", command: ["l"], enabled: true, isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
             stageProviderIds: ["lint": "linter"])
         let ingestKey = AgentLauncher.stageKey(for: .ingest(sources: [emptySource], stateMarkdown: emptyState))
         #expect(ingestKey == "planner")
         // Ingest's resolved provider is the default (def), NOT the linter.
-        #expect(config.provider(forStage: ingestKey).id == "def")
+        #expect(config.provider(forStage: ingestKey).id == ProviderID(rawValue: "def"))
     }
 
     @Test func queryDoesNotRouteToLintStage() {
         // A one-shot query must NOT pick up the lint stage's pinned provider.
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "def", label: "Def", command: ["d"], enabled: true, isDefault: true),
-                AgentProvider(id: "linter", label: "Linter", command: ["l"], enabled: true, isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
             stageProviderIds: ["lint": "linter"])
         let queryKey = AgentLauncher.stageKey(for: .query(question: "Q", stateMarkdown: emptyState))
         #expect(queryKey == "chat")
-        #expect(config.provider(forStage: queryKey).id == "def")
+        #expect(config.provider(forStage: queryKey).id == ProviderID(rawValue: "def"))
     }
 
     @Test func lintRoutesToLintStage() {
         // Lint MUST use the lint stage's pinned provider when set.
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "def", label: "Def", command: ["d"], enabled: true, isDefault: true),
-                AgentProvider(id: "linter", label: "Linter", command: ["l"], enabled: true, isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
             stageProviderIds: ["lint": "linter"])
         let lintKey = AgentLauncher.stageKey(for: .lint(stateMarkdown: emptyState))
         #expect(lintKey == "lint")
-        #expect(config.provider(forStage: lintKey).id == "linter")
+        #expect(config.provider(forStage: lintKey).id == ProviderID(rawValue: "linter"))
     }
 }
 #endif // os(macOS)

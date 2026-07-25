@@ -38,7 +38,7 @@ struct QuotaFallbackIntegrationTests {
         launcher.resolveSelectedProvider = { providers.first ?? .claudeAcpDefault }
         let config = AgentProvidersConfig(
             providers: providers,
-            selectedModelIds: Dictionary(uniqueKeysWithValues: providers.map { ($0.id, "fake-model") }))
+            selectedModelIds: Dictionary(uniqueKeysWithValues: providers.map { ($0.id.rawValue, "fake-model") }))
         do {
             try config.save(to: tempDir)
         } catch {
@@ -75,7 +75,7 @@ struct QuotaFallbackIntegrationTests {
         let fake = FakeAgentBackend(behaviors: [
             // Planner: yield a quota turn-failed event, then messageStop.
             FakeSessionBehavior(events: [
-                .turnFailed(reason: .quotaExhausted(provider: "fake-acp", resetTime: nil)),
+                .turnFailed(reason: .quotaExhausted(provider: ProviderID(rawValue: "fake-acp"), resetTime: nil)),
                 .messageStop
             ]),
         ])
@@ -86,7 +86,7 @@ struct QuotaFallbackIntegrationTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let providers = [
-            AgentProvider(id: "fake-acp", label: "Fake",
+            AgentProvider(id: ProviderID(rawValue: "fake-acp"), label: "Fake",
                           command: ["/usr/bin/true"], enabled: true, isDefault: true)
         ]
         let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir, providers: providers)
@@ -120,7 +120,7 @@ struct QuotaFallbackIntegrationTests {
         let fake = FakeAgentBackend(behaviors: [
             // Phase 1 — planner on provider A: quota hit, then messageStop.
             FakeSessionBehavior(events: [
-                .turnFailed(reason: .quotaExhausted(provider: "provider-a", resetTime: nil)),
+                .turnFailed(reason: .quotaExhausted(provider: ProviderID(rawValue: "provider-a"), resetTime: nil)),
                 .messageStop
             ]),
             // Phase 1 — planner on provider B: success (writes plan.json).
@@ -137,9 +137,9 @@ struct QuotaFallbackIntegrationTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let providers = [
-            AgentProvider(id: "provider-a", label: "Provider A",
+            AgentProvider(id: ProviderID(rawValue: "provider-a"), label: "Provider A",
                           command: ["/usr/bin/true"], enabled: true, isDefault: true),
-            AgentProvider(id: "provider-b", label: "Provider B",
+            AgentProvider(id: ProviderID(rawValue: "provider-b"), label: "Provider B",
                           command: ["/usr/bin/true"], enabled: true)
         ]
         let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir, providers: providers)
@@ -170,12 +170,12 @@ struct QuotaFallbackIntegrationTests {
         let fake = FakeAgentBackend(behaviors: [
             // Provider A: quota hit.
             FakeSessionBehavior(events: [
-                .turnFailed(reason: .quotaExhausted(provider: "provider-a", resetTime: nil)),
+                .turnFailed(reason: .quotaExhausted(provider: ProviderID(rawValue: "provider-a"), resetTime: nil)),
                 .messageStop
             ]),
             // Provider B: quota hit.
             FakeSessionBehavior(events: [
-                .turnFailed(reason: .quotaExhausted(provider: "provider-b", resetTime: nil)),
+                .turnFailed(reason: .quotaExhausted(provider: ProviderID(rawValue: "provider-b"), resetTime: nil)),
                 .messageStop
             ]),
         ])
@@ -186,9 +186,9 @@ struct QuotaFallbackIntegrationTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let providers = [
-            AgentProvider(id: "provider-a", label: "Provider A",
+            AgentProvider(id: ProviderID(rawValue: "provider-a"), label: "Provider A",
                           command: ["/usr/bin/true"], enabled: true, isDefault: true),
-            AgentProvider(id: "provider-b", label: "Provider B",
+            AgentProvider(id: ProviderID(rawValue: "provider-b"), label: "Provider B",
                           command: ["/usr/bin/true"], enabled: true)
         ]
         let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir, providers: providers)
@@ -227,7 +227,7 @@ struct QuotaFallbackIntegrationTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let providers = [
-            AgentProvider(id: "fake-acp", label: "Fake",
+            AgentProvider(id: ProviderID(rawValue: "fake-acp"), label: "Fake",
                           command: ["/usr/bin/true"], enabled: true, isDefault: true)
         ]
         let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir, providers: providers)
@@ -252,7 +252,7 @@ struct QuotaFallbackIntegrationTests {
         let fake = FakeAgentBackend(behaviors: [
             FakeSessionBehavior(events: [.messageStop]),
         ])
-        let provider = AgentProvider(id: "test-recording", label: "Test",
+        let provider = AgentProvider(id: ProviderID(rawValue: "test-recording"), label: "Test",
                                      command: ["/usr/bin/true"], enabled: true, isDefault: true)
         let hints = AgentBackendFactory.providerHints(
             provider: provider, resolvedCommand: ["/usr/bin/true"], apiKey: nil)

@@ -35,7 +35,7 @@ struct RunAwaitsTurnTests {
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = {
             AgentProvider(
-                id: "fake",
+                id: ProviderID(rawValue: "fake"),
                 label: "Fake",
                 command: ["/usr/bin/true"],
                 enabled: true,

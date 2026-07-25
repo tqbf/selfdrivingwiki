@@ -203,7 +203,7 @@ struct IngestGateTests {
     /// A no-op worker factory: workers succeed but do nothing. We only care
     /// whether a `.ingestion` queue item is created for the source at all.
     private struct NoopWorkerFactory: QueueWorkerFactory {
-        func providerID(for item: QueueItem) async -> String? { "test-ingest" }
+        func providerID(for item: QueueItem) async -> ProviderID? { ProviderID(rawValue: "test-ingest") }
         func worker(for item: QueueItem) async throws -> any QueueWorker {
             struct W: QueueWorker { func execute(_ item: QueueItem) async throws {} }
             return W()

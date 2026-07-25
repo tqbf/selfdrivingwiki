@@ -92,7 +92,7 @@ struct EnvVarTextTests {
 
     @Test func seedUsesExistingEnvAsAssignments() {
         let provider = AgentProvider(
-            id: "p", label: "P", command: ["x"], env: ["FOO": "bar"],
+            id: ProviderID(rawValue: "p"), label: "P", command: ["x"], env: ["FOO": "bar"],
             enabled: true, isDefault: false)
         let seed = EnvVarText.seed(for: provider)
         #expect(seed == "FOO=bar")
@@ -101,7 +101,7 @@ struct EnvVarTextTests {
 
     @Test func seedForEmptyEnvIsAllCommentsSoItParsesEmpty() {
         let provider = AgentProvider(
-            id: "claude-acp", label: "Claude", command: ["x"], env: [:],
+            id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["x"], env: [:],
             enabled: true, isDefault: false)
         let seed = EnvVarText.seed(for: provider)
         // Every line is a comment/blank → nothing is set until the user edits.

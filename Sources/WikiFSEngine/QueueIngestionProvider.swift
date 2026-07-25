@@ -184,7 +184,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         self.emitPendingPermission = emitPendingPermission
     }
 
-    public func providerID(for item: QueueItem) async -> String? {
+    public func providerID(for item: QueueItem) async -> ProviderID? {
         // The provider ID for ingestion is resolved from the agent provider
         // config. For now, we use a fixed default — the app's provider
         // resolution happens inside runIngestion when launcher.run() resolves
@@ -194,7 +194,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         // TODO: Phase 5+ — resolve the actual provider from config so
         // per-provider limits are enforced. For now, all ingestion items
         // share one "default" provider slot.
-        return "default-ingest"
+        return ProviderID(rawValue: "default-ingest")
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {

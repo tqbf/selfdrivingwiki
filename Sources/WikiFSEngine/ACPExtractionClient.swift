@@ -251,7 +251,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
         // Use the explicitly-configured extraction provider if set + valid;
         // otherwise fall back to the app's selected (default) provider.
         let provider: AgentProvider
-        if let id = acpProviderId, let p = config.provider(id: id), p.enabled {
+        if let id = acpProviderId, let p = config.provider(id: ProviderID(rawValue: id)), p.enabled {
             provider = p
         } else {
             provider = config.selectedProvider()
@@ -261,7 +261,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
             return nil
         }
 
-        let apiKey = acpCredentialStore.apiKey(forProvider: provider.id)
+        let apiKey = acpCredentialStore.apiKey(forProvider: provider.id.rawValue)
         let selectedModelId = config.selectedModelId(forProvider: provider.id)
 
         return ACPExtractionClient(

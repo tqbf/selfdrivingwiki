@@ -17,7 +17,7 @@ public struct CompositeWorkerFactory: QueueWorkerFactory {
         self.factories = factories
     }
 
-    public func providerID(for item: QueueItem) async -> String? {
+    public func providerID(for item: QueueItem) async -> ProviderID? {
         guard let factory = factories[item.queue] else { return nil }
         return await factory.providerID(for: item)
     }
@@ -59,7 +59,7 @@ public protocol QueueWorker: Sendable {
 /// committing to a worker (and without the factory "opening" a connection
 /// before a slot is confirmed free).
 public protocol QueueWorkerFactory: Sendable {
-    func providerID(for item: QueueItem) async -> String?
+    func providerID(for item: QueueItem) async -> ProviderID?
     func worker(for item: QueueItem) async throws -> any QueueWorker
 }
 
@@ -144,7 +144,7 @@ public struct QueueSnapshot: Sendable, Codable {
     /// Per-queue run state (`.running` or `.paused`).
     public var runStates: [QueueKind: QueueRunState]
     /// Per-provider active (running) item counts.
-    public var providerCounts: [String: Int]
+    public var providerCounts: [ProviderID: Int]
     /// Wikis with an active ingestion item (the per-wiki invariant).
     public var activeIngestionWikis: Set<String>
 
@@ -152,7 +152,7 @@ public struct QueueSnapshot: Sendable, Codable {
         activeItems: [QueueItem] = [],
         recentItems: [QueueItem] = [],
         runStates: [QueueKind: QueueRunState] = [:],
-        providerCounts: [String: Int] = [:],
+        providerCounts: [ProviderID: Int] = [:],
         activeIngestionWikis: Set<String> = []
     ) {
         self.activeItems = activeItems
@@ -197,15 +197,16 @@ public struct QueueEngineConfig: Sendable {
     }
 
     /// The concurrency limit for a given provider ID. Missing key → 1.
-    public func ingestionLimit(for providerID: String) -> Int {
-        ingestionLimits[providerID] ?? 1
+    public func ingestionLimit(for providerID: ProviderID) -> Int {
+        ingestionLimits[providerID.rawValue] ?? 1
     }
 
     /// The extraction limit for a given provider/extraction-backend ID.
     /// Local backends (containing "local" or "pdf2md") get `localExtractionLimit`;
     /// everything else gets `remoteExtractionLimit`.
-    public func extractionLimit(for providerID: String) -> Int {
-        let lowered = providerID.lowercased()
+    public func extractionLimit(for providerID: ProviderID) -> Int {
+        // String-op boundary: substring test needs the raw String.
+        let lowered = providerID.rawValue.lowercased()
         if lowered.contains("local") || lowered.contains("pdf2md") {
             return localExtractionLimit
         }

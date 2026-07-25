@@ -25,7 +25,7 @@ struct SpawnModelGuardTests {
     /// is the generic catalog→provider mapper. Construct inline so the test
     /// is independent of any seed.
     private let claude = AgentProvider(
-        id: "claude-acp",
+        id: ProviderID(rawValue: "claude-acp"),
         label: "Claude",
         command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
         env: [:],
@@ -62,7 +62,7 @@ struct SpawnModelGuardTests {
         // The provider label is what the user sees in Settings → Providers, so the
         // error message must use it (not the internal `id`) to be actionable.
         let opencode = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -78,8 +78,8 @@ struct SpawnModelGuardTests {
         // The wording is templated by label only — two providers with the same
         // label produce identical messages, so a snapshot/regression test can
         // pin the format.
-        let a = AgentProvider(id: "x", label: "Hermes", command: ["hermes", "acp"])
-        let b = AgentProvider(id: "y", label: "Hermes", command: ["hermes2", "acp"])
+        let a = AgentProvider(id: ProviderID(rawValue: "x"), label: "Hermes", command: ["hermes", "acp"])
+        let b = AgentProvider(id: ProviderID(rawValue: "y"), label: "Hermes", command: ["hermes2", "acp"])
         #expect(
             SpawnModelGuard.validate(provider: a, modelId: nil)
             == SpawnModelGuard.validate(provider: b, modelId: nil))

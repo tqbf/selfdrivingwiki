@@ -95,7 +95,7 @@ struct QueueStoreTests {
             let item = try store.enqueue(request)
             itemID = item.id
 
-            try store.markRunning(id: itemID, providerID: "provider-A")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "provider-A"))
             try store.markCompleted(id: itemID)
             store.close()
         }
@@ -104,7 +104,7 @@ struct QueueStoreTests {
         let item = try reopened.getItem(itemID)
 
         #expect(item?.state == .completed)
-        #expect(item?.providerID == "provider-A")
+        #expect(item?.providerID == ProviderID(rawValue: "provider-A"))
         #expect(item?.startedAt != nil)
         #expect(item?.finishedAt != nil)
         // finishedAt should be >= startedAt.
@@ -151,13 +151,13 @@ struct QueueStoreTests {
             originalOrderingKey = item.orderingKey
 
             // Move it through a retry cycle to get attempt=2, then mark running.
-            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markFailed(id: itemID, error: "boom")
             try store.retryItem(id: itemID) // attempt becomes 1, state=queued
-            try store.markRunning(id: itemID, providerID: "p2")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p2"))
             try store.markFailed(id: itemID, error: "boom2")
             try store.retryItem(id: itemID) // attempt becomes 2, state=queued
-            try store.markRunning(id: itemID, providerID: "p3")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p3"))
             // Now state is .running with attempt=2 — simulate crash.
             store.close()
         }
@@ -192,7 +192,7 @@ struct QueueStoreTests {
                 queue: .extraction, wikiID: "wiki1", payload: makePayload())
             let item = try store.enqueue(request)
             completedIDs.append(item.id)
-            try store.markRunning(id: item.id, providerID: "p")
+            try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p"))
             try store.markCompleted(id: item.id)
         }
 
@@ -246,7 +246,7 @@ struct QueueStoreTests {
             func completeOne() throws -> QueueItem.ID {
                 let item = try store.enqueue(
                     QueueItemRequest(queue: .ingestion, wikiID: "wiki1", payload: makePayload()))
-                try store.markRunning(id: item.id, providerID: "p")
+                try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p"))
                 try store.markCompleted(id: item.id)
                 return item.id
             }
@@ -347,10 +347,10 @@ struct QueueStoreTests {
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
 
         // queued → running
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         let running = try store.getItem(item.id)
         #expect(running?.state == .running)
-        #expect(running?.providerID == "p1")
+        #expect(running?.providerID == ProviderID(rawValue: "p1"))
         #expect(running?.startedAt != nil)
 
         // running → completed
@@ -361,7 +361,7 @@ struct QueueStoreTests {
 
         // Invalid: completed → running should throw.
         #expect(throws: QueueStoreError.self) {
-            try store.markRunning(id: item.id, providerID: "p2")
+            try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p2"))
         }
 
         // Invalid: completed → failed should throw.
@@ -375,7 +375,7 @@ struct QueueStoreTests {
 
         let item = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: item.id, error: "something broke")
 
         let failed = try store.getItem(item.id)
@@ -401,14 +401,14 @@ struct QueueStoreTests {
         // running → cancelled
         let item2 = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: item2.id, providerID: "p1")
+        try store.markRunning(id: item2.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCancelled(id: item2.id)
         let cancelled2 = try store.getItem(item2.id)
         #expect(cancelled2?.state == .cancelled)
 
         // Invalid: cancelled → running should throw.
         #expect(throws: QueueStoreError.self) {
-            try store.markRunning(id: item1.id, providerID: "p2")
+            try store.markRunning(id: item1.id, providerID: ProviderID(rawValue: "p2"))
         }
     }
 
@@ -422,7 +422,7 @@ struct QueueStoreTests {
         let oldKey = item.orderingKey
         let oldAttempt = item.attempt
 
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: item.id, error: "fail")
         try store.retryItem(id: item.id)
 
@@ -489,19 +489,19 @@ struct QueueStoreTests {
             QueueItemRequest(queue: .ingestion, wikiID: "iw1", payload: makePayload()))
 
         // First lifecycle: queued → running → cancelled.
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCancelled(id: item.id)
         try store.retryItem(id: item.id)
         #expect(try store.getItem(item.id)?.attempt == 1)
 
         // Second lifecycle: queued → running → failed → retry.
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: item.id, error: "boom")
         try store.retryItem(id: item.id)
         #expect(try store.getItem(item.id)?.attempt == 2)
 
         // Third lifecycle: queued → running → cancelled (again) → retry.
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCancelled(id: item.id)
         try store.retryItem(id: item.id)
         #expect(try store.getItem(item.id)?.attempt == 3)
@@ -516,7 +516,7 @@ struct QueueStoreTests {
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
         let oldKey = item.orderingKey
 
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.requeue(id: item.id)
 
         let requeued = try store.getItem(item.id)
@@ -543,16 +543,16 @@ struct QueueStoreTests {
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
         let running = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: running.id, providerID: "p1")
+        try store.markRunning(id: running.id, providerID: ProviderID(rawValue: "p1"))
 
         let completed = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: completed.id, providerID: "p1")
+        try store.markRunning(id: completed.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCompleted(id: completed.id)
 
         let failed = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: failed.id, providerID: "p1")
+        try store.markRunning(id: failed.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: failed.id, error: "err")
 
         let cancelled = try store.enqueue(
@@ -578,7 +578,7 @@ struct QueueStoreTests {
         for i in 0..<3 {
             let item = try store.enqueue(
                 QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-            try store.markRunning(id: item.id, providerID: "p\(i)")
+            try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p\(i)"))
             try store.markCompleted(id: item.id)
             ids.append(item.id)
         }
@@ -608,7 +608,7 @@ struct QueueStoreTests {
     @Test func testTransitionOnMissingItem() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         #expect(throws: QueueStoreError.self) {
-            try store.markRunning(id: "DOESNOTEXIST", providerID: "p1")
+            try store.markRunning(id: "DOESNOTEXIST", providerID: ProviderID(rawValue: "p1"))
         }
     }
 
@@ -643,8 +643,8 @@ struct QueueStoreTests {
         let item3 = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
 
-        try store.markRunning(id: item1.id, providerID: "p1")
-        try store.markRunning(id: item2.id, providerID: "p2")
+        try store.markRunning(id: item1.id, providerID: ProviderID(rawValue: "p1"))
+        try store.markRunning(id: item2.id, providerID: ProviderID(rawValue: "p2"))
         // item3 stays queued.
 
         let count = try store.resetRunningToQueued()
@@ -678,7 +678,7 @@ struct QueueStoreTests {
             let item = try store.enqueue(
                 QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
             itemID = item.id
-            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markCompleted(id: itemID)
             // Write usage + paths as separate upserts, exactly as the engine's
             // emit closures do (usage on `.usage`, paths on `.runPaths`).
@@ -731,7 +731,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let item = try store.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
-        try store.markRunning(id: item.id, providerID: "p1")
+        try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCompleted(id: item.id)
         try store.upsertItemActivity(itemID: item.id, usageJSON: "{}",
                                      logURL: "/tmp/log", debugURL: nil)

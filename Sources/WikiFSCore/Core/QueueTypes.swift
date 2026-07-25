@@ -118,7 +118,7 @@ public struct QueueItem: Codable, Sendable, Identifiable {
     /// Monotonically increasing within a queue kind, spaced by 1000. Determines
     /// processing order; lower keys are picked up first.
     public var orderingKey: Int64
-    public var providerID: String?
+    public var providerID: ProviderID?
     /// Number of times this item has been retried (incremented by `retryItem`).
     public var attempt: Int
     public var error: String?
@@ -136,7 +136,7 @@ public struct QueueItem: Codable, Sendable, Identifiable {
         payload: QueueItemPayload,
         state: QueueItemState,
         orderingKey: Int64,
-        providerID: String? = nil,
+        providerID: ProviderID? = nil,
         attempt: Int,
         error: String? = nil,
         createdAt: Int64,
