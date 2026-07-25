@@ -160,9 +160,6 @@ final class DaemonChatHost: @unchecked Sendable {
                 self?.handleTranscript(
                     chatID: chatIDPage, events: events, wikiID: wikiIDCapture)
             },
-            onSummary: { [weak self] id, summary in
-                self?.handleSummary(chatID: id, summary: summary, wikiID: wikiIDCapture)
-            },
             onMessageSummary: { [weak self] id in
                 self?.summarizePendingMessages(
                     chatID: id, wikiID: wikiIDCapture, launcher: launcher)
@@ -272,9 +269,6 @@ final class DaemonChatHost: @unchecked Sendable {
             onTranscript: { [weak self] events in
                 self?.handleTranscript(
                     chatID: chatIDPage, events: events, wikiID: wikiIDCapture)
-            },
-            onSummary: { [weak self] id, summary in
-                self?.handleSummary(chatID: id, summary: summary, wikiID: wikiIDCapture)
             },
             onMessageSummary: { [weak self] id in
                 self?.summarizePendingMessages(
@@ -515,17 +509,6 @@ final class DaemonChatHost: @unchecked Sendable {
         }
     }
 
-    private func handleSummary(
-        chatID: PageID, summary: String, wikiID: String
-    ) {
-        guard let store = storeResolver(wikiID) else { return }
-        do {
-            try store.updateChatSummary(chatID: chatID, summary: summary)
-        } catch {
-            DebugLog.store("DaemonChatHost: updateChatSummary failed: \(error)")
-        }
-    }
-
     // MARK: - Private: message summarization (RC5)
 
     /// Summarize all unsummarized assistant messages in `chatID` per the
@@ -534,6 +517,10 @@ final class DaemonChatHost: @unchecked Sendable {
     ///
     /// RC5: this is the daemon-native generalization of the app's
     /// `summarizePendingMessages` + `runModelSummarization`.
+    ///
+    /// Also mirrors the FIRST summarizable message's summary into
+    /// `chats.summary` (issue #411) — the sole writer of that column now that
+    /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
         chatID: PageID, wikiID: String, launcher: AgentLauncher
     ) {
@@ -556,6 +543,9 @@ final class DaemonChatHost: @unchecked Sendable {
         }
         guard !pending.isEmpty else { return }
 
+        // The message whose summary doubles as `chats.summary` (issue #411).
+        let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
+
         switch mode {
         case .defaultTruncation:
             for msg in pending {
@@ -566,8 +556,11 @@ final class DaemonChatHost: @unchecked Sendable {
                     try store.updateMessageSummary(
                         chatID: chatID, messageID: msg.id,
                         summary: summary, kind: .defaultTruncation)
+                    if msg.id == chatSummaryMessageID {
+                        try store.updateChatSummary(chatID: chatID, summary: summary)
+                    }
                 } catch {
-                    DebugLog.store("DaemonChatHost: updateMessageSummary failed: \(error)")
+                    DebugLog.store("DaemonChatHost: summary write failed: \(error)")
                 }
             }
         case .model:
@@ -577,7 +570,7 @@ final class DaemonChatHost: @unchecked Sendable {
                 await Self.runModelSummarization(
                     chatID: chatID, pending: pending, config: config,
                     containerDir: containerDir, credentialStore: credentialStore,
-                    store: store)
+                    store: store, chatSummaryMessageID: chatSummaryMessageID)
             }
         }
     }
@@ -588,7 +581,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private static func runModelSummarization(
         chatID: PageID, pending: [ChatMessage], config: AgentProvidersConfig,
         containerDir: URL, credentialStore: any ACPCredentialStore,
-        store: GRDBWikiStore
+        store: GRDBWikiStore, chatSummaryMessageID: PageID?
     ) async {
         guard let profile = MessageSummarizer.resolveProfile(
             config: config, credentialStore: credentialStore) else {
@@ -604,6 +597,11 @@ final class DaemonChatHost: @unchecked Sendable {
                 try store.updateMessageSummary(
                     chatID: chatID, messageID: msg.id,
                     summary: summary, kind: .model)
+                // VERBATIM into the chat row — the model already produced a
+                // one-sentence summary; eliding it would chop the answer.
+                if msg.id == chatSummaryMessageID {
+                    try store.updateChatSummary(chatID: chatID, summary: summary)
+                }
             } catch {
                 DebugLog.store("DaemonChatHost.runModelSummarization: write failed: \(error)")
             }
