@@ -7,8 +7,12 @@ import WikiCtlCore
 /// - **Red** banner when `.disconnected`: "wikid daemon is not running — some
 ///   features may be unavailable." Dismissible with an X button; reappears on
 ///   the next disconnect.
-/// - **Green** banner on recovery (transition to `.connected` after being
-///   disconnected): "wikid daemon reconnected." Auto-dismisses after 3 seconds.
+///
+/// The positive recovery signal (transition to `.connected` after a disconnect)
+/// is NOT shown here — it surfaces as a small transient popover anchored to the
+/// menu-bar status item, via `MenuBarItemController.showTransientHint` (same
+/// treatment as "Ingest queued" / "Lint queued"). This view only owns the
+/// persistent red banner that needs to stay up until dismissed.
 ///
 /// Reads the `DaemonHealthMonitor` from the environment. When `nil` (no monitor
 /// wired), no banner is shown.
@@ -20,16 +24,13 @@ struct DaemonStatusBanner: View {
     /// banner again.
     @State private var hasDismissedDisconnect = false
 
-    /// Whether the green "reconnected" banner is currently showing.
-    @State private var showReconnectedBanner = false
-
     /// Tracks the previous state to detect transitions.
     @State private var previousState: DaemonConnectionState?
 
     var body: some View {
         Group {
-            if let healthMonitor {
-                bannerContent(for: healthMonitor.state)
+            if let healthMonitor, healthMonitor.state == .disconnected, !hasDismissedDisconnect {
+                disconnectedBanner
             }
         }
         .animation(.easeInOut(duration: 0.2), value: healthMonitor?.state)
@@ -38,15 +39,6 @@ struct DaemonStatusBanner: View {
         }
         .onAppear {
             previousState = healthMonitor?.state
-        }
-    }
-
-    @ViewBuilder
-    private func bannerContent(for state: DaemonConnectionState?) -> some View {
-        if state == .disconnected, !hasDismissedDisconnect {
-            disconnectedBanner
-        } else if showReconnectedBanner {
-            reconnectedBanner
         }
     }
 
@@ -74,47 +66,17 @@ struct DaemonStatusBanner: View {
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    private var reconnectedBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.white)
-            Text("wikid daemon reconnected.")
-                .font(.callout)
-                .foregroundStyle(.white)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color.green.opacity(0.9))
-        .transition(.move(edge: .top).combined(with: .opacity))
-    }
-
     /// Handle a state transition. On disconnect, reset the dismiss flag so the
-    /// banner shows. On reconnect (from disconnected), show the green banner
-    /// for 3 seconds.
+    /// banner shows. (The reconnect signal is handled by the menu-bar hint
+    /// popover — see `MenuBarItemController`.)
     private func handleStateChange(to newState: DaemonConnectionState?) {
         guard let newState else { return }
-        let oldState = previousState
         previousState = newState
 
         if newState == .disconnected {
             // New (or recurring) disconnect — reset the dismiss flag so the
             // red banner shows again.
             hasDismissedDisconnect = false
-        }
-
-        if newState == .connected, oldState == .disconnected || oldState == .reconnecting {
-            // Recovery from a disconnected state — show the green banner and
-            // auto-dismiss after 3 seconds.
-            showReconnectedBanner = true
-            Task {
-                // Task.sleep only throws CancellationError — expected, not actionable.
-                // swiftlint:disable:next silent_try_optional
-                try? await Task.sleep(for: .seconds(3))
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showReconnectedBanner = false
-                }
-            }
         }
     }
 }

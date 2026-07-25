@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WikiCtlCore
 import WikiFSCore
 import WikiFSEngine
 
@@ -64,6 +65,12 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private var lastSnapshot: QueueSnapshot = QueueSnapshot()
     private var hintPopover: NSPopover?
     private var hintDismissTask: Task<Void, Never>?
+    /// Previous daemon connection state, used to detect the
+    /// disconnected/reconnecting → `.connected` transition (which fires the
+    /// "wikid daemon reconnected." hint popover). Seeded in `start()` from the
+    /// monitor's current state so the first transition is a real one, not a
+    /// duplicate of the initial state.
+    private var previousDaemonState: DaemonConnectionState?
 
     // MARK: - Init
 
@@ -139,9 +146,12 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         }
 
         // #878: observe daemon health to swap the icon to a warning variant
-        // when the daemon is disconnected.
-        daemonHealthMonitor?.onStateChange = { [weak self] _ in
-            self?.updateIcon()
+        // when the daemon is disconnected, and to surface a small "reconnected"
+        // hint popover (matching the "Ingest queued" / "Lint queued" treatment)
+        // when the daemon recovers from a disconnected state.
+        previousDaemonState = daemonHealthMonitor?.state
+        daemonHealthMonitor?.onStateChange = { [weak self] newState in
+            self?.handleDaemonStateChange(newState)
         }
         // Reflect the initial state immediately.
         if daemonHealthMonitor?.state == .disconnected {
@@ -160,6 +170,26 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
         }
+    }
+
+    // MARK: - Daemon health
+
+    /// Handle a daemon connection state transition: refresh the icon on every
+    /// change, and surface a small "reconnected." hint popover when the daemon
+    /// recovers from a disconnected/reconnecting state. This replaces the old
+    /// full-width green banner (`DaemonStatusBanner` now only owns the red
+    /// disconnected banner) so the positive signal matches the "Ingest queued"
+    /// / "Lint queued" treatment.
+    private func handleDaemonStateChange(_ newState: DaemonConnectionState) {
+        let oldState = previousDaemonState
+        previousDaemonState = newState
+        if newState == .connected, oldState == .disconnected || oldState == .reconnecting {
+            showTransientHint(
+                message: "wikid daemon reconnected.",
+                symbol: "checkmark.circle.fill"
+            )
+        }
+        updateIcon()
     }
 
     // MARK: - Menu

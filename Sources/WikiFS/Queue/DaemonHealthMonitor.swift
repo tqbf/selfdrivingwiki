@@ -8,8 +8,8 @@ import WikiFSCore
 ///
 /// Owns the recurring 30 s health-ping loop, the XPC invalidation/interruption
 /// handlers, and the manual ``restart()`` action. Exposes `@Observable` `state`
-/// that drives the menu-bar icon badge and the in-app disconnected/reconnected
-/// banner.
+/// that drives the menu-bar icon badge, the in-app disconnected banner, and the
+/// "reconnected" hint popover.
 ///
 /// The daemon is an **embedded XPC service** — macOS launches it on demand and
 /// terminates it when the app quits. No LaunchAgent or `launchctl` is involved.
