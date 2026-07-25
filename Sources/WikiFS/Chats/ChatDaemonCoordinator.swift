@@ -219,10 +219,16 @@ public final class ChatDaemonCoordinator {
                 runningChatIDs.remove(chatID)
             }
         } catch {
-            // A rehydrate failure (e.g. the daemon evicted the session) is
-            // non-fatal — the session keeps its last-known state and the
-            // persisted rows remain the source of truth.
-            DebugLog.agent("ChatDaemonCoordinator.rehydrate failed for \(chatID): \(error)")
+            // A rehydrate failure (e.g. the daemon evicted the session, so
+            // `chatSessionState` throws `noSession`) is non-fatal — but the
+            // mirror must actively RELINQUISH its liveness claim, not merely
+            // keep its last-known state. Otherwise a session that never got a
+            // successful hydrate stays flagged live with zero events, and
+            // `ChatDetailView` renders that empty stream instead of the
+            // persisted transcript.
+            session.markNotLive()
+            runningChatIDs.remove(chatID)
+            DebugLog.agent("ChatDaemonCoordinator.rehydrate failed for \(chatID): \(error) — marked not live")
         }
     }
 

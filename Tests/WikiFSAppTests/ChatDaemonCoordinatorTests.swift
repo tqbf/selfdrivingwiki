@@ -229,6 +229,45 @@ struct ChatDaemonCoordinatorTests {
         #expect(coord.session(for: "chat-1").events.isEmpty)
     }
 
+    @Test func rehydrateFailure_clearsLivenessSoPersistedRowsRender() async {
+        // Regression: the daemon throws `noSession` for any chat whose launcher
+        // it has evicted (every chat from a previous app run). If the mirror is
+        // left claiming liveness, `ChatDetailView.isLiveChat` is true with zero
+        // events and the view renders an empty live stream — a chat with a full
+        // persisted transcript showed "Ask a question to start a chat.".
+        let stub = StubChatDaemonCommands(shouldThrow: true)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coord.rehydrate(chatID: "chat-evicted")
+        let session = coord.session(for: "chat-evicted")
+        #expect(session.activeChatID == nil)
+        #expect(session.isInteractiveSession == false)
+        #expect(coord.isChatRunning("chat-evicted") == false)
+    }
+
+    @Test func freshSessionDoesNotClaimLivenessBeforeHydration() async {
+        // A mirror the daemon has never reported on must not pass the
+        // source-of-truth rule: `activeChatID` is daemon-derived, so it stays
+        // nil until `hydrate`/`applyStateUpdate` sets it.
+        let coord = makeCoordinator()
+        #expect(coord.session(for: "chat-new").activeChatID == nil)
+        #expect(coord.session(for: nil).activeChatID == nil)
+    }
+
+    @Test func rehydrateIdleState_leavesSessionNotLive() async {
+        // The daemon still holds the launcher but reports it idle — the mirror
+        // must render persisted rows, not the launcher's in-memory events.
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = ChatSessionState(
+            chatID: "chat-idle", events: [],
+            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
+            preflightError: nil, thinkingOption: nil, usageData: nil,
+            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coord.rehydrate(chatID: "chat-idle")
+        #expect(coord.session(for: "chat-idle").activeChatID == nil)
+        #expect(coord.isChatRunning("chat-idle") == false)
+    }
+
     // MARK: - Helpers
 
     private func makeCoordinator() -> ChatDaemonCoordinator {
