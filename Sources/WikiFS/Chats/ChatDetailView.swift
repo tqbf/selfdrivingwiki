@@ -621,7 +621,7 @@ struct ChatDetailView: View {
             }
             // Inside ContentView the session is always non-nil (a wiki is
             // open), so the provider/model chips are always shown.
-            ProviderSelector(remoteSession: remoteSession)
+            ProviderSelector(remoteSession: remoteSession, store: store)
             ThinkingEffortSelector(remoteSession: remoteSession)
             PermissionModeSelector(rawValue: $permissionModeRaw)
             Spacer(minLength: 0)
@@ -1407,8 +1407,10 @@ struct ChatDetailView: View {
             // path, but the row now lives in the daemon-owned store).
             Task {
                 do {
+                    let override = remoteSession.pendingModelOverride
                     let newChatID = try await coordinator.startChat(
-                        wikiID: session.wikiID, firstMessage: wireMessage)
+                        wikiID: session.wikiID, firstMessage: wireMessage,
+                        providerId: override?.providerId, modelId: override?.modelId)
                     store.retargetActiveTabToChat(chatID: PageID(rawValue: newChatID))
                 } catch {
                     DebugLog.agent("ChatDetailView.startChat failed: \(error)")

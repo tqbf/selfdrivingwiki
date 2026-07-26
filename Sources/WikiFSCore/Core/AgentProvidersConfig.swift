@@ -236,7 +236,15 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `"lint"`. PURE so it is unit-tested without a subprocess. A disabled
     /// pin falls back to the default (the launcher never selects a disabled
     /// provider). See `plans/agent-settings-tabs.md` §3.
-    public func provider(forStage stage: String) -> AgentProvider {
+    /// `chatOverrideProviderId` is the per-chat model override
+    /// (`ChatSummary.modelProviderId`) — when set + enabled, it outranks even
+    /// the stage pin. `nil` (every non-chat call site, and a chat with no
+    /// override) preserves today's stage-pin-then-global-default resolution.
+    public func provider(forStage stage: String, chatOverrideProviderId: String? = nil) -> AgentProvider {
+        if let chatOverrideProviderId, !chatOverrideProviderId.isEmpty,
+           let p = provider(id: chatOverrideProviderId), p.enabled {
+            return p
+        }
         if let pinnedId = stageProviderIds[stage],
            !pinnedId.isEmpty,
            let p = provider(id: pinnedId), p.enabled {
@@ -266,8 +274,22 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `provider(forStage:)` + `modelId(forStage:fallbackProvider:)` — the
     /// launcher's chat/lint/ingest sites call it so both the provider pin and
     /// the model override resolve through one seam.
-    public func modelId(forStage stage: String) -> String? {
-        let p = provider(forStage: stage)
+    /// `chatOverrideProviderId`/`chatOverrideModelId` mirror
+    /// `provider(forStage:chatOverrideProviderId:)`'s override tier: when a
+    /// per-chat provider override is active, the model resolves WITHIN that
+    /// override (the override's own model id, else that provider's
+    /// `selectedModelId`) — the stage's model pin (`ingestStageModelIds`) is
+    /// bypassed, matching "the per-chat pick replaces the stage's resolution
+    /// entirely, not just the provider half of it."
+    public func modelId(
+        forStage stage: String,
+        chatOverrideProviderId: String? = nil, chatOverrideModelId: String? = nil
+    ) -> String? {
+        let p = provider(forStage: stage, chatOverrideProviderId: chatOverrideProviderId)
+        if let chatOverrideProviderId, !chatOverrideProviderId.isEmpty {
+            if let chatOverrideModelId, !chatOverrideModelId.isEmpty { return chatOverrideModelId }
+            return selectedModelId(forProvider: p.id)
+        }
         return modelId(forStage: stage, fallbackProvider: p.id)
     }
 

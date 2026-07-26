@@ -523,6 +523,66 @@ struct AgentProvidersConfigPerStageModelTests {
         let replaced = config.replacingProviders(config.providers)
         #expect(replaced.stageProviderIds["chat"] == "acme")
     }
+
+    // MARK: - Per-chat model override (outranks the stage pin AND the global default)
+
+    @Test func providerForStageChatOverrideOutranksStagePin() {
+        // Chat is pinned to acme, but THIS chat's override picks neuralwatt —
+        // the per-chat tier is the highest priority.
+        let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "neuralwatt").id == "neuralwatt")
+        // Other stages (no override argument passed) are unaffected.
+        #expect(config.provider(forStage: "planner").id == "neuralwatt")
+    }
+
+    @Test func providerForStageChatOverrideOutranksGlobalDefault() {
+        // No stage pin at all — the override still wins over the global default.
+        let config = twoProviderFixture
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == "acme")
+    }
+
+    @Test func providerForStageDisabledChatOverrideFallsBackToStagePin() {
+        // A disabled override provider must not be selectable — falls through
+        // to the stage pin, same as a disabled stage pin falls through to the
+        // global default.
+        var disabled = twoProviderFixture
+        disabled.providers[1].enabled = false  // disable acme
+        let config = disabled.settingStageProvider("neuralwatt", forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == "neuralwatt")
+    }
+
+    @Test func providerForStageEmptyChatOverrideFallsBackNormally() {
+        // Empty string (the "no override" sentinel) behaves exactly like nil.
+        let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "").id == "acme")
+    }
+
+    @Test func modelIdForStageChatOverrideUsesOverrideModelId() {
+        // A chat stage MODEL pin exists, but the per-chat override model wins.
+        let config = twoProviderFixture.settingIngestStageModel("glm-5.2", forStage: "chat")
+        #expect(config.modelId(
+            forStage: "chat",
+            chatOverrideProviderId: "acme", chatOverrideModelId: "acme-1") == "acme-1")
+    }
+
+    @Test func modelIdForStageChatOverrideProviderWithNoModelUsesProviderDefault() {
+        // Override provider set, no override model ("Default" row picked) —
+        // resolves to THAT provider's own selectedModelId, NOT the stage's
+        // model pin (which belongs to a different provider's catalog).
+        let config = twoProviderFixture.settingIngestStageModel("glm-5.2", forStage: "chat")
+        #expect(config.modelId(
+            forStage: "chat",
+            chatOverrideProviderId: "acme", chatOverrideModelId: nil) == "acme-1")
+    }
+
+    @Test func modelIdForStageNoChatOverridePreservesExistingResolution() {
+        // Omitting the override params entirely must not change behavior for
+        // every pre-existing call site.
+        let config = twoProviderFixture
+            .settingStageProvider("acme", forStage: "chat")
+            .settingIngestStageModel("glm-5.2", forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == "glm-5.2")
+    }
 }
 
 /// per-stage-model-selection plan §7: pure-logic tests for the

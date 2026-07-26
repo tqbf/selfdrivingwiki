@@ -635,6 +635,15 @@ public protocol WikiStore: Sendable {
     @discardableResult
     func createChat(kind: ChatKind, title: String) throws -> ChatSummary
 
+    /// `createChat(kind:title:)`, seeding the per-chat model override
+    /// (composer `ProviderSelector` pin) at creation time. `modelProviderId`
+    /// nil = no override (equivalent to the two-arg overload above).
+    @discardableResult
+    func createChat(
+        kind: ChatKind, title: String,
+        modelProviderId: String?, modelId: String?
+    ) throws -> ChatSummary
+
     /// Append the given events as new `chat_messages` rows, in one transaction:
     /// each row gets the next dense `seq` (continuing from the chat's current
     /// max), `role` from `event.chatRole`, `event_json` from encoding `event`,
@@ -670,6 +679,12 @@ public protocol WikiStore: Sendable {
     /// clear (terminal teardown / permanent resume failure). Bumps
     /// `updated_at`.
     func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) throws
+
+    /// Write or clear the per-chat model override (composer `ProviderSelector`
+    /// pin — outranks both the "chat" stage pin and the global default
+    /// provider for THIS chat only). Pass `providerId: nil` to clear. Bumps
+    /// `updated_at`. Throws `.notFound` if no chat has `id`.
+    func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) throws
 
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
     func getChat(id: PageID) throws -> ChatSummary

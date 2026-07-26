@@ -58,7 +58,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 44
+    private static let currentSchemaVersion = 45
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1263,6 +1263,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 44
         }
 
+        // v44→v45: per-chat model override (chat composer picker). Lets the
+        // user pin a provider + model to ONE chat, outranking both the "chat"
+        // stage pin and the global default provider for that chat only.
+        // Nullable: NULL for every existing chat (no override) and for chats
+        // created before this change. Idempotent via the column-existence
+        // guard.
+        if version < 45 {
+            if !(try Self.hasColumn("model_provider_id", on: "chats", in: db)) {
+                try db.execute(sql: "ALTER TABLE chats ADD COLUMN model_provider_id TEXT;")
+            }
+            if !(try Self.hasColumn("model_id", on: "chats", in: db)) {
+                try db.execute(sql: "ALTER TABLE chats ADD COLUMN model_id TEXT;")
+            }
+            try db.execute(sql: "PRAGMA user_version = 45;")
+            version = 45
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1476,14 +1493,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private static func createChatTablesV23(in db: Database) throws {
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id              TEXT PRIMARY KEY,
-            kind            TEXT NOT NULL,
-            title           TEXT NOT NULL,
-            created_at      REAL NOT NULL,
-            updated_at      REAL NOT NULL,
-            summary         TEXT,
-            summary_at      REAL,
-            acp_session_id  TEXT
+            id                 TEXT PRIMARY KEY,
+            kind               TEXT NOT NULL,
+            title              TEXT NOT NULL,
+            created_at         REAL NOT NULL,
+            updated_at         REAL NOT NULL,
+            summary            TEXT,
+            summary_at         REAL,
+            acp_session_id     TEXT,
+            model_provider_id  TEXT,
+            model_id           TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -2512,14 +2531,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // v25: persisted chat history (chats + chat_messages).
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
-            id              TEXT PRIMARY KEY,
-            kind            TEXT NOT NULL,
-            title           TEXT NOT NULL,
-            created_at      REAL NOT NULL,
-            updated_at      REAL NOT NULL,
-            summary         TEXT,
-            summary_at      REAL,
-            acp_session_id  TEXT
+            id                 TEXT PRIMARY KEY,
+            kind               TEXT NOT NULL,
+            title              TEXT NOT NULL,
+            created_at         REAL NOT NULL,
+            updated_at         REAL NOT NULL,
+            summary            TEXT,
+            summary_at         REAL,
+            acp_session_id     TEXT,
+            model_provider_id  TEXT,
+            model_id           TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -6030,21 +6051,30 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: Persisted chats
 
     public func createChat(kind: ChatKind, title: String) throws -> ChatSummary {
+        try createChat(kind: kind, title: title, modelProviderId: nil, modelId: nil)
+    }
+
+    public func createChat(
+        kind: ChatKind, title: String,
+        modelProviderId: String?, modelId: String?
+    ) throws -> ChatSummary {
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
         }) { db in
             let id = PageID(rawValue: ULID.generate())
             let now = Date()
             try db.execute(sql: """
-            INSERT INTO chats (id, kind, title, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO chats (id, kind, title, created_at, updated_at, model_provider_id, model_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
             """, arguments: [
                 id.rawValue, kind.rawValue, title,
-                now.timeIntervalSince1970, now.timeIntervalSince1970
+                now.timeIntervalSince1970, now.timeIntervalSince1970,
+                modelProviderId, modelId
             ])
             return ChatSummary(
                 id: id, kind: kind, title: title,
-                createdAt: now, updatedAt: now, messageCount: 0
+                createdAt: now, updatedAt: now, messageCount: 0,
+                modelProviderId: modelProviderId, modelId: modelId
             )
         }
     }
@@ -6250,7 +6280,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at, c.acp_session_id
+                   c.summary, c.summary_at, c.acp_session_id,
+                   c.model_provider_id, c.model_id
             FROM chats c
             ORDER BY c.updated_at DESC, c.rowid DESC;
             """)
@@ -6376,6 +6407,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Write (or clear) the per-chat model override — the chat composer's
+    /// `ProviderSelector` pinning a provider + model to THIS chat, outranking
+    /// both the "chat" stage pin and the global default provider
+    /// (`AgentProvidersConfig.provider(forStage:chatOverrideProviderId:)`).
+    /// Pass `providerId: nil` to clear the override entirely (both columns
+    /// are written together — a lone `modelId` with no `providerId` is not a
+    /// representable state). Bumps `updated_at`. Routes through
+    /// `mutate(event:_:)` so it emits a `.chat .updated` event, same as
+    /// `updateChatAcpSessionId`.
+    public func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: id.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chats SET model_provider_id = ?, model_id = ?, updated_at = ?
+            WHERE id = ?;
+            """, arguments: [providerId, providerId == nil ? nil : modelId,
+                            Date().timeIntervalSince1970, id.rawValue])
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
+        }
+    }
+
     /// Write the cached one-line summary for a single assistant message
     /// (chat-summary plan §3.5). Routes through `mutate(event:_:)` and emits a
     /// `.chat .updated` event on the chat the message belongs to — the
@@ -6404,7 +6457,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at, c.acp_session_id
+                   c.summary, c.summary_at, c.acp_session_id,
+                   c.model_provider_id, c.model_id
             FROM chats c
             ORDER BY c.id ASC;
             """)
@@ -6736,6 +6790,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         from row: Row, summary: String?, summaryAt: Date?
     ) -> ChatSummary {
         let acpSessionId: String? = row["acp_session_id"]
+        let modelProviderId: String? = row["model_provider_id"]
+        let modelId: String? = row["model_id"]
         return ChatSummary(
             id: PageID(rawValue: row["id"]),
             kind: ChatKind(rawValue: row["kind"]) ?? .edit,
@@ -6745,7 +6801,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             messageCount: row["msg_count"],
             summary: summary,
             summaryAt: summaryAt,
-            acpSessionId: acpSessionId
+            acpSessionId: acpSessionId,
+            modelProviderId: modelProviderId,
+            modelId: modelId
         )
     }
 
@@ -7676,7 +7734,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                       c.summary, c.summary_at, c.acp_session_id
+                       c.summary, c.summary_at, c.acp_session_id,
+                       c.model_provider_id, c.model_id
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]

@@ -181,9 +181,15 @@ public final class ChatDaemonCoordinator {
     // MARK: - Commands (wrap DaemonWorkloadClient)
 
     /// Start a new chat on the daemon. Returns the assigned chat ULID.
+    /// `providerId`/`modelId` thread a `.draft`-session `ProviderSelector` pick
+    /// (there's no `chats` row to write it to before the chat exists).
     @discardableResult
-    public func startChat(wikiID: String, firstMessage: String) async throws -> String {
-        try await client.startChat(ChatStartRequest(wikiID: wikiID, firstMessage: firstMessage))
+    public func startChat(
+        wikiID: String, firstMessage: String,
+        providerId: String? = nil, modelId: String? = nil
+    ) async throws -> String {
+        try await client.startChat(ChatStartRequest(
+            wikiID: wikiID, firstMessage: firstMessage, providerId: providerId, modelId: modelId))
     }
 
     /// Continue a persisted chat with a new user turn.

@@ -2862,6 +2862,8 @@ public final class AgentLauncher {
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
         priorAcpSessionId: String? = nil,
+        chatOverrideProviderId: String? = nil,
+        chatOverrideModelId: String? = nil,
         onAcpSessionId: (@MainActor (String?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
@@ -2914,8 +2916,17 @@ public final class AgentLauncher {
         // ingest/lint; the composer chip reflects this resolution (Decision A,
         // `ProviderSelector.current`). The model resolves through the same
         // stage seam so a chat-specific model override applies.
-        let provider = providersConfig().provider(forStage: "chat")
-        let resolvedSelectedModel = providersConfig().modelId(forStage: "chat")
+        //
+        // `chatOverrideProviderId`/`chatOverrideModelId` (per-chat model
+        // override, `ChatSummary.modelProviderId`/`.modelId`) outrank the
+        // stage pin when set + enabled — see
+        // `AgentProvidersConfig.provider(forStage:chatOverrideProviderId:)`.
+        let provider = providersConfig().provider(
+            forStage: "chat", chatOverrideProviderId: chatOverrideProviderId)
+        let resolvedSelectedModel = providersConfig().modelId(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderId,
+            chatOverrideModelId: chatOverrideModelId)
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
 
         // Refuse to spawn without an explicit `selectedModelId`. Mirrors the

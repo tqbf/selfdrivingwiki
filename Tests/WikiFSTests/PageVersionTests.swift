@@ -647,13 +647,15 @@ struct PageVersionTests {
 
     /// AC.8 (migration ladder sanity) — a fresh DB must report the current
     /// `user_version`. The v42→43 step adds `acp_session_id` to chats; the
-    /// v43→44 step adds `is_draft`/`draft_handle` to chat_messages (#826).
+    /// v43→44 step adds `is_draft`/`draft_handle` to chat_messages (#826); the
+    /// v44→45 step adds `model_provider_id`/`model_id` to chats (per-chat
+    /// model override).
     @Test func v44SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 44,
-                "schemaVersion must report 44 after the inflight-persist column add")
+        #expect(GRDBWikiStore.schemaVersion == 45,
+                "schemaVersion must report 45 after the per-chat model override column add")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "44", "fresh DB stamps user_version = 44 (got \(v))")
+        #expect(v == "45", "fresh DB stamps user_version = 45 (got \(v))")
     }
 
     // MARK: - #817: pageVersionBody (read arbitrary version body)

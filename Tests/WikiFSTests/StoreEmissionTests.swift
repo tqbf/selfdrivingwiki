@@ -460,6 +460,22 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    /// Per-chat model override (composer `ProviderSelector` pin). MUST route
+    /// through `mutate()` and emit a `.chat .updated` event, same as
+    /// `updateChatAcpSessionId` — the picker's local UI state (`chatModelOverride`
+    /// in `ProviderSelector`) reads back through the store's `chats` mirror,
+    /// which is only kept fresh by this event.
+    @Test func updateChatModelOverrideEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try await drain(rec)
+        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     /// Incremental in-flight checkpoint (#826). The `checkpointStreamingMessage`
     /// mutator MUST route through `mutate()` and emit a `.chat .updated` event
     /// — it is a real content mutation (writes `event_json`, `text`), not

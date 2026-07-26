@@ -40,12 +40,24 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// successful completion. `nil` for pre-#830 chats and chats whose resume
     /// permanently failed.
     public var acpSessionId: String?
+    /// Per-chat provider override: when set (and the provider is enabled),
+    /// outranks both the stage pin (`stageProviderIds["chat"]`) and the global
+    /// default provider for THIS chat only. `nil` = no override, fall through
+    /// to the existing stage/global resolution (`AgentProvidersConfig.provider(forStage:)`).
+    /// Set by the composer's `ProviderSelector`.
+    public var modelProviderId: String?
+    /// The model id within `modelProviderId`'s catalog. `nil` (with
+    /// `modelProviderId` set) means "that provider's default model" — mirrors
+    /// the composer's synthetic "Default" row. Meaningless when
+    /// `modelProviderId` is `nil`.
+    public var modelId: String?
 
     public init(
         id: PageID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
         summary: String? = nil, summaryAt: Date? = nil,
-        acpSessionId: String? = nil
+        acpSessionId: String? = nil,
+        modelProviderId: String? = nil, modelId: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -56,6 +68,8 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         self.summary = summary
         self.summaryAt = summaryAt
         self.acpSessionId = acpSessionId
+        self.modelProviderId = modelProviderId
+        self.modelId = modelId
     }
 
     /// Derive a chat title from the first user message: first line, trimmed,
