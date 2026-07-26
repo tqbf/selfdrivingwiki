@@ -6275,8 +6275,32 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
+    /// True when the `chats` table has all columns the chat-summary queries
+    /// depend on (`acp_session_id` from v43, `model_provider_id` / `model_id`
+    /// from v45). A read-only File Provider connection opened before the main
+    /// app has migrated the DB will see an older schema; without this guard the
+    /// query throws "no such column: c.acp_session_id" on every retry, causing
+    /// a busy-loop (#931). Returning early with an empty result mirrors the
+    /// `wikiIndexDocument()` graceful-fallback pattern for not-yet-migrated DBs.
+    private func chatsSchemaIsReady(in db: Database) -> Bool {
+        // Intentionally swallows the error: if the `chats` table doesn't exist
+        // at all (even older schema), pragma_table_info returns empty and the
+        // optimistic column checks below just fail — the desired "not ready"
+        // result.
+        do {
+            let columns = try Self.tableColumnInfo("chats", in: db)
+            return columns.contains("acp_session_id")
+                && columns.contains("model_provider_id")
+                && columns.contains("model_id")
+        } catch {
+            // swiftlint:disable:next silent_try_optional
+            return false
+        }
+    }
+
     public func listChats() throws -> [ChatSummary] {
         try dbWriter.read { db in
+            guard chatsSchemaIsReady(in: db) else { return [] }
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
@@ -6454,6 +6478,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func listAllChatsOrderedByID() throws -> [ChatSummary] {
         try dbWriter.read { db in
+            guard chatsSchemaIsReady(in: db) else { return [] }
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
@@ -6540,6 +6565,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary] {
         try dbWriter.read { db in
+            // Guard: if the chats schema is not yet migrated (read-only File
+            // Provider connection, #931), return BM25-only results — the
+            // cosine leg queries c.acp_session_id and would throw.
+            let schemaReady = chatsSchemaIsReady(in: db)
             let pool = max(limit * 2, limit)
             // --- BM25 leg (Tantivy) ---
             // Sole lexical leg post-#634. nil/empty → no BM25 results, only the
@@ -6549,7 +6578,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // --- Semantic (cosine) pass + RRF ---
             // Swift-side dot product (issue #628) over L2-normalized chunk
             // embeddings. Same shape as `searchSimilar` (pages).
-            if EmbeddingService.isAvailable,
+            if schemaReady,
+               EmbeddingService.isAvailable,
                let queryBlob = EmbeddingService.embeddingBlob(for: query),
                let queryVec = VectorCosine.decode(queryBlob) {
                 DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
@@ -7729,6 +7759,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// SQLiteWikiStore.getChat(id:).
     public func getChat(id: PageID) throws -> ChatSummary {
         try dbWriter.read { db in
+            guard chatsSchemaIsReady(in: db) else { throw WikiStoreError.notFound(id) }
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
