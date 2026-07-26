@@ -77,7 +77,7 @@ struct WikiRegistryTests {
 
     @Test func dbFileNameAndDomainDeriveFromULIDNeverDisplayName() {
         let wiki = WikiDescriptor.make(displayName: "Has Spaces & Symbols!")
-        #expect(wiki.dbFileName == "\(wiki.id).sqlite")
+        #expect(wiki.dbFileName == "\(wiki.id.rawValue).sqlite")
         #expect(wiki.domainIdentifier == wiki.id.rawValue)
         // Display name characters never leak into the on-disk identity.
         #expect(!wiki.dbFileName.contains(" "))

@@ -50,7 +50,7 @@ struct QueueEngineClientConformanceTests {
             payload: QueueItemPayload(sourceIDs: [])
         )
         let itemID = try await client.enqueue(request)
-        #expect(!itemID.isEmpty)
+        #expect(!itemID.rawValue.isEmpty)
 
         // cancelItem
         await client.cancelItem(itemID)

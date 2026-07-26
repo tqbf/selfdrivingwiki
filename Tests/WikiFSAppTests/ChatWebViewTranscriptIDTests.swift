@@ -54,7 +54,7 @@ struct ChatWebViewTranscriptIDTests {
         // two id spaces must still read as two different transcripts.
         let shared = "01JQ0000000000000000000000"
         #expect(ChatWebView.Coordinator.needsFullReload(
-            transcriptID: .queueItem(shared),
+            transcriptID: .queueItem(QueueItemID(rawValue: shared)),
             renderedTranscriptID: .chat(PageID(rawValue: shared)),
             showsInternals: false, renderedShowsInternals: false,
             eventCount: 5, renderedCount: 5))

@@ -18,7 +18,7 @@ import WikiFSCore
         lintPageIDs: [PageID]? = nil
     ) -> QueueItem {
         QueueItem(
-            id: "TESTITEM001",
+            id: QueueItemID(rawValue: "TESTITEM001"),
             queue: queue,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(

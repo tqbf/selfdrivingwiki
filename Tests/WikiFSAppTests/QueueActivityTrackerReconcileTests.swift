@@ -179,7 +179,7 @@ struct QueueActivityTrackerReconcileTests {
         wikiID: WikiID = WikiID(rawValue: "wiki1")
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: queue, wikiID: wikiID,
+            id: QueueItemID(rawValue: id), queue: queue, wikiID: wikiID,
             payload: QueueItemPayload(
                 sourceIDs: sourceIDs.map { PageID(rawValue: $0) },
                 lintPageIDs: lintPageIDs),
@@ -201,7 +201,7 @@ actor FakeQueueEngineClient: QueueEngineClient {
 
     nonisolated var events: AsyncStream<QueueEvent> { AsyncStream { _ in } }
     @discardableResult
-    nonisolated func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID { "fake" }
+    nonisolated func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID { QueueItemID(rawValue: "fake") }
     nonisolated func cancelItem(_ id: QueueItem.ID) async {}
     @discardableResult
     nonisolated func cancelAllInFlight() async -> Int { 0 }

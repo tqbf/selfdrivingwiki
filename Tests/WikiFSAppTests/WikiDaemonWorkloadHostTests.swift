@@ -233,7 +233,7 @@ struct WikiDaemonWorkloadHostTests {
         // The daemon's engine still has the item (it survives the disconnect).
         let engine = try await daemon.ensureQueueEngine()
         let snapshot = await engine.snapshot()
-        let itemExists = snapshot.activeItems.contains { $0.id == itemID }
+        let itemExists = snapshot.activeItems.contains { $0.id.rawValue == itemID }
         #expect(itemExists)
 
         listener.invalidate()
@@ -408,7 +408,7 @@ struct WikiDaemonWorkloadHostTests {
         // waitForCompletion returns immediately (without hanging on a
         // non-existent item).
         let engine = try await daemon.ensureQueueEngine()
-        await engine.cancelItem(itemID)
+        await engine.cancelItem(QueueItemID(rawValue: itemID))
 
         // waitForCompletion for a cancelled item → failure result (fast path).
         let waitReplyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in

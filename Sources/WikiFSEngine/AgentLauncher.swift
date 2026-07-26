@@ -2238,7 +2238,7 @@ public final class AgentLauncher {
             if isPlannerBackend || provider.id == quotaFallback.plannerProviderId {
                 phaseScratch = scratch
             } else {
-                phaseScratch = scratch.appending(path: "fallback-\(provider.id)")
+                phaseScratch = scratch.appending(path: "fallback-\(provider.id.rawValue)")
                 DebugLog.trying("create phaseScratch directory", operation: { try FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true) })
             }
 

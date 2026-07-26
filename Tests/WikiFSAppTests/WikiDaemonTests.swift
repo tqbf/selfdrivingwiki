@@ -77,7 +77,7 @@ struct WikiDaemonTests {
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Test"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
-        let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite")
+        let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
         #expect(FileManager.default.fileExists(atPath: dbURL.path))
     }
 
@@ -89,7 +89,7 @@ struct WikiDaemonTests {
         #expect(descriptor.homePageID != nil)
 
         // Verify the Home page actually exists in the DB
-        let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite")
+        let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
         let store = try StoreBackend.current.makeStore(databaseURL: dbURL)
         let pages = try store.listPages(sortBy: .newestFirst)
         #expect(pages.count == 1)
@@ -170,7 +170,7 @@ struct WikiDaemonTests {
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Delete Me"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
-        let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite")
+        let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
         #expect(FileManager.default.fileExists(atPath: dbURL.path))
 
         _ = daemon.deleteWiki(id: descriptor.id.rawValue)
@@ -292,7 +292,7 @@ struct WikiDaemonTests {
         daemon.closeStore(wikiID: descriptor.id)
 
         // Corrupt the DB so StoreBackend.current.makeStore(databaseURL:) throws (SQLITE_NOTADB)
-        let dbURL = dir.appendingPathComponent("\(descriptor.id).sqlite", isDirectory: false)
+        let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite", isDirectory: false)
         for suffix in ["", "-wal", "-shm"] {
             try? FileManager.default.removeItem(atPath: dbURL.path + suffix)
         }

@@ -530,15 +530,15 @@ struct AgentProvidersConfigPerStageModelTests {
         // Chat is pinned to acme, but THIS chat's override picks neuralwatt —
         // the per-chat tier is the highest priority.
         let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
-        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "neuralwatt").id == "neuralwatt")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "neuralwatt").id == ProviderID(rawValue: "neuralwatt"))
         // Other stages (no override argument passed) are unaffected.
-        #expect(config.provider(forStage: "planner").id == "neuralwatt")
+        #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "neuralwatt"))
     }
 
     @Test func providerForStageChatOverrideOutranksGlobalDefault() {
         // No stage pin at all — the override still wins over the global default.
         let config = twoProviderFixture
-        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == "acme")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == ProviderID(rawValue: "acme"))
     }
 
     @Test func providerForStageDisabledChatOverrideFallsBackToStagePin() {
@@ -548,13 +548,13 @@ struct AgentProvidersConfigPerStageModelTests {
         var disabled = twoProviderFixture
         disabled.providers[1].enabled = false  // disable acme
         let config = disabled.settingStageProvider("neuralwatt", forStage: "chat")
-        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == "neuralwatt")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "acme").id == ProviderID(rawValue: "neuralwatt"))
     }
 
     @Test func providerForStageEmptyChatOverrideFallsBackNormally() {
         // Empty string (the "no override" sentinel) behaves exactly like nil.
         let config = twoProviderFixture.settingStageProvider("acme", forStage: "chat")
-        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "").id == "acme")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: "").id == ProviderID(rawValue: "acme"))
     }
 
     @Test func modelIdForStageChatOverrideUsesOverrideModelId() {
