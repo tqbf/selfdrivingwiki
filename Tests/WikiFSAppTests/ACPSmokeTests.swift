@@ -29,8 +29,15 @@ import WikiFSCore
 ///   validates launch + `initialize` + the auth-decision gate (the agent
 ///   advertises `authMethods` → `ACPBackendError.missingAPIKey`).
 /// - `ACP_SMOKE_PROMPT` (default `Reply with exactly: ACP_OK`).
+///
+/// `.serialized` (#925, mirrors #664's fallback direction): this suite
+/// resolves the agent path via `PathPreflight.resolveOnLoginShell`, which
+/// blocks a cooperative-pool thread on a real `Process().waitUntilExit()`,
+/// alongside spawning + streaming a real ACP subprocess. `.serialized`
+/// prevents that from compounding with other tests in the same run.
 @Suite(
     .timeLimit(.minutes(5)),
+    .serialized,
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full turn) to run the live ACP smoke test.")

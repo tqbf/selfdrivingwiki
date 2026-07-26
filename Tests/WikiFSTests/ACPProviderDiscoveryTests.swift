@@ -8,7 +8,14 @@ import WikiFSCore
 /// Filesystem ACP-agent discovery (slice of #217). The discovery logic is pure
 /// given an injected resolver, so it's tested without the real filesystem; a
 /// live integration check confirms it against this machine's PATH.
-@Suite
+///
+/// `.serialized` AND `.timeLimit(.minutes(5))` (#925, mirrors #664's fallback
+/// direction): `liveDiscoveryMatchesFilesystem` calls
+/// `PathPreflight.resolveOnLoginShell`, which blocks a cooperative-pool
+/// thread on a real `Process().waitUntilExit()`. `.serialized` keeps that
+/// blocking wait from compounding with the rest of this suite under
+/// full-suite concurrency; `.timeLimit` is the per-test safety net.
+@Suite(.timeLimit(.minutes(5)), .serialized)
 struct ACPProviderDiscoveryTests {
 
     // MARK: - Pure logic (injected resolver)

@@ -18,7 +18,15 @@ import Testing
 /// These are fast: they open a temp SQLite DB, build a small Tantivy index
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
-@Suite(.timeLimit(.minutes(5)))
+///
+/// `.serialized` (#925, mirrors #664's fallback direction): every resolver
+/// call in this suite funnels through `CLITantivyLegResolver.runSearch`,
+/// which blocks a cooperative-pool thread on `DispatchSemaphore.wait()`.
+/// Under full-suite `swift test` concurrency this can starve the pool
+/// alongside other suites; `.serialized` removes intra-suite concurrency so
+/// this suite's own semaphore waits don't compound. `.timeLimit` is the
+/// per-test backstop against a hang that still gets through.
+@Suite(.timeLimit(.minutes(5)), .serialized)
 struct CLITantivyLegResolverTests {
 
     // MARK: - Helpers
