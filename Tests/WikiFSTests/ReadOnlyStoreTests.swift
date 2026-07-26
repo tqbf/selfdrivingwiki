@@ -1,5 +1,10 @@
 import Foundation
 import Testing
+#if canImport(CSQLite)
+import CSQLite
+#else
+import SQLite3
+#endif
 @testable import WikiFSCore
 
 /// Tests for the read-only (`query_only`) store the File Provider extension
@@ -63,6 +68,55 @@ struct ReadOnlyStoreTests {
         }
         #expect(throws: (any Error).self) {
             _ = try reader.createPage(title: "Should Fail")
+        }
+    }
+
+    // MARK: - not-yet-migrated schema (#931)
+
+    /// A read-only connection opened against a DB that hasn't been migrated to
+    /// v43+ (missing `acp_session_id`) or v45+ (missing `model_provider_id` /
+    /// `model_id`) must NOT throw "no such column" on chat queries — it should
+    /// return an empty / not-found result, mirroring the `wikiIndexDocument()`
+    /// graceful fallback. Without the guard this busy-loops ~50 times/sec in
+    /// the File Provider extension (#931).
+    @Test func chatQueriesDontThrowOnPreMigrationSchema() throws {
+        let url = tempDatabaseURL()
+
+        // Build a v42 DB by hand: a `chats` table WITHOUT the v43/v45 columns.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chats (id TEXT PRIMARY KEY, kind TEXT, title TEXT,
+            created_at REAL, updated_at REAL, summary TEXT, summary_at REAL);
+        """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chat_messages (id TEXT PRIMARY KEY, chat_id TEXT, seq INTEGER,
+            role TEXT, event_json TEXT, text TEXT, created_at REAL,
+            summary TEXT, summary_kind TEXT, summary_at REAL);
+        """, nil, nil, nil) == SQLITE_OK)
+        // Insert a chat row so we can verify the guard fires (not just empty table).
+        #expect(sqlite3_exec(raw, """
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES ('01TEST0000000000000000000A', 'edit', 'Old Chat', 1000.0, 1000.0);
+        """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
+
+        // Open read-only — the File Provider extension path.
+        let reader = try GRDBWikiStore(readOnlyURL: url)
+
+        // listAllChatsOrderedByID: returns [] instead of throwing.
+        let ordered = try reader.listAllChatsOrderedByID()
+        #expect(ordered.isEmpty)
+
+        // listChats: returns [] instead of throwing.
+        let listed = try reader.listChats()
+        #expect(listed.isEmpty)
+
+        // getChat: throws notFound instead of "no such column".
+        let chatID = PageID(rawValue: "01TEST0000000000000000000A")
+        #expect(throws: WikiStoreError.self) {
+            _ = try reader.getChat(id: chatID)
         }
     }
 }
