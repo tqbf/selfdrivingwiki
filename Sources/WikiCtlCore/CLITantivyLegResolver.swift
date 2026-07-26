@@ -19,8 +19,7 @@ import WikiFSCore
 /// This resolver constructs a CLI-owned `TantivySearchService` over the SAME
 /// on-disk index the app builds/maintains (the index is a derived artifact, so
 /// concurrently opening it read-only is safe — SQLite remains the source of
-/// truth), runs the kind-scoped search via the actor (bridged async→sync with
-/// a semaphore, mirroring `wikid`'s `runRefresh` pattern), and resolves the
+/// truth), runs the kind-scoped search asynchronously via the actor, and resolves the
 /// hits to typed summaries (`WikiPageSummary` / `SourceSummary` / `ChatSummary`)
 /// via the store's list APIs — preserving Tantivy's best-first rank order, the
 /// same mapping `WikiStoreModel.resolveTantivyLeg(query:kind:limit:catalog:)`
@@ -34,6 +33,9 @@ import WikiFSCore
 /// has been opened in the app at least once (the app kicks off the initial
 /// build via `TantivyShadowSync.start()`), the Tantivy leg is populated.
 public enum CLITantivyLegResolver {
+    private enum SearchRetryPolicy {
+        static let maximumAttempts = 5
+    }
 
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
     /// when the index is unavailable/empty — post-#634 that means no BM25
@@ -45,11 +47,11 @@ public enum CLITantivyLegResolver {
         store: WikiStore,
         query: String,
         limit: Int
-    ) -> [WikiPageSummary]? {
+    ) async -> [WikiPageSummary]? {
         guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
             return nil
         }
-        let hits = runSearch(svc: svc, query: query, kind: .page, limit: limit)
+        let hits = await runSearch(svc: svc, query: query, kind: .page, limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [WikiPageSummary]
         do {
@@ -69,11 +71,11 @@ public enum CLITantivyLegResolver {
         store: WikiStore,
         query: String,
         limit: Int
-    ) -> [SourceSummary]? {
+    ) async -> [SourceSummary]? {
         guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
             return nil
         }
-        let hits = runSearch(svc: svc, query: query, kind: .source, limit: limit)
+        let hits = await runSearch(svc: svc, query: query, kind: .source, limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [SourceSummary]
         do {
@@ -93,11 +95,11 @@ public enum CLITantivyLegResolver {
         store: WikiStore,
         query: String,
         limit: Int
-    ) -> [ChatSummary]? {
+    ) async -> [ChatSummary]? {
         guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
             return nil
         }
-        let hits = runSearch(svc: svc, query: query, kind: .chat, limit: limit)
+        let hits = await runSearch(svc: svc, query: query, kind: .chat, limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [ChatSummary]
         do {
@@ -133,12 +135,6 @@ public enum CLITantivyLegResolver {
         }
     }
 
-    /// Bridge `TantivySearchService.search` to synchronous execution, mirroring
-    /// `wikictl`'s existing `runRefresh` async→sync semaphore pattern at
-    /// `Sources/wikictl/main.swift:180-200`. Safe because the search runs on
-    /// the `TantivyIndexer` actor (off-main); the dispatched `Task` signals
-    /// the semaphore from a thread that never needs the main thread.
-    ///
     /// Calls `rebuildIfNeeded()` before querying — opening a fresh
     /// `TantivySearchService` against an existing on-disk index can initially
     /// report `count == 0` until the rebuild path runs (the index open seems
@@ -154,18 +150,18 @@ public enum CLITantivyLegResolver {
         query: String,
         kind: TantivyDocumentKind,
         limit: Int
-    ) -> [TantivyShadowSearchResult] {
-        let box = SearchBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
+    ) async -> [TantivyShadowSearchResult] {
+        for attempt in 1...SearchRetryPolicy.maximumAttempts {
             // Mirror TantivyShadowSync.start()'s rebuild-on-open: cheap
             // (count-check) when the index is populated, essential when empty.
             await svc.rebuildIfNeeded()
-            box.result = await svc.search(query: query, kinds: [kind], limit: limit)
-            semaphore.signal()
+            let hits = await svc.search(query: query, kinds: [kind], limit: limit)
+            if !hits.isEmpty || attempt == SearchRetryPolicy.maximumAttempts {
+                return hits
+            }
         }
-        semaphore.wait()
-        return box.result ?? []
+
+        return []
     }
 
     /// Map best-first Tantivy hits to typed summaries via the supplied catalog,
@@ -194,36 +190,22 @@ public enum CLITantivyLegResolver {
     }
 }
 
-/// Thread-safe result box for the async→sync semaphore bridge. Mirrors
-/// `RefreshResultBox` at `Sources/wikictl/main.swift` — `@unchecked Sendable`
-/// is belt-and-suspenders; the semaphore guarantees the `Task`'s write
-/// happens-before the read after `semaphore.wait()` returns.
-private final class SearchBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _result: [TantivyShadowSearchResult]?
-
-    var result: [TantivyShadowSearchResult]? {
-        get { lock.lock(); defer { lock.unlock() }; return _result }
-        set { lock.lock(); defer { lock.unlock() }; _result = newValue }
-    }
-}
-
 #else
 /// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
 public enum CLITantivyLegResolver {
     public static func resolvePageLeg(
         wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
-    ) -> [WikiPageSummary]? { nil }
+    ) async -> [WikiPageSummary]? { nil }
 
     public static func resolveSourceLeg(
         wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
-    ) -> [SourceSummary]? { nil }
+    ) async -> [SourceSummary]? { nil }
 
     public static func resolveChatLeg(
         wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
-    ) -> [ChatSummary]? { nil }
+    ) async -> [ChatSummary]? { nil }
 }
 #endif
