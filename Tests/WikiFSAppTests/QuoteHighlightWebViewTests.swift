@@ -54,23 +54,18 @@ struct QuoteHighlightWebViewTests {
     }
 
     /// Run `js` (no expected return value) and await completion.
+    /// Timeout-guarded — see `evaluateJavaScriptWithTimeout` for why this
+    /// suite's live `evaluateJavaScript` calls can otherwise hang forever.
     @MainActor
     private func run(_ webView: WKWebView, _ js: String) async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            webView.evaluateJavaScript(js) { _, _ in cont.resume() }
-        }
+        _ = await evaluateJavaScriptWithTimeout(webView, js)
     }
 
-    /// Run `js` and return its result coerced to a String (Sendable-safe: the
-    /// cast happens inside the completion so only a `String?` crosses the
-    /// continuation).
+    /// Run `js` and return its result coerced to a String, or `nil` if it
+    /// times out. Timeout-guarded — see `evaluateJavaScriptWithTimeout`.
     @MainActor
     private func evalString(_ webView: WKWebView, _ js: String) async -> String? {
-        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            webView.evaluateJavaScript(js) { result, _ in
-                cont.resume(returning: result as? String)
-            }
-        }
+        await evaluateJavaScriptWithTimeout(webView, js)
     }
 
     /// Query the DOM for the highlight `<mark>` and return its text (or "").

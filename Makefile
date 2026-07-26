@@ -118,7 +118,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check check-release test test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
+.PHONY: all deps build check check-release test test-watchdog test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
         version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
@@ -132,6 +132,7 @@ help:
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  check-release     Compile only in release mode (swift build -c release)"
 	@echo "  test              Run the SwiftPM test suite"
+	@echo "  test-watchdog     Same as test, but with a wall-clock timeout + hang/slow-test report"
 	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
 	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
@@ -273,6 +274,17 @@ test: deps prompts version keychain
 	 pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build" 2>/dev/null || true; \
 	 swift test
 	@echo "✓ tests pass"
+
+# Same full suite as `test`, but with a hard wall-clock timeout and a
+# post-run summary of the slowest tests + whichever test started but never
+# finished. Use this instead of bare `swift test`/`make test` when a hang is
+# suspected: `.timeLimit` traits can't interrupt a stuck `evaluateJavaScript`/
+# `withCheckedContinuation` starved off the cooperative thread pool by another
+# concurrently-running blocking suite (#664/#732) — this wrapper bounds and
+# surfaces that instead of hanging indefinitely. Override the deadline with
+# TEST_TIMEOUT=<seconds> (default 900). Log: tmp/test-logs/swift-test-*.log.
+test-watchdog: deps prompts version keychain
+	@scripts/test-with-watchdog.sh
 
 # Fast test tier (debug) — skips the slow SQLite integration suites for quick
 # PR feedback. Run `make test` for the full suite. (issue #520)
