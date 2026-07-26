@@ -663,11 +663,11 @@ final class QueueActivityTracker {
                     if pageIDs.isEmpty {
                         // Whole-wiki lint: covers every page in this wiki.
                         wholeWikiLintingWikiIDs.insert(item.wikiID)
-                        DebugLog.ingest("LintActivity: started whole-wiki lint for wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.prefix(8)))")
+                        DebugLog.ingest("LintActivity: started whole-wiki lint for wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.rawValue.prefix(8)))")
                     } else {
                         // Page-level lint: track the specific pages.
                         lintingPageIDs.formUnion(pageIDs)
-                        DebugLog.ingest("LintActivity: started page-level lint for \(pageIDs.count) page(s) in wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.prefix(8)))")
+                        DebugLog.ingest("LintActivity: started page-level lint for \(pageIDs.count) page(s) in wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.rawValue.prefix(8)))")
                     }
                 } else {
                     ingestingSourceIDs.formUnion(sourceIDs)

@@ -111,7 +111,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             if let error = dict["error"] as? String, !error.isEmpty {
                 throw DaemonXPCError.failure(error)
             }
-            return id
+            // XPC wire boundary: the reply dict has the raw String; wrap as QueueItemID.
+            return QueueItemID(rawValue: id)
         }
     }
 
@@ -119,7 +120,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func cancelItem(_ id: QueueItem.ID) async throws {
         try await withTimeout {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.cancelItem(id: id) { cont.resume() }
+                self.proxy.cancelItem(id: id.rawValue) { cont.resume() }
             }
         }
     }
@@ -139,7 +140,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func retryItem(_ id: QueueItem.ID) async throws {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.retryItem(id: id) { data in
+                self.proxy.retryItem(id: id.rawValue) { data in
                     cont.resume(returning: data)
                 }
             }
@@ -183,7 +184,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws {
         try await withTimeout {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.reorderItem(id: id, beforeItemID: beforeItemID) { cont.resume() }
+                self.proxy.reorderItem(id: id.rawValue, beforeItemID: beforeItemID?.rawValue) { cont.resume() }
             }
         }
     }
@@ -207,7 +208,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func waitForCompletion(of id: QueueItem.ID) async throws {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.waitForCompletion(id: id) { data in
+                self.proxy.waitForCompletion(id: id.rawValue) { data in
                     cont.resume(returning: data)
                 }
             }
@@ -226,7 +227,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func loadTranscript(for itemID: QueueItem.ID) async throws -> [AgentEvent] {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.loadTranscript(itemID: itemID) { data in
+                self.proxy.loadTranscript(itemID: itemID.rawValue) { data in
                     cont.resume(returning: data)
                 }
             }

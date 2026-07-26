@@ -870,7 +870,7 @@ struct ActivityWindowView: View {
             do {
                 try await queueEngine.retryItem(item.id)
             } catch {
-                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
+                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.rawValue.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
             }
         }
     }

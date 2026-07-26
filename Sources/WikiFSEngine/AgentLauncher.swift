@@ -685,7 +685,7 @@ public final class AgentLauncher {
     @ObservationIgnored private var currentRunToken: UUID?
     /// #813 Phase 3: Queue store and item ID for the current run (used for session ID persistence)
     @ObservationIgnored private var currentQueueStore: QueueStore?
-    @ObservationIgnored private var currentQueueItemID: String?
+    @ObservationIgnored private var currentQueueItemID: QueueItem.ID?
     /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
     /// Stored so `finish()` — and thus the completion watchdog — can decrement
     /// the run counter even when the process's `terminationHandler` never fires.
@@ -1081,7 +1081,7 @@ public final class AgentLauncher {
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
-        queueItemID: String? = nil,
+        queueItemID: QueueItem.ID? = nil,
         queueStore: QueueStore? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
@@ -1222,7 +1222,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory(id: queueItemID) else {
+        guard let scratch = makeScratchDirectory(id: queueItemID?.rawValue) else {
             preflightError = "Could not create a scratch working directory for the agent."
             isRunning = false
             releaseGenerationSlot()
@@ -1252,7 +1252,7 @@ public final class AgentLauncher {
             // Create a temporary backend to attempt resume
             let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
             if let acpBackend = tempBackend as? ACPBackend {
-                DebugLog.agent("run: attempting to resume ACP session \(sessionId.rawValue) for queue item \(queueItemID)")
+                DebugLog.agent("run: attempting to resume ACP session \(sessionId.rawValue) for queue item \(queueItemID.rawValue)")
                 do {
                     if let handle = try await acpBackend.resume(sessionID: sessionId.rawValue, profile: BackendProfile(
                     providerHints: [:],
@@ -1300,7 +1300,7 @@ public final class AgentLauncher {
         // in `ACPBackend.startProcess`, called below; hence the static helper).
         let (sourceFiles, sourceIDs) = Self.sourceFilesAndIDs(for: operation)
         let modelsRecord = DebugRunLogger.makeRecord(
-            chatULID: queueItemID,
+            chatULID: queueItemID?.rawValue,
             startedAt: now,
             operationKind: operation.kind.rawValue,
             providerId: provider.id,
@@ -1415,10 +1415,10 @@ public final class AgentLauncher {
                             var updatedPayload = item.payload
                             updatedPayload.acpSessionId = AcpSessionID(rawValue: sessionId.value)
                             try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
-                            DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID)")
+                            DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID.rawValue)")
                         }
                     } catch {
-                        DebugLog.agent("run: failed to persist ACP session ID for queue item \(queueItemID): \(error)")
+                        DebugLog.agent("run: failed to persist ACP session ID for queue item \(queueItemID.rawValue): \(error)")
                     }
                 }
             }
@@ -3749,10 +3749,10 @@ public final class AgentLauncher {
                     var updatedPayload = item.payload
                     updatedPayload.acpSessionId = nil
                     try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
-                    DebugLog.agent("finish: cleared ACP session ID for queue item \(queueItemID)")
+                    DebugLog.agent("finish: cleared ACP session ID for queue item \(queueItemID.rawValue)")
                 }
             } catch {
-                DebugLog.agent("finish: failed to clear ACP session ID for queue item \(queueItemID): \(error)")
+                DebugLog.agent("finish: failed to clear ACP session ID for queue item \(queueItemID.rawValue): \(error)")
             }
         }
 

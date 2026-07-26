@@ -28,13 +28,13 @@ struct UnavailableQueueEngineTests {
     @Test func retryItemThrowsUnavailableError() async {
         let engine = UnavailableQueueEngine(reason: reason)
         await #expect(throws: UnavailableQueueEngine.Error.self) {
-            try await engine.retryItem("some-item")
+            try await engine.retryItem(QueueItem.ID(rawValue: "some-item"))
         }
     }
 
     @Test func waitForCompletionReturnsFailure() async {
         let engine = UnavailableQueueEngine(reason: reason)
-        let result = await engine.waitForCompletion(of: "some-item")
+        let result = await engine.waitForCompletion(of: QueueItem.ID(rawValue: "some-item"))
         if case .failure(let error) = result {
             #expect(error is UnavailableQueueEngine.Error)
         } else {
@@ -59,18 +59,18 @@ struct UnavailableQueueEngineTests {
     @Test func cancelAndReorderAreNoOps() async {
         let engine = UnavailableQueueEngine(reason: reason)
         // These must not throw — they're idempotent no-ops.
-        await engine.cancelItem("item")
+        await engine.cancelItem(QueueItem.ID(rawValue: "item"))
         let n = await engine.cancelAllInFlight()
         #expect(n == 0)
         await engine.pause(.extraction)
         await engine.resume(.extraction)
         await engine.halt(.extraction)
-        await engine.reorderItem(id: "item", beforeItemID: nil)
+        await engine.reorderItem(id: QueueItem.ID(rawValue: "item"), beforeItemID: nil)
     }
 
     @Test func readsReturnEmpty() async {
         let engine = UnavailableQueueEngine(reason: reason)
-        #expect(await engine.loadTranscript(for: "item").isEmpty)
+        #expect(await engine.loadTranscript(for: QueueItem.ID(rawValue: "item")).isEmpty)
         #expect(await engine.loadAllActivitySnapshots().isEmpty)
     }
 

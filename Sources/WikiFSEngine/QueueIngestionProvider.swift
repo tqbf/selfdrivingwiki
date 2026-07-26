@@ -60,7 +60,7 @@ public protocol QueueIngestionProvider: Sendable {
     func runIngestion(
         wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -82,7 +82,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLint(
         wikiID: WikiID,
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -107,7 +107,7 @@ public protocol QueueIngestionProvider: Sendable {
     func runLintPages(
         wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,

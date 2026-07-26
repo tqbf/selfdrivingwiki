@@ -304,7 +304,7 @@ struct PageDetailView: View {
                         for: id, wikiID: session.wikiID) {
                         activityTracker.pendingSelectionItemID = itemID
                         openActivityWindow?(.ingestion)
-                        DebugLog.ingest("Lint button: navigating to lint job \(itemID.prefix(8)) for page \(id) in wiki \(session.wikiID.rawValue.prefix(8))")
+                        DebugLog.ingest("Lint button: navigating to lint job \(itemID) for page \(id) in wiki \(session.wikiID.rawValue.prefix(8))")
                     } else {
                         // isLinting returned true but we couldn't resolve the
                         // specific item (race: item just finished). Fall back to

@@ -601,14 +601,14 @@ struct QueueStoreTests {
 
     @Test func testGetItemNotFound() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
-        let result = try store.getItem("NONEXISTENT")
+        let result = try store.getItem(QueueItemID(rawValue: "NONEXISTENT"))
         #expect(result == nil)
     }
 
     @Test func testTransitionOnMissingItem() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         #expect(throws: QueueStoreError.self) {
-            try store.markRunning(id: "DOESNOTEXIST", providerID: ProviderID(rawValue: "p1"))
+            try store.markRunning(id: QueueItemID(rawValue: "DOESNOTEXIST"), providerID: ProviderID(rawValue: "p1"))
         }
     }
 

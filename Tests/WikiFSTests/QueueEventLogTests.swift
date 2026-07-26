@@ -25,7 +25,7 @@ struct QueueEventLogTests {
     /// A completed item for testing.
     private func makeCompletedItem() -> QueueItem {
         QueueItem(
-            id: "TESTCOMPLETED001",
+            id: QueueItemID(rawValue: "TESTCOMPLETED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
@@ -43,7 +43,7 @@ struct QueueEventLogTests {
     /// A queued item for testing.
     private func makeQueuedItem() -> QueueItem {
         QueueItem(
-            id: "TESTQUEUED001",
+            id: QueueItemID(rawValue: "TESTQUEUED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
@@ -61,7 +61,7 @@ struct QueueEventLogTests {
     /// A running item for testing.
     private func makeRunningItem() -> QueueItem {
         QueueItem(
-            id: "TESTRUNNING001",
+            id: QueueItemID(rawValue: "TESTRUNNING001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
@@ -79,7 +79,7 @@ struct QueueEventLogTests {
     /// A failed item for testing.
     private func makeFailedItem() -> QueueItem {
         QueueItem(
-            id: "TESTFAILED001",
+            id: QueueItemID(rawValue: "TESTFAILED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
@@ -97,7 +97,7 @@ struct QueueEventLogTests {
     /// A cancelled item for testing.
     private func makeCancelledItem() -> QueueItem {
         QueueItem(
-            id: "TESTCANCELLED001",
+            id: QueueItemID(rawValue: "TESTCANCELLED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),

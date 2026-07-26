@@ -45,7 +45,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         do {
             try await workloadClient.cancelItem(id)
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.cancelItem failed for \(id): \(error.localizedDescription)")
+            DebugLog.ingest("XPCQueueEngineProxy.cancelItem failed for \(id.rawValue): \(error.localizedDescription)")
         }
     }
 
@@ -63,7 +63,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         do {
             try await workloadClient.retryItem(id)
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.retryItem failed for \(id): \(error.localizedDescription)")
+            DebugLog.ingest("XPCQueueEngineProxy.retryItem failed for \(id.rawValue): \(error.localizedDescription)")
             throw error
         }
     }
@@ -96,7 +96,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         do {
             try await workloadClient.reorderItem(id: id, beforeItemID: beforeItemID)
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.reorderItem failed for \(id): \(error.localizedDescription)")
+            DebugLog.ingest("XPCQueueEngineProxy.reorderItem failed for \(id.rawValue): \(error.localizedDescription)")
         }
     }
 
@@ -123,7 +123,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
             try await workloadClient.waitForCompletion(of: id)
             return .success(())
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.waitForCompletion failed for \(id): \(error.localizedDescription)")
+            DebugLog.ingest("XPCQueueEngineProxy.waitForCompletion failed for \(id.rawValue): \(error.localizedDescription)")
             return .failure(error)
         }
     }
@@ -132,7 +132,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         do {
             return try await workloadClient.loadTranscript(for: itemID)
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.loadTranscript failed for \(itemID): \(error.localizedDescription)")
+            DebugLog.ingest("XPCQueueEngineProxy.loadTranscript failed for \(itemID.rawValue): \(error.localizedDescription)")
             return []
         }
     }
@@ -146,8 +146,8 @@ final class XPCQueueEngineProxy: QueueEngineClient {
             data = [:]
         }
         var result: [QueueItem.ID: QueueEngine.ActivitySnapshot] = [:]
-        for (id, snapshot) in data {
-            result[id] = QueueEngine.ActivitySnapshot(
+            for (id, snapshot) in data {
+                result[QueueItemID(rawValue: id)] = QueueEngine.ActivitySnapshot(
                 usage: snapshot.usage,
                 logURL: snapshot.logURL,
                 debugURL: snapshot.debugURL,

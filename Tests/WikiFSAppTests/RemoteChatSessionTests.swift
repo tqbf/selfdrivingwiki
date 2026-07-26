@@ -369,13 +369,13 @@ struct RemoteChatSessionTests {
         // encoding/decoding.
         let envelope = QueueEventEnvelope(
             kind: .transcript,
-            itemID: "item-1",
+            itemID: QueueItemID(rawValue: "item-1"),
             agentEventData: try JSONEncoder().encode(AgentEvent.assistantText("test")))
         let data = try JSONEncoder().encode(envelope)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
 
         #expect(decoded.kind == .transcript)
-        #expect(decoded.itemID == "item-1")
+        #expect(decoded.itemID == QueueItemID(rawValue: "item-1"))
         #expect(!decoded.isChatEnvelope)
         #expect(decoded.toQueueEvent() != nil)
     }

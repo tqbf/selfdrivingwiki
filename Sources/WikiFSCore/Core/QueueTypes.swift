@@ -73,7 +73,7 @@ public struct QueueItemPayload: Codable, Sendable {
     /// The linked `QueueItem.ID` when one item chains into another (e.g. PDF
     /// extraction completes → enqueues an ingestion item referencing this ID).
     /// `nil` for standalone items.
-    public var chainedItemID: String?
+    public var chainedItemID: QueueItemID?
 
     /// For `.ingestion` queue items: when non-nil, this item is a lint
     /// operation (not a regular ingestion). An empty array means whole-wiki
@@ -87,7 +87,7 @@ public struct QueueItemPayload: Codable, Sendable {
     public init(
         sourceIDs: [PageID],
         stageRouting: [String: String]? = nil,
-        chainedItemID: String? = nil,
+        chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,
         acpSessionId: AcpSessionID? = nil
     ) {
@@ -108,7 +108,7 @@ public struct QueueItemPayload: Codable, Sendable {
 /// `QueueEngine` actor in Phase 2) and drive SwiftUI lists in later phases.
 public struct QueueItem: Codable, Sendable, Identifiable {
     /// ULID-based string identifier (see ``ULID``).
-    public typealias ID = String
+    public typealias ID = QueueItemID
 
     public let id: ID
     public let queue: QueueKind

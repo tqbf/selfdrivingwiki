@@ -60,7 +60,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     func runIngestion(
         wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -149,7 +149,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     func runLint(
         wikiID: WikiID,
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -188,7 +188,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     func runLintPages(
         wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -269,7 +269,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         request: OperationRequest,
         launcher: AgentLauncher,
         wikiID: WikiID,
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         providerLabel: String?,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,

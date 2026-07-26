@@ -28,7 +28,7 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
         switch self {
         case .open(let m): return "QueueStore open failed: \(m)"
         case .sqlite(let code, let message): return "SQLite error \(code): \(message)"
-        case .notFound(let id): return "Queue item not found: \(id)"
+        case .notFound(let id): return "Queue item not found: \(id.rawValue)"
         case .invalidStateTransition(let from, let to):
             return "Invalid queue state transition: \(from.rawValue) → \(to.rawValue)"
         case .invalidRequest(let m): return "Invalid request: \(m)"
@@ -353,7 +353,8 @@ public final class QueueStore: @unchecked Sendable {
     /// so column order changes are harmless — a key safety improvement over
     /// the old `stmt.text(at: 0)` positional access.
     private static func readItem(from row: Row) throws -> QueueItem {
-        let id: String = row["id"]
+        // SQL/Row boundary: the column is a raw TEXT String — wrap as QueueItemID.
+        let id = QueueItemID(rawValue: (row["id"] as String? ?? ""))
         let queueRaw: String = row["queue"]
         // SQL/Row boundary: the column is a raw TEXT String — wrap as WikiID.
         let wikiID = WikiID(rawValue: (row["wiki_id"] as String? ?? ""))
@@ -413,7 +414,7 @@ public final class QueueStore: @unchecked Sendable {
         try Self.wrap {
             let queue = try self.queue()
             return try queue.write { db in
-                let id = ULID.generate()
+                let id = QueueItemID(rawValue: ULID.generate())
                 let orderingKey = try Self.nextOrderingKey(db, for: request.queue)
                 let now = Self.nowMillis()
                 let payloadJSON = try Self.encodePayload(request.payload)
@@ -427,7 +428,7 @@ public final class QueueStore: @unchecked Sendable {
                         (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, NULL, NULL);
                     """,
                     arguments: [
-                        id, request.queue.rawValue, request.wikiID.rawValue, payloadJSON,
+                        id.rawValue, request.queue.rawValue, request.wikiID.rawValue, payloadJSON,
                         QueueItemState.queued.rawValue, orderingKey, now,
                     ])
 
@@ -463,7 +464,7 @@ public final class QueueStore: @unchecked Sendable {
                     FROM queue_items
                     WHERE id = ?;
                     """,
-                    arguments: [id])
+                    arguments: [id.rawValue])
                 guard let row else { return nil }
                 return try Self.readItem(from: row)
             }
@@ -544,7 +545,7 @@ public final class QueueStore: @unchecked Sendable {
                     WHERE id = ?;
                     """,
                     // SQL argument boundary: bind the raw String.
-                    arguments: [providerID.rawValue, now, id])
+                    arguments: [providerID.rawValue, now, id.rawValue])
             }
         }
     }
@@ -564,7 +565,7 @@ public final class QueueStore: @unchecked Sendable {
                     SET state = 'completed', finished_at = ?
                     WHERE id = ?;
                     """,
-                    arguments: [now, id])
+                    arguments: [now, id.rawValue])
             }
         }
     }
@@ -584,7 +585,7 @@ public final class QueueStore: @unchecked Sendable {
                     SET state = 'failed', finished_at = ?, error = ?
                     WHERE id = ?;
                     """,
-                    arguments: [now, error, id])
+                    arguments: [now, error, id.rawValue])
             }
         }
     }
@@ -605,7 +606,7 @@ public final class QueueStore: @unchecked Sendable {
                     SET state = 'cancelled', finished_at = ?
                     WHERE id = ?;
                     """,
-                    arguments: [now, id])
+                    arguments: [now, id.rawValue])
             }
         }
     }
@@ -625,7 +626,7 @@ public final class QueueStore: @unchecked Sendable {
                     SET state = 'queued', provider_id = NULL, started_at = NULL
                     WHERE id = ?;
                     """,
-                    arguments: [id])
+                    arguments: [id.rawValue])
             }
         }
     }
@@ -655,7 +656,7 @@ public final class QueueStore: @unchecked Sendable {
                         error = NULL, finished_at = NULL
                     WHERE id = ?;
                     """,
-                    arguments: [newOrderingKey, id])
+                    arguments: [newOrderingKey, id.rawValue])
             }
         }
     }
@@ -673,7 +674,7 @@ public final class QueueStore: @unchecked Sendable {
             try queue.write { db in
                 try db.execute(
                     sql: "UPDATE queue_items SET ordering_key = ? WHERE id = ?;",
-                    arguments: [key, id])
+                    arguments: [key, id.rawValue])
             }
         }
         return try getItem(id)
@@ -690,7 +691,7 @@ public final class QueueStore: @unchecked Sendable {
                 let data = try JSONEncoder().encode(payload)
                 try db.execute(
                     sql: "UPDATE queue_items SET payload = ? WHERE id = ?;",
-                    arguments: [String(data: data, encoding: .utf8)!, id])
+                    arguments: [String(data: data, encoding: .utf8)!, id.rawValue])
             }
         }
         return try getItem(id)
@@ -809,7 +810,7 @@ public final class QueueStore: @unchecked Sendable {
                     INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
                     VALUES (?, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?), -1) + 1, ?, ?);
                     """,
-                    arguments: [itemID, itemID, json, now])
+                    arguments: [itemID.rawValue, itemID.rawValue, json, now])
             }
         }
     }
@@ -822,7 +823,7 @@ public final class QueueStore: @unchecked Sendable {
                 let rows = try Row.fetchAll(
                     db,
                     sql: "SELECT event_json FROM queue_item_events WHERE item_id = ? ORDER BY seq;",
-                    arguments: [itemID])
+                    arguments: [itemID.rawValue])
                 return rows.compactMap { row -> AgentEvent? in
                     let json: String = row["event_json"]
                     guard let data = json.data(using: .utf8) else { return nil }
@@ -844,7 +845,7 @@ public final class QueueStore: @unchecked Sendable {
             try queue.write { db in
                 try db.execute(
                     sql: "DELETE FROM queue_item_events WHERE item_id = ?;",
-                    arguments: [itemID])
+                    arguments: [itemID.rawValue])
             }
         }
     }
@@ -900,7 +901,7 @@ public final class QueueStore: @unchecked Sendable {
                         debug_url  = COALESCE(excluded.debug_url, queue_item_activity.debug_url),
                         updated_at = excluded.updated_at;
                     """,
-                    arguments: [itemID, usageJSON, logURL, debugURL, now])
+                    arguments: [itemID.rawValue, usageJSON, logURL, debugURL, now])
             }
         }
     }
@@ -928,7 +929,7 @@ public final class QueueStore: @unchecked Sendable {
                         END,
                         updated_at = excluded.updated_at;
                     """,
-                    arguments: [itemID, line, now])
+                    arguments: [itemID.rawValue, line, now])
             }
         }
     }
@@ -944,7 +945,7 @@ public final class QueueStore: @unchecked Sendable {
                     SELECT usage_json, log_url, debug_url, progress_log
                     FROM queue_item_activity WHERE item_id = ?;
                     """,
-                    arguments: [itemID]) else { return nil }
+                    arguments: [itemID.rawValue]) else { return nil }
                 return QueueItemActivity(
                     usageJSON: row["usage_json"],
                     logURL: row["log_url"],
@@ -971,7 +972,8 @@ public final class QueueStore: @unchecked Sendable {
                 var result: [QueueItem.ID: QueueItemActivity] = [:]
                 result.reserveCapacity(rows.count)
                 for row in rows {
-                    let id: String = row["item_id"]
+                    // SQL/Row boundary: TEXT → QueueItemID.
+                    let id = QueueItemID(rawValue: (row["item_id"] as String? ?? ""))
                     result[id] = QueueItemActivity(
                         usageJSON: row["usage_json"],
                         logURL: row["log_url"],
@@ -1007,7 +1009,7 @@ public final class QueueStore: @unchecked Sendable {
                 let raw = try String.fetchOne(
                     db,
                     sql: "SELECT state FROM queue_items WHERE id = ?;",
-                    arguments: [id])
+                    arguments: [id.rawValue])
                 guard let raw else { throw QueueStoreError.notFound(id) }
                 guard let state = QueueItemState(rawValue: raw) else {
                     throw QueueStoreError.sqlite(code: -1, message: "Unknown item state: \(raw)")
@@ -1022,7 +1024,7 @@ public final class QueueStore: @unchecked Sendable {
         let raw = try String.fetchOne(
             db,
             sql: "SELECT queue FROM queue_items WHERE id = ?;",
-            arguments: [id])
+            arguments: [id.rawValue])
         guard let raw else { throw QueueStoreError.notFound(id) }
         return try decodeQueueKind(raw)
     }

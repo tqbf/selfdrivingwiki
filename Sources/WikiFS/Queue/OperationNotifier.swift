@@ -104,7 +104,7 @@ final class OperationNotifier {
             // Include the outcome in the identifier so a retried item (failed →
             // completed) gets two distinct notifications rather than replacing
             // the first.
-            identifier: "queue-\(item.id)-\(outcome.identifier)",
+            identifier: "queue-\(item.id.rawValue)-\(outcome.identifier)",
             content: content,
             trigger: nil // Deliver immediately.
         )
@@ -113,7 +113,7 @@ final class OperationNotifier {
             do {
                 try await UNUserNotificationCenter.current().add(request)
             } catch {
-                DebugLog.config("OperationNotifier: failed to post notification for item \(item.id): \(error)")
+                DebugLog.config("OperationNotifier: failed to post notification for item \(item.id.rawValue): \(error)")
             }
         }
     }

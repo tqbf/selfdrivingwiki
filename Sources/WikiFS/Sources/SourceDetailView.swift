@@ -876,7 +876,7 @@ struct SourceDetailView: View {
                                     tracker.pendingSelectionItemID = itemID
                                     tracker.pendingSelectionQueue = .extraction
                                     openActivityWindow?(.extraction)
-                                    DebugLog.extraction("Transcribe button: navigating to transcription job \(itemID.prefix(8)) for source \(file.id.rawValue)")
+                                    DebugLog.extraction("Transcribe button: navigating to transcription job \(itemID) for source \(file.id.rawValue)")
                                 } else {
                                     openActivityWindow?(.extraction)
                                     DebugLog.extraction("Transcribe button: transcription in flight for source \(file.id.rawValue) but item not found; opening Activity window")
