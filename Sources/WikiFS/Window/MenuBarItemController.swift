@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import WikiCtlCore
 import WikiFSCore
@@ -351,6 +352,18 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        // Launch-at-login toggle, backed by `SMAppService.mainApp` (no
+        // separate login-item helper needed on macOS 13+). Read fresh on
+        // every menu build so a change made through System Settings ▸
+        // General ▸ Login Items is reflected without a manual refresh.
+        let launchAtLoginItem = NSMenuItem(
+            title: "Open at Login",
+            action: #selector(toggleLaunchAtLogin(_:)),
+            keyEquivalent: "")
+        launchAtLoginItem.target = self
+        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(launchAtLoginItem)
+
         // Confirm-before-quit toggle. The Settings UI toggle for this was
         // removed along with the old Permissions tab, but `AppDelegate` still
         // reads `confirmBeforeQuitting` to gate the quit dialog — this menu
@@ -424,6 +437,28 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         let newValue = !AppDelegate.confirmBeforeQuitting
         UserDefaults.standard.set(newValue, forKey: AppDelegate.confirmQuitKey)
         sender?.state = newValue ? .on : .off
+    }
+
+    /// Register/unregister the app as a login item via `SMAppService`. If
+    /// registering leaves the service in `.requiresApproval` (macOS requires
+    /// the user to flip it on in System Settings the first time), open
+    /// System Settings ▸ Login Items directly so the request doesn't look
+    /// like it silently failed.
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem?) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            DebugLog.store("MenuBarItemController: failed to toggle launch-at-login: \(error)")
+        }
+        sender?.state = service.status == .enabled ? .on : .off
+        if service.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
