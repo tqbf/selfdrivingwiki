@@ -27,7 +27,7 @@ public final class QuotaFallbackCoordinator {
 
     /// #813: individual provider quota entry
     public struct ProviderQuotaEntry: Codable {
-        public let providerId: String
+        public let providerId: ProviderID
         public let deadUntil: Date
         public let kind: QuotaSignal.Kind
     }
@@ -35,7 +35,7 @@ public final class QuotaFallbackCoordinator {
     /// #813: providerId → (revival time, kind). A provider is "dead" while
     /// now < revival time. Entries are auto-pruned when `now >= revival`
     /// (lazy revival).
-    private var deadUntil: [String: (revival: Date, kind: QuotaSignal.Kind)] = [:]
+    private var deadUntil: [ProviderID: (revival: Date, kind: QuotaSignal.Kind)] = [:]
 
     /// #813: URL to the quota-state.json file. Defaults to the app group
     /// container; overridable for tests.
@@ -44,12 +44,12 @@ public final class QuotaFallbackCoordinator {
     /// providerId → the backend spawned for it (for teardown when it dies or
     /// the run ends). Each fallback provider gets its own `ACPBackend` actor;
     /// the coordinator owns its teardown so no backend leaks.
-    private(set) var backends: [String: AgentBackend] = [:]
+    private(set) var backends: [ProviderID: AgentBackend] = [:]
 
     /// The provider the planner ACTUALLY ran on (post-fallback), used by the
     /// executor to decide fork-vs-fresh-start (§3.6 step e of the plan). nil
     /// until the planner phase completes.
-    private(set) var plannerProviderId: String?
+    private(set) var plannerProviderId: ProviderID?
 
     /// #813: initialize the coordinator and load persisted quota state.
     /// - Parameter quotaStateURL: override the persistence location (for
@@ -72,7 +72,7 @@ public final class QuotaFallbackCoordinator {
     /// — the detector already applies a default, so this is defensive). If the
     /// provider is already dead with a later reset time, keep the later one
     /// (the longer window wins).
-    public func markExhausted(_ providerId: String, resetTime: Date?, kind: QuotaSignal.Kind) {
+    public func markExhausted(_ providerId: ProviderID, resetTime: Date?, kind: QuotaSignal.Kind) {
         let revival: Date
         if let resetTime {
             if resetTime > Date() {
@@ -95,13 +95,13 @@ public final class QuotaFallbackCoordinator {
             return
         }
         deadUntil[providerId] = (revival, kind)
-        DebugLog.agent("QuotaFallback: provider \(providerId) marked dead until \(revival) (kind: \(kind))")
+        DebugLog.agent("QuotaFallback: provider \(providerId.rawValue) marked dead until \(revival) (kind: \(kind))")
         saveQuotaState()
     }
 
     /// True if `providerId` is currently dead (now < its revival time). Auto-
     /// revives (prunes the entry) if now >= revival time.
-    public func isExhausted(_ providerId: String) -> Bool {
+    public func isExhausted(_ providerId: ProviderID) -> Bool {
         guard let entry = deadUntil[providerId] else { return false }
         if Date() >= entry.revival {
             // Auto-revival — the provider's quota window has reset.
@@ -120,7 +120,7 @@ public final class QuotaFallbackCoordinator {
     }
 
     /// Record a backend for teardown purposes.
-    func recordBackend(_ backend: AgentBackend, forProvider providerId: String) {
+    func recordBackend(_ backend: AgentBackend, forProvider providerId: ProviderID) {
         backends[providerId] = backend
     }
 
@@ -128,7 +128,7 @@ public final class QuotaFallbackCoordinator {
     /// fallback). This is the source of truth for "which provider the planner
     /// ran on" — the executor compares its resolved provider against this to
     /// decide fork-vs-fresh-start.
-    func recordPlanner(providerId: String, backend: AgentBackend) {
+    func recordPlanner(providerId: ProviderID, backend: AgentBackend) {
         plannerProviderId = providerId
         recordBackend(backend, forProvider: providerId)
     }
@@ -137,12 +137,12 @@ public final class QuotaFallbackCoordinator {
     /// NOT for the `primaryProviderId`). The primary backend (planner
     /// provider's) is owned by `run()`'s lifecycle; fallback backends are
     /// owned by the coordinator.
-    func finishFallbackBackends(excludingPrimaryProvider primaryProviderId: String?) async {
+    func finishFallbackBackends(excludingPrimaryProvider primaryProviderId: ProviderID?) async {
         for (providerId, backend) in backends {
             if let primaryProviderId, providerId == primaryProviderId {
                 continue
             }
-            DebugLog.agent("QuotaFallback: tearing down fallback backend for \(providerId)")
+            DebugLog.agent("QuotaFallback: tearing down fallback backend for \(providerId.rawValue)")
             await backend.cancel(SessionHandle(id: ""))
         }
         if let primaryProviderId {

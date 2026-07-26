@@ -203,7 +203,7 @@ struct IngestGateTests {
     /// A no-op worker factory: workers succeed but do nothing. We only care
     /// whether a `.ingestion` queue item is created for the source at all.
     private struct NoopWorkerFactory: QueueWorkerFactory {
-        func providerID(for item: QueueItem) async -> String? { "test-ingest" }
+        func providerID(for item: QueueItem) async -> ProviderID? { ProviderID(rawValue: "test-ingest") }
         func worker(for item: QueueItem) async throws -> any QueueWorker {
             struct W: QueueWorker { func execute(_ item: QueueItem) async throws {} }
             return W()
@@ -229,7 +229,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [yt.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -252,7 +252,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [md.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -278,7 +278,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [yt.id, md.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -320,7 +320,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [png.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -344,7 +344,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [xml.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -386,7 +386,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [yt.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()
@@ -423,7 +423,7 @@ struct IngestGateTests {
         await enqueueIngestion(
             sourceIDs: [yt.id, png.id, md.id],
             store: model,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             queueEngine: engine)
 
         let snapshot = await engine.snapshot()

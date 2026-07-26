@@ -376,7 +376,7 @@ public final class AgentLauncher {
     /// next `resolveSelectedProvider()` call reads this, so the next chat
     /// session uses the chosen provider with no launcher change.
     @discardableResult
-    public func setDefaultProvider(id: String) -> AgentProvidersConfig {
+    public func setDefaultProvider(id: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingDefault(id: id)
         do {
@@ -396,17 +396,17 @@ public final class AgentLauncher {
     /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
     /// the model picker has the agent's advertised list on the next read.
     /// `@MainActor`; no return — the picker reads the cache next load.
-    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: String) {
+    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: ProviderID) {
         guard !models.isEmpty else { return }
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
-        DebugLog.store("cacheDiscoveredModels: provider=\(providerId) count=\(models.count) → save")
+        DebugLog.store("cacheDiscoveredModels: provider=\(providerId.rawValue) count=\(models.count) → save")
         do {
             try updated.save(to: dir)
         } catch {
             // #475/#492: the cached model list silently disappears on next launch
             // if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId)): \(error)")
+            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId.rawValue)): \(error)")
         }
     }
 
@@ -414,10 +414,10 @@ public final class AgentLauncher {
     /// the new config so the composer picker can update its bound state. A
     /// nil/empty `modelId` clears the selection ("use the agent's default").
     @discardableResult
-    public func setSelectedModel(_ modelId: String?, forProvider providerId: String) -> AgentProvidersConfig {
+    public func setSelectedModel(_ modelId: String?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
-        DebugLog.store("setSelectedModel: provider=\(providerId) modelId=\(modelId ?? "nil") → save")
+        DebugLog.store("setSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId ?? "nil") → save")
         do {
             try updated.save(to: dir)
         } catch {
@@ -457,7 +457,7 @@ public final class AgentLauncher {
     /// The user's persisted model selection for `providerId` (nil = "use the
     /// agent's default"). Read at spawn time so `ACPBackend.start` can call
     /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
-    public func selectedModelId(forProvider providerId: String) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -466,7 +466,7 @@ public final class AgentLauncher {
     /// display-only preference (favorites sort to the top of the picker); no
     /// effect on which model actually launches.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
@@ -474,7 +474,7 @@ public final class AgentLauncher {
         } catch {
             // #475/#492: the favorite toggle silently reverts if this write
             // throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
         }
         return updated
     }
@@ -685,7 +685,7 @@ public final class AgentLauncher {
     @ObservationIgnored private var currentRunToken: UUID?
     /// #813 Phase 3: Queue store and item ID for the current run (used for session ID persistence)
     @ObservationIgnored private var currentQueueStore: QueueStore?
-    @ObservationIgnored private var currentQueueItemID: String?
+    @ObservationIgnored private var currentQueueItemID: QueueItem.ID?
     /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
     /// Stored so `finish()` — and thus the completion watchdog — can decrement
     /// the run counter even when the process's `terminationHandler` never fires.
@@ -1075,13 +1075,13 @@ public final class AgentLauncher {
     ///   it. Nil is fine (the model id alone still shows).
     public func run(
         request: OperationRequest,
-        wikiID: String,
+        wikiID: WikiID,
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
         workspaceID: String? = nil,
-        queueItemID: String? = nil,
+        queueItemID: QueueItem.ID? = nil,
         queueStore: QueueStore? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
@@ -1222,7 +1222,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory(id: queueItemID) else {
+        guard let scratch = makeScratchDirectory(id: queueItemID?.rawValue) else {
             preflightError = "Could not create a scratch working directory for the agent."
             isRunning = false
             releaseGenerationSlot()
@@ -1252,9 +1252,9 @@ public final class AgentLauncher {
             // Create a temporary backend to attempt resume
             let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
             if let acpBackend = tempBackend as? ACPBackend {
-                DebugLog.agent("run: attempting to resume ACP session \(sessionId) for queue item \(queueItemID)")
+                DebugLog.agent("run: attempting to resume ACP session \(sessionId.rawValue) for queue item \(queueItemID.rawValue)")
                 do {
-                    if let handle = try await acpBackend.resume(sessionID: sessionId, profile: BackendProfile(
+                    if let handle = try await acpBackend.resume(sessionID: sessionId.rawValue, profile: BackendProfile(
                     providerHints: [:],
                     scratchDirectory: scratch,
                     isReadOnly: false,
@@ -1290,7 +1290,7 @@ public final class AgentLauncher {
         runningKind = operation.kind
         lastActivityAt = now
         runCommitedAt = now
-        runProviderLabel = provider.id
+        runProviderLabel = provider.id.rawValue
         openLogFiles(in: scratch)
         // Write the resolved provider/model/thinking snapshot to
         // `<scratch>/models.json` ONCE at ingestion start — a sibling of
@@ -1300,7 +1300,7 @@ public final class AgentLauncher {
         // in `ACPBackend.startProcess`, called below; hence the static helper).
         let (sourceFiles, sourceIDs) = Self.sourceFilesAndIDs(for: operation)
         let modelsRecord = DebugRunLogger.makeRecord(
-            chatULID: queueItemID,
+            chatULID: queueItemID?.rawValue,
             startedAt: now,
             operationKind: operation.kind.rawValue,
             providerId: provider.id,
@@ -1375,7 +1375,7 @@ public final class AgentLauncher {
             debugLogURL: debugFolderURL)
 
         do {
-            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
+            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID.rawValue) exe=\(resolvedPath)")
             let runToken = UUID()
             let session: SessionHandle
 
@@ -1413,12 +1413,12 @@ public final class AgentLauncher {
                     do {
                         if let item = try queueStore.getItem(queueItemID) {
                             var updatedPayload = item.payload
-                            updatedPayload.acpSessionId = sessionId.value
+                            updatedPayload.acpSessionId = AcpSessionID(rawValue: sessionId.value)
                             try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
-                            DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID)")
+                            DebugLog.agent("run: persisted ACP session ID \(sessionId.value) for queue item \(queueItemID.rawValue)")
                         }
                     } catch {
-                        DebugLog.agent("run: failed to persist ACP session ID for queue item \(queueItemID): \(error)")
+                        DebugLog.agent("run: failed to persist ACP session ID for queue item \(queueItemID.rawValue): \(error)")
                     }
                 }
             }
@@ -1523,7 +1523,7 @@ public final class AgentLauncher {
         scratch: URL,
         operation: WikiOperation,
         wikiRoot: String,
-        wikiID: String,
+        wikiID: WikiID,
         systemPrompt: String,
         wikictlDirectory: String
     ) async {
@@ -1824,7 +1824,7 @@ public final class AgentLauncher {
                     wikiID: wikiID,
                     phaseName: "executor[\(sourceFile)]"
                 ) {
-                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted().first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
+                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted(by: { $0.rawValue < $1.rawValue }).first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
                     await capturePhaseUsage(backend: backend, session: session, providerLabel: execProvider.label)
                     if let acp = backend as? ACPBackend {
                         await acp.closeSession(session)
@@ -2177,7 +2177,7 @@ public final class AgentLauncher {
         makeCLIProfile: (WikiOperation) -> CLIProfile,
         operation: WikiOperation,
         wikiRoot: String,
-        wikiID: String,
+        wikiID: WikiID,
         phaseName: String
     ) async -> SessionHandle? {
         var attemptChain = chain
@@ -2238,7 +2238,7 @@ public final class AgentLauncher {
             if isPlannerBackend || provider.id == quotaFallback.plannerProviderId {
                 phaseScratch = scratch
             } else {
-                phaseScratch = scratch.appending(path: "fallback-\(provider.id)")
+                phaseScratch = scratch.appending(path: "fallback-\(provider.id.rawValue)")
                 DebugLog.trying("create phaseScratch directory", operation: { try FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true) })
             }
 
@@ -2271,7 +2271,7 @@ public final class AgentLauncher {
             case .quotaExhausted(let signal):
                 // Cancel the failed backend BEFORE re-entering the loop.
                 if !isPlannerBackend || provider.id != quotaFallback.plannerProviderId {
-                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: cancelling failed backend for \(signal.providerId)")
+                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: cancelling failed backend for \(signal.providerId.rawValue)")
                     await backend.cancel(SessionHandle(id: ""))
                 }
                 quotaFallback.markExhausted(signal.providerId,
@@ -2448,7 +2448,8 @@ public final class AgentLauncher {
             // (rare — quota usually surfaces at sendPrompt time, but some
             // agents reject at auth).
             if let signal = ProviderQuotaDetector.detect(
-                providerId: profile.providerHints[HintKey.acpProviderId.rawValue] ?? "unknown",
+                // Hint-dict boundary: providerHints is [String: String].
+                providerId: profile.providerHints[HintKey.acpProviderId.rawValue].map { ProviderID(rawValue: $0) } ?? ProviderID(rawValue: "unknown"),
                 error: error
             ) {
                 return .quotaExhausted(signal)
@@ -2727,7 +2728,7 @@ public final class AgentLauncher {
                 return nil
             }
         }
-        return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id))
+        return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id.rawValue))
     }
 
     /// Warning threshold for the "still working" check-in. When the agent has
@@ -2854,17 +2855,17 @@ public final class AgentLauncher {
         firstMessage: String,
         firstMessageDisplay: String? = nil,
         stateMarkdown: String,
-        wikiID: String,
+        wikiID: WikiID,
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
         chatID: String? = nil,
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
-        priorAcpSessionId: String? = nil,
+        priorAcpSessionId: AcpSessionID? = nil,
         chatOverrideProviderId: String? = nil,
         chatOverrideModelId: String? = nil,
-        onAcpSessionId: (@MainActor (String?) -> Void)? = nil,
+        onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
@@ -2885,7 +2886,7 @@ public final class AgentLauncher {
             events = historySeed
             persistedEventCount = historySeed.count
         }
-        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID) historySeed=\(historySeed.count)")
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID.rawValue) historySeed=\(historySeed.count)")
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
@@ -2997,7 +2998,7 @@ public final class AgentLauncher {
         runningKind = operation.kind
         lastActivityAt = now
         runCommitedAt = now
-        runProviderLabel = provider.id
+        runProviderLabel = provider.id.rawValue
         openLogFiles(in: scratch)
         // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
@@ -3084,19 +3085,19 @@ public final class AgentLauncher {
         // support it), fall through to the fresh-start + preamble path below.
         var resumedSession: SessionHandle? = nil
         if let priorAcpSessionId {
-            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId) for chat \(chatID ?? "?")")
+            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId.rawValue) for chat \(chatID ?? "?")")
             do {
                 if let handle = try await backend.resume(
-                    sessionID: priorAcpSessionId,
+                    sessionID: priorAcpSessionId.rawValue,
                     profile: profile
                 ) {
                     resumedSession = handle
-                    DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId)")
+                    DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId.rawValue)")
                 } else {
-                    DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId), will start fresh")
+                    DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId.rawValue), will start fresh")
                 }
             } catch {
-                DebugLog.agent("startInteractiveQuery: resume threw for session \(priorAcpSessionId): \(error), will start fresh")
+                DebugLog.agent("startInteractiveQuery: resume threw for session \(priorAcpSessionId.rawValue): \(error), will start fresh")
             }
             // If we had a prior session ID but resume failed, clear it so
             // future continues don't keep retrying a dead session.
@@ -3136,7 +3137,7 @@ public final class AgentLauncher {
                 // re-seeding a preamble.
                 if let acpBackend = backend as? ACPBackend {
                     if let sessionId = await acpBackend.currentResumableSessionId() {
-                        onAcpSessionId?(sessionId.value)
+                        onAcpSessionId?(AcpSessionID(rawValue: sessionId.value))
                         DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID ?? "?")")
                     }
                 }
@@ -3748,10 +3749,10 @@ public final class AgentLauncher {
                     var updatedPayload = item.payload
                     updatedPayload.acpSessionId = nil
                     try queueStore.updatePayload(id: queueItemID, payload: updatedPayload)
-                    DebugLog.agent("finish: cleared ACP session ID for queue item \(queueItemID)")
+                    DebugLog.agent("finish: cleared ACP session ID for queue item \(queueItemID.rawValue)")
                 }
             } catch {
-                DebugLog.agent("finish: failed to clear ACP session ID for queue item \(queueItemID): \(error)")
+                DebugLog.agent("finish: failed to clear ACP session ID for queue item \(queueItemID.rawValue): \(error)")
             }
         }
 
@@ -4004,7 +4005,7 @@ public final class AgentLauncher {
     /// write-capable. The former read-only Ask sandbox is retained in-tree but
     /// unwired.)
     private func resolveSandboxInvocation(
-        wikiID: String,
+        wikiID: WikiID,
         scratch: URL,
         dir: URL,
         pdf2mdScriptPath: String?
@@ -4018,7 +4019,7 @@ public final class AgentLauncher {
         // `<container>/<ulid>.sqlite`. `dir` is the App Group container the DB lives in.
         // Symlink resolution is performed inside `SandboxProfile.invocation` (the
         // tested core layer) so the canonical path reaches the seatbelt profile.
-        let dbPath = dir.appendingPathComponent("\(wikiID).sqlite", isDirectory: false).path
+        let dbPath = dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
 
         // Fail-open if any required path is empty/relative (misconfiguration).
         guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),

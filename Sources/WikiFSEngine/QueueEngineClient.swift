@@ -65,7 +65,7 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     func snapshot() async -> QueueSnapshot
 
     /// Whether the engine has any queued or running items for the given wiki.
-    func hasActiveWork(for wikiID: String) async -> Bool
+    func hasActiveWork(for wikiID: WikiID) async -> Bool
 
     // MARK: - Await / Transcript / Activity
 

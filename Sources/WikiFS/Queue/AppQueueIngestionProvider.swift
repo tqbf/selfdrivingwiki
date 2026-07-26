@@ -102,9 +102,9 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - QueueIngestionProvider
 
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -184,7 +184,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 ext: sourceExt,
                 displayPath: ingestSourcePath(for: source),
                 name: source.effectiveName,
-                sourceID: source.id.rawValue
+                sourceID: source.id
             ))
         }
 
@@ -286,8 +286,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - Lint (payload variant of .ingestion)
 
     func runLint(
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -332,9 +332,9 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     }
 
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -411,8 +411,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         changeSignaler: any ChangeSignaler,
         ingestingSourceIDs: Set<PageID>,
         workspaceID: String? = nil,
@@ -461,8 +461,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         changeSignaler: any ChangeSignaler,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
@@ -492,7 +492,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     }
 
     private func ingestSourcePath(for source: SourceSummary) -> String {
-        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
+        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext)
         return "sources/by-id/\(leaf)"
     }
 

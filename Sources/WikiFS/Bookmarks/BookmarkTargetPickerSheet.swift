@@ -29,6 +29,19 @@ struct BookmarkTargetPickerContext: Identifiable, Sendable {
 ///
 /// Reads `store.bookmarkNodes` live so an inline "Create" folder shows up
 /// immediately and auto-selects.
+/// The picker's selection: the bookmarks root or a specific folder (`nil` =
+/// deselected). Replaces a bare `String?` whose root was the
+/// `"__bookmarks_root__"` sentinel — that sentinel shared a namespace with real
+/// folder ids, so "is this the root?" was a comparison against a magic string
+/// any call site could forget. The case tag makes root structurally distinct
+/// from any folder id, so the question is asked by the type, not remembered.
+enum BookmarkFolderSelection: Hashable {
+    /// The bookmarks root (`parentID == nil`) — top-level destination.
+    case root
+    /// A real bookmark folder, by its `BookmarkNode.id`.
+    case folder(String)
+}
+
 struct BookmarkTargetPickerSheet: View {
     @Bindable var store: WikiStoreModel
     let kind: BookmarkRefKind
@@ -40,21 +53,19 @@ struct BookmarkTargetPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""
     /// Pre-selected to the bookmarks root so "Add" is enabled immediately,
-    /// even in a wiki with no folders yet (#243).
-    @State private var selectedFolderID: String? = BookmarkTargetPickerSheet.rootFolderID
+    /// even in a wiki with no folders yet (#243). `nil` means deselected.
+    @State private var selection: BookmarkFolderSelection? = .root
     @State private var newFolderName: String = ""
 
-    /// Sentinel id representing the bookmarks root (`parentID == nil`).
-    /// The picker treats this as a selectable destination alongside real
-    /// folders, so the user can bookmark to the top level without first
-    /// creating a folder (#243).
-    private static let rootFolderID = "__bookmarks_root__"
-
-    /// Converts the internal selection id to the `parentID` value expected
-    /// by `onConfirm` — the root sentinel maps to `nil`, everything else
-    /// passes through unchanged. Exposed for testing (#243).
-    static func parentID(forSelection selection: String?) -> String? {
-        selection == rootFolderID ? nil : selection
+    /// Converts the selection to the `parentID` value expected by `onConfirm`
+    /// — the root and a deselected picker both map to `nil` (top level).
+    /// Exposed for testing (#243).
+    static func parentID(forSelection selection: BookmarkFolderSelection?) -> String? {
+        guard let selection else { return nil }
+        switch selection {
+        case .root: return nil
+        case .folder(let id): return id
+        }
     }
 
     var body: some View {
@@ -109,13 +120,13 @@ struct BookmarkTargetPickerSheet: View {
                 }
                 .keyboardShortcut(.cancelAction)
                 Button("Add") {
-                    let parentID = Self.parentID(forSelection: selectedFolderID)
+                    let parentID = Self.parentID(forSelection: selection)
                     DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID ?? "nil"), \(ids.count) items")
                     onConfirm(parentID)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(selectedFolderID == nil)
+                .disabled(selection == nil)
             }
             .padding(16)
         }
@@ -192,7 +203,7 @@ struct BookmarkTargetPickerSheet: View {
     /// folder. Selectable like any folder row (#243).
     @ViewBuilder
     private var rootRow: some View {
-        let isSelected = selectedFolderID == Self.rootFolderID
+        let isSelected = selection == .root
         HStack(spacing: 8) {
             Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
@@ -209,7 +220,7 @@ struct BookmarkTargetPickerSheet: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedFolderID = (isSelected ? nil : Self.rootFolderID)
+            selection = (isSelected ? nil : .root)
         }
     }
 
@@ -217,7 +228,7 @@ struct BookmarkTargetPickerSheet: View {
 
     @ViewBuilder
     private func row(for folder: BookmarkNode) -> some View {
-        let isSelected = selectedFolderID == folder.id
+        let isSelected = selection == .folder(folder.id)
         HStack(spacing: 8) {
             Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
@@ -234,7 +245,7 @@ struct BookmarkTargetPickerSheet: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedFolderID = (isSelected ? nil : folder.id)
+            selection = (isSelected ? nil : .folder(folder.id))
         }
     }
 
@@ -265,7 +276,7 @@ struct BookmarkTargetPickerSheet: View {
         guard !name.isEmpty else { return }
         DebugLog.tabs("BookmarkTargetPickerSheet: createFolder — name=\(name)")
         if let newID = store.createFolder(parentID: nil, name: name) {
-            selectedFolderID = newID
+            selection = .folder(newID)
             newFolderName = ""
             searchText = ""
         }

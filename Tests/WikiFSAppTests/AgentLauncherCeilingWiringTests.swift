@@ -52,7 +52,7 @@ struct AgentLauncherCeilingWiringTests {
     /// `selectedModelId` is pre-seeded in the test config so the chat path's
     /// `SpawnModelGuard.validate` (which fires before `resolveBackend`) passes.
     private let noCommandProvider = AgentProvider(
-        id: "fake-no-cmd",
+        id: ProviderID(rawValue: "fake-no-cmd"),
         label: "FakeNoCommand",
         command: nil,
         env: [:],
@@ -75,7 +75,7 @@ struct AgentLauncherCeilingWiringTests {
         launcher.resolveSelectedProvider = { noCommandProvider }
         let config = AgentProvidersConfig(
             providers: [noCommandProvider],
-            selectedModelIds: [noCommandProvider.id: "fake-model"])
+            selectedModelIds: [noCommandProvider.id.rawValue: "fake-model"])
         do {
             try config.save(to: tempDir)
         } catch {
@@ -107,10 +107,10 @@ struct AgentLauncherCeilingWiringTests {
                     ext: "md",
                     displayPath: "sources/by-id/test.md",
                     name: "Test Source",
-                    sourceID: "01TEST01KQ8HDDR3ZXK72XHG6R"
+                    sourceID: PageID(rawValue: "01TEST01KQ8HDDR3ZXK72XHG6R")
                 )],
                 stateMarkdown: "# State"),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",
@@ -142,7 +142,7 @@ struct AgentLauncherCeilingWiringTests {
 
         await launcher.run(
             request: .lint(stateMarkdown: "# State"),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",
@@ -171,7 +171,7 @@ struct AgentLauncherCeilingWiringTests {
         await launcher.startInteractiveQuery(
             firstMessage: "hello",
             stateMarkdown: "",
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "",
             wikictlDirectory: "/tmp",

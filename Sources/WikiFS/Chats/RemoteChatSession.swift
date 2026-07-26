@@ -173,9 +173,9 @@ public final class RemoteChatSession {
     /// Called by the app's chat-event router (which demuxes from
     /// `DaemonQueueEventSink`).
     func ingest(_ envelope: QueueEventEnvelope) {
-        // Envelopes carry the wire form; convert at this boundary rather than
-        // letting raw chat-id strings leak past it.
-        guard envelope.chatID == chatID.rawValue else { return }
+        // Envelopes carry the typed chat-id; compare against the session's
+        // `PageID` (the draft has none and is never a wire target).
+        guard envelope.chatID == chatID.pageID else { return }
         switch envelope.kind {
         case .chatEvent:
             if let event = envelope.chatAgentEvent {
@@ -197,7 +197,7 @@ public final class RemoteChatSession {
                 let toolName = dict["toolName"] as? String
                 let inputSummary = dict["inputSummary"] as? String
                 pendingPermissions = [PendingPermission(
-                    toolCallId: toolCallId,
+                    toolCallId: ToolCallID(rawValue: toolCallId),
                     title: title, toolName: toolName,
                     inputSummary: inputSummary,
                     options: [])]
@@ -370,7 +370,7 @@ public final class RemoteChatSession {
 
     /// The user's persisted model selection for `providerId` (nil = agent
     /// default). Mirrors `AgentLauncher.selectedModelId(forProvider:)`.
-    public func selectedModelId(forProvider providerId: String) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -378,13 +378,13 @@ public final class RemoteChatSession {
     /// to the top of the picker). Mirrors
     /// `AgentLauncher.toggleFavoriteModel(_:forProvider:)`.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: String) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
             try updated.save(to: dir)
         } catch {
-            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId) model=\(modelId)): \(error)")
+            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
         }
         return updated
     }

@@ -3988,7 +3988,7 @@ public final class WikiStoreModel {
             }
             let filename = file.filename.lowercased()
             let byIDLeaf = FilenameEscaping
-                .byIDSourceFilename(sourceID: file.id.rawValue, ext: file.ext)
+                .byIDSourceFilename(sourceID: file.id, ext: file.ext)
                 .lowercased()
             let path = "sources/by-id/\(byIDLeaf)"
             let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
@@ -4265,7 +4265,7 @@ public final class WikiStoreModel {
     /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
     /// at spawn time (persist) and on resume failure (clear). No manual reload
     /// — the bus fires `reloadFromStore()` async after the store write.
-    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: String?) {
+    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) {
         do {
             try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: acpSessionId)
         } catch {

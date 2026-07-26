@@ -48,7 +48,7 @@ struct QueueExtractionTests {
 
         let start = Date()
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(elapsed < 1.0) // Immediate — not waiting for the worker.
@@ -68,7 +68,7 @@ struct QueueExtractionTests {
 
         do {
             _ = try await engine.enqueue(
-                QueueItemRequest(queue: .extraction, wikiID: "", payload: makePayload()))
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: ""), payload: makePayload()))
             Issue.record("Should have thrown")
         } catch is QueueStoreError { /* expected */ }
         store.close()
@@ -84,7 +84,7 @@ struct QueueExtractionTests {
 
         do {
             _ = try await engine.enqueue(
-                QueueItemRequest(queue: .extraction, wikiID: "  ", payload: makePayload()))
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "  "), payload: makePayload()))
             Issue.record("Should have thrown")
         } catch is QueueStoreError { /* expected */ }
         store.close()
@@ -102,7 +102,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         // Give the engine time to attempt dispatch.
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -129,7 +129,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -163,7 +163,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         try await progressHolder.waitForCount(2, timeoutSeconds: 5)
 
@@ -193,7 +193,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         // Wait for completion — should be .failure because the worker threw.
         let result = await engine.waitForCompletion(of: id)
@@ -227,7 +227,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         let result = await engine.waitForCompletion(of: id)
 
@@ -256,7 +256,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         let result = await engine.waitForCompletion(of: id)
 
@@ -280,7 +280,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         let id = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         // Wait for the item to complete first.
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -315,7 +315,7 @@ struct QueueExtractionTests {
         await engine.start()
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -352,7 +352,7 @@ struct QueueExtractionTests {
             sourceIDs: [PageID(rawValue: "SRC1")],
             stageRouting: [StageRoutingKey.backend.rawValue: "anthropic"])
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: payload))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: payload))
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -416,11 +416,11 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     }
 
     func resolveExtraction(
-        wikiID: String, sourceID: PageID,
+        wikiID: WikiID, sourceID: PageID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
         lock.withLock { state in
-            state.callLog.append("resolve(wikiID:\(wikiID), sourceID:\(sourceID.rawValue), backend:\(backendOverride?.rawValue ?? "default"))")
+            state.callLog.append("resolve(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(backendOverride?.rawValue ?? "default"))")
             state.lastBackendOverride = backendOverride
         }
 
@@ -441,12 +441,12 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     }
 
     func persistExtraction(
-        wikiID: String, sourceID: PageID,
+        wikiID: WikiID, sourceID: PageID,
         markdown: String, backend: ExtractionBackend,
         modelVersion: String?, technique: String?
     ) async throws {
         lock.withLock { state in
-            state.callLog.append("persist(wikiID:\(wikiID), sourceID:\(sourceID.rawValue), backend:\(backend.rawValue))")
+            state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(backend.rawValue))")
         }
     }
 }

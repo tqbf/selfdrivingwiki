@@ -66,8 +66,8 @@ public enum FilenameEscaping {
     /// The canonical `sources/by-id` filename: `<full-ulid>.<ext>`, preserving the
     /// dropped file's original extension. The dot is omitted when `ext` is empty
     /// (extension-less drops): `01ABC…` → `01ABC…` (no trailing dot).
-    public static func byIDSourceFilename(sourceID: String, ext: String) -> String {
-        ext.isEmpty ? sourceID : "\(sourceID).\(ext)"
+    public static func byIDSourceFilename(sourceID: PageID, ext: String) -> String {
+        ext.isEmpty ? sourceID.rawValue : "\(sourceID.rawValue).\(ext)"
     }
 
     /// The human-readable `sources/by-name` filename:
@@ -76,11 +76,11 @@ public enum FilenameEscaping {
     /// empty/weird stem becomes `untitled`), the short id disambiguates
     /// collisions, and the ORIGINAL `ext` is preserved (dot omitted if empty).
     /// `Trip Report.PDF` + ext `pdf` → `Trip Report--01ABCDEF.pdf`.
-    public static func byNameSourceFilename(filename: String, ext: String, sourceID: String) -> String {
+    public static func byNameSourceFilename(filename: String, ext: String, sourceID: PageID) -> String {
         let ns = filename as NSString
         let stem = ns.deletingPathExtension
         let escapedStem = escapeTitle(stem)
-        let base = "\(escapedStem)--\(shortID(sourceID))"
+        let base = "\(escapedStem)--\(shortID(sourceID.rawValue))"
         return ext.isEmpty ? base : "\(base).\(ext)"
     }
 

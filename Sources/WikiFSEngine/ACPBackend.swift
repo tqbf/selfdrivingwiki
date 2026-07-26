@@ -189,7 +189,7 @@ public actor ACPBackend: AgentBackend {
     /// `HintKey.acpProviderId` from the launcher). nil until `start()` is
     /// called. Used by the `send()` catch block to pass to
     /// `ProviderQuotaDetector` for family disambiguation.
-    private var providerId: String?
+    private var providerId: ProviderID?
 
     /// The per-run debug logger (verbose ACP wire trace). Created in
     /// `startProcess()` from `profile.debugLogURL`. nil when debug logging is
@@ -323,8 +323,10 @@ public actor ACPBackend: AgentBackend {
         DebugLog.agent("ACPBackend.start: enter providerHints=\(profile.providerHints)")
         // #727: capture the provider id so the send catch block can pass it
         // to ProviderQuotaDetector for family disambiguation.
+        // Hint-dict boundary: providerHints is [String: String] (env-style) —
+        // wrap the raw String as ProviderID here.
         if let pid = profile.providerHints[HintKey.acpProviderId.rawValue] {
-            providerId = pid
+            providerId = ProviderID(rawValue: pid)
         }
         // Warm-subprocess reuse (Phase 1, plans/acp-session-efficiency.md): if a
         // warm process already exists (spawned by a prior `start()` call on this
@@ -1136,7 +1138,7 @@ public actor ACPBackend: AgentBackend {
                     // mark the provider dead and retry on the next one.
                     let mappedError: Error
                     if let signal = ProviderQuotaDetector.detect(
-                        providerId: providerId ?? "unknown",
+                        providerId: providerId ?? ProviderID(rawValue: "unknown"),
                         error: error
                     ) {
                         mappedError = ACPBackendError.quotaExhausted(
@@ -1854,7 +1856,7 @@ public actor ACPBackend: AgentBackend {
         spawnEnvironment: [String: String]
     ) -> [String: String] {
         var env = baseEnv
-        env[AgentEnvKey.wikiDB] = cli.wikiID
+        env[AgentEnvKey.wikiDB] = cli.wikiID.rawValue
         // WIKI_ROOT is intentionally NOT exported — mount is optional; wikictl is the primary read surface (#441).
         env[AgentEnvKey.wikictl] = cli.wikictlDirectory + "/wikictl"
         let existingPath = env[AgentEnvKey.path] ?? AgentEnvKey.defaultPath
@@ -2268,7 +2270,7 @@ enum ACPBackendError: Error, LocalizedError {
     /// launcher should fall through to the next enabled provider in the
     /// stage's chain. `resetTime` is nil when the error did not carry a
     /// timestamp — the coordinator applies a conservative default.
-    case quotaExhausted(provider: String, resetTime: Date?)
+    case quotaExhausted(provider: ProviderID, resetTime: Date?)
 
     /// #733 + #737: the agent subprocess failed to launch or died before the
     /// ACP handshake completed (e.g. `bun` started but `claude` / `codex` was

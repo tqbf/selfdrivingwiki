@@ -28,7 +28,7 @@ struct QueueEngineHotSwapTests {
 
         var events: AsyncStream<QueueEvent> { stream }
         @discardableResult
-        func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID { id }
+        func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID { QueueItemID(rawValue: id) }
         func cancelItem(_ id: QueueItem.ID) async {}
         @discardableResult
         func cancelAllInFlight() async -> Int { 0 }
@@ -41,7 +41,7 @@ struct QueueEngineHotSwapTests {
             snapshotCallCount += 1
             return QueueSnapshot()
         }
-        func hasActiveWork(for wikiID: String) async -> Bool { false }
+        func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
         func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
         func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] { [] }
         func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
@@ -101,7 +101,7 @@ struct QueueEngineHotSwapTests {
             for await event in router.events {
                 switch event {
                 case .enqueued(let item):
-                    ids.append(item.id)
+                    ids.append(item.id.rawValue)
                     if ids.count >= 2 { return ids }
                 default: break
                 }
@@ -129,15 +129,15 @@ struct QueueEngineHotSwapTests {
         let router = QueueEngineHotSwap(engine)
 
         let id = try await router.enqueue(QueueItemRequest(
-            queue: .extraction, wikiID: "wiki", payload: QueueItemPayload(sourceIDs: [])))
-        #expect(id == "engine-X")
+            queue: .extraction, wikiID: WikiID(rawValue: "wiki"), payload: QueueItemPayload(sourceIDs: [])))
+        #expect(id == QueueItemID(rawValue: "engine-X"))
     }
 
     // MARK: - Helpers
 
     private func makeItem(id: String) -> QueueItem {
         QueueItem(
-            id: id, queue: .extraction, wikiID: "wiki",
+            id: QueueItemID(rawValue: id), queue: .extraction, wikiID: WikiID(rawValue: "wiki"),
             payload: QueueItemPayload(sourceIDs: []),
             state: .queued, orderingKey: 0, attempt: 0,
             createdAt: Int64(Date().timeIntervalSince1970 * 1000))

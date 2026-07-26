@@ -32,7 +32,7 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         self.emitProgress = emitProgress
     }
 
-    public func providerID(for item: QueueItem) async -> String? {
+    public func providerID(for item: QueueItem) async -> ProviderID? {
         // Resolve the provider for this item, respecting any backend override
         // from stageRouting (re-extraction with a specific backend). This
         // mirrors the worker's logic so the capacity pre-check uses the same
@@ -59,16 +59,16 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         guard let resolved else { return nil }
 
         // Transcript sources get their own capacity bucket.
-        if resolved.transcriptFetch != nil { return "transcript" }
+        if resolved.transcriptFetch != nil { return ProviderID(rawValue: "transcript") }
 
         // Map the backend to a provider ID that the engine's capacity config
         // can route: local → "local-pdf2md", remote → backend-specific.
         switch resolved.backend {
-        case .localPdf2md: return "local-pdf2md"
-        case .acp: return "remote-acp"
-        case .anthropic: return "remote-anthropic"
-        case .gemini: return "remote-gemini"
-        case .doclingServe: return "remote-docling"
+        case .localPdf2md: return ProviderID(rawValue: "local-pdf2md")
+        case .acp: return ProviderID(rawValue: "remote-acp")
+        case .anthropic: return ProviderID(rawValue: "remote-anthropic")
+        case .gemini: return ProviderID(rawValue: "remote-gemini")
+        case .doclingServe: return ProviderID(rawValue: "remote-docling")
         }
     }
 

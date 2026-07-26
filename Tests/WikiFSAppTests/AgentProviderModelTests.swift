@@ -25,7 +25,7 @@ import ACPModel
         // discoverability now flows through the `AddProviderSheet` +
         // `ACPProviderCatalog` suggestions surface.)
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.providers.map(\.id) == ["claude-acp"])
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
         #expect(config.providers.first?.isDefault == true)
         #expect(config.providers.allSatisfy { $0.enabled })
         #expect(config.providers.filter(\.isDefault).count == 1)
@@ -35,18 +35,18 @@ import ACPModel
         // Phase 1: the claudeCachedModels injection is removed — model lists
         // come from ACP discovery (providerModels), not a hardcoded alias list.
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.cachedModels(forProvider: "claude-acp").isEmpty)
+        #expect(config.cachedModels(forProvider: ProviderID(rawValue: "claude-acp")).isEmpty)
     }
 
     @Test func seedIgnoresDiscoveredAgents() {
         // The seed always yields the single Claude default — discovered agents
         // are ignored (the user opts in via Settings → Add Provider).
         let discovered = [
-            DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/usr/local/bin/gemini"),
-            DiscoveredACPAgent(agent: KnownACPAgent(id: "hermes", label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/usr/local/bin/hermes"),
+            DiscoveredACPAgent(agent: KnownACPAgent(id: ProviderID(rawValue: "gemini"), label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/usr/local/bin/gemini"),
+            DiscoveredACPAgent(agent: KnownACPAgent(id: ProviderID(rawValue: "hermes"), label: "Hermes", summary: "", detectExecutable: "hermes", command: ["hermes", "acp"]), resolvedPath: "/usr/local/bin/hermes"),
         ]
         let config = AgentProvidersConfig.seed(discovered: discovered)
-        #expect(config.providers.map(\.id) == ["claude-acp"])
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
     }
 
     // MARK: - Normalization (single-default invariant)
@@ -55,26 +55,26 @@ import ACPModel
         // Phase 1: no force-inserted claude-acp — the FIRST isDefault==true
         // provider in the input list keeps it, the rest are demoted.
         let raw = [
-            AgentProvider(id: "a", label: "A", command: ["a"], isDefault: true),
-            AgentProvider(id: "b", label: "B", command: ["b"], isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "a"), label: "A", command: ["a"], isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "b"), label: "B", command: ["b"], isDefault: true),
         ]
         let config = AgentProvidersConfig(providers: raw)
         let defaults = config.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
-        #expect(config.defaultProvider.id == "a")
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "a"))
         // The second default was demoted.
-        #expect(config.providers.first(where: { $0.id == "b" })?.isDefault == false)
+        #expect(config.providers.first(where: { $0.id == ProviderID(rawValue: "b") })?.isDefault == false)
     }
 
     @Test func normalizedPromotesFirstEnabledWhenNoneDefault() {
         // Phase 1: with none marked default, the FIRST ENABLED provider is
         // promoted (no more hardcoded claude-acp fallback).
         let raw = [
-            AgentProvider(id: "a", label: "A", command: ["a"], enabled: false, isDefault: false),
-            AgentProvider(id: "b", label: "B", command: ["b"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "a"), label: "A", command: ["a"], enabled: false, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "b"), label: "B", command: ["b"], enabled: true, isDefault: false),
         ]
         let config = AgentProvidersConfig(providers: raw)
-        #expect(config.defaultProvider.id == "b")
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "b"))
     }
 
     @Test func normalizedReseedsClaudeAcpOnlyWhenEmpty() {
@@ -82,36 +82,36 @@ import ACPModel
         // default seed was removed; the catalog-driven `AddProviderSheet`
         // replaced it for first-run discoverability).
         let config = AgentProvidersConfig(providers: [])
-        #expect(config.providers.map(\.id) == ["claude-acp"])
-        #expect(config.defaultProvider.id == "claude-acp")
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
     }
 
     // MARK: - Selection
 
     @Test func selectedProviderPicksDefaultWhenEnabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
-        #expect(config.selectedProvider().id == "claude")
+        #expect(config.selectedProvider().id == ProviderID(rawValue: "claude"))
     }
 
     @Test func selectedProviderFallsBackToFirstEnabled() {
         // Default (claude-acp) disabled → falls back to the first enabled provider.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
-        #expect(config.selectedProvider().id == "gemini")
+        #expect(config.selectedProvider().id == ProviderID(rawValue: "gemini"))
     }
 
     @Test func selectedProviderFallsBackToClaudeAcpWhenAllDisabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: false, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
         ])
         // All disabled → falls back to the claudeAcpDefault static.
-        #expect(config.selectedProvider().id == "claude-acp")
+        #expect(config.selectedProvider().id == ProviderID(rawValue: "claude-acp"))
     }
 
     // MARK: - Persistence round-trip
@@ -127,9 +127,9 @@ import ACPModel
         // the model-cache injection symmetric between init(providers:) and
         // init(from:) → the round-trip is exactly equal.
         let original = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: false),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], env: ["FOO": "bar"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], env: ["FOO": "bar"], enabled: true, isDefault: false),
         ])
         try original.save(to: tmp)
 
@@ -137,8 +137,8 @@ import ACPModel
         let data = try Data(contentsOf: url)
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: data)
         #expect(loaded == original)
-        #expect(loaded.provider(id: "gemini")?.command == ["gemini", "--acp"])
-        #expect(loaded.provider(id: "gemini")?.env == ["FOO": "bar"])
+        #expect(loaded.provider(id: ProviderID(rawValue: "gemini"))?.command == ["gemini", "--acp"])
+        #expect(loaded.provider(id: ProviderID(rawValue: "gemini"))?.env == ["FOO": "bar"])
     }
 
     // MARK: - AC.3 (#663): hermes/opencode IDs round-trip after static removal
@@ -152,9 +152,9 @@ import ACPModel
     /// a catalog entry).
     @Test func hermesOpencodeIDsRoundTripAfterStaticRemoval() throws {
         let original = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], env: ["ZAI_API_KEY": "x"], enabled: true, isDefault: false),
-            AgentProvider(id: "opencode", label: "OpenCode", command: ["opencode", "acp"], enabled: false, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], env: ["ZAI_API_KEY": "x"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode", command: ["opencode", "acp"], enabled: false, isDefault: false),
         ])
 
         let encoded = try JSONEncoder().encode(original)
@@ -162,11 +162,11 @@ import ACPModel
         #expect(decoded == original)
         // Pin the per-provider fields that previously lived on the deleted
         // statics — same id, same command, same env.
-        #expect(decoded.provider(id: "hermes")?.command == ["hermes", "acp"])
-        #expect(decoded.provider(id: "hermes")?.env == ["ZAI_API_KEY": "x"])
-        #expect(decoded.provider(id: "opencode")?.command == ["opencode", "acp"])
+        #expect(decoded.provider(id: ProviderID(rawValue: "hermes"))?.command == ["hermes", "acp"])
+        #expect(decoded.provider(id: ProviderID(rawValue: "hermes"))?.env == ["ZAI_API_KEY": "x"])
+        #expect(decoded.provider(id: ProviderID(rawValue: "opencode"))?.command == ["opencode", "acp"])
         // Default's still claude-acp.
-        #expect(decoded.defaultProvider.id == "claude-acp")
+        #expect(decoded.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
     }
 
     @Test func loadOrSeedSeedsWhenMissing() throws {
@@ -176,7 +176,7 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(config.providers.first?.id == "claude-acp")
+        #expect(config.providers.first?.id == ProviderID(rawValue: "claude-acp"))
         // The seed is persisted so the next load is stable.
         let url = tmp.appendingPathComponent(AgentProvidersConfig.fileName, isDirectory: false)
         #expect(FileManager.default.fileExists(atPath: url.path))
@@ -189,49 +189,49 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let discovered = [
-            DiscoveredACPAgent(agent: KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/x"),
+            DiscoveredACPAgent(agent: KnownACPAgent(id: ProviderID(rawValue: "gemini"), label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"]), resolvedPath: "/x"),
         ]
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { discovered })
         // #663: Discovered agents are ignored — the single Claude default is seeded.
-        #expect(config.providers.map(\.id) == ["claude-acp"])
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
     }
 
     // MARK: - Favorites (display-only per-row star)
 
     @Test func togglingFavoriteAddsThenRemoves() {
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-        #expect(!config.isFavoriteModel("opus", forProvider: "claude-acp"))
+        #expect(!config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
 
-        let favorited = config.togglingFavoriteModel("opus", forProvider: "claude-acp")
-        #expect(favorited.isFavoriteModel("opus", forProvider: "claude-acp"))
-        #expect(favorited.favoriteModels(forProvider: "claude-acp") == ["opus"])
+        let favorited = config.togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
+        #expect(favorited.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(favorited.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == ["opus"])
 
         // Toggling again clears it (and drops the now-empty provider key).
-        let cleared = favorited.togglingFavoriteModel("opus", forProvider: "claude-acp")
-        #expect(!cleared.isFavoriteModel("opus", forProvider: "claude-acp"))
+        let cleared = favorited.togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
+        #expect(!cleared.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
         #expect(cleared.favoriteModelIds["claude-acp"] == nil)
     }
 
     @Test func favoritesArePerProviderAndOrdered() {
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: "claude-acp")
-            .togglingFavoriteModel("haiku", forProvider: "claude-acp")
-            .togglingFavoriteModel("gpt", forProvider: "other")
+            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel("haiku", forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel("gpt", forProvider: ProviderID(rawValue: "other"))
         // Insertion order is preserved; providers are isolated.
-        #expect(config.favoriteModels(forProvider: "claude-acp") == ["opus", "haiku"])
-        #expect(config.favoriteModels(forProvider: "other") == ["gpt"])
-        #expect(!config.isFavoriteModel("opus", forProvider: "other"))
+        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == ["opus", "haiku"])
+        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "other")) == ["gpt"])
+        #expect(!config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "other")))
     }
 
     @Test func favoritesSurviveSelectionAndDefaultRewraps() {
         // Favorites must be threaded through the other setting* mutators, not
         // wiped when the selection or default provider changes.
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: "claude-acp")
-            .settingSelectedModel("sonnet", forProvider: "claude-acp")
-            .settingDefault(id: "claude-acp")
-        #expect(config.isFavoriteModel("opus", forProvider: "claude-acp"))
-        #expect(config.selectedModelId(forProvider: "claude-acp") == "sonnet")
+            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
+            .settingSelectedModel("sonnet", forProvider: ProviderID(rawValue: "claude-acp"))
+            .settingDefault(id: ProviderID(rawValue: "claude-acp"))
+        #expect(config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
     }
 
     @Test func favoritesRoundTripThroughDisk() throws {
@@ -241,11 +241,11 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let original = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: "claude-acp")
+            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
         try original.save(to: tmp)
 
         let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(loaded.isFavoriteModel("opus", forProvider: "claude-acp"))
+        #expect(loaded.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
     }
 
     // MARK: - SpawnModelGuard precondition (diagnosed 2026-07-18 bug state)
@@ -265,7 +265,7 @@ import ACPModel
         // nil. (#604 removed the per-stage assignment API; this is the same
         // precondition the collapsed single-resolution path uses.)
         var opencodeAsDefault = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -275,7 +275,7 @@ import ACPModel
         let config = AgentProvidersConfig(providers: [opencodeAsDefault])
         let provider = config.selectedProvider()
         let modelId = config.selectedModelId(forProvider: provider.id)
-        #expect(provider.id == "opencode")
+        #expect(provider.id == ProviderID(rawValue: "opencode"))
         #expect(modelId == nil)
         // This is the exact state `SpawnModelGuard.validate` refuses to spawn on
         // — confirmed by `SpawnModelGuardTests.returnsErrorMessageWhenModelIdIsNil`.
@@ -286,22 +286,22 @@ import ACPModel
 
     @Test func catalogHasExpandedEntries() {
         let ids = Set(ACPProviderCatalog.agents.map(\.id))
-        #expect(ids.contains("gemini"))
-        #expect(ids.contains("hermes"))
-        #expect(ids.contains("copilot"))
-        #expect(ids.contains("kimi"))
-        #expect(ids.contains("cursor"))
-        #expect(ids.contains("kiro"))
+        #expect(ids.contains(ProviderID(rawValue: "gemini")))
+        #expect(ids.contains(ProviderID(rawValue: "hermes")))
+        #expect(ids.contains(ProviderID(rawValue: "copilot")))
+        #expect(ids.contains(ProviderID(rawValue: "kimi")))
+        #expect(ids.contains(ProviderID(rawValue: "cursor")))
+        #expect(ids.contains(ProviderID(rawValue: "kiro")))
         // Claude via the official ACP wrapper IS in the catalog (the default chat
         // provider); the legacy `claude -p` CLI id is NOT (driven via ClaudeCLIBackend).
-        #expect(ids.contains("claude-acp"))
-        #expect(!ids.contains("claude"))
+        #expect(ids.contains(ProviderID(rawValue: "claude-acp")))
+        #expect(!ids.contains(ProviderID(rawValue: "claude")))
         // codex-acp (npx wrapper) removed — the catalog is npx-free.
-        #expect(!ids.contains("codex-acp"))
+        #expect(!ids.contains(ProviderID(rawValue: "codex-acp")))
     }
 
     @Test func claudeIsAbsent() {
-        #expect(!ACPProviderCatalog.agents.contains(where: { $0.id == "claude" }))
+        #expect(!ACPProviderCatalog.agents.contains(where: { $0.id == ProviderID(rawValue: "claude") }))
     }
 
     @Test func commandFirstEqualsDetectExecutable() {
@@ -336,7 +336,7 @@ import ACPModel
     // MARK: - providerHints
 
     @Test func providerHintsForACPProvider() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
@@ -347,7 +347,7 @@ import ACPModel
     }
 
     @Test func providerHintsEmptyForCLIProvider() {
-        let provider = AgentProvider(id: "claude", label: "Claude")
+        let provider = AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude")
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
@@ -356,7 +356,7 @@ import ACPModel
     }
 
     @Test func providerHintsEmptyForACPWithNoCommand() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", command: nil)
+        let provider = AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: nil)
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
@@ -365,7 +365,7 @@ import ACPModel
     }
 
     @Test func providerHintsNoApiKeyWhenAbsent() {
-        let provider = AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/gemini", "--acp"],
@@ -397,9 +397,9 @@ import ACPModel
     }
 
     @Test func acpFromCatalogAgentCarriesCommand() {
-        let agent = KnownACPAgent(id: "gemini", label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"])
+        let agent = KnownACPAgent(id: ProviderID(rawValue: "gemini"), label: "Gemini CLI", summary: "", detectExecutable: "gemini", command: ["gemini", "--acp"])
         let provider = AgentProvider.acp(from: agent)
-        #expect(provider.id == "gemini")
+        #expect(provider.id == ProviderID(rawValue: "gemini"))
         #expect(provider.command == ["gemini", "--acp"])
         #expect(provider.isDefault == false)
     }
@@ -432,11 +432,11 @@ import ACPModel
         }
         """
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: legacyJSON.data(using: .utf8)!)
-        #expect(loaded.providers.map(\.id) == ["claude-acp", "hermes"])
-        #expect(loaded.provider(id: "hermes")?.env == ["ZAI_API_KEY": "x"])
+        #expect(loaded.providers.map(\.id) == [ProviderID(rawValue: "claude-acp"), ProviderID(rawValue: "hermes")])
+        #expect(loaded.provider(id: ProviderID(rawValue: "hermes"))?.env == ["ZAI_API_KEY": "x"])
         // The stages key was silently dropped — there is no `stageAssignments`
         // property anymore. The default provider resolves normally.
-        #expect(loaded.selectedProvider().id == "claude-acp")
+        #expect(loaded.selectedProvider().id == ProviderID(rawValue: "claude-acp"))
     }
 
     // MARK: - Empty-list reseed
@@ -446,8 +446,8 @@ import ACPModel
         // Hermes/OpenCode seeds were removed in favour of the catalog-driven
         // `AddProviderSheet`).
         let config = AgentProvidersConfig(providers: [])
-        #expect(config.providers.map(\.id) == ["claude-acp"])
-        #expect(config.defaultProvider.id == "claude-acp")
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "claude-acp")])
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
         #expect(config.providers.filter(\.isDefault).count == 1)
     }
 
@@ -458,13 +458,13 @@ import ACPModel
         // the config without it — the first remaining ENABLED provider is
         // promoted.
         let withHermesDefault = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
         ])
-        #expect(withHermesDefault.defaultProvider.id == "hermes")
+        #expect(withHermesDefault.defaultProvider.id == ProviderID(rawValue: "hermes"))
 
-        let afterDeletingHermes = AgentProvidersConfig(providers: withHermesDefault.providers.filter { $0.id != "hermes" })
-        #expect(afterDeletingHermes.defaultProvider.id == "claude-acp")
+        let afterDeletingHermes = AgentProvidersConfig(providers: withHermesDefault.providers.filter { $0.id != ProviderID(rawValue: "hermes") })
+        #expect(afterDeletingHermes.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
         #expect(afterDeletingHermes.providers.filter(\.isDefault).count == 1)
     }
 
@@ -472,10 +472,10 @@ import ACPModel
         // No provider marked default, and the first in list order is disabled
         // → the first ENABLED provider is promoted, not the first overall.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "a", label: "A", command: ["a"], enabled: false, isDefault: false),
-            AgentProvider(id: "b", label: "B", command: ["b"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "a"), label: "A", command: ["a"], enabled: false, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "b"), label: "B", command: ["b"], enabled: true, isDefault: false),
         ])
-        #expect(config.defaultProvider.id == "b")
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "b"))
     }
 
     // MARK: - #604: all ingest stages resolve to the app default provider
@@ -489,13 +489,13 @@ import ACPModel
     @Test func ingestStagesResolveToAppDefaultProvider() {
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude-acp", label: "Claude", command: ["bun"], enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun"], enabled: true, isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             selectedModelIds: ["claude-acp": "sonnet"])
         let provider = config.selectedProvider()
         let modelId = config.selectedModelId(forProvider: provider.id)
-        #expect(provider.id == "claude-acp")
+        #expect(provider.id == ProviderID(rawValue: "claude-acp"))
         #expect(modelId == "sonnet")
         // The planner/executor/finalizer no longer have a distinct API;
         // they all use this single resolution.
@@ -505,17 +505,17 @@ import ACPModel
 
     @Test func claudeIsNoLongerForceInsertedIntoAnArbitraryProviderList() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: true),
         ])
-        #expect(config.providers.map(\.id) == ["hermes"])
-        #expect(config.defaultProvider.id == "hermes")
+        #expect(config.providers.map(\.id) == [ProviderID(rawValue: "hermes")])
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "hermes"))
     }
 
     @Test func claudeModelsAreNotAutoInjected() {
         // Phase 4: the hardcoded opus/sonnet/haiku alias list is gone — model
         // lists come only from ACP discovery (providerModels capture).
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-        #expect(config.cachedModels(forProvider: "claude-acp").isEmpty)
+        #expect(config.cachedModels(forProvider: ProviderID(rawValue: "claude-acp")).isEmpty)
     }
 
     // MARK: - Readiness (#440)
@@ -533,7 +533,7 @@ import ACPModel
     @Test func readinessMessageReturnsMessageWhenBinaryNotFound() {
         // Inject a resolver that always fails → the provider is not ready.
         let provider = AgentProvider(
-            id: "hermes", label: "Hermes",
+            id: ProviderID(rawValue: "hermes"), label: "Hermes",
             command: ["hermes", "acp"], enabled: true, isDefault: true)
         let msg = AgentLauncher.readinessMessage(
             for: provider,
@@ -546,7 +546,7 @@ import ACPModel
     @Test func readinessMessageReturnsMessageWhenNoCommandConfigured() {
         // A provider with no command at all.
         let provider = AgentProvider(
-            id: "broken", label: "Broken",
+            id: ProviderID(rawValue: "broken"), label: "Broken",
             command: nil, enabled: true, isDefault: true)
         let msg = AgentLauncher.readinessMessage(
             for: provider,

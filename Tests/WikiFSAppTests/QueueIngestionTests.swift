@@ -13,8 +13,8 @@ struct CompositeWorkerFactoryTests {
 
     // A fake factory that always returns the same provider ID + a no-op worker.
     private struct FakeFactory: QueueWorkerFactory {
-        let providerIDValue: String?
-        func providerID(for item: QueueItem) async -> String? { providerIDValue }
+        let providerIDValue: ProviderID?
+        func providerID(for item: QueueItem) async -> ProviderID? { providerIDValue }
         func worker(for item: QueueItem) async throws -> any QueueWorker {
             NoopWorker()
         }
@@ -26,70 +26,70 @@ struct CompositeWorkerFactoryTests {
 
     @Test("Routes extraction items to extraction factory")
     func routesExtractionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
         ])
 
         let item = QueueItem(
-            id: "123", queue: .extraction, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "123"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "local-pdf2md")
+        #expect(providerID == ProviderID(rawValue: "local-pdf2md"))
     }
 
     @Test("Routes ingestion items to ingestion factory")
     func routesIngestionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
         ])
 
         let item = QueueItem(
-            id: "456", queue: .ingestion, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "456"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "default-ingest")
+        #expect(providerID == ProviderID(rawValue: "default-ingest"))
     }
 
     @Test("Routes extraction items to extraction factory")
     func routesTranscriptionItems() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
-        let ingestionFactory = FakeFactory(providerIDValue: "default-ingest")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
+        let ingestionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "default-ingest"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory
         ])
 
         let item = QueueItem(
-            id: "tr1", queue: .extraction, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "tr1"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
         let providerID = await composite.providerID(for: item)
-        #expect(providerID == "local-pdf2md")
+        #expect(providerID == ProviderID(rawValue: "local-pdf2md"))
     }
 
     @Test("Missing factory returns nil provider ID")
     func missingFactoryReturnsNil() async throws {
-        let extractionFactory = FakeFactory(providerIDValue: "local-pdf2md")
+        let extractionFactory = FakeFactory(providerIDValue: ProviderID(rawValue: "local-pdf2md"))
         let composite = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory
         ])
 
         let item = QueueItem(
-            id: "789", queue: .ingestion, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "789"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src3")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -121,9 +121,9 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     func setReadinessMessage(_ val: String?) { readinessMessage = val }
 
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -131,7 +131,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
-        calledWikiID = wikiID
+        calledWikiID = wikiID.rawValue
         calledSourceIDs = sourceIDs
         if shouldThrow { throw QueueIngestionError.spawnFailed("test error") }
         onProgress("starting ingest")
@@ -139,8 +139,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     }
 
     func runLint(
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -148,7 +148,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
-        calledLintWikiID = wikiID
+        calledLintWikiID = wikiID.rawValue
         calledLintPageIDs = []
         if shouldThrow { throw QueueIngestionError.spawnFailed("test lint error") }
         onProgress("starting whole-wiki lint")
@@ -156,9 +156,9 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     }
 
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -166,7 +166,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
-        calledLintWikiID = wikiID
+        calledLintWikiID = wikiID.rawValue
         calledLintPageIDs = pageIDs
         if shouldThrow { throw QueueIngestionError.spawnFailed("test lint error") }
         onProgress("starting page lint")
@@ -191,13 +191,13 @@ struct QueueIngestionWorkerTests {
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
-            id: "test1", queue: .ingestion, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "test1"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
 
         try await worker.execute(QueueItem(
-            id: "test1", queue: .ingestion, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "test1"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
@@ -218,7 +218,7 @@ struct QueueIngestionWorkerTests {
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
-                id: "test2", queue: .ingestion, wikiID: "wiki1",
+                id: QueueItemID(rawValue: "test2"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
                 payload: QueueItemPayload(sourceIDs: []),
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
@@ -236,7 +236,7 @@ struct QueueIngestionWorkerTests {
 
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
-                id: "test3", queue: .ingestion, wikiID: "wiki1",
+                id: QueueItemID(rawValue: "test3"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
                 payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
@@ -255,7 +255,7 @@ struct QueueIngestionWorkerTests {
 
         do {
             try await worker.execute(QueueItem(
-                id: "test-ready", queue: .ingestion, wikiID: "wiki1",
+                id: QueueItemID(rawValue: "test-ready"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
                 payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
@@ -286,7 +286,7 @@ struct QueueIngestionWorkerTests {
             emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
         try await worker.execute(QueueItem(
-            id: "test-ready-ok", queue: .ingestion, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "test-ready-ok"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
@@ -308,7 +308,7 @@ struct QueueActivityTrackerIngestionTests {
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: queue, wikiID: "wiki1",
+            id: QueueItemID(rawValue: id), queue: queue, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: sourceIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -337,7 +337,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         #expect(tracker.ingestingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
 
-        let completed = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.ingestingSourceIDs.isEmpty)
         #expect(tracker.isIngesting == false)
@@ -394,7 +394,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")))
 
-        let completed = makeItem(id: item.id, queue: .extraction, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
+        let completed = makeItem(id: item.id.rawValue, queue: .extraction, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.extractingSourceIDs.isEmpty)
         #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == false)
@@ -437,7 +437,7 @@ struct QueueActivityTrackerIngestionTests {
         inputSummary: String? = "/wiki/page.md"
     ) -> PendingPermission {
         PendingPermission(
-            toolCallId: toolCallId,
+            toolCallId: ToolCallID(rawValue: toolCallId),
             title: "Edit file /wiki/page.md",
             toolName: toolName,
             inputSummary: inputSummary,
@@ -505,7 +505,7 @@ struct QueueActivityTrackerIngestionTests {
         // completed row. The launcher's `finish()` emits `nil` first, but a
         // terminal state arriving first (cancelled mid-prompt, hard process
         // death) needs this safety net too.
-        let completed = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.pendingPermission(for: item.id) == nil)
 
@@ -513,7 +513,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
         #expect(tracker.pendingPermission(for: item.id) != nil)
-        let failed = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .failed)
+        let failed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .failed)
         tracker.handleForTesting(.failed(failed, error: "boom"))
         #expect(tracker.pendingPermission(for: item.id) == nil)
 
@@ -521,7 +521,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
         #expect(tracker.pendingPermission(for: item.id) != nil)
-        let cancelled = makeItem(id: item.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .cancelled)
+        let cancelled = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .cancelled)
         tracker.handleForTesting(.cancelled(cancelled))
         #expect(tracker.pendingPermission(for: item.id) == nil)
     }
@@ -545,7 +545,7 @@ struct QueueActivityTrackerIngestionTests {
         // Completing item A should NOT clear item B's state — but more
         // importantly, completing item B (without ever surfacing a permission
         // for it) should leave item A's pending permission intact.
-        let completedB = makeItem(id: itemB.id, queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        let completedB = makeItem(id: itemB.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
         tracker.handleForTesting(.completed(completedB))
         #expect(tracker.pendingPermission(for: itemA.id) == permA)
         #expect(tracker.pendingPermission(for: itemB.id) == nil)
@@ -571,7 +571,7 @@ struct QueueEngineHasActiveWorkTests {
         let engine = QueueEngine(store: store, workerFactory: factory)
         await engine.start()
 
-        let hasWork = await engine.hasActiveWork(for: "wiki1")
+        let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki1"))
         #expect(hasWork == false)
     }
 
@@ -584,10 +584,10 @@ struct QueueEngineHasActiveWorkTests {
         // Enqueue an item
         _ = try store.enqueue(QueueItemRequest(
             queue: .ingestion,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
 
-        let hasWork = await engine.hasActiveWork(for: "wiki1")
+        let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki1"))
         #expect(hasWork == true)
     }
 
@@ -596,13 +596,13 @@ struct QueueEngineHasActiveWorkTests {
         let store = try QueueStore(databaseURL: tempDB())
         _ = try store.enqueue(QueueItemRequest(
             queue: .ingestion,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
 
         let factory = StubWorkerFactory()
         let engine = QueueEngine(store: store, workerFactory: factory)
 
-        let hasWork = await engine.hasActiveWork(for: "wiki2")
+        let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki2"))
         #expect(hasWork == false)
     }
 }
@@ -636,12 +636,12 @@ struct LintIngestionDispatchTests {
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
-            id: "lint1", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "lint1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
         try await worker.execute(QueueItem(
-            id: "lint1", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "lint1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
@@ -662,12 +662,12 @@ struct LintIngestionDispatchTests {
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
-            id: "lint2", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "lint2"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
         try await worker.execute(QueueItem(
-            id: "lint2", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "lint2"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
@@ -686,12 +686,12 @@ struct LintIngestionDispatchTests {
             emitTranscript: { _, _ in }, emitUsage: { _, _ in },
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
-            id: "ing1", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "ing1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
         try await worker.execute(QueueItem(
-            id: "ing1", queue: .ingestion, wikiID: "w1",
+            id: QueueItemID(rawValue: "ing1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
@@ -713,7 +713,7 @@ struct QueueActivityTrackerTranscriptTests {
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: queue, wikiID: "wiki1",
+            id: QueueItemID(rawValue: id), queue: queue, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: sourceIDs, lintPageIDs: lintPageIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -724,8 +724,8 @@ struct QueueActivityTrackerTranscriptTests {
     @Test("Transcript events are forwarded to tracker")
     func transcriptEventsForwarded() async {
         let tracker = QueueActivityTracker()
-        let itemID = "lint-transcript-1"
-        let item = makeItem(id: itemID, queue: .ingestion, sourceIDs: [], lintPageIDs: [])
+        let itemID = QueueItemID(rawValue: "lint-transcript-1")
+        let item = makeItem(id: itemID.rawValue, queue: .ingestion, sourceIDs: [], lintPageIDs: [])
 
         tracker.handleForTesting(.started(item))
         #expect(tracker.lintingItemIDs.contains(itemID))
@@ -743,7 +743,7 @@ struct QueueActivityTrackerTranscriptTests {
         #expect(transcript[1] == event2)
 
         // Terminal state should NOT clear the transcript.
-        let completed = makeItem(id: itemID, queue: .ingestion, sourceIDs: [], lintPageIDs: [], state: .completed)
+        let completed = makeItem(id: itemID.rawValue, queue: .ingestion, sourceIDs: [], lintPageIDs: [], state: .completed)
         tracker.handleForTesting(.completed(completed))
 
         #expect(!tracker.lintingItemIDs.contains(itemID))
@@ -761,7 +761,7 @@ struct QueueActivityTrackerTranscriptTests {
 
         tracker.handleForTesting(.started(item))
         #expect(tracker.isIngesting == true)
-        #expect(tracker.lintingItemIDs.contains("lint-only"))
+        #expect(tracker.lintingItemIDs.contains(QueueItemID(rawValue: "lint-only")))
         #expect(tracker.ingestingSourceIDs.isEmpty)  // no sources for lint
     }
 
@@ -773,10 +773,10 @@ struct QueueActivityTrackerTranscriptTests {
         let item = makeItem(id: "prog-1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
 
         tracker.handleForTesting(.started(item))
-        tracker.handleForTesting(.progress("prog-1", line: "line 1"))
-        tracker.handleForTesting(.progress("prog-1", line: "line 2"))
+        tracker.handleForTesting(.progress(QueueItemID(rawValue: "prog-1"), line: "line 1"))
+        tracker.handleForTesting(.progress(QueueItemID(rawValue: "prog-1"), line: "line 2"))
 
-        let log = tracker.progressLog(for: "prog-1")
+        let log = tracker.progressLog(for: QueueItemID(rawValue: "prog-1"))
         #expect(log.contains("line 1"))
         #expect(log.contains("line 2"))
     }
@@ -794,7 +794,7 @@ struct QueueActivityTrackerRunPathsTests {
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: queue, wikiID: "wiki1",
+            id: QueueItemID(rawValue: id), queue: queue, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: sourceIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -804,8 +804,8 @@ struct QueueActivityTrackerRunPathsTests {
     @Test("Run paths stored per-item")
     func runPathsStoredPerItem() {
         let tracker = QueueActivityTracker()
-        let itemID = "paths-item"
-        let item = makeItem(id: itemID)
+        let itemID = QueueItemID(rawValue: "paths-item")
+        let item = makeItem(id: itemID.rawValue)
         let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
         let debugURL = URL(fileURLWithPath: "/tmp/scratch/debug", isDirectory: true)
 
@@ -820,14 +820,14 @@ struct QueueActivityTrackerRunPathsTests {
     @Test("Run paths survive terminal state")
     func runPathsSurviveCompletion() {
         let tracker = QueueActivityTracker()
-        let itemID = "paths-item"
-        let item = makeItem(id: itemID)
+        let itemID = QueueItemID(rawValue: "paths-item")
+        let item = makeItem(id: itemID.rawValue)
         let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
 
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.runPaths(itemID, logURL: logURL, debugURL: nil))
 
-        let completed = makeItem(id: itemID, state: .completed)
+        let completed = makeItem(id: itemID.rawValue, state: .completed)
         tracker.handleForTesting(.completed(completed))
 
         // Paths persist after completion (same as transcripts) so the user can
@@ -840,8 +840,8 @@ struct QueueActivityTrackerRunPathsTests {
     @Test("Run paths cleared on prune")
     func runPathsClearedOnPrune() {
         let tracker = QueueActivityTracker()
-        let itemID = "paths-item"
-        let item = makeItem(id: itemID)
+        let itemID = QueueItemID(rawValue: "paths-item")
+        let item = makeItem(id: itemID.rawValue)
         let logURL = URL(fileURLWithPath: "/tmp/scratch/run.jsonl")
         let debugURL = URL(fileURLWithPath: "/tmp/scratch/debug", isDirectory: true)
 
@@ -857,7 +857,7 @@ struct QueueActivityTrackerRunPathsTests {
     @Test("Nil paths produce nil accessors")
     func nilPathsProduceNil() {
         let tracker = QueueActivityTracker()
-        let itemID = "never-ran"
+        let itemID = QueueItemID(rawValue: "never-ran")
 
         tracker.handleForTesting(.runPaths(itemID, logURL: nil, debugURL: nil))
 
@@ -903,7 +903,7 @@ struct QueueActivityTrackerInteractiveUsageTests {
         #expect(tracker.todayUsage.outputTokens == savedDaily.outputTokens + 500)
         #expect(tracker.todayUsage.totalTokens == savedDaily.totalTokens + 2300)
         // No queue item → no per-item usage entry is created.
-        #expect(tracker.transcripts["any-interactive"] == nil)
+        #expect(tracker.transcripts[QueueItemID(rawValue: "any-interactive")] == nil)
 
         DailyUsage.save(savedDaily)
     }
@@ -911,7 +911,7 @@ struct QueueActivityTrackerInteractiveUsageTests {
 
 /// A stub factory that never dispatches (providerID returns nil).
 struct StubWorkerFactory: QueueWorkerFactory {
-    func providerID(for item: QueueItem) async -> String? { nil }
+    func providerID(for item: QueueItem) async -> ProviderID? { nil }
     func worker(for item: QueueItem) async throws -> any QueueWorker {
         struct W: QueueWorker { func execute(_ item: QueueItem) async throws {} }
         return W()
@@ -951,10 +951,10 @@ struct QueueActivityTrackerRehydrateTests {
         do {
             let store = try QueueStore(databaseURL: db)
             let item = try store.enqueue(QueueItemRequest(
-                queue: .ingestion, wikiID: "w1",
+                queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
                 payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
             itemID = item.id
-            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markCompleted(id: itemID)
             let data = try JSONEncoder().encode(usage)
             let usageJSON = String(data: data, encoding: .utf8)!
@@ -1001,9 +1001,9 @@ struct QueueActivityTrackerRehydrateTests {
         tracker.attachForTesting(events: AsyncStream { _ in })
         await tracker.rehydrate(from: engine)
 
-        #expect(tracker.usage(for: "never-existed") == nil)
-        #expect(tracker.logURL(for: "never-existed") == nil)
-        #expect(tracker.progressLog(for: "never-existed") == "")
+        #expect(tracker.usage(for: QueueItemID(rawValue: "never-existed")) == nil)
+        #expect(tracker.logURL(for: QueueItemID(rawValue: "never-existed")) == nil)
+        #expect(tracker.progressLog(for: QueueItemID(rawValue: "never-existed")) == "")
     }
 }
 
@@ -1016,12 +1016,12 @@ struct QueueActivityTrackerLintItemIDTests {
     /// so cross-wiki scoping can be exercised.
     private func makeLintItem(
         id: String,
-        wikiID: String = "w1",
+        wikiID: WikiID = WikiID(rawValue: "w1"),
         lintPageIDs: [PageID],
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: .ingestion, wikiID: wikiID,
+            id: QueueItemID(rawValue: id), queue: .ingestion, wikiID: wikiID,
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: lintPageIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -1037,8 +1037,8 @@ struct QueueActivityTrackerLintItemIDTests {
 
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.lintItemID(for: pageA, wikiID: "w1") == "lint-1")
-        #expect(tracker.lintItemID(for: pageB, wikiID: "w1") == "lint-1")
+        #expect(tracker.lintItemID(for: pageA, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-1"))
+        #expect(tracker.lintItemID(for: pageB, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-1"))
     }
 
     @MainActor
@@ -1050,7 +1050,7 @@ struct QueueActivityTrackerLintItemIDTests {
 
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.lintItemID(for: anyPage, wikiID: "w1") == "lint-wiki")
+        #expect(tracker.lintItemID(for: anyPage, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-wiki"))
     }
 
     @MainActor
@@ -1059,7 +1059,7 @@ struct QueueActivityTrackerLintItemIDTests {
         let tracker = QueueActivityTracker()
         let page = PageID(rawValue: "lonely")
 
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == nil)
     }
 
     @MainActor
@@ -1067,13 +1067,13 @@ struct QueueActivityTrackerLintItemIDTests {
     func wholeWikiLintWikiScoped() {
         let tracker = QueueActivityTracker()
         let page = PageID(rawValue: "p1")
-        let item = makeLintItem(id: "lint-w2", wikiID: "w2", lintPageIDs: [])
+        let item = makeLintItem(id: "lint-w2", wikiID: WikiID(rawValue: "w2"), lintPageIDs: [])
 
         tracker.handleForTesting(.started(item))
 
         // A whole-wiki lint in w2 should not match a page in w1.
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
-        #expect(tracker.lintItemID(for: page, wikiID: "w2") == "lint-w2")
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == nil)
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w2")) == QueueItemID(rawValue: "lint-w2"))
     }
 
     @MainActor
@@ -1086,8 +1086,8 @@ struct QueueActivityTrackerLintItemIDTests {
 
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.lintItemID(for: pageA, wikiID: "w1") == "lint-2")
-        #expect(tracker.lintItemID(for: pageC, wikiID: "w1") == nil)
+        #expect(tracker.lintItemID(for: pageA, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-2"))
+        #expect(tracker.lintItemID(for: pageC, wikiID: WikiID(rawValue: "w1")) == nil)
     }
 
     @MainActor
@@ -1098,12 +1098,12 @@ struct QueueActivityTrackerLintItemIDTests {
         let item = makeLintItem(id: "lint-done", lintPageIDs: [page])
 
         tracker.handleForTesting(.started(item))
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == "lint-done")
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-done"))
 
         let completed = makeLintItem(id: "lint-done", lintPageIDs: [page], state: .completed)
         tracker.handleForTesting(.completed(completed))
 
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == nil)
     }
 
     @MainActor
@@ -1114,12 +1114,12 @@ struct QueueActivityTrackerLintItemIDTests {
         let item = makeLintItem(id: "lint-cancel", lintPageIDs: [page])
 
         tracker.handleForTesting(.started(item))
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == "lint-cancel")
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == QueueItemID(rawValue: "lint-cancel"))
 
         let cancelled = makeLintItem(id: "lint-cancel", lintPageIDs: [page], state: .cancelled)
         tracker.handleForTesting(.cancelled(cancelled))
 
-        #expect(tracker.lintItemID(for: page, wikiID: "w1") == nil)
+        #expect(tracker.lintItemID(for: page, wikiID: WikiID(rawValue: "w1")) == nil)
     }
 
     @MainActor
@@ -1133,7 +1133,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("pendingSelectionItemID cleared by stop()")
     func pendingSelectionClearedByStop() {
         let tracker = QueueActivityTracker()
-        tracker.pendingSelectionItemID = "some-item"
+        tracker.pendingSelectionItemID = QueueItemID(rawValue: "some-item")
         tracker.stop()
         #expect(tracker.pendingSelectionItemID == nil)
     }
@@ -1164,7 +1164,7 @@ struct QueueActivityTrackerLintItemIDTests {
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
-            id: id, queue: .extraction, wikiID: "w1",
+            id: QueueItemID(rawValue: id), queue: .extraction, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: sourceIDs),
             state: state, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -1180,8 +1180,8 @@ struct QueueActivityTrackerLintItemIDTests {
 
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.transcriptionItemID(for: srcA) == "tr-1")
-        #expect(tracker.transcriptionItemID(for: srcB) == "tr-1")
+        #expect(tracker.transcriptionItemID(for: srcA) == QueueItemID(rawValue: "tr-1"))
+        #expect(tracker.transcriptionItemID(for: srcB) == QueueItemID(rawValue: "tr-1"))
     }
 
     @MainActor
@@ -1199,7 +1199,7 @@ struct QueueActivityTrackerLintItemIDTests {
         let tracker = QueueActivityTracker()
         let src = PageID(rawValue: "src1")
         let extractionItem = QueueItem(
-            id: "ext-1", queue: .extraction, wikiID: "w1",
+            id: QueueItemID(rawValue: "ext-1"), queue: .extraction, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [src]),
             state: .running, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -1208,7 +1208,7 @@ struct QueueActivityTrackerLintItemIDTests {
 
         // Since transcription merged into .extraction, transcriptionItemID
         // resolves via the extraction item tracking (itemToSourceIDs).
-        #expect(tracker.transcriptionItemID(for: src) == "ext-1")
+        #expect(tracker.transcriptionItemID(for: src) == QueueItemID(rawValue: "ext-1"))
     }
 
     @MainActor
@@ -1219,7 +1219,7 @@ struct QueueActivityTrackerLintItemIDTests {
         let item = makeTranscriptionItem(id: "tr-done", sourceIDs: [src])
 
         tracker.handleForTesting(.started(item))
-        #expect(tracker.transcriptionItemID(for: src) == "tr-done")
+        #expect(tracker.transcriptionItemID(for: src) == QueueItemID(rawValue: "tr-done"))
 
         let completed = makeTranscriptionItem(id: "tr-done", sourceIDs: [src], state: .completed)
         tracker.handleForTesting(.completed(completed))
@@ -1235,7 +1235,7 @@ struct QueueActivityTrackerLintItemIDTests {
         let item = makeTranscriptionItem(id: "tr-cancel", sourceIDs: [src])
 
         tracker.handleForTesting(.started(item))
-        #expect(tracker.transcriptionItemID(for: src) == "tr-cancel")
+        #expect(tracker.transcriptionItemID(for: src) == QueueItemID(rawValue: "tr-cancel"))
 
         let cancelled = makeTranscriptionItem(id: "tr-cancel", sourceIDs: [src], state: .cancelled)
         tracker.handleForTesting(.cancelled(cancelled))
@@ -1250,7 +1250,7 @@ struct QueueActivityTrackerLintItemIDTests {
         let src1 = PageID(rawValue: "src1")
         let src2 = PageID(rawValue: "src2")
         let extractionItem = QueueItem(
-            id: "ext-1", queue: .extraction, wikiID: "w1",
+            id: QueueItemID(rawValue: "ext-1"), queue: .extraction, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [src1]),
             state: .running, orderingKey: 1000, attempt: 0,
             createdAt: 0)
@@ -1260,13 +1260,13 @@ struct QueueActivityTrackerLintItemIDTests {
         tracker.handleForTesting(.started(transcriptionItem))
 
         // Both resolve via itemToSourceIDs (merged into .extraction)
-        #expect(tracker.transcriptionItemID(for: src1) == "ext-1")
-        #expect(tracker.transcriptionItemID(for: src2) == "tr-1")
+        #expect(tracker.transcriptionItemID(for: src1) == QueueItemID(rawValue: "ext-1"))
+        #expect(tracker.transcriptionItemID(for: src2) == QueueItemID(rawValue: "tr-1"))
 
         // Complete the second item → only src2 clears
         tracker.handleForTesting(.completed(transcriptionItem))
         #expect(tracker.transcriptionItemID(for: src2) == nil)
-        #expect(tracker.transcriptionItemID(for: src1) == "ext-1")
+        #expect(tracker.transcriptionItemID(for: src1) == QueueItemID(rawValue: "ext-1"))
     }
 }
 #endif

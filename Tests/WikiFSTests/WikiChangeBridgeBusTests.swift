@@ -23,7 +23,7 @@ struct WikiChangeBridgeBusTests {
     @MainActor
     private func makeModel() throws -> (GRDBWikiStore, WikiEventBus, WikiStoreModel) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
         let model = WikiStoreModel(store: store)
         return (store, bus, model)
@@ -62,7 +62,7 @@ struct WikiChangeBridgeBusTests {
 
         // The bridge's flush emits this coarse event for the active wiki.
         _ = try store.createPage(title: "Second")
-        bus.emit(ResourceChangeEvent(wikiID: "W", kind: nil, id: "", change: .updated))
+        bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["External", "Second"])
 
         let titles = Set(model.summaries.map(\.title))
@@ -73,11 +73,11 @@ struct WikiChangeBridgeBusTests {
     @MainActor @Test func externalEventThenAnotherExternalReloadsAgain() async throws {
         let (store, bus, model) = try makeModel()
         _ = try store.createPage(title: "First")
-        bus.emit(ResourceChangeEvent(wikiID: "W", kind: nil, id: "", change: .updated))
+        bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["First"])
 
         _ = try store.createPage(title: "Second")
-        bus.emit(ResourceChangeEvent(wikiID: "W", kind: nil, id: "", change: .updated))
+        bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["First", "Second"])
 
         #expect(Set(model.summaries.map(\.title)) == ["First", "Second"])
@@ -95,7 +95,7 @@ struct WikiChangeBridgeBusTests {
         let url = tempDatabaseURL()
         // Store A = the app's store (has the bus + model).
         let storeA = try GRDBWikiStore(databaseURL: url)
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         storeA.eventBus = bus
         let model = WikiStoreModel(store: storeA)
         #expect(model.summaries.isEmpty)
@@ -108,7 +108,7 @@ struct WikiChangeBridgeBusTests {
         #expect(model.summaries.isEmpty, "no bus event yet → model must be stale")
 
         // The bridge's coalesced flush emits the coarse event.
-        bus.emit(ResourceChangeEvent(wikiID: "W", kind: nil, id: "", change: .updated))
+        bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["Chat-Created Page"])
 
         #expect(Set(model.summaries.map(\.title)).contains("Chat-Created Page"),
@@ -123,7 +123,7 @@ struct WikiChangeBridgeBusTests {
     @MainActor @Test func burstOfWritesOneCoarseEventSurfacesAll() async throws {
         let url = tempDatabaseURL()
         let storeA = try GRDBWikiStore(databaseURL: url)
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         storeA.eventBus = bus
         let model = WikiStoreModel(store: storeA)
 
@@ -135,7 +135,7 @@ struct WikiChangeBridgeBusTests {
         }
 
         // One coarse event after the burst settles.
-        bus.emit(ResourceChangeEvent(wikiID: "W", kind: nil, id: "", change: .updated))
+        bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["Alpha", "Beta", "Gamma"])
 
         #expect(Set(model.summaries.map(\.title)) == ["Alpha", "Beta", "Gamma"],

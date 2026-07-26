@@ -50,10 +50,10 @@ struct QueueLogRecord: Codable, Sendable {
     let queue: String?
 
     /// The wiki this item belongs to. `nil` for `runStateChanged`.
-    let wikiID: String?
+    let wikiID: WikiID?
 
     /// The provider that claimed the item. `nil` until `markRunning`.
-    let providerID: String?
+    let providerID: ProviderID?
 
     /// The item's `QueueItemState`. `nil` for `runStateChanged` (use
     /// `runState` instead). Typed as `QueueItemState` (not `String`) so
@@ -101,7 +101,7 @@ struct QueueLogRecord: Codable, Sendable {
         switch event {
         case .enqueued(let i):
             self.eventType = .enqueued
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
@@ -116,7 +116,7 @@ struct QueueLogRecord: Codable, Sendable {
 
         case .started(let i):
             self.eventType = .started
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
@@ -131,7 +131,7 @@ struct QueueLogRecord: Codable, Sendable {
 
         case .completed(let i):
             self.eventType = .completed
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
@@ -146,7 +146,7 @@ struct QueueLogRecord: Codable, Sendable {
 
         case .failed(let i, let error):
             self.eventType = .failed
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
@@ -161,7 +161,7 @@ struct QueueLogRecord: Codable, Sendable {
 
         case .cancelled(let i):
             self.eventType = .cancelled
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID
@@ -301,7 +301,7 @@ struct QueueLogRecord: Codable, Sendable {
 
         case .reordered(let i):
             self.eventType = .reordered
-            self.itemID = i.id
+            self.itemID = i.id.rawValue
             self.queue = i.queue.rawValue
             self.wikiID = i.wikiID
             self.providerID = i.providerID

@@ -18,12 +18,12 @@ import WikiFSEngine
 final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     private let containerDirectory: URL
     private let extractionCoordinator: ExtractionCoordinator
-    private let storeResolver: @Sendable (String) -> GRDBWikiStore?
+    private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
 
     init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
-        storeResolver: @escaping @Sendable (String) -> GRDBWikiStore?
+        storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -33,12 +33,12 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     // MARK: - QueueExtractionProvider
 
     func resolveExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
         guard let store = storeResolver(wikiID) else {
-            DebugLog.extraction("DaemonQueueExtractionProvider: no store for wikiID=\(wikiID)")
+            DebugLog.extraction("DaemonQueueExtractionProvider: no store for wikiID=\(wikiID.rawValue)")
             return nil
         }
 
@@ -122,7 +122,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     }
 
     func persistExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         markdown: String,
         backend: ExtractionBackend,
@@ -130,7 +130,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         technique: String?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
-            DebugLog.extraction("DaemonQueueExtractionProvider: persistExtraction — no store for wikiID=\(wikiID)")
+            DebugLog.extraction("DaemonQueueExtractionProvider: persistExtraction — no store for wikiID=\(wikiID.rawValue)")
             return
         }
         if let technique {
@@ -147,7 +147,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     sourceVersionID: nil, note: nil, modelVersion: modelVersion)
             })
         }
-        DarwinNotifier.postChange(forWikiID: wikiID)
+        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
     }
 }
 

@@ -11,7 +11,7 @@ import WikiFSEngine
 struct ExtractionCompareContext: Codable, Hashable {
     let sourceID: PageID
     let filename: String
-    let wikiID: String
+    let wikiID: WikiID
 
     static func == (lhs: ExtractionCompareContext, rhs: ExtractionCompareContext) -> Bool {
         lhs.sourceID == rhs.sourceID && lhs.wikiID == rhs.wikiID

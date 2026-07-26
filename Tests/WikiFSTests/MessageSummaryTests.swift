@@ -68,11 +68,11 @@ struct MessageSummaryTests {
         // The critical invariant: an empty/absent pin ⇒ Default (truncation,
         // no model call). NEVER use `provider(forStage:)` for this decision.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ])
         // Confirm the precondition: provider(forStage:) returns a provider
         // (the global default) EVEN when the pin is empty — that's the trap.
-        #expect(config.provider(forStage: "summarizer").id == "claude")
+        #expect(config.provider(forStage: "summarizer").id == ProviderID(rawValue: "claude"))
         // And yet mode(for:) correctly reports Default because it reads
         // stageProviderIds directly, not provider(forStage:).
         #expect(MessageSummarizer.mode(for: config) == .defaultTruncation)
@@ -81,7 +81,7 @@ struct MessageSummaryTests {
     @Test func mode_absentPin_returnsDefaultTruncation() {
         // No "summarizer" key at all → Default.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ])
         #expect(config.stageProviderIds["summarizer"] == nil)
         #expect(MessageSummarizer.mode(for: config) == .defaultTruncation)
@@ -90,8 +90,8 @@ struct MessageSummaryTests {
     @Test func mode_nonEmptyPin_returnsModel() {
         // A pinned provider ⇒ Model.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ]).settingStageProvider("gemini", forStage: "summarizer")
         #expect(MessageSummarizer.mode(for: config) == .model)
     }
@@ -99,7 +99,7 @@ struct MessageSummaryTests {
     @Test func mode_clearedPin_returnsDefaultTruncation() {
         // Setting then clearing the pin restores Default.
         let base = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ])
         let pinned = base.settingStageProvider("claude", forStage: "summarizer")
         #expect(MessageSummarizer.mode(for: pinned) == .model)
@@ -254,7 +254,7 @@ struct MessageSummaryTests {
         // when it's empty — even though the caller should have confirmed model
         // mode before calling.
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ])
         let creds = InMemoryACPCredentialStore()
         let profile = MessageSummarizer.resolveProfile(
@@ -266,7 +266,7 @@ struct MessageSummaryTests {
 
     @Test func resolveProfile_pinnedProvider_buildsHints() throws {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ]).settingStageProvider("claude", forStage: "summarizer")
         let creds = InMemoryACPCredentialStore()
         try creds.setAPIKey("secret-key", forProvider: "claude")
@@ -283,7 +283,7 @@ struct MessageSummaryTests {
 
     @Test func resolveProfile_unresolvableCommand_returnsNil() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ]).settingStageProvider("claude", forStage: "summarizer")
         let profile = MessageSummarizer.resolveProfile(
             config: config,

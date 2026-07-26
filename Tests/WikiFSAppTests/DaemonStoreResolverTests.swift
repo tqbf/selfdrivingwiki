@@ -27,7 +27,7 @@ struct DaemonStoreResolverTests {
 
     /// Create a registered wiki and return the daemon + its wikiID, with the
     /// store dropped from the cache so the resolver must lazy-open it.
-    private func makeDaemonWithUncachedWiki() throws -> (WikiDaemon, String) {
+    private func makeDaemonWithUncachedWiki() throws -> (WikiDaemon, WikiID) {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiData = try #require(daemon.createWiki(name: "ResolverTestWiki"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: wikiData)
@@ -42,7 +42,7 @@ struct DaemonStoreResolverTests {
     @Test func resolveStoreLazilyReturnsNilForUnknownWikiID() {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         // Registry is empty → no lazy open possible.
-        #expect(daemon.resolveStoreLazily(wikiID: "not-a-registered-wiki") == nil)
+        #expect(daemon.resolveStoreLazily(wikiID: WikiID(rawValue: "not-a-registered-wiki")) == nil)
     }
 
     // MARK: - AC.2 — registered wiki is lazily opened and cached

@@ -38,7 +38,7 @@ struct QueueEngineTests {
         // so only one runs at a time, and record execution order.
         let recorder = FakeWorkerRecorder()
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
             }
@@ -51,11 +51,11 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let id2 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let id3 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         // Start the engine (triggers dispatch + rehydration).
         await engine.start()
@@ -79,7 +79,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()  // Block the first item so the slot is held.
@@ -89,9 +89,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let blockedID = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let waitingID = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -120,7 +120,7 @@ struct QueueEngineTests {
         let factory = FakeWorkerFactory(
             providerID: { item in
                 // Assign items to different providers based on their wikiID.
-                item.wikiID == "w1" ? "p1" : "p2"
+                item.wikiID == WikiID(rawValue: "w1") ? ProviderID(rawValue: "p1") : ProviderID(rawValue: "p2")
             },
             worker: { item in
                 recorder.record(item.id)
@@ -131,9 +131,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -153,7 +153,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -164,9 +164,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         await engine.start()
 
@@ -190,7 +190,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "local-pdf2md" },
+            providerID: { _ in ProviderID(rawValue: "local-pdf2md") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -200,9 +200,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -225,7 +225,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -235,9 +235,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -266,7 +266,7 @@ struct QueueEngineTests {
         do {
             let store = try QueueStore(databaseURL: url)
             let factory = FakeWorkerFactory(
-                providerID: { _ in "p1" },
+                providerID: { _ in ProviderID(rawValue: "p1") },
                 worker: { _ in }
             )
             let engine = QueueEngine(
@@ -279,7 +279,7 @@ struct QueueEngineTests {
         // Reopen at the same URL.
         let store = try QueueStore(databaseURL: url)
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in }
         )
         let engine = QueueEngine(
@@ -303,7 +303,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -313,7 +313,7 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         await engine.start()
         try await recorder.waitForCount(1, timeoutSeconds: 5)
@@ -345,7 +345,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 if recorder.executedIDs.count == 1 {
@@ -364,9 +364,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -396,7 +396,7 @@ struct QueueEngineTests {
         // First call throws; subsequent calls block on the gate so the
         // retried item stays alive while we inspect it.
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 if item.attempt == 0 { throw TestError() }
                 await gate.wait()
@@ -406,7 +406,7 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         await engine.start()
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -445,7 +445,7 @@ struct QueueEngineTests {
 
         let gate = CountDownLatch(count: 1)
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in await gate.wait() }
         )
         let engine = QueueEngine(store: store, config: QueueEngineConfig(), workerFactory: factory)
@@ -454,7 +454,7 @@ struct QueueEngineTests {
         // Enqueue should return immediately even though the worker is blocked.
         let start = Date()
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(elapsed < 0.5)  // Should be near-instant.
@@ -476,9 +476,9 @@ struct QueueEngineTests {
                 // concurrently while the third waits for a slot — which is what
                 // the test intends to exercise.
                 switch item.wikiID {
-                case "w1", "w3": return "p1"
-                case "w2": return "p2"
-                default: return "p1"
+                case WikiID(rawValue: "w1"), WikiID(rawValue: "w3"): return ProviderID(rawValue: "p1")
+                case WikiID(rawValue: "w2"): return ProviderID(rawValue: "p2")
+                default: return ProviderID(rawValue: "p1")
                 }
             },
             worker: { item in recorder.record(item.id) }
@@ -489,11 +489,11 @@ struct QueueEngineTests {
 
         // Enqueue items from 3 different wikis.
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w3", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w3"), payload: makePayload()))
 
         await engine.start()
 
@@ -504,9 +504,9 @@ struct QueueEngineTests {
         #expect(snap.recentItems.count == 3)
 
         let wikis = Set(snap.recentItems.map(\.wikiID))
-        #expect(wikis.contains("w1"))
-        #expect(wikis.contains("w2"))
-        #expect(wikis.contains("w3"))
+        #expect(wikis.contains(WikiID(rawValue: "w1")))
+        #expect(wikis.contains(WikiID(rawValue: "w2")))
+        #expect(wikis.contains(WikiID(rawValue: "w3")))
 
         store.close()
     }
@@ -522,9 +522,9 @@ struct QueueEngineTests {
         do {
             let store = try QueueStore(databaseURL: url)
             let item = try store.enqueue(
-                QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
             itemID = item.id
-            try store.markRunning(id: itemID, providerID: "p1")
+            try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             // Simulate crash — close without transitioning to a terminal state.
             store.close()
         }
@@ -532,7 +532,7 @@ struct QueueEngineTests {
         // Reopen and start the engine.
         let store = try QueueStore(databaseURL: url)
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in }
         )
         let engine = QueueEngine(store: store, config: QueueEngineConfig(), workerFactory: factory)
@@ -554,7 +554,7 @@ struct QueueEngineTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in }
         )
         let engine = QueueEngine(store: store, config: QueueEngineConfig(), workerFactory: factory)
@@ -575,7 +575,7 @@ struct QueueEngineTests {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         let events = await eventTask.value
 
@@ -600,14 +600,14 @@ struct QueueEngineTests {
 
         let gate = CountDownLatch(count: 1)
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in await gate.wait() }
         )
         let engine = QueueEngine(store: store, config: QueueEngineConfig(), workerFactory: factory)
         await engine.start()
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         try await Task.sleep(nanoseconds: 200_000_000)
 
@@ -635,7 +635,7 @@ struct QueueEngineTests {
 
         let gate = CountDownLatch(count: 1)
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in await gate.wait() }
         )
         let config = QueueEngineConfig(localExtractionLimit: 1)
@@ -643,9 +643,9 @@ struct QueueEngineTests {
 
         // Enqueue 2 items — the first will start (blocking), the second will be queued.
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let id2 = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w2", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -679,7 +679,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -690,9 +690,9 @@ struct QueueEngineTests {
 
         // Enqueue a lint item and an ingestion item for the SAME wiki.
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         await engine.start()
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -713,7 +713,7 @@ struct QueueEngineTests {
         let gate = CountDownLatch(count: 1)
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -723,9 +723,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w2", payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: lintPayload()))
 
         await engine.start()
 
@@ -743,7 +743,7 @@ struct QueueEngineTests {
         let recorder = FakeWorkerRecorder()
 
         let factory = FakeWorkerFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { item in
                 recorder.record(item.id)
                 await gate.wait()
@@ -755,9 +755,9 @@ struct QueueEngineTests {
         // Both on the SAME wiki so the per-wiki invariant keeps the second queued
         // until the first finishes. Then pause stops the second from dispatching.
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
 
         await engine.start()
         try await recorder.waitForCount(1, timeoutSeconds: 5)
@@ -781,18 +781,18 @@ struct QueueEngineTests {
 /// A factory that returns a fixed provider ID and a closure-based worker.
 /// Used by tests to inject controlled worker behavior.
 private final class FakeWorkerFactory: QueueWorkerFactory, @unchecked Sendable {
-    let providerIDFunc: @Sendable (QueueItem) async -> String?
+    let providerIDFunc: @Sendable (QueueItem) async -> ProviderID?
     let workerFunc: @Sendable (QueueItem) async throws -> Void
 
     init(
-        providerID: @escaping @Sendable (QueueItem) async -> String?,
+        providerID: @escaping @Sendable (QueueItem) async -> ProviderID?,
         worker: @escaping @Sendable (QueueItem) async throws -> Void
     ) {
         self.providerIDFunc = providerID
         self.workerFunc = worker
     }
 
-    func providerID(for item: QueueItem) async -> String? {
+    func providerID(for item: QueueItem) async -> ProviderID? {
         await providerIDFunc(item)
     }
 

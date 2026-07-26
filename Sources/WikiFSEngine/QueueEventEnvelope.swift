@@ -33,8 +33,8 @@ public struct QueueEventEnvelope: Codable, Sendable {
     public let pendingPermissionJSON: String?
 
     // Chat-specific fields (Phase C). nil for queue kinds.
-    public let chatID: String?
-    public let acpSessionId: String?
+    public let chatID: PageID?
+    public let acpSessionId: AcpSessionID?
     public let chatStateData: Data?
 
     public init(kind: Kind, item: QueueItem? = nil, itemID: QueueItem.ID? = nil,
@@ -43,7 +43,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
                 logURL: URL? = nil, debugURL: URL? = nil,
                 queue: QueueKind? = nil, runState: QueueRunState? = nil,
                 pendingPermissionJSON: String? = nil,
-                chatID: String? = nil, acpSessionId: String? = nil,
+                chatID: PageID? = nil, acpSessionId: AcpSessionID? = nil,
                 chatStateData: Data? = nil) {
         self.kind = kind
         self.item = item
@@ -95,7 +95,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case .pendingPermission(let id, let permission):
             let json: String? = permission.map { perm in
                 let dict: [String: Any] = [
-                    "toolCallId": perm.toolCallId,
+                    "toolCallId": perm.toolCallId.rawValue,
                     "title": perm.title as Any,
                     "toolName": perm.toolName as Any,
                     "inputSummary": perm.inputSummary as Any
@@ -171,7 +171,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
     }
 
     /// Build a `.chatEvent` envelope carrying one streamed `AgentEvent` for a chat.
-    public static func chatEvent(chatID: String, event: AgentEvent) -> QueueEventEnvelope {
+    public static func chatEvent(chatID: PageID, event: AgentEvent) -> QueueEventEnvelope {
         let data = DebugLog.trying("encode chatEvent", operation: { try JSONEncoder().encode(event) }) ?? Data()
         return QueueEventEnvelope(
             kind: .chatEvent, agentEventData: data, chatID: chatID)
@@ -185,7 +185,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     /// Build a `.chatState` envelope carrying run-flag changes.
     public static func chatState(
-        chatID: String, update: ChatStateUpdate
+        chatID: PageID, update: ChatStateUpdate
     ) -> QueueEventEnvelope {
         let data = DebugLog.trying("encode chatState", operation: { try JSONEncoder().encode(update) }) ?? Data()
         return QueueEventEnvelope(
@@ -200,7 +200,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     /// Build a `.chatAcpSessionId` envelope for the #830 session-id writeback.
     public static func chatAcpSessionId(
-        chatID: String, sessionId: String?
+        chatID: PageID, sessionId: AcpSessionID?
     ) -> QueueEventEnvelope {
         QueueEventEnvelope(
             kind: .chatAcpSessionId, chatID: chatID, acpSessionId: sessionId)
@@ -208,11 +208,11 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     /// Build a `.chatPendingPermission` envelope.
     public static func chatPendingPermission(
-        chatID: String, permission: PendingPermission?
+        chatID: PageID, permission: PendingPermission?
     ) -> QueueEventEnvelope {
         let json: String? = permission.map { perm in
             let dict: [String: Any] = [
-                "toolCallId": perm.toolCallId,
+                "toolCallId": perm.toolCallId.rawValue,
                 "title": perm.title as Any,
                 "toolName": perm.toolName as Any,
                 "inputSummary": perm.inputSummary as Any,

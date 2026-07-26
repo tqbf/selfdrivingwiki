@@ -51,7 +51,7 @@ public enum AgentStaging {
   /// prefix and would silently collide for same-ms sources).
   @discardableResult
   public static func stageSources(
-    _ sources: [(bytes: Data, ext: String, name: String, sourceID: String)],
+    _ sources: [(bytes: Data, ext: String, name: String, sourceID: PageID)],
     in scratchDirectory: URL
   ) throws -> [String] {
     var paths: [String] = []
@@ -93,7 +93,7 @@ public enum AgentStaging {
   ///     `Cost-Revenue-Q3--01KXY….md`
   ///   `("",                          "01KXY…", "md")` →
   ///     `untitled--01KXY….md`
-  public static func shellSafeLeaf(name: String, sourceID: String, ext: String) -> String {
+  public static func shellSafeLeaf(name: String, sourceID: PageID, ext: String) -> String {
     // (1) escapeTitle: strip control chars, replace `/` & `:` with `-`, handle
     //     leading `.` and empty → "untitled" (FilenameEscaping.swift).
     var stem = FilenameEscaping.escapeTitle(name)
@@ -112,7 +112,7 @@ public enum AgentStaging {
     let safeExt = String(ext.lowercased().unicodeScalars.compactMap { scalar -> Character? in
       allowed.contains(scalar) ? Character(scalar) : nil
     })
-    let base = "\(stem)--\(sourceID)"   // full 26-char ULID (fix #2)
+    let base = "\(stem)--\(sourceID.rawValue)"   // full 26-char ULID (fix #2)
     return safeExt.isEmpty ? base : "\(base).\(safeExt)"
   }
 }

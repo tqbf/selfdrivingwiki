@@ -244,8 +244,8 @@ import SQLite3
         #expect(try store.getChat(id: chat.id).acpSessionId == nil)
 
         // Write.
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-123")
-        #expect(try store.getChat(id: chat.id).acpSessionId == "acp-123")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "acp-123"))
+        #expect(try store.getChat(id: chat.id).acpSessionId == AcpSessionID(rawValue: "acp-123"))
 
         // Clear.
         try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: nil)
@@ -256,18 +256,18 @@ import SQLite3
     @Test func listChatsIncludesAcpSessionId() throws {
         let store = try tempStore()
         let chat = try store.createChat(kind: .edit, title: "Test")
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-456")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "acp-456"))
         let listed = try store.listChats()
-        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == "acp-456")
+        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == AcpSessionID(rawValue: "acp-456"))
     }
 
     /// AC.4b: `listAllChatsOrderedByID` includes the `acpSessionId`.
     @Test func listAllChatsIncludesAcpSessionId() throws {
         let store = try tempStore()
         let chat = try store.createChat(kind: .edit, title: "Test")
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-789")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "acp-789"))
         let listed = try store.listAllChatsOrderedByID()
-        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == "acp-789")
+        #expect(listed.first(where: { $0.id == chat.id })?.acpSessionId == AcpSessionID(rawValue: "acp-789"))
     }
 
     /// AC.1: migration v42→v43 adds the `acp_session_id` column to a DB

@@ -105,7 +105,7 @@ final class QueueActivityTracker {
     /// wiki, so every page-detail "Lint" button in that wiki should reflect
     /// the running state. Wiki-scoped (not page-scoped) so a whole-wiki
     /// lint on one wiki doesn't mark another wiki's pages as linting.
-    private(set) var wholeWikiLintingWikiIDs: Set<String> = []
+    private(set) var wholeWikiLintingWikiIDs: Set<WikiID> = []
 
     /// Maps a lint item ID → the page IDs it lints (empty = whole-wiki).
     /// Used by ``lintItemID(for:wikiID:)`` to resolve which running lint job
@@ -119,7 +119,7 @@ final class QueueActivityTracker {
     /// `lintPageIDs`) that covers EVERY page in its wiki from a page-level
     /// lint in a different wiki. Whole-wiki lints match by wiki ID; page-level
     /// lints match by page ID (ULIDs are globally unique across wikis).
-    private var itemToLintWikiID: [QueueItem.ID: String] = [:]
+    private var itemToLintWikiID: [QueueItem.ID: WikiID] = [:]
 
     /// A pending item selection requested from outside the Activity window —
     /// e.g. PageDetailView's "View Lint" button (#837) or SourceDetailView's
@@ -164,7 +164,7 @@ final class QueueActivityTracker {
     /// every page in its wiki. Used by `PageDetailView` to disable its Lint
     /// button and reflect the running state. Page IDs are ULIDs (globally
     /// unique), so the page-level branch needs no wiki check.
-    func isLinting(pageID: PageID, wikiID: String) -> Bool {
+    func isLinting(pageID: PageID, wikiID: WikiID) -> Bool {
         lintingPageIDs.contains(pageID) || wholeWikiLintingWikiIDs.contains(wikiID)
     }
 
@@ -175,7 +175,7 @@ final class QueueActivityTracker {
     /// (#837). Page-level lints match by page ID (ULIDs are globally unique);
     /// whole-wiki lints match by wiki ID (empty `lintPageIDs` covers every
     /// page in that wiki).
-    func lintItemID(for pageID: PageID, wikiID: String) -> QueueItem.ID? {
+    func lintItemID(for pageID: PageID, wikiID: WikiID) -> QueueItem.ID? {
         for (itemID, lintPageIDs) in itemToLintPageIDs {
             guard itemToLintWikiID[itemID] == wikiID else { continue }
             if lintPageIDs.isEmpty {
@@ -663,11 +663,11 @@ final class QueueActivityTracker {
                     if pageIDs.isEmpty {
                         // Whole-wiki lint: covers every page in this wiki.
                         wholeWikiLintingWikiIDs.insert(item.wikiID)
-                        DebugLog.ingest("LintActivity: started whole-wiki lint for wiki \(item.wikiID.prefix(8)) (item \(item.id.prefix(8)))")
+                        DebugLog.ingest("LintActivity: started whole-wiki lint for wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.rawValue.prefix(8)))")
                     } else {
                         // Page-level lint: track the specific pages.
                         lintingPageIDs.formUnion(pageIDs)
-                        DebugLog.ingest("LintActivity: started page-level lint for \(pageIDs.count) page(s) in wiki \(item.wikiID.prefix(8)) (item \(item.id.prefix(8)))")
+                        DebugLog.ingest("LintActivity: started page-level lint for \(pageIDs.count) page(s) in wiki \(item.wikiID.rawValue.prefix(8)) (item \(item.id.rawValue.prefix(8)))")
                     }
                 } else {
                     ingestingSourceIDs.formUnion(sourceIDs)

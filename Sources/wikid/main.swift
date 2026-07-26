@@ -95,16 +95,16 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func openStore(wikiID: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.openStore(wikiID: wikiID))
+        reply(daemon.openStore(wikiID: WikiID(rawValue: wikiID)))
     }
 
     func closeStore(wikiID: String, reply: @escaping () -> Void) {
-        daemon.closeStore(wikiID: wikiID)
+        daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
         reply()
     }
 
     func changeToken(wikiID: String, reply: @escaping (String) -> Void) {
-        reply(daemon.changeToken(wikiID: wikiID))
+        reply(daemon.changeToken(wikiID: WikiID(rawValue: wikiID)))
     }
 
     // MARK: - Workload: event sink registration (Phase 0)
@@ -141,7 +141,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let engine = try await daemon.ensureQueueEngine()
                 let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
                 let id = try await engine.enqueue(req)
-                let envelope: [String: String?] = ["id": id, "error": nil]
+                // XPC wire boundary: the engine returns a QueueItemID; the reply dict serializes the raw String.
+                let envelope: [String: String?] = ["id": id.rawValue, "error": nil]
                 let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
@@ -156,7 +157,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                await engine.cancelItem(id)
+                await engine.cancelItem(QueueItemID(rawValue: id))
             }
             sendableReply.reply()
         }
@@ -179,7 +180,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         Task { [daemon] in
             do {
                 let engine = try await daemon.ensureQueueEngine()
-                try await engine.retryItem(id)
+                try await engine.retryItem(QueueItemID(rawValue: id))
                 let envelope: [String: String?] = ["error": nil]
                 let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
@@ -228,7 +229,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                await engine.reorderItem(id: id, beforeItemID: beforeItemID)
+                await engine.reorderItem(id: QueueItemID(rawValue: id), beforeItemID: beforeItemID.map { QueueItemID(rawValue: $0) })
             }
             sendableReply.reply()
         }
@@ -238,7 +239,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let result = await engine.hasActiveWork(for: wikiID)
+                let result = await engine.hasActiveWork(for: WikiID(rawValue: wikiID))
                 sendableReply.reply(result)
             } else {
                 sendableReply.reply(false)
@@ -258,7 +259,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 sendableReply.reply(data)
                 return
             }
-            let result = await engine.waitForCompletion(of: id)
+            let result = await engine.waitForCompletion(of: QueueItemID(rawValue: id))
             switch result {
             case .success:
                 let envelope: [String: Any] = ["success": true]
@@ -281,7 +282,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let events = await engine.loadTranscript(for: itemID)
+                let events = await engine.loadTranscript(for: QueueItemID(rawValue: itemID))
                 let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(events) })) ?? Data()
                 sendableReply.reply(data)
             } else {
@@ -297,7 +298,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 let snapshots = await engine.loadAllActivitySnapshots()
                 var data: [String: QueueEngine.ActivitySnapshotData] = [:]
                 for (id, snapshot) in snapshots {
-                    data[id] = QueueEngine.ActivitySnapshotData(from: snapshot)
+                    data[id.rawValue] = QueueEngine.ActivitySnapshotData(from: snapshot)
                 }
                 let result = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(data) })) ?? Data()
                 sendableReply.reply(result)
@@ -336,7 +337,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func stopChat(chatID: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            await daemon.stopChat(chatID: chatID)
+            await daemon.stopChat(chatID: PageID(rawValue: chatID))
             sendableReply.reply()
         }
     }
@@ -344,7 +345,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            let data = await daemon.chatSessionStateData(chatID: chatID)
+            let data = await daemon.chatSessionStateData(chatID: PageID(rawValue: chatID))
             sendableReply.reply(data)
         }
     }
@@ -619,14 +620,14 @@ while let line = readLine() {
             result = nil
         }
     case "openStore":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         result = daemon.openStore(wikiID: wikiID)
     case "closeStore":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         daemon.closeStore(wikiID: wikiID)
         result = nil
     case "changeToken":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         result = daemon.changeToken(wikiID: wikiID)
     case "queueSnapshot":
         // Phase 0 scaffold: returns an empty JSON snapshot (no WikiFSEngine

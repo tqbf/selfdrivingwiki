@@ -389,9 +389,9 @@ public struct ACPProviderModelProbe: Sendable {
     /// (`acp-agent.ts:1095-1103`) always `terminateChildProcess` regardless
     /// of `session/close`. The SDK `Client.terminate()` is the equivalent: it
     /// kills the subprocess itself.
-    private static func terminateAndLog(_ client: Client, reason: String, providerID: String) async {
+    private static func terminateAndLog(_ client: Client, reason: String, providerID: ProviderID) async {
         await client.terminate()
-        DebugLog.agent("ACPProviderModelProbe.terminate(\(reason)): provider=\(providerID)")
+        DebugLog.agent("ACPProviderModelProbe.terminate(\(reason)): provider=\(providerID.rawValue)")
     }
 }
 

@@ -143,7 +143,7 @@ import WikiFSCore
             firstMessage: "hello",
             launcher: launcher,
             store: model,
-            wikiID: "wiki-test",
+            wikiID: WikiID(rawValue: "wiki-test"),
             changeSignaler: StubChangeSignaler(),
             wikictlDirectory: "/tmp/wiki-test"
         )
@@ -219,7 +219,7 @@ import WikiFSCore
         // Pre-write a config whose DEFAULT provider is opencode with no model.
         // #663: `.opencodeDefault` was deleted; built inline.
         var opencodeDefault = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],

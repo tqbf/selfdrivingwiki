@@ -63,7 +63,7 @@ struct WikiRegistryClientTests {
         let first = registry.activeWikiID!
 
         // Write a uniquely-titled page into wiki A via the store directly.
-        let storeA = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(first).sqlite"))
+        let storeA = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(first.rawValue).sqlite"))
         let pageA = try storeA.createPage(title: "Only-In-A")
         try storeA.updatePage(id: pageA.id, title: "Only-In-A", body: "A")
 
@@ -73,7 +73,7 @@ struct WikiRegistryClientTests {
         #expect(b.id != first)
 
         // B has its own DB: it must NOT contain A's page.
-        let storeB = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(b.id).sqlite"))
+        let storeB = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(b.id.rawValue).sqlite"))
         let bTitles = (try storeB.listPages(sortBy: .lastUpdated)).map(\.title)
         #expect(!bTitles.contains("Only-In-A"))
 
@@ -91,8 +91,8 @@ struct WikiRegistryClientTests {
         let b = await registry.createWiki(displayName: "B")
 
         let fm = FileManager.default
-        #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(a).sqlite").path))
-        #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(b.id).sqlite").path))
+        #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(a.rawValue).sqlite").path))
+        #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(b.id.rawValue).sqlite").path))
         #expect(a != b.id)
     }
 
@@ -104,7 +104,7 @@ struct WikiRegistryClientTests {
         registry.bootstrap()
         _ = registry.activeWikiID!
         let b = await registry.createWiki(displayName: "B")
-        let bPath = dir.appendingPathComponent("\(b.id).sqlite").path
+        let bPath = dir.appendingPathComponent("\(b.id.rawValue).sqlite").path
         #expect(FileManager.default.fileExists(atPath: bPath))
 
         await registry.deleteWiki(id: b.id)
@@ -142,7 +142,7 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         let id = registry.activeWikiID!
-        let path = dir.appendingPathComponent("\(id).sqlite").path
+        let path = dir.appendingPathComponent("\(id.rawValue).sqlite").path
         #expect(FileManager.default.fileExists(atPath: path))
 
         await registry.renameWiki(id: id, to: "Renamed")
@@ -155,7 +155,7 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: tempDirectory())
         registry.bootstrap()
         let id = try #require(registry.activeWikiID)
-        var renamedDomain: (id: String, displayName: String)?
+        var renamedDomain: (id: WikiID, displayName: String)?
         registry.renameDomain = { id, displayName in
             renamedDomain = (id, displayName)
         }
@@ -175,7 +175,7 @@ struct WikiRegistryClientTests {
         let id = try #require(registry.activeWikiID)
 
         // Write a page via the store directly.
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(id).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(id.rawValue).sqlite"))
         let page = try store.createPage(title: "Exported Page")
         try store.updatePage(id: page.id, title: "Exported Page", body: "backup body")
 
@@ -194,7 +194,7 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         let id = try #require(registry.activeWikiID)
-        let sourceURL = dir.appendingPathComponent("\(id).sqlite")
+        let sourceURL = dir.appendingPathComponent("\(id.rawValue).sqlite")
 
         #expect(throws: WikiRegistryError.exportWouldOverwriteSource) {
             try registry.exportWiki(id: id, to: sourceURL)
@@ -209,7 +209,7 @@ struct WikiRegistryClientTests {
         let originalID = try #require(registry.activeWikiID)
 
         // Write a page via the store directly.
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(originalID).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(originalID.rawValue).sqlite"))
         let page = try store.createPage(title: "Restored Page")
         try store.updatePage(id: page.id, title: "Restored Page", body: "restored body")
 
@@ -223,10 +223,10 @@ struct WikiRegistryClientTests {
         #expect(registry.activeWikiID == imported.id)
         #expect(registry.wikis.first?.id == imported.id)
         #expect(FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("\(imported.id).sqlite").path))
+            atPath: dir.appendingPathComponent("\(imported.id.rawValue).sqlite").path))
 
         // Verify the imported page is present.
-        let restoredStore = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(imported.id).sqlite"))
+        let restoredStore = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(imported.id.rawValue).sqlite"))
         let titles = (try? restoredStore.listPages(sortBy: .lastUpdated))?.map(\.title) ?? []
         #expect(titles.contains("Restored Page"))
         let pageID = try restoredStore.resolveTitleToID("Restored Page")
@@ -256,9 +256,9 @@ struct WikiRegistryClientTests {
 
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
         #expect(FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("\(descriptor.id).sqlite").path))
+            atPath: dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite").path))
 
-        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(descriptor.id).sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite"))
         let titles = (try? store.listPages(sortBy: .lastUpdated))?.map(\.title) ?? []
         #expect(titles.contains("Legacy Home"))
         let pageID = try store.resolveTitleToID("Legacy Home")

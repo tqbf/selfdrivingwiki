@@ -332,7 +332,7 @@ struct ACPProviderModelProbeTests {
         // A provider with maxConcurrent set — the field the parent's `save(_)`,
         // helper DROPS (pre-existing bug). `settingCachedModels` (the path the
         // probe-driven persist uses) must carry it through.
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"])
         let original = AgentProvidersConfig(
             providers: [provider],
             selectedModelIds: ["hermes": "glm-4.7"],
@@ -348,26 +348,26 @@ struct ACPProviderModelProbeTests {
 
         // The persist path the sheet's `onRefreshModels` closure drives —
         // identical to `AgentsSettingsView.persistDiscoveredModels` body.
-        let updated = original.settingCachedModels(discovered, forProvider: "hermes")
+        let updated = original.settingCachedModels(discovered, forProvider: ProviderID(rawValue: "hermes"))
         try updated.save(to: tmp)
 
         // Reload from disk and assert the discovered list round-tripped AND
         // the OTHER fields (maxConcurrent, favorites, selection) survived.
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
-        #expect(reloaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
-        #expect(reloaded.cachedModels(forProvider: "hermes").first?.name == "GLM-4.7")
+        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).first?.name == "GLM-4.7")
         // maxConcurrent carried through (the parent's `save(_:)` helper drops
         // this — pinning that the probe persist does NOT).
         #expect(reloaded.maxConcurrent["hermes"] == 3)
-        #expect(reloaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
-        #expect(reloaded.favoriteModels(forProvider: "hermes") == ["glm-4.7"])
+        #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
+        #expect(reloaded.favoriteModels(forProvider: ProviderID(rawValue: "hermes")) == ["glm-4.7"])
     }
 
     /// The probe's success → cachedModels path: a sheet that already has a
     /// stale list gets the new list and the OLD list is replaced (not
     /// concatenated). Pinned so a re-Refresh doesn't grow duplicates.
     @Test func refreshReplacesExistingCacheRatherThanAppending() {
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"])
         let stale = AgentProvidersConfig(
             providers: [provider],
             providerModels: ["hermes": [
@@ -377,9 +377,9 @@ struct ACPProviderModelProbeTests {
             CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7"),
             CachedModelInfo(modelId: "glm-4-7", name: "GLM 4.7"),
         ]
-        let updated = stale.settingCachedModels(fresh, forProvider: "hermes")
-        #expect(updated.cachedModels(forProvider: "hermes").count == 2)
-        #expect(updated.cachedModels(forProvider: "hermes").contains { $0.modelId == "stale-model" } == false)
+        let updated = stale.settingCachedModels(fresh, forProvider: ProviderID(rawValue: "hermes"))
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).count == 2)
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).contains { $0.modelId == "stale-model" } == false)
     }
 
     /// Refresh failure (`.error`) does NOT wipe the last-known cache. Paseo
@@ -387,7 +387,7 @@ struct ACPProviderModelProbeTests {
     /// fields change). The model Picker keeps showing the prior list.
     @Test func refreshFailureKeepsLastKnownCache() {
         // Start with one cached model + a "ready" state.
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"])
         let config = AgentProvidersConfig(
             providers: [provider],
             providerModels: ["hermes": [
@@ -397,7 +397,7 @@ struct ACPProviderModelProbeTests {
         // catches the error and sets `.error(message)` — it does NOT touch
         // `cachedModels`. The persist closure (`onRefreshModels`) is only
         // invoked on SUCCESS. So the cache stays at its prior state.
-        let stillCached = config.cachedModels(forProvider: "hermes")
+        let stillCached = config.cachedModels(forProvider: ProviderID(rawValue: "hermes"))
         #expect(stillCached.count == 1)
         #expect(stillCached.first?.modelId == "glm-4.7")
     }
@@ -409,14 +409,14 @@ struct ACPProviderModelProbeTests {
     /// NOT by weakening the guard. Pinned so a future refactor that
     /// relaxes the guard is caught.
     @Test func spawnModelGuardStillRejectsNilModel() {
-        let provider = AgentProvider(id: "opencode", label: "OpenCode")
+        let provider = AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode")
         let msg = SpawnModelGuard.validate(provider: provider, modelId: nil)
         #expect(msg != nil)
         #expect(msg?.contains("No model selected") == true)
     }
 
     @Test func spawnModelGuardStillRejectsEmptyModel() {
-        let provider = AgentProvider(id: "opencode", label: "OpenCode")
+        let provider = AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode")
         let msg = SpawnModelGuard.validate(provider: provider, modelId: "")
         #expect(msg != nil)
     }
@@ -425,7 +425,7 @@ struct ACPProviderModelProbeTests {
         // The guard's allow-path: a non-empty modelId → nil (no error). This
         // is the path the probe ENABLES — once the user picks a discovered
         // model, the guard lets the spawn through.
-        let provider = AgentProvider(id: "opencode", label: "OpenCode")
+        let provider = AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode")
         #expect(SpawnModelGuard.validate(provider: provider, modelId: "glm-4.7") == nil)
     }
 
@@ -433,7 +433,7 @@ struct ACPProviderModelProbeTests {
         // The error message points the user at the SAME Settings → Providers
         // path the probe's Refresh button lives in. Pinned so the discovery
         // guidance stays accurate.
-        let provider = AgentProvider(id: "opencode", label: "OpenCode")
+        let provider = AgentProvider(id: ProviderID(rawValue: "opencode"), label: "OpenCode")
         let msg = SpawnModelGuard.validate(provider: provider, modelId: nil) ?? ""
         #expect(msg.contains("Settings") || msg.contains("Agents") || msg.contains("pick a model"))
     }
@@ -446,7 +446,7 @@ struct ACPProviderModelProbeTests {
     /// yields a non-empty hints dict (no `notConfigured` short-circuit).
     @Test func providerHintsFromProbeProviderIsNonEmpty() {
         let provider = AgentProvider(
-            id: "opencode", label: "OpenCode",
+            id: ProviderID(rawValue: "opencode"), label: "OpenCode",
             command: ["opencode", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
@@ -515,7 +515,7 @@ struct ACPProviderModelProbeLiveTests {
         }
 
         let provider = AgentProvider(
-            id: "claude-acp-live", label: "Claude (live probe)",
+            id: ProviderID(rawValue: "claude-acp-live"), label: "Claude (live probe)",
             command: [resolvedAgentPath] + ShellArgv.tokenize(agentArgs))
         let probe = ACPProviderModelProbe(
             provider: provider,

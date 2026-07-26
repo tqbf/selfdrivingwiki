@@ -13,7 +13,7 @@ import WikiFSEngine
 struct PageVersionCompareContext: Codable, Hashable {
     let pageID: PageID
     let title: String
-    let wikiID: String
+    let wikiID: WikiID
 
     static func == (lhs: PageVersionCompareContext, rhs: PageVersionCompareContext) -> Bool {
         lhs.pageID == rhs.pageID && lhs.wikiID == rhs.wikiID

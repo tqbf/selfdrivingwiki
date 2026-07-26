@@ -214,7 +214,7 @@ public enum MessageSummarizer {
         // confirmed model mode, but the guard is here too for defense in depth.
         guard let pinnedId = config.stageProviderIds["summarizer"],
               !pinnedId.isEmpty,
-              let provider = config.provider(id: pinnedId),
+              let provider = config.provider(id: ProviderID(rawValue: pinnedId)),
               provider.enabled else {
             return nil
         }
@@ -224,7 +224,7 @@ public enum MessageSummarizer {
             return nil
         }
 
-        let apiKey = credentialStore.apiKey(forProvider: provider.id)
+        let apiKey = credentialStore.apiKey(forProvider: provider.id.rawValue)
         // Read the stage's model id via modelId(forStage:) — this is safe now
         // because we already confirmed the pin is non-empty above. The fallback
         // is the provider's selectedModelId.

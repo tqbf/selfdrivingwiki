@@ -36,7 +36,7 @@ struct StoreEmissionReentrancyTests {
 
     private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
         let store = try TestStoreFactory.inMemory()
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
         let recorder = Recorder()
         bus.subscribe(nil) { recorder.append($0) }

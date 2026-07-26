@@ -47,7 +47,7 @@ import WikiFSCore
         // replaced them, so test fixtures build literals). No selectedModelIds
         // entry for opencode → the guard fires on the nil-model state.
         var opencodeDefault = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -74,7 +74,7 @@ import WikiFSCore
         await launcher.startInteractiveQuery(
             firstMessage: "hello",
             stateMarkdown: "",
-            wikiID: "wiki-test",
+            wikiID: WikiID(rawValue: "wiki-test"),
             wikiRoot: "/tmp/wiki-test",
             systemPrompt: "",
             wikictlDirectory: "/tmp/wiki-test",
@@ -126,7 +126,7 @@ import WikiFSCore
         // seeds — the catalog-driven `AddProviderSheet` replaced them, so test
         // fixtures build literals.
         var opencodeDefault = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -148,7 +148,7 @@ import WikiFSCore
         let modelId = launcher.providersConfig().selectedModelId(forProvider: provider.id)
         // Pin the chat path's guard input contract — what
         // `startInteractiveQuery` actually feeds into `SpawnModelGuard.validate`.
-        #expect(provider.id == "opencode")
+        #expect(provider.id == ProviderID(rawValue: "opencode"))
         #expect(modelId == "glm-4.7")
         #expect(SpawnModelGuard.validate(provider: provider, modelId: modelId) == nil)
     }

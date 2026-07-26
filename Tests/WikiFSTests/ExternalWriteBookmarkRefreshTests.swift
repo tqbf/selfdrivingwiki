@@ -22,7 +22,7 @@ struct ExternalWriteBookmarkRefreshTests {
 
     private func makeModel() throws -> (WikiStoreModel, GRDBWikiStore) {
         let store = try GRDBWikiStore(databaseURL: tempURL())
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         return (model, store)
     }

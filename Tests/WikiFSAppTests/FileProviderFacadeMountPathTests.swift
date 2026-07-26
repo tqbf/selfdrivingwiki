@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
+@testable import WikiFSCore
 
 /// Tests for `FileProviderFacade` schema migration and non-blocking path
 /// resolution.  Share URL resolution (`resolveSourceByNameURL` /
@@ -30,7 +31,7 @@ struct FileProviderFacadeMountPathTests {
         // resolvePath should return quickly even when the domain isn't
         // registered — warmCaches is detached and must not block the caller.
         let spike = FileProviderFacade()
-        await spike.resolvePath(id: "nonexistent-wiki-id", displayName: "Test")
+        await spike.resolvePath(id: WikiID(rawValue: "nonexistent-wiki-id"), displayName: "Test")
         // After resolvePath returns, isResolvingPath must be false
         // regardless of whether the mount succeeded.
         #expect(!spike.isResolvingPath)

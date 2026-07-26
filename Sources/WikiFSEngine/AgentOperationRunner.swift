@@ -12,7 +12,7 @@ public enum AgentOperationRunner {
         question: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -35,7 +35,7 @@ public enum AgentOperationRunner {
         firstMessage: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -79,7 +79,7 @@ public enum AgentOperationRunner {
         // Start the interactive session. The agent-run lifecycle is ref-counted
         // (agentRunStarted/agentRunEnded) for sidebar reload on last-run-end;
         // no edit lock — CAS (page versions, W0) prevents data races.
-        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chat?.id.rawValue ?? "nil")")
+        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chat?.id.rawValue ?? "nil")")
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
@@ -91,7 +91,7 @@ public enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
-            onAcpSessionId: chat.map { chat -> (@MainActor (String?) -> Void) in
+            onAcpSessionId: chat.map { chat -> (@MainActor (AcpSessionID?) -> Void) in
                 return { [weak store] sessionId in
                     guard let store else { return }
                     if let sessionId {
@@ -370,7 +370,7 @@ public enum AgentOperationRunner {
         message: String,
         store: WikiStoreModel,
         launcher: AgentLauncher,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -441,13 +441,13 @@ public enum AgentOperationRunner {
         // #830: Read the chat's prior ACP session ID so startInteractiveQuery
         // can attempt resume before falling back to the fresh-start + preamble.
         let priorAcpSessionId = store.getChat(id: chatID)?.acpSessionId
-        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId ?? "nil")")
+        DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId?.rawValue ?? "nil")")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
         // flips ChatDetailView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
-        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chatID.rawValue)")
+        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chatID.rawValue)")
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
             firstMessageDisplay: trimmed,
@@ -480,7 +480,7 @@ public enum AgentOperationRunner {
     public static func runLint(
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -500,7 +500,7 @@ public enum AgentOperationRunner {
         pages: [(id: PageID, title: String)],
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -532,7 +532,7 @@ public enum AgentOperationRunner {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],
@@ -572,7 +572,7 @@ public enum AgentOperationRunner {
     }
 
     private static func ingestSourcePath(for source: SourceSummary) -> String {
-        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
+        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext)
         return "sources/by-id/\(leaf)"
     }
 

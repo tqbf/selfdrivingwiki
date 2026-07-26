@@ -43,7 +43,7 @@ struct FPIfSubscriberDebounceTests {
         let coalescer: ChangeCoalescer
         private(set) var noteCount = 0
         init(_ coalescer: ChangeCoalescer) { self.coalescer = coalescer }
-        func note(wikiID: String) {
+        func note(wikiID: WikiID) {
             noteCount += 1
             coalescer.noteChange(forWikiID: wikiID)
         }
@@ -70,16 +70,16 @@ struct FPIfSubscriberDebounceTests {
     /// Wire the production seam: a store's bus → a `ChangeCoalescer` (with the
     /// given scheduler) whose flush records the wikiID, mirroring
     /// `FileProviderFacade.subscribeBus(for:bus:)`.
-    private func wireSeam(scheduler: ManualScheduler, flushes: @escaping (String) -> Void) throws -> (GRDBWikiStore, WikiEventBus, SignalBox) {
+    private func wireSeam(scheduler: ManualScheduler, flushes: @escaping (WikiID) -> Void) throws -> (GRDBWikiStore, WikiEventBus, SignalBox) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
         let box = SignalBox(ChangeCoalescer(
             schedule: { scheduler.schedule($0) },
             flush: { flushes($0) }
         ))
         // The production subscriber registers for ALL kinds/origins.
-        bus.subscribe(nil) { _ in box.note(wikiID: "W") }
+        bus.subscribe(nil) { _ in box.note(wikiID: WikiID(rawValue: "W")) }
         return (store, bus, box)
     }
 
@@ -87,20 +87,20 @@ struct FPIfSubscriberDebounceTests {
     /// bus (no `onPageDidChange` involved).
     @Test func singleWriteSignalsOnce() async throws {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
 
         _ = try store.createPage(title: "One")
         try await awaitDeliveries(box, expected: 1)
         scheduler.fireAll()
-        #expect(flushes == ["W"])
+        #expect(flushes == [WikiID(rawValue: "W")])
     }
 
     /// AC.7 — a burst of writes (batch `addFiles` / many saves) collapses to a
     /// single FP signal (debounce now at the subscriber edge).
     @Test func burstCollapsesToOneSignal() async throws {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
 
         for i in 0..<6 { _ = try store.createPage(title: "P\(i)") }
@@ -109,23 +109,23 @@ struct FPIfSubscriberDebounceTests {
         #expect(scheduler.cancelledIDs.count == 5)
 
         scheduler.fireAll()
-        #expect(flushes == ["W"])
+        #expect(flushes == [WikiID(rawValue: "W")])
     }
 
     /// A second burst after the first flush re-arms a fresh signal (the pending
     /// slot was cleared on flush), so back-to-back edits each get one signal.
     @Test func secondBurstAfterFlushSignalsAgain() async throws {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
         _ = try store.createPage(title: "A")
         try await awaitDeliveries(box, expected: 1)
         scheduler.fireAll()
-        #expect(flushes == ["W"])
+        #expect(flushes == [WikiID(rawValue: "W")])
 
         _ = try store.createPage(title: "B")
         try await awaitDeliveries(box, expected: 2)
         scheduler.fireAll()
-        #expect(flushes == ["W", "W"])
+        #expect(flushes == [WikiID(rawValue: "W"), WikiID(rawValue: "W")])
     }
 }

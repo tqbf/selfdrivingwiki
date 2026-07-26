@@ -32,7 +32,7 @@ public final class WikiSession {
     /// The wiki's stable ULID. Guaranteed non-nil (a session only exists while
     /// a wiki is open). Views read `session.wikiID` instead of the old
     /// `activeWikiID ?? ""`.
-    public let wikiID: String
+    public let wikiID: WikiID
 
     /// The wiki's registry descriptor (display name, home page, etc). Updated
     /// in place if the app layer mutates the registry (rename / set home page)
@@ -153,7 +153,7 @@ public final class WikiSession {
     ///     `PdfExtractionService.resolveScript()`; tests / the daemon default
     ///     to `{ nil }`.
     public init(
-        wikiID: String,
+        wikiID: WikiID,
         descriptor: WikiDescriptor,
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
@@ -175,7 +175,7 @@ public final class WikiSession {
         // is committed to `self.descriptor`.
         var sessionDescriptor = descriptor
 
-        let url = containerDirectory.appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
+        let url = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         let model: WikiStoreModel
         // Captured so the Phase 1 Tantivy shadow service can read from the
         // same `WikiStore` the model wraps (the model keeps it `private`).
@@ -263,7 +263,7 @@ public final class WikiSession {
                 // Wire the service into the model's search path (Phase 2 cutover).
                 model.tantivySearch = svc
             } catch {
-                DebugLog.store("WikiSession: Tantivy search index disabled for wiki \(wikiID): \(error)")
+                DebugLog.store("WikiSession: Tantivy search index disabled for wiki \(wikiID.rawValue): \(error)")
             }
         }
         self.tantivyShadowSearch = shadowSearch

@@ -280,7 +280,7 @@ import ACPModel
         try await Task.sleep(nanoseconds: 50_000_000)
         let pending = delegate.pendingSnapshot()
         #expect(pending.count == 1)
-        #expect(pending.first?.toolCallId == "tc-pending")
+        #expect(pending.first?.toolCallId == ToolCallID(rawValue: "tc-pending"))
         #expect(pending.first?.options.count == 2)
 
         // Resolve ALLOW — the future UI's Approve button.

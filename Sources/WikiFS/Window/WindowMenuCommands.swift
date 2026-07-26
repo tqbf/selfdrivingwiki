@@ -21,7 +21,7 @@ final class WindowListTracker {
     struct Entry: Identifiable {
         let id: ObjectIdentifier
         /// The wiki ID parsed from the window's `wiki:` identifier, if any.
-        let wikiID: String?
+        let wikiID: WikiID?
         /// The window's raw AppKit title (fallback when no wiki name resolves).
         let title: String
     }
@@ -63,10 +63,10 @@ final class WindowListTracker {
         entries = NSApplication.shared.windows
             .filter { $0.isVisible && $0.canBecomeMain && !($0 is NSPanel) }
             .map { window in
-                var wikiID: String?
+                var wikiID: WikiID?
                 if let raw = window.identifier?.rawValue,
                    raw.hasPrefix(wikiWindowIdentifierPrefix) {
-                    wikiID = String(raw.dropFirst(wikiWindowIdentifierPrefix.count))
+                    wikiID = WikiID(rawValue: String(raw.dropFirst(wikiWindowIdentifierPrefix.count)))
                 }
                 return Entry(id: ObjectIdentifier(window), wikiID: wikiID, title: window.title)
             }

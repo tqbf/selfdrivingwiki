@@ -12,7 +12,7 @@ import Foundation
 /// impossible by construction.
 public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
     /// The wiki's stable ULID. Lexicographically sortable == creation order.
-    public let id: String
+    public let id: WikiID
 
     /// Human-facing label, shown in the switcher and used to name the Finder
     /// mount (`~/Library/CloudStorage/Self Driving Wiki-<displayName>`). Mutable — a rename
@@ -32,7 +32,7 @@ public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
     /// its title, so a page rename doesn't orphan the setting.
     public var homePageID: PageID?
 
-    public init(id: String, displayName: String, createdAt: Date, lastUsedAt: Date, homePageID: PageID? = nil) {
+    public init(id: WikiID, displayName: String, createdAt: Date, lastUsedAt: Date, homePageID: PageID? = nil) {
         self.id = id
         self.displayName = displayName
         self.createdAt = createdAt
@@ -44,7 +44,7 @@ public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
     /// same instant the ULID encodes.
     public static func make(displayName: String, now: Date = Date()) -> WikiDescriptor {
         WikiDescriptor(
-            id: ULID.generate(at: now),
+            id: WikiID(rawValue: ULID.generate(at: now)),
             displayName: displayName,
             createdAt: now,
             lastUsedAt: now
@@ -53,11 +53,11 @@ public struct WikiDescriptor: Codable, Identifiable, Equatable, Sendable {
 
     /// The SQLite filename for this wiki, derived from the ULID — NEVER the
     /// display name (so a rename doesn't orphan the file). `<ulid>.sqlite`.
-    public var dbFileName: String { "\(id).sqlite" }
+    public var dbFileName: String { "\(id.rawValue).sqlite" }
 
     /// The File Provider domain identifier for this wiki: the bare ULID. The
     /// extension maps `domain.identifier` → `<ulid>.sqlite` with no registry
     /// read, so this string and `dbFileName` must stay in lockstep — both are
     /// `id`, by construction.
-    public var domainIdentifier: String { id }
+    public var domainIdentifier: String { id.rawValue }
 }

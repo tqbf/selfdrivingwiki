@@ -84,7 +84,7 @@ struct SessionManagerTests {
         // Create a second wiki so we have two distinct IDs.
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
         // Seed the DB file for descriptor2.
-        let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
+        let url2 = dir.appendingPathComponent("\(descriptor2.id.rawValue).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         let session1 = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
@@ -143,7 +143,7 @@ struct SessionManagerTests {
 
         // Create a second wiki.
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
-        let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
+        let url2 = dir.appendingPathComponent("\(descriptor2.id.rawValue).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         _ = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
@@ -171,7 +171,7 @@ struct SessionManagerTests {
 
         // Create a second wiki.
         let descriptor2 = WikiDescriptor.make(displayName: "Second Wiki")
-        let url2 = dir.appendingPathComponent("\(descriptor2.id).sqlite", isDirectory: false)
+        let url2 = dir.appendingPathComponent("\(descriptor2.id.rawValue).sqlite", isDirectory: false)
         _ = try? StoreBackend.current.makeStore(databaseURL: url2)
 
         let session1 = try! manager.session(for: descriptor1.id, descriptor: descriptor1)
@@ -396,10 +396,10 @@ private final class StubExtractor: MarkdownExtractor {
 /// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
-        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? { nil }
     func persistExtraction(
-        wikiID: String, sourceID: PageID, markdown: String,
+        wikiID: WikiID, sourceID: PageID, markdown: String,
         backend: ExtractionBackend, modelVersion: String?,
         technique: String?
     ) async throws {}

@@ -315,6 +315,14 @@ struct WikiFSApp: App {
     /// calls from both windows' `.task` are harmless no-ops.
     private static var didBootstrap = false
     @MainActor
+    /// Extracted from the `.task` closure to avoid type-checker timeouts.
+    private func appLaunchTasks() async {
+        bootstrapApp()
+        startStatusItem()
+        applyAppKitAppearance()
+        connectToDaemon()
+    }
+
     private func bootstrapApp() {
         DebugLog.tabs("WikiFSApp: bootstrapApp called, didBootstrap=\(Self.didBootstrap)")
         guard !Self.didBootstrap else { return }
@@ -440,7 +448,7 @@ struct WikiFSApp: App {
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
-                openWindowBridge.openWiki?(wikiID)
+                openWindowBridge.openWiki?(wikiID.rawValue)
             } else {
                 openWindowBridge.openMain?()
             }
@@ -730,10 +738,7 @@ struct WikiFSApp: App {
                 applyAppKitAppearance()
             }
             .task {
-                bootstrapApp()
-                startStatusItem()
-                applyAppKitAppearance()
-                connectToDaemon()
+                await appLaunchTasks()
             }
         }
         .windowToolbarStyle(.unified)
@@ -753,7 +758,7 @@ struct WikiFSApp: App {
         // switcher via `openWindow(value: wiki.id)`. `WindowGroup(for:)`
         // deduplicates by `==`, so opening a wiki that already has a window
         // focuses it instead of spawning a duplicate.
-        WindowGroup(for: String.self) { $wikiID in
+        WindowGroup(for: WikiID.self) { $wikiID in
             RootScene(
                 wikiID: wikiID,
                 registry: registry,
@@ -768,7 +773,7 @@ struct WikiFSApp: App {
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
             .onAppear {
-                DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID ?? "nil")")
+                DebugLog.tabs("RootScene wiki-window onAppear: wikiID=\(wikiID?.rawValue ?? "nil")")
             }
             .task {
                 bootstrapApp()

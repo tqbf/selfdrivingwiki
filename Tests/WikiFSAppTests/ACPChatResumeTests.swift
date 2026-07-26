@@ -14,11 +14,11 @@ struct ACPChatResumeTests {
     /// Thread-safe box for the `onAcpSessionId` callback's values.
     private final class SessionIdRecorder: @unchecked Sendable {
         private let lock = NSLock()
-        private var _values: [String?] = []
-        func record(_ value: String?) {
+        private var _values: [AcpSessionID?] = []
+        func record(_ value: AcpSessionID?) {
             lock.lock(); _values.append(value); lock.unlock()
         }
-        var values: [String?] {
+        var values: [AcpSessionID?] {
             lock.lock(); defer { lock.unlock() }
             return _values
         }
@@ -40,7 +40,7 @@ struct ACPChatResumeTests {
         backend: FakeAgentBackend, dummyPath: String, tempDir: URL
     ) -> AgentLauncher {
         let provider = AgentProvider(
-            id: "test-acp", label: "TestACP", command: [dummyPath],
+            id: ProviderID(rawValue: "test-acp"), label: "TestACP", command: [dummyPath],
             env: [:], enabled: true, isDefault: true)
         let launcher = AgentLauncher()
         launcher.resolveBackend = { _, _, _ in backend }
@@ -48,7 +48,7 @@ struct ACPChatResumeTests {
         launcher.resolveSelectedProvider = { provider }
         let config = AgentProvidersConfig(
             providers: [provider],
-            selectedModelIds: [provider.id: "fake-model"])
+            selectedModelIds: [provider.id.rawValue: "fake-model"])
         try? config.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir
@@ -72,12 +72,12 @@ struct ACPChatResumeTests {
             firstMessage: "preamble text",
             firstMessageDisplay: "user question",
             stateMarkdown: "",
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "",
             wikictlDirectory: "/tmp",
             chatID: "chat-1",
-            priorAcpSessionId: "prior-session-id",
+            priorAcpSessionId: AcpSessionID(rawValue: "prior-session-id"),
             onAcpSessionId: { recorder.record($0) },
             onLock: {},
             onUnlock: {}
@@ -109,12 +109,12 @@ struct ACPChatResumeTests {
             firstMessage: "preamble text",
             firstMessageDisplay: "user question",
             stateMarkdown: "",
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "",
             wikictlDirectory: "/tmp",
             chatID: "chat-1",
-            priorAcpSessionId: "prior-session-id",
+            priorAcpSessionId: AcpSessionID(rawValue: "prior-session-id"),
             onAcpSessionId: { recorder.record($0) },
             onLock: {},
             onUnlock: {}
@@ -146,7 +146,7 @@ struct ACPChatResumeTests {
         await launcher.startInteractiveQuery(
             firstMessage: "hello world",
             stateMarkdown: "",
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "",
             wikictlDirectory: "/tmp",

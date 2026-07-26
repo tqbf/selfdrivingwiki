@@ -271,8 +271,8 @@ import WikiFSCore
         ]
         let original = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
             providerModels: ["hermes": models],
             selectedModelIds: ["hermes": "glm-4.7"])
@@ -280,15 +280,15 @@ import WikiFSCore
 
         let url = tmp.appendingPathComponent(AgentProvidersConfig.fileName, isDirectory: false)
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
-        #expect(loaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
-        #expect(loaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
+        #expect(loaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(loaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
         // Phase 1: the claudeCachedModels injection is removed — Claude has no
         // cached models until ACP discovery captures a real list.
-        #expect(loaded.cachedModels(forProvider: "claude-acp").isEmpty)
-        #expect(loaded.cachedModels(forProvider: "claude").isEmpty)
+        #expect(loaded.cachedModels(forProvider: ProviderID(rawValue: "claude-acp")).isEmpty)
+        #expect(loaded.cachedModels(forProvider: ProviderID(rawValue: "claude")).isEmpty)
         // No selection for either Claude provider → nil (agent default).
-        #expect(loaded.selectedModelId(forProvider: "claude-acp") == nil)
-        #expect(loaded.selectedModelId(forProvider: "claude") == nil)
+        #expect(loaded.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == nil)
+        #expect(loaded.selectedModelId(forProvider: ProviderID(rawValue: "claude")) == nil)
     }
 
     @Test func preModelCacheFileDecodesWithEmptyCaches() throws {
@@ -314,48 +314,48 @@ import WikiFSCore
 
         let loaded = try JSONDecoder().decode(AgentProvidersConfig.self, from: Data(contentsOf: url))
         // No hardcoded injection — Claude has no cached models yet.
-        #expect(loaded.cachedModels(forProvider: "claude-acp").isEmpty)
-        #expect(loaded.cachedModels(forProvider: "claude").isEmpty)
+        #expect(loaded.cachedModels(forProvider: ProviderID(rawValue: "claude-acp")).isEmpty)
+        #expect(loaded.cachedModels(forProvider: ProviderID(rawValue: "claude")).isEmpty)
         // Selections remain empty (legacy: no model selected → agent default).
         #expect(loaded.selectedModelIds.isEmpty)
-        #expect(loaded.selectedModelId(forProvider: "claude") == nil)
+        #expect(loaded.selectedModelId(forProvider: ProviderID(rawValue: "claude")) == nil)
         // No claude-acp force-insertion: the decoded provider list is exactly
         // what the legacy file specified.
-        #expect(loaded.providers.map(\.id) == ["claude"])
+        #expect(loaded.providers.map(\.id) == [ProviderID(rawValue: "claude")])
     }
 
     @Test func settingCachedModelsReplacesAndPersists() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"], isDefault: true),
         ])
         let models = [CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7")]
-        let updated = config.settingCachedModels(models, forProvider: "hermes")
-        #expect(updated.cachedModels(forProvider: "hermes").count == 1)
-        #expect(updated.cachedModels(forProvider: "hermes").first?.modelId == "glm-4.7")
+        let updated = config.settingCachedModels(models, forProvider: ProviderID(rawValue: "hermes"))
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).count == 1)
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).first?.modelId == "glm-4.7")
         // Original is unchanged (value semantics).
-        #expect(config.cachedModels(forProvider: "hermes") == [])
+        #expect(config.cachedModels(forProvider: ProviderID(rawValue: "hermes")) == [])
     }
 
     @Test func settingCachedModelsEmptyClearsEntry() {
         let config = AgentProvidersConfig(
-            providers: [AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true)],
+            providers: [AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"], isDefault: true)],
             providerModels: ["hermes": [CachedModelInfo(modelId: "x", name: "X")]])
-        let updated = config.settingCachedModels([], forProvider: "hermes")
-        #expect(updated.cachedModels(forProvider: "hermes") == [])
+        let updated = config.settingCachedModels([], forProvider: ProviderID(rawValue: "hermes"))
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")) == [])
         #expect(updated.providerModels["hermes"] == nil)
     }
 
     @Test func settingSelectedModelAndClearing() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"], isDefault: true),
         ])
-        let selected = config.settingSelectedModel("glm-4.7", forProvider: "hermes")
-        #expect(selected.selectedModelId(forProvider: "hermes") == "glm-4.7")
-        let cleared = selected.settingSelectedModel(nil, forProvider: "hermes")
-        #expect(cleared.selectedModelId(forProvider: "hermes") == nil)
+        let selected = config.settingSelectedModel("glm-4.7", forProvider: ProviderID(rawValue: "hermes"))
+        #expect(selected.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
+        let cleared = selected.settingSelectedModel(nil, forProvider: ProviderID(rawValue: "hermes"))
+        #expect(cleared.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == nil)
         // Empty string also clears.
-        let reselected = cleared.settingSelectedModel("", forProvider: "hermes")
-        #expect(reselected.selectedModelId(forProvider: "hermes") == nil)
+        let reselected = cleared.settingSelectedModel("", forProvider: ProviderID(rawValue: "hermes"))
+        #expect(reselected.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == nil)
     }
 
     @Test func switchingDefaultProviderPreservesModelCaches() {
@@ -363,21 +363,21 @@ import WikiFSCore
         // must NOT wipe the per-provider model caches or selections.
         let config = AgentProvidersConfig(
             providers: [
-                AgentProvider(id: "claude", label: "Claude", isDefault: true),
-                AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: false),
+                AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", isDefault: true),
+                AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"], isDefault: false),
             ],
             providerModels: ["hermes": [CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7")]],
             selectedModelIds: ["hermes": "glm-4.7"])
-        let switched = config.settingDefault(id: "hermes")
-        #expect(switched.defaultProvider.id == "hermes")
-        #expect(switched.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7"])
-        #expect(switched.selectedModelId(forProvider: "hermes") == "glm-4.7")
+        let switched = config.settingDefault(id: ProviderID(rawValue: "hermes"))
+        #expect(switched.defaultProvider.id == ProviderID(rawValue: "hermes"))
+        #expect(switched.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == ["glm-4.7"])
+        #expect(switched.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
     }
 
     // MARK: - providerHints selectedModelId threading
 
     @Test func providerHintsCarriesSelectedModelId() {
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
@@ -388,7 +388,7 @@ import WikiFSCore
     }
 
     @Test func providerHintsOmitsSelectedModelIdWhenNil() {
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"])
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"])
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: ["/usr/local/bin/hermes", "acp"],
@@ -401,7 +401,7 @@ import WikiFSCore
         // Phase 4 (ACP-only): an empty resolved command yields empty hints —
         // even with a model selection — so ACPBackend throws noAgentConfigured
         // instead of spawning garbage.
-        let provider = AgentProvider(id: "claude-acp", label: "Claude")
+        let provider = AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude")
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: [],
@@ -422,22 +422,22 @@ import WikiFSCore
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let initial = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
         try initial.save(to: tmp)
 
         let launcher = AgentLauncher()
         launcher.resolveProvidersContainerDirectory = { tmp }
 
-        let hermes = initial.provider(id: "hermes")!
+        let hermes = initial.provider(id: ProviderID(rawValue: "hermes"))!
         _ = launcher.setSelectedModelAndDefault("glm-4.7", provider: hermes)
 
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
-        #expect(reloaded.defaultProvider.id == "hermes")
-        #expect(reloaded.selectedModelId(forProvider: "hermes") == "glm-4.7")
+        #expect(reloaded.defaultProvider.id == ProviderID(rawValue: "hermes"))
+        #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
         // Claude's selection is untouched.
-        #expect(reloaded.selectedModelId(forProvider: "claude") == nil)
+        #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "claude")) == nil)
     }
 }
 
@@ -463,17 +463,17 @@ import WikiFSCore
         // The launcher's cache path maps SDK → CachedModelInfo + persists.
         let launcher = AgentLauncher()
         launcher.resolveProvidersContainerDirectory = { tmp }
-        let provider = AgentProvider(id: "hermes", label: "Hermes", command: ["hermes"], isDefault: true)
+        let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes"], isDefault: true)
         try AgentProvidersConfig(providers: [provider]).save(to: tmp)
 
         let cached = discovered.map {
             CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
         }
-        launcher.cacheDiscoveredModels(cached, forProvider: "hermes")
+        launcher.cacheDiscoveredModels(cached, forProvider: ProviderID(rawValue: "hermes"))
 
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
-        #expect(reloaded.cachedModels(forProvider: "hermes").map(\.modelId) == ["glm-4.7", "glm-4-7"])
-        #expect(reloaded.cachedModels(forProvider: "hermes").first?.name == "GLM-4.7")
+        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).first?.name == "GLM-4.7")
     }
 
     @MainActor
@@ -485,9 +485,9 @@ import WikiFSCore
             FileManager.default.temporaryDirectory
                 .appendingPathComponent("capture-empty-\(UUID().uuidString)", isDirectory: true)
         }
-        launcher.cacheDiscoveredModels([], forProvider: "hermes")
+        launcher.cacheDiscoveredModels([], forProvider: ProviderID(rawValue: "hermes"))
         // No crash, no throw — empty is a guarded no-op in cacheDiscoveredModels.
-        #expect(launcher.providersConfig().cachedModels(forProvider: "hermes") == [])
+        #expect(launcher.providersConfig().cachedModels(forProvider: ProviderID(rawValue: "hermes")) == [])
     }
 }
 #endif

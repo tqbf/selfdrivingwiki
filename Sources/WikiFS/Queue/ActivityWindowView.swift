@@ -262,7 +262,7 @@ struct ActivityWindowView: View {
     private func itemRow(_ item: QueueItem, displayData: RowDisplayData?) -> some View {
         let data = displayData ?? RowDisplayData(
             title: kindLabel(for: item),
-            subtitle: String(item.wikiID.prefix(8)),
+            subtitle: String(item.wikiID.rawValue.prefix(8)),
             targetNames: [],
             usage: nil,
             liveUsage: nil,
@@ -735,7 +735,7 @@ struct ActivityWindowView: View {
     /// A single linted page: title (resolved from the wiki's store) with an
     /// "Open" button. Pages deleted since the lint ran resolve to a placeholder.
     @ViewBuilder
-    private func lintPageRow(pageID: PageID, wikiID: String) -> some View {
+    private func lintPageRow(pageID: PageID, wikiID: WikiID) -> some View {
         let title = pageTitle(pageID, wikiID: wikiID) ?? "Deleted page"
         HStack(spacing: 6) {
             Image(systemName: "doc.text")
@@ -756,7 +756,7 @@ struct ActivityWindowView: View {
 
     /// Resolve a page ID to its current title via the wiki's store, or `nil`
     /// if the page no longer exists / the session isn't live.
-    private func pageTitle(_ pageID: PageID, wikiID: String) -> String? {
+    private func pageTitle(_ pageID: PageID, wikiID: WikiID) -> String? {
         sessionManager?.sessions[wikiID]?.store
             .summaries.first { $0.id == pageID }?.title
     }
@@ -765,14 +765,14 @@ struct ActivityWindowView: View {
     /// shared across windows (one session per wiki), so `openTab` mutates the
     /// same model the main window observes; `openWiki` then focuses that window
     /// — mirroring the bookmark "Go to Original" navigation (#570).
-    private func openPage(_ pageID: PageID, in wikiID: String) {
+    private func openPage(_ pageID: PageID, in wikiID: WikiID) {
         guard let store = sessionManager?.sessions[wikiID]?.store else {
-            DebugLog.tabs("Lint Open Page: no live session for wiki \(wikiID.prefix(8)); cannot open page")
+            DebugLog.tabs("Lint Open Page: no live session for wiki \(wikiID.rawValue.prefix(8)); cannot open page")
             return
         }
         store.openTab(.page(pageID))
-        openWindowBridge?.openWiki?(wikiID)
-        DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.prefix(8))")
+        openWindowBridge?.openWiki?(wikiID.rawValue)
+        DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.rawValue.prefix(8))")
     }
 
     /// Reveal an extraction job's source in the wiki's Sources outline (#598).
@@ -781,14 +781,14 @@ struct ActivityWindowView: View {
     /// — revealing the source in the sidebar (not opening it as a tab, since
     /// sources are file-backed toms, not tabable documents). Mirrors how #583
     /// `openPage` lets lint jobs navigate back to a page.
-    private func revealSource(_ sourceID: PageID, in wikiID: String) {
+    private func revealSource(_ sourceID: PageID, in wikiID: WikiID) {
         guard let store = sessionManager?.sessions[wikiID]?.store else {
-            DebugLog.tabs("Extraction Reveal Source: no live session for wiki \(wikiID.prefix(8)); cannot reveal source")
+            DebugLog.tabs("Extraction Reveal Source: no live session for wiki \(wikiID.rawValue.prefix(8)); cannot reveal source")
             return
         }
         store.requestSidebarReveal(.source(sourceID))
-        openWindowBridge?.openWiki?(wikiID)
-        DebugLog.tabs("Extraction Reveal Source: revealed source \(sourceID) in wiki \(wikiID.prefix(8))")
+        openWindowBridge?.openWiki?(wikiID.rawValue)
+        DebugLog.tabs("Extraction Reveal Source: revealed source \(sourceID) in wiki \(wikiID.rawValue.prefix(8))")
     }
 
     /// Whole-wiki lint "Browse Pages": reveal the wiki's home page (switches the
@@ -797,19 +797,19 @@ struct ActivityWindowView: View {
     /// uses, #570), then focus the wiki window. Falls back to the first page if
     /// there's no home page, and to focusing the window only if the wiki has no
     /// pages / no live session.
-    private func browsePages(in wikiID: String) {
+    private func browsePages(in wikiID: WikiID) {
         let session = sessionManager?.sessions[wikiID]
         let store = session?.store
         if store != nil, let homeID = session?.descriptor.homePageID {
             store?.requestSidebarReveal(.page(homeID))
-            DebugLog.tabs("Lint Browse Pages: revealed home page in wiki \(wikiID.prefix(8))")
+            DebugLog.tabs("Lint Browse Pages: revealed home page in wiki \(wikiID.rawValue.prefix(8))")
         } else if let firstID = store?.summaries.first?.id {
             store?.requestSidebarReveal(.page(firstID))
-            DebugLog.tabs("Lint Browse Pages: revealed first page in wiki \(wikiID.prefix(8))")
+            DebugLog.tabs("Lint Browse Pages: revealed first page in wiki \(wikiID.rawValue.prefix(8))")
         } else {
-            DebugLog.tabs("Lint Browse Pages: no pages to reveal in wiki \(wikiID.prefix(8)); focusing window only")
+            DebugLog.tabs("Lint Browse Pages: no pages to reveal in wiki \(wikiID.rawValue.prefix(8)); focusing window only")
         }
-        openWindowBridge?.openWiki?(wikiID)
+        openWindowBridge?.openWiki?(wikiID.rawValue)
     }
 
     // MARK: - Reveal debug folder
@@ -870,7 +870,7 @@ struct ActivityWindowView: View {
             do {
                 try await queueEngine.retryItem(item.id)
             } catch {
-                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
+                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.rawValue.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
             }
         }
     }
@@ -890,7 +890,7 @@ struct ActivityWindowView: View {
     /// `ChatWebView` — a closed wiki degrades gracefully (links render, no
     /// ghost coloring / blob serving), since the agent's transcript text is
     /// self-contained HTML.
-    private func store(for wikiID: String) -> WikiStoreModel? {
+    private func store(for wikiID: WikiID) -> WikiStoreModel? {
         sessionManager?.sessions[wikiID]?.store
     }
 
@@ -898,7 +898,7 @@ struct ActivityWindowView: View {
     /// the wiki window is closed. `nil` preserves the historical constant-
     /// `true` resolution in `ChatWebView` (links render as resolved — the
     /// best we can do without a live store to query).
-    private func renderContextProvider(for wikiID: String) -> (() -> WikiRenderContext?)? {
+    private func renderContextProvider(for wikiID: WikiID) -> (() -> WikiRenderContext?)? {
         guard let store = store(for: wikiID) else { return nil }
         return { [weak store] in store?.renderContext() }
     }
@@ -919,7 +919,7 @@ struct ActivityWindowView: View {
     ///    focuses) the window. `RootScene.resolveSession` creates the session,
     ///    transfers the stash onto it, and `RootView.onAppear` delivers it to
     ///    the store via the same `onWikiLinkHandler`.
-    private func wikiLinkHandler(for wikiID: String) -> (URL, Bool) -> Void {
+    private func wikiLinkHandler(for wikiID: WikiID) -> (URL, Bool) -> Void {
         { url, openInNewTab in
             if let store = self.sessionManager?.sessions[wikiID]?.store {
                 // Window open → route directly (same path as the in-wiki chat).
@@ -930,7 +930,7 @@ struct ActivityWindowView: View {
                 self.sessionManager?.stashPendingWikiLink(
                     wikiID, url: url, openInNewTab: openInNewTab
                 )
-                self.openWindowBridge?.openWiki?(wikiID)
+                self.openWindowBridge?.openWiki?(wikiID.rawValue)
             }
         }
     }
@@ -999,8 +999,8 @@ struct ActivityWindowView: View {
         return markers.contains(where: { lower.contains($0) })
     }
 
-    private func wikiDisplayName(for id: String) -> String {
-        sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.prefix(8))
+    private func wikiDisplayName(for id: WikiID) -> String {
+        sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.rawValue.prefix(8))
     }
 
     /// #583: Sort a per-item per-model breakdown for display — largest total
@@ -1072,7 +1072,7 @@ struct ActivityWindowView: View {
         result.reserveCapacity(items.count)
         for item in items {
             let session = sessions[item.wikiID]
-            let wikiName = session?.descriptor.displayName ?? String(item.wikiID.prefix(8))
+            let wikiName = session?.descriptor.displayName ?? String(item.wikiID.rawValue.prefix(8))
             let store = session?.store
 
             // Resolve source/page names (observable reads on WikiStoreModel).

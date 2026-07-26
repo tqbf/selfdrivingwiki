@@ -43,7 +43,7 @@ struct StoreEmissionTests {
     /// Fresh in-memory store + per-wiki bus + spy subscriber.
     private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
         let store = try TestStoreFactory.inMemory()
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
         let recorder = Recorder()
         bus.subscribe(nil) { recorder.append($0) }
@@ -453,7 +453,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
-        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: "acp-123")
+        try store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: AcpSessionID(rawValue: "acp-123"))
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)
         #expect(events.last?.change == .updated)

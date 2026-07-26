@@ -39,7 +39,7 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// created; cleared on terminal teardown (resume permanently failed) or
     /// successful completion. `nil` for pre-#830 chats and chats whose resume
     /// permanently failed.
-    public var acpSessionId: String?
+    public var acpSessionId: AcpSessionID?
     /// Per-chat provider override: when set (and the provider is enabled),
     /// outranks both the stage pin (`stageProviderIds["chat"]`) and the global
     /// default provider for THIS chat only. `nil` = no override, fall through
@@ -56,7 +56,7 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         id: PageID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
         summary: String? = nil, summaryAt: Date? = nil,
-        acpSessionId: String? = nil,
+        acpSessionId: AcpSessionID? = nil,
         modelProviderId: String? = nil, modelId: String? = nil
     ) {
         self.id = id

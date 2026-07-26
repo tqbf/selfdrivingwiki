@@ -173,7 +173,7 @@ struct SidebarDropBuilderIntegrationTests {
     /// issue #651).
     private func makeModel() throws -> (WikiStoreModel, GRDBWikiStore) {
         let store = try TestStoreFactory.inMemory()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         return (WikiStoreModel(store: store), store)
     }
 

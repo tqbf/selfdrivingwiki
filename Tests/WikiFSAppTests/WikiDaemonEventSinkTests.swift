@@ -19,7 +19,7 @@ struct WikiDaemonEventSinkTests {
 
     private func makeItem() -> QueueItem {
         QueueItem(
-            id: "01ABCDEF", queue: .extraction, wikiID: "wiki1",
+            id: QueueItemID(rawValue: "01ABCDEF"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
     }
@@ -96,13 +96,13 @@ struct WikiDaemonEventSinkTests {
         let sink = MockEventSink()
         daemon.registerEventSink(sink)
 
-        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: "chat-1")
+        let envelope = QueueEventEnvelope(kind: .chatEvent, chatID: PageID(rawValue: "chat-1"))
         daemon.pushChatEnvelope(envelope)
 
         #expect(sink.receivedPayloads.count == 1)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: sink.receivedPayloads[0])
         #expect(decoded.kind == .chatEvent)
-        #expect(decoded.chatID == "chat-1")
+        #expect(decoded.chatID == PageID(rawValue: "chat-1"))
     }
 }
 #endif

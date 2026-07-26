@@ -58,9 +58,9 @@ public protocol QueueIngestionProvider: Sendable {
     ///     rejected / auto-rejected). May never fire if the agent isn't
     ///     configured for `always-ask`.
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -81,8 +81,8 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLint(
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -105,9 +105,9 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -184,7 +184,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         self.emitPendingPermission = emitPendingPermission
     }
 
-    public func providerID(for item: QueueItem) async -> String? {
+    public func providerID(for item: QueueItem) async -> ProviderID? {
         // The provider ID for ingestion is resolved from the agent provider
         // config. For now, we use a fixed default — the app's provider
         // resolution happens inside runIngestion when launcher.run() resolves
@@ -194,7 +194,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
         // TODO: Phase 5+ — resolve the actual provider from config so
         // per-provider limits are enforced. For now, all ingestion items
         // share one "default" provider slot.
-        return "default-ingest"
+        return ProviderID(rawValue: "default-ingest")
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {

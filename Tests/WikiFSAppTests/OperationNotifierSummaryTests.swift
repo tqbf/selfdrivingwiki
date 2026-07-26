@@ -18,15 +18,15 @@ import WikiFSCore
         lintPageIDs: [PageID]? = nil
     ) -> QueueItem {
         QueueItem(
-            id: "TESTITEM001",
+            id: QueueItemID(rawValue: "TESTITEM001"),
             queue: queue,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(
                 sourceIDs: sourceIDs,
                 lintPageIDs: lintPageIDs),
             state: .completed,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 0,
             error: nil,
             createdAt: 1000,

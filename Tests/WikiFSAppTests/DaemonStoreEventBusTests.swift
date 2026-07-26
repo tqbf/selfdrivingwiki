@@ -42,7 +42,7 @@ struct DaemonStoreEventBusTests {
         }
     }
 
-    private func makeWiki(_ daemon: WikiDaemon, name: String = "BusTest") throws -> String {
+    private func makeWiki(_ daemon: WikiDaemon, name: String = "BusTest") throws -> WikiID {
         let wikiData = try #require(daemon.createWiki(name: name))
         return try JSONDecoder().decode(WikiDescriptor.self, from: wikiData).id
     }

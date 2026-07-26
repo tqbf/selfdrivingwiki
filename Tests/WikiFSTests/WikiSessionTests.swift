@@ -239,10 +239,10 @@ private final class StubExtractor: MarkdownExtractor {
 /// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
-        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? { nil }
     func persistExtraction(
-        wikiID: String, sourceID: PageID, markdown: String,
+        wikiID: WikiID, sourceID: PageID, markdown: String,
         backend: ExtractionBackend, modelVersion: String?,
         technique: String?
     ) async throws {}

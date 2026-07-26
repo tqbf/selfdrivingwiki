@@ -490,7 +490,7 @@ struct ChatDetailView: View {
                                 .kind.hasPrefix("allow") ?? false
                             Task {
                                 await coordinator.resolvePermission(
-                                    chatID: chatID.rawValue,
+                                    chatID: chatID,
                                     optionId: optionId,
                                     approve: approve)
                             }
@@ -1169,7 +1169,7 @@ struct ChatDetailView: View {
     private var stopButton: some View {
         Button(action: {
             if let chatID {
-                Task { await coordinator.stop(chatID: chatID.rawValue) }
+                Task { await coordinator.stop(chatID: chatID) }
             }
         }) {
             Image(systemName: "stop.circle.fill")
@@ -1378,7 +1378,7 @@ struct ChatDetailView: View {
                 Task {
                     do {
                         try await coordinator.sendMessage(
-                            chatID: chatID.rawValue, message: wireMessage)
+                            chatID: chatID, message: wireMessage)
                     } catch {
                         DebugLog.agent("ChatDetailView.sendMessage failed: \(error)")
                     }
@@ -1392,7 +1392,7 @@ struct ChatDetailView: View {
                 do {
                     try await coordinator.continueChat(
                         wikiID: session.wikiID,
-                        chatID: chatID.rawValue,
+                        chatID: chatID,
                         message: wireMessage)
                 } catch {
                     DebugLog.agent("ChatDetailView.continueChat failed: \(error)")
@@ -1411,7 +1411,7 @@ struct ChatDetailView: View {
                     let newChatID = try await coordinator.startChat(
                         wikiID: session.wikiID, firstMessage: wireMessage,
                         providerId: override?.providerId, modelId: override?.modelId)
-                    store.retargetActiveTabToChat(chatID: PageID(rawValue: newChatID))
+                    store.retargetActiveTabToChat(chatID: newChatID)
                 } catch {
                     DebugLog.agent("ChatDetailView.startChat failed: \(error)")
                     remoteSession.preflightError = error.localizedDescription

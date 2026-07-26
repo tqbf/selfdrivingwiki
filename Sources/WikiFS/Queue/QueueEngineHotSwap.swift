@@ -108,7 +108,7 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
         await current.snapshot()
     }
 
-    func hasActiveWork(for wikiID: String) async -> Bool {
+    func hasActiveWork(for wikiID: WikiID) async -> Bool {
         await current.hasActiveWork(for: wikiID)
     }
 

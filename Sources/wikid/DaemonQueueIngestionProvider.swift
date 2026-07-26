@@ -16,7 +16,7 @@ import WikiFSEngine
 final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private let containerDirectory: URL
     private let extractionCoordinator: ExtractionCoordinator
-    private let storeResolver: @Sendable (String) -> GRDBWikiStore?
+    private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     private let queueStore: QueueStore
     private let resolveSelectedProvider: @Sendable () -> AgentProvider
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
@@ -24,7 +24,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
-        storeResolver: @escaping @Sendable (String) -> GRDBWikiStore?,
+        storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         queueStore: QueueStore,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
         resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig
@@ -58,9 +58,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - QueueIngestionProvider
 
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -69,7 +69,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
-            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID)")
+            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
         }
 
         guard !sourceIDs.isEmpty else {
@@ -106,7 +106,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 ext: staged.ext,
                 displayPath: ingestSourcePath(for: source),
                 name: source.effectiveName,
-                sourceID: source.id.rawValue
+                sourceID: source.id
             ))
         }
 
@@ -133,7 +133,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onPendingPermission: onPendingPermission,
             providerLabel: providerLabel,
             onLock: { },
-            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID) }
+            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
         )
 
         let results = await launcherResults(launcher)
@@ -148,8 +148,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - Lint
 
     func runLint(
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -158,11 +158,11 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
-            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID)")
+            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
         }
         let launcher = await makeLauncher()
 
-        DebugLog.ingest("DaemonQueueIngestionProvider.runLint: begin wikiID=\(wikiID)")
+        DebugLog.ingest("DaemonQueueIngestionProvider.runLint: begin wikiID=\(wikiID.rawValue)")
 
         let stateMarkdown = daemonStateMarkdown(from: store)
         let providerLabel = resolveSelectedProvider().label
@@ -186,9 +186,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     }
 
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
-        queueItemID: String,
+        queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
@@ -197,11 +197,11 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
-            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID)")
+            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
         }
         let launcher = await makeLauncher()
 
-        DebugLog.ingest("DaemonQueueIngestionProvider.runLintPages: begin wikiID=\(wikiID) pages=\(pageIDs.count)")
+        DebugLog.ingest("DaemonQueueIngestionProvider.runLintPages: begin wikiID=\(wikiID.rawValue) pages=\(pageIDs.count)")
 
         let allPages = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .lastUpdated) })) ?? []
         let pages: [(id: PageID, title: String)] = pageIDs.compactMap { id in
@@ -268,8 +268,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private func runLintAgent(
         request: OperationRequest,
         launcher: AgentLauncher,
-        wikiID: String,
-        queueItemID: String,
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
         providerLabel: String?,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
@@ -290,7 +290,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onPendingPermission: onPendingPermission,
             providerLabel: providerLabel,
             onLock: { },
-            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID) }
+            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
         )
     }
 
@@ -299,7 +299,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     }
 
     private func ingestSourcePath(for source: SourceSummary) -> String {
-        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id.rawValue, ext: source.ext)
+        let leaf = FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext)
         return "sources/by-id/\(leaf)"
     }
 

@@ -73,7 +73,7 @@ public struct QueueItemPayload: Codable, Sendable {
     /// The linked `QueueItem.ID` when one item chains into another (e.g. PDF
     /// extraction completes → enqueues an ingestion item referencing this ID).
     /// `nil` for standalone items.
-    public var chainedItemID: String?
+    public var chainedItemID: QueueItemID?
 
     /// For `.ingestion` queue items: when non-nil, this item is a lint
     /// operation (not a regular ingestion). An empty array means whole-wiki
@@ -82,14 +82,14 @@ public struct QueueItemPayload: Codable, Sendable {
     public var lintPageIDs: [PageID]?
 
     /// ACP session ID for crash-resume. Set after session start, cleared on completion.
-    public var acpSessionId: String?
+    public var acpSessionId: AcpSessionID?
 
     public init(
         sourceIDs: [PageID],
         stageRouting: [String: String]? = nil,
-        chainedItemID: String? = nil,
+        chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,
-        acpSessionId: String? = nil
+        acpSessionId: AcpSessionID? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
@@ -108,17 +108,17 @@ public struct QueueItemPayload: Codable, Sendable {
 /// `QueueEngine` actor in Phase 2) and drive SwiftUI lists in later phases.
 public struct QueueItem: Codable, Sendable, Identifiable {
     /// ULID-based string identifier (see ``ULID``).
-    public typealias ID = String
+    public typealias ID = QueueItemID
 
     public let id: ID
     public let queue: QueueKind
-    public let wikiID: String
+    public let wikiID: WikiID
     public let payload: QueueItemPayload
     public var state: QueueItemState
     /// Monotonically increasing within a queue kind, spaced by 1000. Determines
     /// processing order; lower keys are picked up first.
     public var orderingKey: Int64
-    public var providerID: String?
+    public var providerID: ProviderID?
     /// Number of times this item has been retried (incremented by `retryItem`).
     public var attempt: Int
     public var error: String?
@@ -132,11 +132,11 @@ public struct QueueItem: Codable, Sendable, Identifiable {
     public init(
         id: ID,
         queue: QueueKind,
-        wikiID: String,
+        wikiID: WikiID,
         payload: QueueItemPayload,
         state: QueueItemState,
         orderingKey: Int64,
-        providerID: String? = nil,
+        providerID: ProviderID? = nil,
         attempt: Int,
         error: String? = nil,
         createdAt: Int64,
@@ -165,10 +165,10 @@ public struct QueueItem: Codable, Sendable, Identifiable {
 /// what to do and for which wiki.
 public struct QueueItemRequest: Codable, Sendable {
     public var queue: QueueKind
-    public var wikiID: String
+    public var wikiID: WikiID
     public var payload: QueueItemPayload
 
-    public init(queue: QueueKind, wikiID: String, payload: QueueItemPayload) {
+    public init(queue: QueueKind, wikiID: WikiID, payload: QueueItemPayload) {
         self.queue = queue
         self.wikiID = wikiID
         self.payload = payload

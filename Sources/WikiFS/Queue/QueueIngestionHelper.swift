@@ -37,7 +37,7 @@ import WikiFSEngine
 func enqueueIngestion(
     sourceIDs: [PageID],
     store: WikiStoreModel,
-    wikiID: String,
+    wikiID: WikiID,
     queueEngine: any QueueEngineClient
 ) async {
     guard !sourceIDs.isEmpty else { return }

@@ -25,13 +25,13 @@ struct QueueEventLogTests {
     /// A completed item for testing.
     private func makeCompletedItem() -> QueueItem {
         QueueItem(
-            id: "TESTCOMPLETED001",
+            id: QueueItemID(rawValue: "TESTCOMPLETED001"),
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .completed,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 0,
             error: nil,
             createdAt: 1000,
@@ -43,9 +43,9 @@ struct QueueEventLogTests {
     /// A queued item for testing.
     private func makeQueuedItem() -> QueueItem {
         QueueItem(
-            id: "TESTQUEUED001",
+            id: QueueItemID(rawValue: "TESTQUEUED001"),
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .queued,
             orderingKey: 1000,
@@ -61,13 +61,13 @@ struct QueueEventLogTests {
     /// A running item for testing.
     private func makeRunningItem() -> QueueItem {
         QueueItem(
-            id: "TESTRUNNING001",
+            id: QueueItemID(rawValue: "TESTRUNNING001"),
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .running,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 0,
             error: nil,
             createdAt: 1000,
@@ -79,13 +79,13 @@ struct QueueEventLogTests {
     /// A failed item for testing.
     private func makeFailedItem() -> QueueItem {
         QueueItem(
-            id: "TESTFAILED001",
+            id: QueueItemID(rawValue: "TESTFAILED001"),
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .failed,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 1,
             error: "something broke",
             createdAt: 1000,
@@ -97,13 +97,13 @@ struct QueueEventLogTests {
     /// A cancelled item for testing.
     private func makeCancelledItem() -> QueueItem {
         QueueItem(
-            id: "TESTCANCELLED001",
+            id: QueueItemID(rawValue: "TESTCANCELLED001"),
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .cancelled,
             orderingKey: 1000,
-            providerID: "provider-A",
+            providerID: ProviderID(rawValue: "provider-A"),
             attempt: 0,
             error: nil,
             createdAt: 1000,
@@ -197,7 +197,7 @@ struct QueueEventLogTests {
         #expect(records.count == 1)
         #expect(records[0].eventType == .cancelled)
         #expect(records[0].itemID == "TESTCANCELLED001")
-        #expect(records[0].wikiID == "wiki1")
+        #expect(records[0].wikiID == WikiID(rawValue: "wiki1"))
         #expect(records[0].durationMs == nil)
     }
 
@@ -256,7 +256,7 @@ struct QueueEventLogTests {
 
         let files = FileManager.default.files(in: dir)
         let records = readLogRecords(at: files[0])
-        #expect(records[0].providerID == "provider-A")
+        #expect(records[0].providerID == ProviderID(rawValue: "provider-A"))
         #expect(records[0].queue == "extraction")
         #expect(records[0].itemState == .running)
     }
@@ -420,7 +420,7 @@ struct QueueEventLogTests {
         let log = QueueEventLog(logDirectory: logDir)
 
         let factory = FakeEngineFactory(
-            providerID: { _ in "p1" },
+            providerID: { _ in ProviderID(rawValue: "p1") },
             worker: { _ in }
         )
         let config = QueueEngineConfig(localExtractionLimit: 1, remoteExtractionLimit: 1)
@@ -431,7 +431,7 @@ struct QueueEventLogTests {
 
         await engine.start()
         let itemID = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
 
         // Wait for the item to complete (deterministic, avoids timing flakes on CI).
         _ = try await engine.waitForCompletion(of: itemID).get()
@@ -504,18 +504,18 @@ extension QueueEventLog {
 // MARK: - Fake engine factory (reuse from QueueEngineTests pattern)
 
 private struct FakeEngineFactory: QueueWorkerFactory {
-    let providerIDFunc: @Sendable (QueueItem) async -> String?
+    let providerIDFunc: @Sendable (QueueItem) async -> ProviderID?
     let workerFunc: @Sendable (QueueItem) async throws -> Void
 
     init(
-        providerID: @escaping @Sendable (QueueItem) async -> String?,
+        providerID: @escaping @Sendable (QueueItem) async -> ProviderID?,
         worker: @escaping @Sendable (QueueItem) async throws -> Void
     ) {
         self.providerIDFunc = providerID
         self.workerFunc = worker
     }
 
-    func providerID(for item: QueueItem) async -> String? {
+    func providerID(for item: QueueItem) async -> ProviderID? {
         await providerIDFunc(item)
     }
 

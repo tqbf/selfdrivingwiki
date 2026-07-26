@@ -10,7 +10,7 @@ struct QueueEventEnvelopeTests {
 
     private func makeItem() -> QueueItem {
         QueueItem(
-            id: "01ABCDEF", queue: .extraction, wikiID: "wiki1",
+            id: QueueItem.ID(rawValue: "01ABCDEF"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
     }
@@ -49,14 +49,14 @@ struct QueueEventEnvelopeTests {
     }
 
     @Test func progressEventRoundTrip() throws {
-        let event = QueueEvent.progress("item-1", line: "Converting…")
+        let event = QueueEvent.progress(QueueItem.ID(rawValue: "item-1"), line: "Converting…")
         let envelope = QueueEventEnvelope(from: event)
         let data = try JSONEncoder().encode(envelope!)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
         let reconstructed = decoded.toQueueEvent()
         #expect(reconstructed != nil)
         if case .progress(let id, let line) = reconstructed! {
-            #expect(id == "item-1")
+            #expect(id.rawValue == "item-1")
             #expect(line == "Converting…")
         }
     }
@@ -76,14 +76,14 @@ struct QueueEventEnvelopeTests {
 
     @Test func runPathsRoundTrip() throws {
         let logURL = URL(fileURLWithPath: "/tmp/log.jsonl")
-        let event = QueueEvent.runPaths("item-1", logURL: logURL, debugURL: nil)
+        let event = QueueEvent.runPaths(QueueItem.ID(rawValue: "item-1"), logURL: logURL, debugURL: nil)
         let envelope = QueueEventEnvelope(from: event)
         let data = try JSONEncoder().encode(envelope!)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
         let reconstructed = decoded.toQueueEvent()
         #expect(reconstructed != nil)
         if case .runPaths(let id, let log, let debug) = reconstructed! {
-            #expect(id == "item-1")
+            #expect(id.rawValue == "item-1")
             #expect(log == logURL)
             #expect(debug == nil)
         }

@@ -17,11 +17,11 @@ import WikiFSEngine
 final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {
     private let broadcaster = QueueEventBroadcaster()
 
-    private let chatContinuation: AsyncStream<(String, QueueEventEnvelope)>.Continuation
-    private let chatStream: AsyncStream<(String, QueueEventEnvelope)>
+    private let chatContinuation: AsyncStream<(PageID, QueueEventEnvelope)>.Continuation
+    private let chatStream: AsyncStream<(PageID, QueueEventEnvelope)>
 
     override init() {
-        var chatContinuation: AsyncStream<(String, QueueEventEnvelope)>.Continuation!
+        var chatContinuation: AsyncStream<(PageID, QueueEventEnvelope)>.Continuation!
         self.chatStream = AsyncStream { c in chatContinuation = c }
         self.chatContinuation = chatContinuation
     }
@@ -36,7 +36,7 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     /// Chat envelopes from the daemon, demuxed by chatID. The app's chat
     /// session registry subscribes and routes each envelope to the matching
     /// `RemoteChatSession.ingest(_:)`.
-    var chatEnvelopes: AsyncStream<(String, QueueEventEnvelope)> { chatStream }
+    var chatEnvelopes: AsyncStream<(PageID, QueueEventEnvelope)> { chatStream }
 
     func deliverEvent(_ payload: Data) {
         guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }

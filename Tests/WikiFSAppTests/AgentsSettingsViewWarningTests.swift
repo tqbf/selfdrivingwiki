@@ -19,7 +19,7 @@ struct AgentsSettingsViewWarningTests {
     @Test func returnsNilWhenProviderDisabled() {
         // A disabled provider can't spawn, so the warning is redundant.
         let disabledClaude = AgentProvider(
-            id: "claude-acp", label: "Claude",
+            id: ProviderID(rawValue: "claude-acp"), label: "Claude",
             command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
             env: [:], enabled: false, isDefault: false)
         let config = AgentProvidersConfig(providers: [disabledClaude])
@@ -57,7 +57,7 @@ struct AgentsSettingsViewWarningTests {
         // is what users of a freshly-added provider see.
         // #663: `.opencodeDefault` was deleted; fixtures build literals.
         let opencode = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -78,7 +78,7 @@ struct AgentsSettingsViewWarningTests {
         // more direct "pick one before running".
         // #663: `.opencodeDefault` was deleted; fixtures build literals.
         let opencode = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
@@ -107,14 +107,14 @@ struct AgentsSettingsViewWarningTests {
         // #663: `.opencodeDefault` and `.hermesDefault` were deleted; fixtures
         // build literals.
         let opencode = AgentProvider(
-            id: "opencode",
+            id: ProviderID(rawValue: "opencode"),
             label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:],
             enabled: true,
             isDefault: false)
         let hermes = AgentProvider(
-            id: "hermes",
+            id: ProviderID(rawValue: "hermes"),
             label: "Hermes",
             command: ["hermes", "acp"],
             env: [:],

@@ -134,7 +134,7 @@ struct ProjectionTreeTests {
         }
         #expect(node.parent == Projection.Identity.sourcesByID)
         #expect(node.name == FilenameEscaping.byIDSourceFilename(
-            sourceID: s.pdfSource.id.rawValue, ext: s.pdfSource.ext))
+            sourceID: s.pdfSource.id, ext: s.pdfSource.ext))
         let expected = try s.store.sourceContent(id: s.pdfSource.id)
         #expect(s.projection.contents(for: id) == expected)
     }

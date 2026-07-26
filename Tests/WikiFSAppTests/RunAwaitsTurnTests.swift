@@ -35,7 +35,7 @@ struct RunAwaitsTurnTests {
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = {
             AgentProvider(
-                id: "fake",
+                id: ProviderID(rawValue: "fake"),
                 label: "Fake",
                 command: ["/usr/bin/true"],
                 enabled: true,
@@ -59,7 +59,7 @@ struct RunAwaitsTurnTests {
                 ext: "md",
                 displayPath: "sources/by-id/test.md",
                 name: "Test Source",
-                sourceID: "01TEST01KQ8HDDR3ZXK72XHG6R"
+                sourceID: PageID(rawValue: "01TEST01KQ8HDDR3ZXK72XHG6R")
             )],
             stateMarkdown: "# State"
         )
@@ -71,7 +71,7 @@ struct RunAwaitsTurnTests {
     ) async {
         await launcher.run(
             request: makeRequest(),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",

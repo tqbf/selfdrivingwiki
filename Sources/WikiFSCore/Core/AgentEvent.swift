@@ -18,7 +18,7 @@ public enum TurnFailureReason: Sendable, Equatable, Codable {
     /// error did not carry a timestamp (the coordinator applies a default).
     /// Codable (forward-compatible: old persisted chats never carried this
     /// case; new chats encode the associated values).
-    case quotaExhausted(provider: String, resetTime: Date?)
+    case quotaExhausted(provider: ProviderID, resetTime: Date?)
 
     /// A plain-English description for the UI banner and `plainText` rendering.
     public var description: String {

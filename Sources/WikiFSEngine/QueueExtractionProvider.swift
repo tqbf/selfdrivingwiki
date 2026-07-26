@@ -108,7 +108,7 @@ public protocol QueueExtractionProvider: Sendable {
     ///   instead of the configured default (used by re-extraction with a chosen
     ///   backend). The provider passes this to `ExtractionCoordinator`.
     func resolveExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution?
@@ -123,7 +123,7 @@ public protocol QueueExtractionProvider: Sendable {
     /// it's a regular bytes-based extraction written via
     /// `recordMarkdownExtraction`.
     func persistExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         markdown: String,
         backend: ExtractionBackend,
@@ -141,9 +141,9 @@ public protocol QueueExtractionProvider: Sendable {
 public protocol QueueIngestSignaling: Sendable {
     /// Called when extraction starts for a wiki's chained PDF pair.
     /// Sets `isIngestInProgress = true` on the wiki's `WikiStoreModel`.
-    func ingestBegan(wikiID: String) async
+    func ingestBegan(wikiID: WikiID) async
 
     /// Called when the ingestion flow (extraction + agent spawn) ends.
     /// Clears `isIngestInProgress = false`.
-    func ingestEnded(wikiID: String) async
+    func ingestEnded(wikiID: WikiID) async
 }

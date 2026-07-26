@@ -101,7 +101,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService(registered: [Self.wikiID: "Old Name"])
         let facade = FileProviderFacade(domainService: service)
 
-        await facade.renameDomain(id: Self.wikiID, displayName: "New Name")
+        await facade.renameDomain(id: WikiID(rawValue: Self.wikiID), displayName: "New Name")
 
         #expect(
             service.removals.isEmpty,
@@ -113,7 +113,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService(registered: [Self.wikiID: "Old Name"])
         let facade = FileProviderFacade(domainService: service)
 
-        await facade.renameDomain(id: Self.wikiID, displayName: "New Name")
+        await facade.renameDomain(id: WikiID(rawValue: Self.wikiID), displayName: "New Name")
 
         #expect(service.name(of: Self.wikiID) == "New Name")
     }
@@ -126,7 +126,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService()
         let facade = FileProviderFacade(domainService: service)
 
-        await facade.renameDomain(id: Self.wikiID, displayName: "New Name")
+        await facade.renameDomain(id: WikiID(rawValue: Self.wikiID), displayName: "New Name")
 
         #expect(service.name(of: Self.wikiID) == "New Name")
         #expect(service.removals.isEmpty)
@@ -143,9 +143,9 @@ struct FileProviderDomainLifecycleTests {
         service.failAdds(with: NSError(
             domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError, userInfo: nil))
         let facade = FileProviderFacade(domainService: service)
-        await facade.activate(id: Self.wikiID, displayName: "Old Name")
+        await facade.activate(id: WikiID(rawValue: Self.wikiID), displayName: "Old Name")
 
-        await facade.renameDomain(id: Self.wikiID, displayName: "New Name")
+        await facade.renameDomain(id: WikiID(rawValue: Self.wikiID), displayName: "New Name")
 
         #expect(facade.status.contains("Rename"))
         #expect(service.name(of: Self.wikiID) == "Old Name", "failed rename must not disturb the domain")
@@ -165,7 +165,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService(registered: [Self.wikiID: "Old Name"])
         let facade = FileProviderFacade(domainService: service)
 
-        let ok = await facade.registerDomain(id: Self.wikiID, displayName: "Different Name")
+        let ok = await facade.registerDomain(id: WikiID(rawValue: Self.wikiID), displayName: "Different Name")
 
         #expect(ok)
         #expect(
@@ -178,7 +178,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService()
         let facade = FileProviderFacade(domainService: service)
 
-        let ok = await facade.registerDomain(id: Self.wikiID, displayName: "Wiki One")
+        let ok = await facade.registerDomain(id: WikiID(rawValue: Self.wikiID), displayName: "Wiki One")
 
         #expect(ok)
         #expect(service.name(of: Self.wikiID) == "Wiki One")
@@ -194,7 +194,7 @@ struct FileProviderDomainLifecycleTests {
         let service = FakeDomainService(registered: [Self.wikiID: "Wiki One"])
         let facade = FileProviderFacade(domainService: service)
 
-        await facade.removeDomain(id: Self.wikiID)
+        await facade.removeDomain(id: WikiID(rawValue: Self.wikiID))
 
         #expect(service.removals.map(\.reason) == [.wikiDeleted])
         #expect(service.name(of: Self.wikiID) == nil)
@@ -208,7 +208,7 @@ struct FileProviderDomainLifecycleTests {
         // clear it so this test drives the migration path rather than the no-op.
         UserDefaults.standard.removeObject(forKey: "FileProviderDomainSchemaVersion")
 
-        await facade.migrateDomainsIfNeeded(wikiIDs: [Self.wikiID, other])
+        await facade.migrateDomainsIfNeeded(wikiIDs: [WikiID(rawValue: Self.wikiID), WikiID(rawValue: other)])
 
         #expect(service.removals.allSatisfy { $0.reason == .schemaMigration })
         #expect(Set(service.removals.map(\.id)) == [Self.wikiID, other])

@@ -30,7 +30,7 @@ struct RootScene: View {
     /// `registry.activeWikiID` after `activateMostRecent()`). Additional
     /// windows receive their ID from `WindowGroup(for: String.self)`'s
     /// binding.
-    @State var wikiID: String?
+    @State var wikiID: WikiID?
     @Bindable var registry: WikiRegistryClient
     @Bindable var sessionManager: SessionManager
     let fileProvider: FileProviderFacade
@@ -42,24 +42,7 @@ struct RootScene: View {
     var body: some View {
         Group {
             if let session {
-                RootView(session: session, registry: registry, fileProvider: fileProvider)
-                    .alert(
-                        "Vacuum Orphaned Storage",
-                        isPresented: Binding(
-                            get: { session.pendingVacuumAll != nil },
-                            set: { if !$0 { session.pendingVacuumAll = nil } }
-                        ),
-                        presenting: session.pendingVacuumAll
-                    ) { report in
-                        if report.isEmpty {
-                            Button("OK", role: .cancel) {}
-                        } else {
-                            Button("Cancel", role: .cancel) {}
-                            Button("Vacuum", role: .destructive) { session.applyVacuumAll() }
-                        }
-                    } message: { report in
-                        Text(report.alertMessage)
-                    }
+                sessionView(session)
             } else if let wikiID {
                 // The wiki ID is known but the session isn't resolved yet, OR
                 // the store failed to open (issue #881 — no in-memory fallback).
@@ -84,7 +67,7 @@ struct RootScene: View {
                             }
                             Button("Reveal Database") {
                                 let dbURL = sessionManager.containerDirectory
-                                    .appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
+                                    .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
                                 NSWorkspace.shared.activateFileViewerSelecting([dbURL])
                             }
                         }
@@ -95,7 +78,7 @@ struct RootScene: View {
                     ProgressView("Opening wiki…")
                         .onAppear { resolveSession(for: wikiID) }
                         .onAppear {
-                            DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID)")
+                            DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID.rawValue)")
                         }
                 }
             } else {
@@ -114,7 +97,7 @@ struct RootScene: View {
                     }
                 }
                 .onAppear {
-                    DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID ?? "nil") isSceneActive=\(isSceneActive)")
+                    DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID?.rawValue ?? "nil") isSceneActive=\(isSceneActive)")
                     // Only adopt activeWikiID for the main launch window (which
                     // starts with wikiID==nil from the single-identity WindowGroup).
                     // Wiki windows (from WindowGroup(for: String.self)) should receive
@@ -138,10 +121,10 @@ struct RootScene: View {
         // spawning a duplicate (see WindowIdentifierTagger).
         .background(WindowIdentifierTagger(wikiID: wikiID))
         .onAppear {
-            DebugLog.tabs("RootScene body onAppear: wikiID=\(wikiID ?? "nil") session=\(session != nil ? "set" : "nil")")
+            DebugLog.tabs("RootScene body onAppear: wikiID=\(wikiID?.rawValue ?? "nil") session=\(session != nil ? "set" : "nil")")
         }
         .onChange(of: wikiID) { old, new in
-            DebugLog.tabs("RootScene wikiID changed: old=\(old ?? "nil") new=\(new ?? "nil")")
+            DebugLog.tabs("RootScene wikiID changed: old=\(old?.rawValue ?? "nil") new=\(new?.rawValue ?? "nil")")
         }
         // Observe activeWikiID for two purposes:
         // 1. Launch: activateMostRecent() sets activeWikiID → adopt it as
@@ -174,13 +157,7 @@ struct RootScene: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { session?.store.flushPendingSaves() }
-            isSceneActive = (phase == .active)
-            // Track frontmost window for VacuumCommands (scene-level .commands).
-            if phase == .active, let wikiID {
-                sessionManager.frontmostWikiID = wikiID
-            }
-            if phase == .active { Task { await session?.upgradeSearchIndex() } }
+            handleScenePhaseChange(phase)
         }
         .onDisappear {
             // Release the session when the window closes — but only if the
@@ -204,6 +181,43 @@ struct RootScene: View {
         }
     }
 
+    /// Extracted from `body` to avoid type-checker timeouts (the `.alert`
+    /// modifier has complex `Binding` + two trailing closures).
+    @ViewBuilder
+    private func sessionView(_ session: WikiSession) -> some View {
+        RootView(session: session, registry: registry, fileProvider: fileProvider)
+            .alert(
+                "Vacuum Orphaned Storage",
+                isPresented: Binding(
+                    get: { session.pendingVacuumAll != nil },
+                    set: { if !$0 { session.pendingVacuumAll = nil } }
+                ),
+                presenting: session.pendingVacuumAll
+            ) { report in
+                if report.isEmpty {
+                    Button("OK", role: .cancel) {}
+                } else {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Vacuum", role: .destructive) { session.applyVacuumAll() }
+                }
+            } message: { report in
+                Text(report.alertMessage)
+            }
+    }
+
+    /// Extracted from the `.onChange(of: scenePhase)` closure to avoid
+    /// type-checker timeouts (multiple conditional branches + optional
+    /// unwrap in one closure body).
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        if phase != .active { session?.store.flushPendingSaves() }
+        isSceneActive = (phase == .active)
+        // Track frontmost window for VacuumCommands (scene-level .commands).
+        if phase == .active, let wikiID {
+            sessionManager.frontmostWikiID = wikiID
+        }
+        if phase == .active { Task { await session?.upgradeSearchIndex() } }
+    }
+
     /// Get-or-create the session for `wikiID` via the shared `SessionManager`,
     /// wire the File Provider bus subscription, activate the FP domain, and
     /// reap stale workspaces. Guarded by `session == nil` so calling it twice
@@ -213,7 +227,7 @@ struct RootScene: View {
     /// spinner can animate while the synchronous store init + model reloads
     /// execute. The `Task.yield()` between reload phases lets the main run
     /// loop paint between batches of SQLite work.
-    private func resolveSession(for wikiID: String) {
+    private func resolveSession(for wikiID: WikiID) {
         guard session == nil else { return }
         guard let descriptor = registry.wikis.first(where: { $0.id == wikiID }) else { return }
         Task { @MainActor in

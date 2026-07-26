@@ -35,7 +35,7 @@ enum ModelStatus: Equatable {
 /// save step, mirroring `ZoteroSettingsView`.
 struct AgentsSettingsView: View {
     @State private var config: AgentProvidersConfig
-    @State private var selectedProviderID: String?
+    @State private var selectedProviderID: ProviderID?
     @State private var providerPendingDeletion: AgentProvider?
     /// #663: drives the `AddProviderSheet` — a non-destructive, catalog-driven
     /// add flow. Cancel = no change (AC.2).
@@ -728,7 +728,8 @@ enum EnvVarText {
     static func seed(for provider: AgentProvider) -> String {
         if !provider.env.isEmpty { return format(provider.env) }
         var lines = ["# One KEY=value per line. Lines starting with # are ignored."]
-        if let hints = EnvVarHints.hints(forProviderID: provider.id), !hints.isEmpty {
+        // EnvVarHints is a static [provider-name] table — String boundary.
+        if let hints = EnvVarHints.hints(forProviderID: provider.id.rawValue), !hints.isEmpty {
             lines.append("#")
             lines.append("# Common variables for this provider:")
             for hint in hints {

@@ -133,7 +133,7 @@ struct ACPRegistryTests {
         """)
         let mapped = ACPRegistryClient.mapRegistryToCatalog(res)
         let agent = try #require(mapped.first)
-        #expect(agent.id == "claude-acp")
+        #expect(agent.id == ProviderID(rawValue: "claude-acp"))
         #expect(agent.label == "Claude Agent")
         #expect(agent.summary == "ACP wrapper")
         #expect(agent.detectExecutable == "npx")
@@ -234,7 +234,7 @@ struct ACPRegistryTests {
         ]}
         """)
         let mapped = ACPRegistryClient.mapRegistryToCatalog(res)
-        #expect(mapped.map(\.id) == ["withnpx"])
+        #expect(mapped.map(\.id) == [ProviderID(rawValue: "withnpx")])
     }
 
     @Test func skipsBinaryWithoutDarwinPlatform() throws {
@@ -289,9 +289,9 @@ struct ACPRegistryTests {
         // Smoke: the IDs we already seed defaults for / ship in the hardcoded
         // fallback are present in the official registry snapshot.
         let ids = Set(mapped.map(\.id))
-        #expect(ids.contains("claude-acp"))
-        #expect(ids.contains("gemini"))
-        #expect(ids.contains("opencode"))
+        #expect(ids.contains(ProviderID(rawValue: "claude-acp")))
+        #expect(ids.contains(ProviderID(rawValue: "gemini")))
+        #expect(ids.contains(ProviderID(rawValue: "opencode")))
     }
 
     // MARK: - Sync accessor (ACPProviderCatalog.agents)
@@ -310,9 +310,9 @@ struct ACPRegistryTests {
         let ids = Set(ACPProviderCatalog.agents.map(\.id))
         let fallbackIDs = Set(ACPProviderCatalog.fallbackCatalog.map(\.id))
         #expect(ids == fallbackIDs)
-        #expect(ids.contains("hermes"))   // hardcoded only — NOT in official registry
-        #expect(ids.contains("copilot"))  // hardcoded only
-        #expect(ids.contains("kiro"))     // hardcoded only
+        #expect(ids.contains(ProviderID(rawValue: "hermes")))   // hardcoded only — NOT in official registry
+        #expect(ids.contains(ProviderID(rawValue: "copilot")))  // hardcoded only
+        #expect(ids.contains(ProviderID(rawValue: "kiro")))     // hardcoded only
     }
 
     @Test func fallbackCatalogSatisfiesConvention() {
@@ -336,7 +336,7 @@ struct ACPRegistryTests {
         let agents = await ACPProviderCatalog.loadAgents()
         #expect(!agents.isEmpty)
         // The fallback (the only absolute floor) always has Claude-acp.
-        #expect(agents.contains(where: { $0.id == "claude-acp" }))
+        #expect(agents.contains(where: { $0.id == ProviderID(rawValue: "claude-acp") }))
         // Convention survives the round-trip through whichever source won.
         for agent in agents {
             #expect(agent.command.first == agent.detectExecutable)

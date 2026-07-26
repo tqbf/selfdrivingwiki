@@ -25,7 +25,7 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
 
     public var isEmpty: Bool { wikis.isEmpty }
 
-    public func descriptor(id: String) -> WikiDescriptor? {
+    public func descriptor(id: WikiID) -> WikiDescriptor? {
         wikis.first { $0.id == id }
     }
 
@@ -43,20 +43,20 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
 
     /// Rename a wiki — changes ONLY the display name (identity, DB filename, and
     /// domain identifier are the ULID, untouched). No-op if the id is unknown.
-    public mutating func rename(id: String, to displayName: String) {
+    public mutating func rename(id: WikiID, to displayName: String) {
         guard let index = wikis.firstIndex(where: { $0.id == id }) else { return }
         wikis[index].displayName = displayName
     }
 
     /// Set (or clear, with `nil`) a wiki's home page. No-op if the id is unknown.
-    public mutating func setHomePage(id: String, pageID: PageID?) {
+    public mutating func setHomePage(id: WikiID, pageID: PageID?) {
         guard let index = wikis.firstIndex(where: { $0.id == id }) else { return }
         wikis[index].homePageID = pageID
     }
 
     /// Mark a wiki as just-used: bump `lastUsedAt` and move it to the front so MRU
     /// ordering (and the launch pick) stays correct.
-    public mutating func touch(id: String, now: Date = Date()) {
+    public mutating func touch(id: WikiID, now: Date = Date()) {
         guard let index = wikis.firstIndex(where: { $0.id == id }) else { return }
         wikis[index].lastUsedAt = now
         let descriptor = wikis.remove(at: index)
@@ -65,7 +65,7 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
 
     /// Remove a wiki from the registry (the caller separately drops its DB files
     /// and File Provider domain). No-op if the id is unknown.
-    public mutating func remove(id: String) {
+    public mutating func remove(id: WikiID) {
         wikis.removeAll { $0.id == id }
     }
 

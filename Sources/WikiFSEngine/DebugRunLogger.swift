@@ -280,7 +280,7 @@ final class DebugRunLogger: @unchecked Sendable {
         chatULID: String?,
         startedAt: Date,
         operationKind: String,
-        providerId: String,
+        providerId: ProviderID,
         providerLabel: String?,
         selectedModelId: String?,
         thinkingEffort: ThinkingEffortOption?,
@@ -424,7 +424,7 @@ struct ModelsConfigRecord: Codable, Sendable, Equatable {
     var phases: [PhaseEntry]
 
     struct ProviderInfo: Codable, Sendable, Equatable {
-        var id: String
+        var id: ProviderID
         var label: String?
     }
 

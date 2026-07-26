@@ -39,11 +39,11 @@ public actor QueueEngine {
 
     /// In-memory mirror of per-provider active (running) counts, used for
     /// capacity checks during dispatch. Derived from `runningItems`.
-    private var providerActiveCounts: [String: Int] = [:]
+    private var providerActiveCounts: [ProviderID: Int] = [:]
 
     /// Wikis with an active (`.running`) ingestion item. Enforces the
     /// per-wiki invariant: at most one ingestion per wiki at a time.
-    private var activeIngestionWikis: Set<String> = []
+    private var activeIngestionWikis: Set<WikiID> = []
 
     /// Bonne: the `Task` for each running item, so `halt` can cancel them.
     private var runningTasks: [QueueItem.ID: Task<Void, Never>] = [:]
@@ -144,7 +144,7 @@ public actor QueueEngine {
     public func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
         // Synchronous shape validation (AC4.2): reject empty wikiID before the
         // store write so doomed items never enter the queue.
-        guard !request.wikiID.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !request.wikiID.rawValue.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw QueueStoreError.invalidRequest("wikiID must not be empty")
         }
         let item = try store.enqueue(request)
@@ -211,7 +211,7 @@ public actor QueueEngine {
                     emit(.cancelled(updated))
                 }
             } catch {
-                DebugLog.store("QueueEngine.halt: failed to requeue \(item.id): \(error)")
+                DebugLog.store("QueueEngine.halt: failed to requeue \(item.id.rawValue): \(error)")
             }
         }
         // Rebuild counts after halting.
@@ -273,7 +273,7 @@ public actor QueueEngine {
         } catch {
             // The item may be in a terminal state already, or the
             // transition is invalid. Best-effort + log.
-            DebugLog.store("QueueEngine.cancelItem: failed for \(id): \(error)")
+            DebugLog.store("QueueEngine.cancelItem: failed for \(id.rawValue): \(error)")
         }
         await dispatchScan()
     }
@@ -348,7 +348,7 @@ public actor QueueEngine {
                 emit(.reordered(updated))
             }
         } catch {
-            DebugLog.store("QueueEngine.reorderItem: failed to persist reorder for \(id): \(error)")
+            DebugLog.store("QueueEngine.reorderItem: failed to persist reorder for \(id.rawValue): \(error)")
         }
     }
 
@@ -357,7 +357,7 @@ public actor QueueEngine {
     /// Whether the engine has any queued or running items for the given wiki.
     /// Used by `RootScene.onDisappear` to decide whether to retain a session
     /// (if work is pending) or release it.
-    public func hasActiveWork(for wikiID: String) -> Bool {
+    public func hasActiveWork(for wikiID: WikiID) -> Bool {
         let active: [QueueItem]
         do {
             active = try store.loadActive()
@@ -552,7 +552,7 @@ public actor QueueEngine {
         do {
             events = try store.loadItemEvents(itemID: itemID)
         } catch {
-            DebugLog.store("QueueEngine.loadTranscript: failed to load events for \(itemID): \(error)")
+            DebugLog.store("QueueEngine.loadTranscript: failed to load events for \(itemID.rawValue): \(error)")
             events = []
         }
         return AgentEvent.mergingStreamDeltas(events)
@@ -563,7 +563,7 @@ public actor QueueEngine {
         do {
             try store.deleteItemEvents(itemID: itemID)
         } catch {
-            DebugLog.store("QueueEngine.clearTranscript: failed to delete events for \(itemID): \(error)")
+            DebugLog.store("QueueEngine.clearTranscript: failed to delete events for \(itemID.rawValue): \(error)")
         }
     }
 
@@ -703,7 +703,7 @@ public actor QueueEngine {
                 do {
                     try store.markRunning(id: item.id, providerID: providerID)
                 } catch {
-                    DebugLog.store("QueueEngine.dispatchScan: claim failed for \(item.id): \(error)")
+                    DebugLog.store("QueueEngine.dispatchScan: claim failed for \(item.id.rawValue): \(error)")
                     continue
                 }
 
@@ -713,7 +713,7 @@ public actor QueueEngine {
                     guard let updated = try store.getItem(item.id) else { continue }
                     runningItem = updated
                 } catch {
-                    DebugLog.store("QueueEngine.dispatchScan: failed to load updated item \(item.id): \(error)")
+                    DebugLog.store("QueueEngine.dispatchScan: failed to load updated item \(item.id.rawValue): \(error)")
                     continue
                 }
 
@@ -797,7 +797,7 @@ public actor QueueEngine {
                 // markCompleted can fail if the item was requeued/cancelled
                 // while the worker was finishing. The work is done — log and
                 // free the slot defensively.
-                DebugLog.store("QueueEngine: markCompleted failed for \(item.id): \(error)")
+                DebugLog.store("QueueEngine: markCompleted failed for \(item.id.rawValue): \(error)")
                 decrementProviderCount(for: item)
                 if item.queue == .ingestion {
                     activeIngestionWikis.remove(item.wikiID)
@@ -824,7 +824,7 @@ public actor QueueEngine {
                         }
                     }
                 } catch {
-                    DebugLog.store("QueueEngine.handleWorkerFinished: failed to handle cancellation for \(item.id): \(error)")
+                    DebugLog.store("QueueEngine.handleWorkerFinished: failed to handle cancellation for \(item.id.rawValue): \(error)")
                 }
             } else {
                 // #440: prefer `localizedDescription` (respects
@@ -844,7 +844,7 @@ public actor QueueEngine {
                         emit(.failed(updated, error: errorMsg))
                     }
                 } catch {
-                    DebugLog.store("QueueEngine: markFailed failed for \(item.id): \(error)")
+                    DebugLog.store("QueueEngine: markFailed failed for \(item.id.rawValue): \(error)")
                     decrementProviderCount(for: item)
                     if item.queue == .ingestion {
                         activeIngestionWikis.remove(item.wikiID)
@@ -879,7 +879,7 @@ public actor QueueEngine {
     // MARK: - In-memory state management
 
     /// Increment the active count for a provider.
-    private func incrementProviderCount(_ providerID: String) {
+    private func incrementProviderCount(_ providerID: ProviderID) {
         providerActiveCounts[providerID, default: 0] += 1
     }
 

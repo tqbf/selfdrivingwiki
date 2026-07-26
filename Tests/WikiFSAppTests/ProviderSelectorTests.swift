@@ -22,38 +22,38 @@ import ACPModel
     /// default survives.
     @Test func settingDefaultDemotesOthers() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
 
-        let updated = config.settingDefault(id: "gemini")
+        let updated = config.settingDefault(id: ProviderID(rawValue: "gemini"))
 
-        #expect(updated.defaultProvider.id == "gemini")
+        #expect(updated.defaultProvider.id == ProviderID(rawValue: "gemini"))
         // Single-default invariant: exactly one.
         let defaults = updated.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
         // The previous default (Claude) lost it.
-        #expect(updated.provider(id: "claude")?.isDefault == false)
-        #expect(updated.provider(id: "hermes")?.isDefault == false)
+        #expect(updated.provider(id: ProviderID(rawValue: "claude"))?.isDefault == false)
+        #expect(updated.provider(id: ProviderID(rawValue: "hermes"))?.isDefault == false)
         // selectedProvider() now resolves to the picked one (it's enabled).
-        #expect(updated.selectedProvider().id == "gemini")
+        #expect(updated.selectedProvider().id == ProviderID(rawValue: "gemini"))
     }
 
     /// Switching the default twice returns to the original: the mutator is
     /// idempotent w.r.t. the invariant and reversible.
     @Test func settingDefaultIsReversible() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
 
-        let switched = config.settingDefault(id: "gemini")
-        #expect(switched.defaultProvider.id == "gemini")
+        let switched = config.settingDefault(id: ProviderID(rawValue: "gemini"))
+        #expect(switched.defaultProvider.id == ProviderID(rawValue: "gemini"))
 
-        let back = switched.settingDefault(id: "claude")
-        #expect(back.defaultProvider.id == "claude")
-        #expect(back.provider(id: "gemini")?.isDefault == false)
+        let back = switched.settingDefault(id: ProviderID(rawValue: "claude"))
+        #expect(back.defaultProvider.id == ProviderID(rawValue: "claude"))
+        #expect(back.provider(id: ProviderID(rawValue: "gemini"))?.isDefault == false)
     }
 
     /// Setting an UNKNOWN id as default does not collapse to zero defaults —
@@ -61,14 +61,14 @@ import ACPModel
     /// never strands the launcher with no provider.
     @Test func settingDefaultUnknownIdKeepsInvariant() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
         ])
 
-        let updated = config.settingDefault(id: "does-not-exist")
+        let updated = config.settingDefault(id: ProviderID(rawValue: "does-not-exist"))
 
         let defaults = updated.providers.filter(\.isDefault)
         #expect(defaults.count == 1)
-        #expect(updated.defaultProvider.id == "claude")
+        #expect(updated.defaultProvider.id == ProviderID(rawValue: "claude"))
     }
 
     /// The mutator is PURE: the original config is untouched (returns a new
@@ -76,15 +76,15 @@ import ACPModel
     /// mutating the source.
     @Test func settingDefaultIsPure() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
 
-        _ = config.settingDefault(id: "gemini")
+        _ = config.settingDefault(id: ProviderID(rawValue: "gemini"))
 
         // Original unchanged: claude is still default.
-        #expect(config.defaultProvider.id == "claude")
-        #expect(config.provider(id: "gemini")?.isDefault == false)
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "claude"))
+        #expect(config.provider(id: ProviderID(rawValue: "gemini"))?.isDefault == false)
     }
 
     // MARK: - enabledProviders (the selector's pickable list)
@@ -94,14 +94,14 @@ import ACPModel
     /// selector menu must agree, or it could show a provider that won't run.
     @Test func enabledProvidersExcludesDisabled() {
         let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: "claude", label: "Claude", enabled: true, isDefault: true),
-            AgentProvider(id: "gemini", label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
-            AgentProvider(id: "hermes", label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
 
         let ids = config.enabledProviders.map(\.id)
-        #expect(ids == ["claude", "hermes"])
-        #expect(!ids.contains("gemini"))
+        #expect(ids == [ProviderID(rawValue: "claude"), ProviderID(rawValue: "hermes")])
+        #expect(!ids.contains(ProviderID(rawValue: "gemini")))
     }
 
     /// selector ever having run.
@@ -120,8 +120,8 @@ import ACPModel
 
         // providersConfig() seeds + persists on first read; no pick made.
         let config = launcher.providersConfig()
-        #expect(config.defaultProvider.id == "claude-acp")
-        #expect(launcher.resolveSelectedProvider().id == "claude-acp")
+        #expect(config.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
+        #expect(launcher.resolveSelectedProvider().id == ProviderID(rawValue: "claude-acp"))
     }
 }
 #endif

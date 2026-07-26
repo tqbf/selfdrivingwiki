@@ -73,7 +73,7 @@ struct WikiStoreModelHtmlExtractionTests {
     /// path may already have written). Returns the new source's id.
     private func modelWithHTMLSource() throws -> (GRDBWikiStore, WikiStoreModel, PageID) {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-html-extract")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-html-extract"))
         let model = WikiStoreModel(store: store)
         let summary = try store.addSource(
             filename: "article.html",
@@ -176,7 +176,7 @@ struct WikiStoreModelHtmlExtractionTests {
     /// here to assert the new invariant instead.
     @Test func extractHtmlWorksOnUnextractedURLIngest() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-pr3-url")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-pr3-url"))
         let model = WikiStoreModel(store: store)
         let fetcher = HTMLFakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(sampleHTML.utf8),
@@ -231,7 +231,7 @@ struct WikiStoreModelHtmlExtractionTests {
     /// AGENTS.md so the macOS assertion is authoritative.
     @Test func htmlFileIngestDoesNotAutoExtract() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-pr3-file")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-pr3-file"))
         let model = WikiStoreModel(store: store)
 
         // Write an HTML fixture to a real temp file so `LocalFileMaterializer`
@@ -269,7 +269,7 @@ struct WikiStoreModelHtmlExtractionTests {
 
     @Test func extractHtmlOnEmptySourceReturnsNil() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-empty")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-empty"))
         let model = WikiStoreModel(store: store)
         let summary = try store.addSource(
             filename: "empty.html",

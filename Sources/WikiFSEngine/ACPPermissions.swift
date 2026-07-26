@@ -262,7 +262,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// (not a tuple) — `OSAllocatedUnfairLock`'s tuple initializer can't infer
     /// the heterogeneous element types, so a named struct is the clean form.
     private struct LockedState: Sendable {
-        var pending: [String: Pending] = [:]
+        var pending: [ToolCallID: Pending] = [:]
         var onExit: (@Sendable (Int) -> Void)?
     }
     private let lock = PortableLock<LockedState>(initialState: LockedState())
@@ -363,7 +363,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
             // #606: arm the auto-reject timer when a budget is set. nil means
             // interactive chat (unbounded — the UI is the release valve).
             let timer: Task<Void, Never>? = budget.map { b in
-                Task { [toolCallId = request.toolCall.toolCallId] in
+                Task { [toolCallId = ToolCallID(rawValue: request.toolCall.toolCallId)] in
                     do {
                         try await Task.sleep(for: b)
                     } catch {
@@ -381,7 +381,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
                 }
             }
             lock.withLock { state in
-                state.pending[request.toolCall.toolCallId] = Pending(
+                state.pending[ToolCallID(rawValue: request.toolCall.toolCallId)] = Pending(
                     options: request.options,
                     toolName: toolName,
                     inputSummary: inputSummary,
@@ -401,7 +401,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
     /// sync re-entrant call). The removed `timer` is returned but not cancelled
     /// here (it's the running task itself — self-cancellation is a no-op).
     private static func timeOut(
-        toolCallId: String,
+        toolCallId: ToolCallID,
         lock: PortableLock<LockedState>
     ) {
         let drained = lock.withLock { state -> (CheckedContinuation<RequestPermissionResponse, Never>, Task<Void, Never>?)? in
@@ -412,7 +412,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
             // resolve() or cancelAllPending() already won the race — nothing to do.
             return
         }
-        DebugLog.agent("ACPBackend: permission budget exceeded — auto-reject toolCallId=\(toolCallId)")
+        DebugLog.agent("ACPBackend: permission budget exceeded — auto-reject toolCallId=\(toolCallId.rawValue)")
         cont.resume(returning: RequestPermissionResponse(outcome: PermissionOutcome(cancelled: true)))
     }
 

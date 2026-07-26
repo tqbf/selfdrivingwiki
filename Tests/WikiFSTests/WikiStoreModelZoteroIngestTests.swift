@@ -44,7 +44,7 @@ struct WikiStoreModelZoteroIngestTests {
 
     @Test func localAttachmentLandsInSourcesList() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         let recorder = SignalRecorder()
         store.eventBus?.subscribe(nil) { recorder.append($0) }
@@ -151,7 +151,7 @@ struct WikiStoreModelZoteroIngestTests {
     /// (PR2) afterward.
     @Test func zoteroHtmlAttachmentLandsWithoutMarkdownSidecar() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test-zotero-html")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-zotero-html"))
         let model = WikiStoreModel(store: store)
         let zoteroDir = try tempZoteroDir()
         let html = #"""

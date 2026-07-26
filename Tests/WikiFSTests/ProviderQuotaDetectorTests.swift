@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import ACPModel
+import WikiFSTypes
 @testable import WikiFSEngine
 
 /// #727: tests for the pure `ProviderQuotaDetector` — the detection logic that
@@ -21,9 +22,9 @@ struct ProviderQuotaDetectorTests {
             message: "Your Claude session limit has been reached. Please try again later.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         #expect(signal != nil)
-        #expect(signal?.providerId == "claude-acp")
+        #expect(signal?.providerId == ProviderID(rawValue: "claude-acp"))
         #expect(signal?.kind == .claudeSession)
         #expect(signal?.resetTime != nil)
     }
@@ -35,7 +36,7 @@ struct ProviderQuotaDetectorTests {
             message: "You have exceeded your weekly limit for Opus.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         #expect(signal != nil)
         #expect(signal?.kind == .claudeWeekly)
         if let signal, let reset = signal.resetTime {
@@ -53,7 +54,7 @@ struct ProviderQuotaDetectorTests {
             message: "Opus limit reached.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         #expect(signal?.kind == .claudeSession)
     }
 
@@ -64,7 +65,7 @@ struct ProviderQuotaDetectorTests {
             message: "Too many requests. Please slow down.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         #expect(signal == nil)
     }
 
@@ -75,7 +76,7 @@ struct ProviderQuotaDetectorTests {
             message: "Your usage limit has been reached.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         #expect(signal?.kind == .claudeWeekly)
     }
 
@@ -88,7 +89,7 @@ struct ProviderQuotaDetectorTests {
             message: "Quota exceeded",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal != nil)
         if let signal {
             #expect(signal.kind == .zaiErrorCode(1310))
@@ -103,7 +104,7 @@ struct ProviderQuotaDetectorTests {
             message: "Rate limit exceeded",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1316))
     }
 
@@ -114,7 +115,7 @@ struct ProviderQuotaDetectorTests {
             message: "Server busy, please try again",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal == nil)
     }
 
@@ -125,7 +126,7 @@ struct ProviderQuotaDetectorTests {
             message: "Internal error, retry",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal == nil)
     }
 
@@ -136,7 +137,7 @@ struct ProviderQuotaDetectorTests {
             message: "Service unavailable",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal == nil)
     }
 
@@ -149,7 +150,7 @@ struct ProviderQuotaDetectorTests {
             message: "Request failed, error code: 1310. Please try later.",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1310))
     }
 
@@ -160,7 +161,7 @@ struct ProviderQuotaDetectorTests {
             message: "Error",
             data: AnyCodable("error code=1317, retry after reset")
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1317))
     }
 
@@ -171,7 +172,7 @@ struct ProviderQuotaDetectorTests {
             message: "Error",
             data: AnyCodable(1319)
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1319))
     }
 
@@ -187,7 +188,7 @@ struct ProviderQuotaDetectorTests {
             message: "Error",
             data: anyCodable
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1318))
     }
 
@@ -204,7 +205,7 @@ struct ProviderQuotaDetectorTests {
             message: "Quota exceeded",
             data: anyCodable
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1310))
         if let signal, let reset = signal.resetTime {
             let isoFormatter = ISO8601DateFormatter()
@@ -218,14 +219,14 @@ struct ProviderQuotaDetectorTests {
     @Test("Non-agentError returns nil")
     func testNonAgentErrorReturnsNil() {
         struct SomeOtherError: Error {}
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: SomeOtherError())
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: SomeOtherError())
         #expect(signal == nil)
     }
 
     @Test("ClientError.invalidResponse returns nil")
     func testInvalidResponseReturnsNil() {
         let signal = ProviderQuotaDetector.detect(
-            providerId: "claude-acp",
+            providerId: ProviderID(rawValue: "claude-acp"),
             error: ClientError.invalidResponse
         )
         #expect(signal == nil)
@@ -234,7 +235,7 @@ struct ProviderQuotaDetectorTests {
     @Test("ClientError.connectionClosed returns nil")
     func testConnectionClosedReturnsNil() {
         let signal = ProviderQuotaDetector.detect(
-            providerId: "claude-acp",
+            providerId: ProviderID(rawValue: "claude-acp"),
             error: ClientError.connectionClosed
         )
         #expect(signal == nil)
@@ -249,7 +250,7 @@ struct ProviderQuotaDetectorTests {
             message: "session limit reached",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "some-provider", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "some-provider"), error: error)
         #expect(signal?.kind == .claudeSession)
     }
 
@@ -260,7 +261,7 @@ struct ProviderQuotaDetectorTests {
             message: "quota exceeded",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "some-provider", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "some-provider"), error: error)
         #expect(signal?.kind == .zaiErrorCode(1310))
     }
 
@@ -271,7 +272,7 @@ struct ProviderQuotaDetectorTests {
             message: "Internal server error",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "some-provider", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "some-provider"), error: error)
         #expect(signal == nil)
     }
 
@@ -279,12 +280,12 @@ struct ProviderQuotaDetectorTests {
 
     @Test("Provider family inference")
     func testProviderFamily() {
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "claude-acp") == .claude)
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "Claude") == .claude)
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "glm-4") == .zai)
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "zai-glm") == .zai)
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "z-ai-provider") == .zai)
-        #expect(ProviderQuotaDetector.providerFamily(forProviderId: "gemini") == .unknown)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "claude-acp")) == .claude)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "Claude")) == .claude)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "glm-4")) == .zai)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "zai-glm")) == .zai)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "z-ai-provider")) == .zai)
+        #expect(ProviderQuotaDetector.providerFamily(forProviderId: ProviderID(rawValue: "gemini")) == .unknown)
     }
 
     // MARK: - nil reset time defaults
@@ -296,7 +297,7 @@ struct ProviderQuotaDetectorTests {
             message: "session limit reached",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "claude-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "claude-acp"), error: error)
         if let signal, let reset = signal.resetTime {
             let interval = reset.timeIntervalSinceNow
             #expect(interval > 4.9 * 3600)
@@ -311,7 +312,7 @@ struct ProviderQuotaDetectorTests {
             message: "quota exceeded",
             data: nil
         ))
-        let signal = ProviderQuotaDetector.detect(providerId: "glm-acp", error: error)
+        let signal = ProviderQuotaDetector.detect(providerId: ProviderID(rawValue: "glm-acp"), error: error)
         if let signal, let reset = signal.resetTime {
             let interval = reset.timeIntervalSinceNow
             #expect(interval > 0.9 * 3600)

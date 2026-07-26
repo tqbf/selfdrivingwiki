@@ -16,17 +16,17 @@ import Foundation
 /// validation / the smoke test.
 public final class TantivySearchService: Sendable {
     public let indexer: TantivyIndexer
-    public let wikiID: String
+    public let wikiID: WikiID
     private let indexDirectory: URL
 
-    public init(wikiID: String, containerDirectory: URL, contentSource: any TantivyContentSource) throws {
+    public init(wikiID: WikiID, containerDirectory: URL, contentSource: any TantivyContentSource) throws {
         self.wikiID = wikiID
         // `<container>/search-index/<wikiID>/` — per-wiki, alongside the
         // `.sqlite` files (same TCC-protected container the app already
         // owns, so no extra entitlement work).
         let dir = containerDirectory
             .appendingPathComponent("search-index", isDirectory: true)
-            .appendingPathComponent(wikiID, isDirectory: true)
+            .appendingPathComponent(wikiID.rawValue, isDirectory: true)
         self.indexDirectory = dir
         self.indexer = try TantivyIndexer(indexDirectory: dir, contentSource: contentSource)
     }
@@ -95,13 +95,13 @@ public final class TantivySearchService: Sendable {
         do {
             let n = await indexer.count()
             if n == 0 {
-                DebugLog.store("TantivySearchService[\(wikiID)]: index empty — rebuilding from store")
+                DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: index empty — rebuilding from store")
                 try await indexer.rebuild()
                 let after = await indexer.count()
-                DebugLog.store("TantivySearchService[\(wikiID)]: rebuild complete (\(after) docs)")
+                DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: rebuild complete (\(after) docs)")
             }
         } catch {
-            DebugLog.store("TantivySearchService[\(wikiID)]: rebuild failed: \(error)")
+            DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: rebuild failed: \(error)")
         }
     }
 
@@ -111,7 +111,7 @@ public final class TantivySearchService: Sendable {
         do {
             try await indexer.rebuild()
         } catch {
-            DebugLog.store("TantivySearchService[\(wikiID)]: forced rebuild failed: \(error)")
+            DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: forced rebuild failed: \(error)")
         }
     }
 
@@ -124,7 +124,7 @@ public final class TantivySearchService: Sendable {
             do {
                 try fm.removeItem(at: indexDirectory)
             } catch {
-                DebugLog.store("TantivySearchService[\(wikiID)]: could not delete index dir: \(error)")
+                DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: could not delete index dir: \(error)")
             }
         }
     }

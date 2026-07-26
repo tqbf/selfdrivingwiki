@@ -1,270 +1,270 @@
 [
   {
-    "text": "        s.unicodeScalars.append(Unicode.Scalar(c)!)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 50,
-        "line": 100,
-        "file": "Sources/FuzzHarness/main.swift"
-      },
+      "ruleDescription": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
       "severity": "warning",
+      "location": {
+        "line": 100,
+        "file": "Sources/FuzzHarness/main.swift",
+        "character": 50
+      },
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "        s.unicodeScalars.append(Unicode.Scalar(c)!)"
   },
   {
-    "text": "private final class SearchBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
       "location": {
         "character": 32,
         "line": 201,
         "file": "Sources/WikiCtlCore/CLITantivyLegResolver.swift"
       },
+      "ruleDescription": "",
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "private final class SearchBox: @unchecked Sendable {"
   },
   {
-    "text": "public final class DaemonWorkloadClient: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 42,
         "line": 36,
-        "file": "Sources/WikiCtlCore/DaemonWorkloadClient.swift"
+        "file": "Sources/WikiCtlCore/DaemonWorkloadClient.swift",
+        "character": 42
       },
-      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleName": "@unchecked Sendable"
+    },
+    "text": "public final class DaemonWorkloadClient: @unchecked Sendable {"
   },
   {
-    "text": "private final class HealthCheckResumeBox: @unchecked Sendable {",
     "violation": {
+      "severity": "error",
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 43,
+        "file": "Sources/WikiCtlCore/WikiDaemonConnection.swift",
         "line": 28,
-        "file": "Sources/WikiCtlCore/WikiDaemonConnection.swift"
+        "character": 43
       },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "private final class HealthCheckResumeBox: @unchecked Sendable {"
   },
   {
-    "text": "public final class WikiDaemonConnection: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
       "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
       "location": {
         "character": 42,
-        "line": 57,
-        "file": "Sources/WikiCtlCore/WikiDaemonConnection.swift"
+        "file": "Sources/WikiCtlCore/WikiDaemonConnection.swift",
+        "line": 57
       },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "public final class WikiDaemonConnection: @unchecked Sendable {"
   },
   {
-    "text": "    var scrollView: NSScrollView!",
     "violation": {
+      "ruleName": "Implicitly Unwrapped Optional",
       "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "severity": "warning",
       "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
         "character": 21,
-        "line": 110,
-        "file": "Sources/WikiFS/Bookmarks/BookmarksOutlineView.swift"
+        "file": "Sources/WikiFS/Bookmarks/BookmarksOutlineView.swift",
+        "line": 110
       },
-      "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
       "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
+    },
+    "text": "    var scrollView: NSScrollView!"
   },
   {
-    "text": "    var outlineView: NSOutlineView!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
-        "character": 22,
         "line": 111,
+        "character": 22,
         "file": "Sources/WikiFS/Bookmarks/BookmarksOutlineView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional"
+    },
+    "text": "    var outlineView: NSOutlineView!"
   },
   {
-    "text": "        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
         "character": 66,
-        "line": 273,
-        "file": "Sources/WikiFS/Chats/ChatWebView.swift"
+        "file": "Sources/WikiFS/Chats/ChatWebView.swift",
+        "line": 368
       },
       "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "severity": "warning"
+    },
+    "text": "        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {"
   },
   {
     "text": "    var scrollView: NSScrollView!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "severity": "warning",
       "location": {
         "character": 21,
-        "line": 69,
+        "line": 80,
         "file": "Sources/WikiFS/Chats/ChatsListView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional"
     }
   },
   {
     "text": "    var tableView: ChatsNSTableView!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional",
       "location": {
         "character": 20,
-        "line": 70,
+        "line": 81,
         "file": "Sources/WikiFS/Chats/ChatsListView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
+      "ruleIdentifier": "implicitly_unwrapped_optional",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible"
     }
   },
   {
     "text": "    final class Coordinator: NSObject, NSSearchFieldDelegate, @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 63,
-        "line": 115,
-        "file": "Sources/WikiFS/Editor/OmniboxSearchField.swift"
-      },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleName": "@unchecked Sendable",
+      "location": {
+        "file": "Sources/WikiFS/Editor/OmniboxSearchField.swift",
+        "line": 115,
+        "character": 63
+      },
+      "ruleDescription": ""
     }
   },
   {
     "text": "    nonisolated(unsafe) static let defaultValue: ((QueueKind) -> Void)? = nil",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "nonisolated_unsafe",
+      "ruleDescription": "",
       "location": {
+        "file": "Sources/WikiFS/Environment/ActivityWindowEnvironmentKey.swift",
         "character": 5,
-        "line": 20,
-        "file": "Sources/WikiFS/Environment/ActivityWindowEnvironmentKey.swift"
+        "line": 20
       },
-      "ruleName": "nonisolated(unsafe)",
       "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
+      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
+      "ruleName": "nonisolated(unsafe)"
     }
   },
   {
     "text": "    var scrollView: NSScrollView!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
-        "character": 21,
         "line": 94,
+        "character": 21,
         "file": "Sources/WikiFS/Pages/PagesListView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "ruleName": "Implicitly Unwrapped Optional"
     }
   },
   {
     "text": "    var tableView: PagesNSTableView!",
     "violation": {
       "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional",
       "ruleIdentifier": "implicitly_unwrapped_optional",
+      "severity": "warning",
       "location": {
         "character": 20,
         "line": 95,
         "file": "Sources/WikiFS/Pages/PagesListView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
       "reason": "Implicitly unwrapped optionals should be avoided when possible"
     }
   },
   {
     "text": "final class FileProviderBox: @unchecked Sendable {",
     "violation": {
+      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "severity": "error",
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 30,
-        "line": 25,
-        "file": "Sources/WikiFS/Queue/AppQueueExtractionProvider.swift"
+        "file": "Sources/WikiFS/Queue/AppQueueExtractionProvider.swift",
+        "line": 25
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleIdentifier": "unchecked_sendable"
     }
   },
   {
     "text": "final class SessionLookupBox: @unchecked Sendable {",
     "violation": {
+      "ruleName": "@unchecked Sendable",
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
       "location": {
-        "character": 31,
         "line": 30,
+        "character": 31,
         "file": "Sources/WikiFS/Queue/AppQueueExtractionProvider.swift"
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
+      "ruleIdentifier": "unchecked_sendable",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
   },
   {
     "text": "final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 66,
-        "line": 17,
-        "file": "Sources/WikiFS/Queue/DaemonQueueEventSink.swift"
-      },
       "ruleName": "@unchecked Sendable",
       "severity": "error",
+      "ruleDescription": "",
+      "location": {
+        "line": 17,
+        "file": "Sources/WikiFS/Queue/DaemonQueueEventSink.swift",
+        "character": 66
+      },
+      "ruleIdentifier": "unchecked_sendable",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
   },
   {
-    "text": "        var chatContinuation: AsyncStream<(String, QueueEventEnvelope)>.Continuation!",
+    "text": "        var chatContinuation: AsyncStream<(PageID, QueueEventEnvelope)>.Continuation!",
     "violation": {
       "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
       "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleName": "Implicitly Unwrapped Optional",
       "location": {
         "character": 31,
         "line": 24,
         "file": "Sources/WikiFS/Queue/DaemonQueueEventSink.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
       "severity": "warning",
       "reason": "Implicitly unwrapped optionals should be avoided when possible"
     }
@@ -272,231 +272,232 @@
   {
     "text": "final class ProgressEmitBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 30,
-        "line": 9,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
-      },
       "ruleName": "@unchecked Sendable",
+      "location": {
+        "line": 9,
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
+        "character": 30
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleDescription": "",
+      "ruleIdentifier": "unchecked_sendable"
     }
   },
   {
     "text": "final class TranscriptEmitBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "ruleDescription": "",
+      "severity": "error",
       "location": {
         "character": 32,
-        "line": 16,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
+        "line": 16
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
   },
   {
-    "text": "final class UsageEmitBox: @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 27,
-        "line": 24,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
+        "line": 24
       },
       "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "final class UsageEmitBox: @unchecked Sendable {"
   },
   {
-    "text": "final class LiveUsageEmitBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "location": {
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
         "character": 31,
-        "line": 33,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
+        "line": 33
       },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": ""
+    },
+    "text": "final class LiveUsageEmitBox: @unchecked Sendable {"
   },
   {
-    "text": "final class LogPathsEmitBox: @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
+      "severity": "error",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 30,
-        "line": 42,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
+        "line": 42
       },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class LogPathsEmitBox: @unchecked Sendable {"
   },
   {
-    "text": "final class PendingPermissionEmitBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 39,
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
         "line": 53,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
+        "character": 39
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "        let suffix = (currency != nil && currency != \"USD\") ? \" \\(currency!)\" : \"\"",
-    "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 75,
-        "line": 1113,
-        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {",
-    "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 52,
-        "line": 21,
-        "file": "Sources/WikiFS/Queue/QueueEngineHotSwap.swift"
-      },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
+      "severity": "error"
+    },
+    "text": "final class PendingPermissionEmitBox: @unchecked Sendable {"
   },
   {
-    "text": "                                       headerFields: headers)!",
+    "violation": {
+      "location": {
+        "line": 1113,
+        "file": "Sources/WikiFS/Queue/QueueActivityTracker.swift",
+        "character": 75
+      },
+      "severity": "warning",
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping"
+    },
+    "text": "        let suffix = (currency != nil && currency != \"USD\") ? \" \\(currency!)\" : \"\""
+  },
+  {
+    "violation": {
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "location": {
+        "line": 21,
+        "character": 52,
+        "file": "Sources/WikiFS/Queue/QueueEngineHotSwap.swift"
+      }
+    },
+    "text": "final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {"
+  },
+  {
+    "violation": {
+      "severity": "warning",
+      "location": {
+        "file": "Sources/WikiFS/Reader/BlobSchemeHandler.swift",
+        "line": 67,
+        "character": 62
+      },
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping"
+    },
+    "text": "                                       headerFields: headers)!"
+  },
+  {
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 62,
-        "line": 67,
-        "file": "Sources/WikiFS/Reader/BlobSchemeHandler.swift"
-      },
       "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "                                       headerFields: nil)!",
-    "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
         "character": 58,
-        "line": 76,
-        "file": "Sources/WikiFS/Reader/BlobSchemeHandler.swift"
+        "file": "Sources/WikiFS/Reader/BlobSchemeHandler.swift",
+        "line": 76
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
+    },
+    "text": "                                       headerFields: nil)!"
   },
   {
-    "text": "        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
       "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
+        "file": "Sources/WikiFS/Reader/WikiReaderView.swift",
         "character": 66,
-        "line": 1209,
-        "file": "Sources/WikiFS/Reader/WikiReaderView.swift"
+        "line": 1209
       },
+      "severity": "warning",
       "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible"
+    },
+    "text": "        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {"
   },
   {
-    "text": "    final class ProcessRegistry: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
+      "severity": "error",
       "location": {
-        "character": 34,
         "line": 319,
+        "character": 34,
         "file": "Sources/WikiFS/Sources/DefuddleExtractionService.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      }
+    },
+    "text": "    final class ProcessRegistry: @unchecked Sendable {"
   },
   {
-    "text": "    final class OutputBuffer: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
+        "file": "Sources/WikiFS/Sources/DefuddleExtractionService.swift",
         "character": 31,
-        "line": 372,
-        "file": "Sources/WikiFS/Sources/DefuddleExtractionService.swift"
+        "line": 372
       },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "severity": "error"
+    },
+    "text": "    final class OutputBuffer: @unchecked Sendable {"
   },
   {
-    "text": "            ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
       "location": {
+        "file": "Sources/WikiFS/Sources/ExtractionSettingsView.swift",
         "character": 69,
-        "line": 347,
-        "file": "Sources/WikiFS/Sources/ExtractionSettingsView.swift"
+        "line": 347
       },
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "            ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!",
-    "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 66,
-        "line": 367,
-        "file": "Sources/WikiFS/Sources/ExtractionSettingsView.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "            ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!"
   },
   {
-    "text": "            let provider = origin.provider!",
     "violation": {
+      "reason": "Force unwrapping should be avoided",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "severity": "warning",
+      "location": {
+        "line": 367,
+        "character": 66,
+        "file": "Sources/WikiFS/Sources/ExtractionSettingsView.swift"
+      }
+    },
+    "text": "            ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!"
+  },
+  {
+    "violation": {
+      "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
       "location": {
@@ -504,367 +505,366 @@
         "line": 1052,
         "file": "Sources/WikiFS/Sources/SourceDetailView.swift"
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "severity": "warning"
+    },
+    "text": "            let provider = origin.provider!"
   },
   {
-    "text": "                ? origin.provider!",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 34,
         "line": 1086,
+        "character": 34,
         "file": "Sources/WikiFS/Sources/SourceDetailView.swift"
       },
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "                ? origin.provider!"
   },
   {
-    "text": "                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 73,
         "line": 1816,
-        "file": "Sources/WikiFS/Sources/SourceDetailView.swift"
+        "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+        "character": 73
       },
-      "ruleName": "Force Unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
       "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!"
   },
   {
-    "text": "                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 70,
         "line": 1823,
+        "character": 70,
         "file": "Sources/WikiFS/Sources/SourceDetailView.swift"
       },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
+      "ruleIdentifier": "force_unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!"
   },
   {
-    "text": "    var scrollView: NSScrollView!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "severity": "warning",
       "location": {
-        "character": 21,
+        "file": "Sources/WikiFS/Sources/SourcesListView.swift",
         "line": 222,
-        "file": "Sources/WikiFS/Sources/SourcesListView.swift"
+        "character": 21
       },
-      "ruleName": "Implicitly Unwrapped Optional",
-      "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
-  },
-  {
-    "text": "    var tableView: SourcesNSTableView!",
-    "violation": {
       "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional",
       "ruleIdentifier": "implicitly_unwrapped_optional",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+    },
+    "text": "    var scrollView: NSScrollView!"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleName": "Implicitly Unwrapped Optional",
       "location": {
-        "character": 20,
         "line": 223,
+        "character": 20,
         "file": "Sources/WikiFS/Sources/SourcesListView.swift"
       },
-      "ruleName": "Implicitly Unwrapped Optional",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
-    }
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible"
+    },
+    "text": "    var tableView: SourcesNSTableView!"
   },
   {
-    "text": "        case .page(let p): return \"\\(ResourceKind.page.linkPrefix!)\\(p.id.rawValue)\"",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 66,
+        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift",
         "line": 23,
-        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift"
+        "character": 66
       },
-      "ruleName": "Force Unwrapping",
+      "ruleIdentifier": "force_unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping"
+    },
+    "text": "        case .page(let p): return \"\\(ResourceKind.page.linkPrefix!)\\(p.id.rawValue)\""
   },
   {
-    "text": "        case .source(let s): return \"\\(ResourceKind.source.linkPrefix!)\\(s.id.rawValue)\"",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "location": {
         "character": 70,
         "line": 24,
         "file": "Sources/WikiFSCore/Core/OmniboxResult.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      }
+    },
+    "text": "        case .source(let s): return \"\\(ResourceKind.source.linkPrefix!)\\(s.id.rawValue)\""
   },
   {
-    "text": "        case .chat(let c): return \"\\(ResourceKind.chat.linkPrefix!)\\(c.id.rawValue)\"",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
+      "ruleDescription": "Force unwrapping should be avoided",
       "location": {
-        "character": 66,
         "line": 25,
-        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift"
+        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift",
+        "character": 66
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "        case .chat(let c): return \"\\(ResourceKind.chat.linkPrefix!)\\(c.id.rawValue)\""
   },
   {
-    "text": "        case .bookmark(let node, _): return \"\\(ResourceKind.bookmark.linkPrefix!)\\(node.id)\"",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
+        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift",
         "character": 80,
-        "line": 26,
-        "file": "Sources/WikiFSCore/Core/OmniboxResult.swift"
+        "line": 26
       },
       "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "        case .bookmark(let node, _): return \"\\(ResourceKind.bookmark.linkPrefix!)\\(node.id)\""
   },
   {
-    "text": "    private static let tokenRegex = try! NSRegularExpression(",
     "violation": {
-      "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
-      "location": {
-        "character": 37,
-        "line": 20,
-        "file": "Sources/WikiFSCore/Core/PromptTemplate.swift"
-      },
       "ruleName": "Force Try",
       "severity": "error",
-      "reason": "Force tries should be avoided"
-    }
+      "ruleIdentifier": "force_try",
+      "location": {
+        "line": 20,
+        "character": 37,
+        "file": "Sources/WikiFSCore/Core/PromptTemplate.swift"
+      },
+      "reason": "Force tries should be avoided",
+      "ruleDescription": "Force tries should be avoided"
+    },
+    "text": "    private static let tokenRegex = try! NSRegularExpression("
   },
   {
-    "text": "public final class QueueStore: @unchecked Sendable {",
     "violation": {
+      "ruleName": "@unchecked Sendable",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 32,
-        "line": 67,
-        "file": "Sources/WikiFSCore/Core/QueueStore.swift"
-      },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
+      "location": {
+        "file": "Sources/WikiFSCore/Core/QueueStore.swift",
+        "line": 67,
+        "character": 32
+      },
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "public final class QueueStore: @unchecked Sendable {"
   },
   {
-    "text": "                    arguments: [String(data: data, encoding: .utf8)!, id])",
     "violation": {
+      "severity": "warning",
+      "location": {
+        "file": "Sources/WikiFSCore/Core/QueueStore.swift",
+        "line": 694,
+        "character": 68
+      },
+      "reason": "Force unwrapping should be avoided",
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping"
+    },
+    "text": "                    arguments: [String(data: data, encoding: .utf8)!, id.rawValue])"
+  },
+  {
+    "violation": {
       "location": {
         "character": 68,
-        "line": 690,
-        "file": "Sources/WikiFSCore/Core/QueueStore.swift"
+        "file": "Sources/WikiFSCore/Integrations/ACPCredentialStore.swift",
+        "line": 100
       },
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "ruleDescription": "",
+      "severity": "error",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+    },
+    "text": "public final class InMemoryACPCredentialStore: ACPCredentialStore, @unchecked Sendable {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "force_unwrapping",
       "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "public final class InMemoryACPCredentialStore: ACPCredentialStore, @unchecked Sendable {",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 68,
-        "line": 100,
-        "file": "Sources/WikiFSCore/Integrations/ACPCredentialStore.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "        baseURL: URL = URL(string: ExtractionConfig.defaultAnthropicBaseURL)!,",
-    "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 77,
         "line": 74,
+        "character": 77,
         "file": "Sources/WikiFSCore/Integrations/AnthropicExtractionClient.swift"
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "reason": "Force unwrapping should be avoided",
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "        baseURL: URL = URL(string: ExtractionConfig.defaultAnthropicBaseURL)!,"
   },
   {
-    "text": "            \"https://amp-api.podcasts.apple.com/v1/catalog/us/podcast-episodes/\\(episodeID)/transcripts\")!",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
       "location": {
+        "file": "Sources/WikiFSCore/Integrations/ApplePodcastAMP.swift",
         "character": 106,
-        "line": 28,
-        "file": "Sources/WikiFSCore/Integrations/ApplePodcastAMP.swift"
+        "line": 28
       },
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "            \"https://amp-api.podcasts.apple.com/v1/catalog/us/podcast-episodes/\\(episodeID)/transcripts\")!"
   },
   {
-    "text": "        var req = URLRequest(url: comps.url!)",
     "violation": {
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
       "location": {
         "character": 44,
         "line": 35,
         "file": "Sources/WikiFSCore/Integrations/ApplePodcastAMP.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      }
+    },
+    "text": "        var req = URLRequest(url: comps.url!)"
   },
   {
-    "text": "public final class InMemoryExtractionCredentialStore: ExtractionCredentialStore, @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
       "location": {
-        "character": 82,
+        "file": "Sources/WikiFSCore/Integrations/ExtractionCredentialStore.swift",
         "line": 67,
-        "file": "Sources/WikiFSCore/Integrations/ExtractionCredentialStore.swift"
+        "character": 82
       },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "public final class InMemoryExtractionCredentialStore: ExtractionCredentialStore, @unchecked Sendable {"
   },
   {
-    "text": "        baseURL: URL = URL(string: ExtractionConfig.defaultGeminiBaseURL)!,",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 74,
-        "line": 68,
-        "file": "Sources/WikiFSCore/Integrations/GeminiExtractionClient.swift"
-      },
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "    final class OutputBuffer: @unchecked Sendable {",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 31,
-        "line": 25,
-        "file": "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift"
+        "line": 68,
+        "file": "Sources/WikiFSCore/Integrations/GeminiExtractionClient.swift",
+        "character": 74
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "severity": "warning",
+      "reason": "Force unwrapping should be avoided",
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "        baseURL: URL = URL(string: ExtractionConfig.defaultGeminiBaseURL)!,"
   },
   {
-    "text": "    final class ProcessRegistry: @unchecked Sendable {",
     "violation": {
+      "location": {
+        "line": 25,
+        "file": "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
+        "character": 31
+      },
       "ruleDescription": "",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "ruleName": "@unchecked Sendable"
+    },
+    "text": "    final class OutputBuffer: @unchecked Sendable {"
+  },
+  {
+    "violation": {
+      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
       "location": {
         "character": 34,
-        "line": 41,
-        "file": "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+        "file": "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
+        "line": 41
+      }
+    },
+    "text": "    final class ProcessRegistry: @unchecked Sendable {"
   },
   {
-    "text": "            let d = downloadedByURL[urlKey]!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 44,
-        "line": 264,
-        "file": "Sources/WikiFSCore/Integrations/WebsiteSnapshotExtractor.swift"
-      },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleDescription": "Force unwrapping should be avoided",
+      "location": {
+        "line": 264,
+        "file": "Sources/WikiFSCore/Integrations/WebsiteSnapshotExtractor.swift",
+        "character": 44
+      },
+      "ruleIdentifier": "force_unwrapping",
+      "severity": "warning"
+    },
+    "text": "            let d = downloadedByURL[urlKey]!"
   },
   {
-    "text": "            resolvingAgainstBaseURL: false)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 44,
         "line": 136,
+        "character": 44,
         "file": "Sources/WikiFSCore/Integrations/ZoteroClient.swift"
       },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping",
+      "severity": "warning"
+    },
+    "text": "            resolvingAgainstBaseURL: false)!"
   },
   {
     "text": "        return authorizedRequest(url: components.url!, config: config)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 53,
-        "line": 138,
-        "file": "Sources/WikiFSCore/Integrations/ZoteroClient.swift"
-      },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleName": "Force Unwrapping",
+      "location": {
+        "file": "Sources/WikiFSCore/Integrations/ZoteroClient.swift",
+        "line": 138,
+        "character": 53
+      },
+      "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
     "text": "public final class InMemoryZoteroCredentialStore: ZoteroCredentialStore, @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
       "location": {
         "character": 74,
-        "line": 51,
-        "file": "Sources/WikiFSCore/Integrations/ZoteroCredentialStore.swift"
+        "file": "Sources/WikiFSCore/Integrations/ZoteroCredentialStore.swift",
+        "line": 51
       },
-      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
       "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
@@ -872,136 +872,136 @@
   {
     "text": "    public nonisolated(unsafe) static var pdfTitleExtractor: (Data) -> String? = { _ in nil }",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
-      "location": {
-        "character": 12,
-        "line": 30,
-        "file": "Sources/WikiFSCore/Sources/DisplayNameResolver.swift"
-      },
-      "ruleName": "nonisolated(unsafe)",
       "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
+      "location": {
+        "file": "Sources/WikiFSCore/Sources/DisplayNameResolver.swift",
+        "line": 30,
+        "character": 12
+      },
+      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
+      "ruleIdentifier": "nonisolated_unsafe",
+      "ruleDescription": "",
+      "ruleName": "nonisolated(unsafe)"
     }
   },
   {
     "text": "    private static let regex = try! NSRegularExpression(",
     "violation": {
+      "ruleName": "Force Try",
       "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
       "location": {
         "character": 32,
-        "line": 47,
-        "file": "Sources/WikiFSCore/Sources/SourceImageRewriter.swift"
+        "file": "Sources/WikiFSCore/Sources/SourceImageRewriter.swift",
+        "line": 47
       },
-      "ruleName": "Force Try",
+      "reason": "Force tries should be avoided",
       "severity": "error",
-      "reason": "Force tries should be avoided"
+      "ruleIdentifier": "force_try"
     }
   },
   {
     "text": "public final class GRDBWikiStore: WikiStore, @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
       "location": {
         "character": 46,
         "line": 51,
         "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleIdentifier": "unchecked_sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "        var result: T!",
     "violation": {
       "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
       "ruleIdentifier": "implicitly_unwrapped_optional",
-      "location": {
-        "character": 21,
-        "line": 341,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
       "ruleName": "Implicitly Unwrapped Optional",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "location": {
+        "line": 341,
+        "character": 21,
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+      }
     }
   },
   {
     "text": "                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))",
     "violation": {
+      "reason": "Force unwrapping should be avoided",
       "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 73,
-        "line": 5145,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5166,
+        "character": 73
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleName": "Force Unwrapping"
     }
   },
   {
     "text": "                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion!)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
+      "ruleDescription": "Force unwrapping should be avoided",
       "location": {
         "character": 94,
-        "line": 5148,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5169
+      }
     }
   },
   {
     "text": "                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion!)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 94,
-        "line": 5151,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
+      "ruleName": "Force Unwrapping",
+      "location": {
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5172,
+        "character": 94
+      },
+      "ruleDescription": "Force unwrapping should be avoided",
       "reason": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "                            db: db, pageID: pageID, baseVersionID: base!,",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
       "location": {
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
         "character": 72,
-        "line": 5156,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "line": 5177
       },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "reason": "Force unwrapping should be avoided",
+      "ruleDescription": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "                            mainVersionID: mainHead!, wsVersionID: wsVersion!)",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
+        "line": 5178,
         "character": 52,
-        "line": 5157,
         "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
       },
       "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
@@ -1009,89 +1009,89 @@
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 77,
-        "line": 5157,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
       "ruleName": "Force Unwrapping",
       "severity": "warning",
+      "location": {
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5178,
+        "character": 77
+      },
       "reason": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
         "character": 73,
-        "line": 5162,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5183
       },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
       "reason": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "                    let baseText = try self.fetchVersionBody(db: db, versionID: base!)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "location": {
         "character": 85,
-        "line": 5305,
+        "line": 5326,
         "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      }
     }
   },
   {
     "text": "                    let oursText = try self.fetchVersionBody(db: db, versionID: mainHead!)",
     "violation": {
+      "severity": "warning",
+      "location": {
+        "line": 5327,
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "character": 89
+      },
+      "reason": "Force unwrapping should be avoided",
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 89,
-        "line": 5306,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleName": "Force Unwrapping"
     }
   },
   {
     "text": "                    let theirText = try self.fetchVersionBody(db: db, versionID: wsVersion!)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 91,
-        "line": 5307,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "line": 5328,
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "character": 91
       },
       "ruleName": "Force Unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
     "text": "                        conflicts.append((pageIDStr, base, wsVersion!, mainHead))",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 69,
-        "line": 5311,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
-      },
       "ruleName": "Force Unwrapping",
+      "location": {
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "character": 69,
+        "line": 5332
+      },
+      "reason": "Force unwrapping should be avoided",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
@@ -1099,342 +1099,342 @@
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
       "location": {
         "character": 46,
-        "line": 5336,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "line": 5357
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "reason": "Force unwrapping should be avoided",
+      "severity": "warning"
     }
   },
   {
     "text": "                    \"\"\", arguments: [newVersionID, pageID.rawValue, mainHead, wsVersion!,",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
+      "ruleName": "Force Unwrapping",
       "location": {
+        "line": 5364,
         "character": 88,
-        "line": 5343,
         "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
     "text": "        var result: T!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
-      "ruleIdentifier": "implicitly_unwrapped_optional",
       "location": {
-        "character": 21,
-        "line": 7849,
-        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift"
+        "line": 7908,
+        "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+        "character": 21
       },
-      "ruleName": "Implicitly Unwrapped Optional",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "ruleIdentifier": "implicitly_unwrapped_optional",
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "ruleName": "Implicitly Unwrapped Optional"
     }
   },
   {
     "text": "public final class WikiEventBus: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 34,
         "line": 84,
-        "file": "Sources/WikiFSCore/Store/WikiEventBus.swift"
+        "file": "Sources/WikiFSCore/Store/WikiEventBus.swift",
+        "character": 34
       },
-      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleName": "@unchecked Sendable",
+      "ruleDescription": ""
     }
   },
   {
     "text": "public final class WikiReadPool: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 34,
         "line": 22,
-        "file": "Sources/WikiFSCore/Store/WikiReadPool.swift"
+        "file": "Sources/WikiFSCore/Store/WikiReadPool.swift",
+        "character": 34
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleDescription": "",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "severity": "error"
     }
   },
   {
     "text": "    private final class TantivyLegBox: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 40,
-        "line": 3828,
-        "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift"
-      },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
+      "location": {
+        "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+        "line": 3828,
+        "character": 40
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "private final class SessionUsageState: @unchecked Sendable {",
     "violation": {
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 40,
-        "line": 1999,
-        "file": "Sources/WikiFSEngine/ACPBackend.swift"
-      },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "location": {
+        "file": "Sources/WikiFSEngine/ACPBackend.swift",
+        "line": 2001,
+        "character": 40
+      },
+      "severity": "error"
     }
   },
   {
-    "text": "final class TurnCompletionFlag: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 33,
-        "line": 2107,
-        "file": "Sources/WikiFSEngine/ACPBackend.swift"
-      },
       "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "location": {
+        "file": "Sources/WikiFSEngine/ACPBackend.swift",
+        "line": 2109,
+        "character": 33
+      },
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "final class TurnCompletionFlag: @unchecked Sendable {"
   },
   {
-    "text": "final class ProcessHealthFlag: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
       "location": {
+        "file": "Sources/WikiFSEngine/ACPBackend.swift",
         "character": 32,
-        "line": 2132,
-        "file": "Sources/WikiFSEngine/ACPBackend.swift"
+        "line": 2134
       },
-      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": ""
+    },
+    "text": "final class ProcessHealthFlag: @unchecked Sendable {"
   },
   {
-    "text": "final class RecoveryTimerRef: @unchecked Sendable {",
     "violation": {
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 31,
-        "line": 2159,
-        "file": "Sources/WikiFSEngine/ACPBackend.swift"
-      },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "location": {
+        "line": 2161,
+        "file": "Sources/WikiFSEngine/ACPBackend.swift",
+        "character": 31
+      }
+    },
+    "text": "final class RecoveryTimerRef: @unchecked Sendable {"
   },
   {
-    "text": "final class EarlyStderrBuffer: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 32,
-        "line": 2349,
-        "file": "Sources/WikiFSEngine/ACPBackend.swift"
-      },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
+      "location": {
+        "file": "Sources/WikiFSEngine/ACPBackend.swift",
+        "line": 2351,
+        "character": 32
+      },
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class EarlyStderrBuffer: @unchecked Sendable {"
   },
   {
-    "text": "public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
+      "severity": "error",
       "location": {
-        "character": 59,
         "line": 236,
-        "file": "Sources/WikiFSEngine/ACPPermissions.swift"
+        "file": "Sources/WikiFSEngine/ACPPermissions.swift",
+        "character": 59
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": ""
+    },
+    "text": "public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {"
   },
   {
-    "text": "        let latest = runNames.sorted().last!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 44,
-        "line": 360,
-        "file": "Sources/WikiFSEngine/AgentLauncher.swift"
-      },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleName": "Force Unwrapping",
+      "location": {
+        "file": "Sources/WikiFSEngine/AgentLauncher.swift",
+        "line": 360,
+        "character": 44
+      },
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "        let latest = runNames.sorted().last!"
   },
   {
-    "text": "final class DebugRunLogger: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
+      "severity": "error",
       "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
       "location": {
         "character": 29,
         "line": 30,
         "file": "Sources/WikiFSEngine/DebugRunLogger.swift"
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
+      "ruleDescription": "",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class DebugRunLogger: @unchecked Sendable {"
   },
   {
-    "text": "                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
+      "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
       "location": {
+        "file": "Sources/WikiFSEngine/ExtractionCoordinator.swift",
         "character": 73,
-        "line": 86,
-        "file": "Sources/WikiFSEngine/ExtractionCoordinator.swift"
+        "line": 86
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleDescription": "Force unwrapping should be avoided"
+    },
+    "text": "                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!"
   },
   {
-    "text": "                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
+      "severity": "warning",
       "ruleIdentifier": "force_unwrapping",
+      "reason": "Force unwrapping should be avoided",
+      "ruleDescription": "Force unwrapping should be avoided",
       "location": {
         "character": 70,
-        "line": 94,
-        "file": "Sources/WikiFSEngine/ExtractionCoordinator.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+        "file": "Sources/WikiFSEngine/ExtractionCoordinator.swift",
+        "line": 94
+      }
+    },
+    "text": "                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!"
   },
   {
-    "text": "    fileprivate final class GenerationWaiter: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 47,
-        "line": 46,
-        "file": "Sources/WikiFSEngine/GenerationGate.swift"
-      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
       "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "location": {
+        "line": 46,
+        "file": "Sources/WikiFSEngine/GenerationGate.swift",
+        "character": 47
+      }
+    },
+    "text": "    fileprivate final class GenerationWaiter: @unchecked Sendable {"
   },
   {
-    "text": "        let state = lanes[lane]!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 32,
-        "line": 113,
-        "file": "Sources/WikiFSEngine/GenerationGate.swift"
-      },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+      "ruleDescription": "Force unwrapping should be avoided",
+      "location": {
+        "line": 113,
+        "file": "Sources/WikiFSEngine/GenerationGate.swift",
+        "character": 32
+      }
+    },
+    "text": "        let state = lanes[lane]!"
   },
   {
-    "text": "            lanes[lane]!.activeCount += 1",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "severity": "warning",
       "location": {
         "character": 24,
-        "line": 119,
-        "file": "Sources/WikiFSEngine/GenerationGate.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
+        "file": "Sources/WikiFSEngine/GenerationGate.swift",
+        "line": 119
+      }
+    },
+    "text": "            lanes[lane]!.activeCount += 1"
   },
   {
     "text": "                lanes[lane]!.waiters.append(waiter)",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 28,
-        "line": 133,
-        "file": "Sources/WikiFSEngine/GenerationGate.swift"
-      },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleDescription": "Force unwrapping should be avoided",
+      "location": {
+        "file": "Sources/WikiFSEngine/GenerationGate.swift",
+        "line": 133,
+        "character": 28
+      },
+      "reason": "Force unwrapping should be avoided",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping"
     }
   },
   {
     "text": "public final class NotificationFanout: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
+        "file": "Sources/WikiFSEngine/NotificationFanout.swift",
         "character": 40,
-        "line": 25,
-        "file": "Sources/WikiFSEngine/NotificationFanout.swift"
+        "line": 25
       },
-      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "    final class ProcessRegistry: @unchecked Sendable {",
     "violation": {
+      "location": {
+        "file": "Sources/WikiFSEngine/PdfExtractionService.swift",
+        "line": 16,
+        "character": 34
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 34,
-        "line": 16,
-        "file": "Sources/WikiFSEngine/PdfExtractionService.swift"
-      },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "severity": "error"
     }
   },
   {
     "text": "    final class OutputBuffer: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
+        "file": "Sources/WikiFSEngine/PdfExtractionService.swift",
         "character": 31,
-        "line": 86,
-        "file": "Sources/WikiFSEngine/PdfExtractionService.swift"
+        "line": 86
       },
       "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
       "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
@@ -1442,74 +1442,74 @@
   {
     "text": "public final class QueueEventBroadcaster: @unchecked Sendable {",
     "violation": {
+      "severity": "error",
+      "location": {
+        "file": "Sources/WikiFSEngine/QueueEngine.swift",
+        "line": 938,
+        "character": 43
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 43,
-        "line": 938,
-        "file": "Sources/WikiFSEngine/QueueEngine.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 63,
         "line": 20,
+        "character": 63,
         "file": "Sources/WikiFSEngine/UnavailableQueueEngine.swift"
       },
-      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "        var continuation: AsyncStream<QueueEvent>.Continuation!",
     "violation": {
-      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
       "ruleIdentifier": "implicitly_unwrapped_optional",
-      "location": {
-        "character": 27,
-        "line": 48,
-        "file": "Sources/WikiFSEngine/UnavailableQueueEngine.swift"
-      },
+      "ruleDescription": "Implicitly unwrapped optionals should be avoided when possible",
       "ruleName": "Implicitly Unwrapped Optional",
       "severity": "warning",
-      "reason": "Implicitly unwrapped optionals should be avoided when possible"
+      "reason": "Implicitly unwrapped optionals should be avoided when possible",
+      "location": {
+        "character": 27,
+        "file": "Sources/WikiFSEngine/UnavailableQueueEngine.swift",
+        "line": 48
+      }
     }
   },
   {
     "text": "    private final class IndexCache: @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "severity": "error",
       "location": {
+        "file": "Sources/WikiFSFileProvider/Projection.swift",
         "character": 37,
-        "line": 276,
-        "file": "Sources/WikiFSFileProvider/Projection.swift"
+        "line": 276
       },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleIdentifier": "unchecked_sendable"
     }
   },
   {
     "text": "    final class ReadScope: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 28,
-        "line": 343,
-        "file": "Sources/WikiFSFileProvider/Projection.swift"
-      },
       "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
+      "location": {
+        "file": "Sources/WikiFSFileProvider/Projection.swift",
+        "line": 343,
+        "character": 28
+      },
       "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
@@ -1517,301 +1517,301 @@
   {
     "text": "    struct FlatResourceProjection: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 36,
-        "line": 583,
-        "file": "Sources/WikiFSFileProvider/Projection.swift"
-      },
       "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable",
       "severity": "error",
+      "ruleDescription": "",
+      "location": {
+        "file": "Sources/WikiFSFileProvider/Projection.swift",
+        "character": 36,
+        "line": 583
+      },
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
     }
   },
   {
     "text": "    struct SingletonDoc: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "ruleDescription": "",
       "location": {
         "character": 26,
-        "line": 748,
-        "file": "Sources/WikiFSFileProvider/Projection.swift"
+        "file": "Sources/WikiFSFileProvider/Projection.swift",
+        "line": 748
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
     "text": "    struct GeneratedIndex: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 28,
         "line": 767,
         "file": "Sources/WikiFSFileProvider/Projection.swift"
       },
-      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+      "ruleName": "@unchecked Sendable"
     }
   },
   {
-    "text": "    struct NestedResourceProjection: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
+      "severity": "error",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 38,
         "line": 901,
         "file": "Sources/WikiFSFileProvider/Projection.swift"
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable"
+    },
+    "text": "    struct NestedResourceProjection: @unchecked Sendable {"
   },
   {
-    "text": "    private final class KnownItemSet: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleName": "@unchecked Sendable",
       "location": {
-        "character": 39,
         "line": 51,
+        "character": 39,
         "file": "Sources/WikiFSFileProvider/WikiFSEnumerator.swift"
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": ""
+    },
+    "text": "    private final class KnownItemSet: @unchecked Sendable {"
   },
   {
-    "text": "        let alias = (displayName?.isEmpty ?? true) ? id : displayName!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
       "location": {
         "character": 70,
-        "line": 74,
-        "file": "Sources/WikiFSLinks/DroppedLinkFormatter.swift"
+        "file": "Sources/WikiFSLinks/DroppedLinkFormatter.swift",
+        "line": 74
       },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
-    }
-  },
-  {
-    "text": "            let aliasPart = result.alias != nil ? \"|\\(result.alias!)\" : \"\"",
-    "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 67,
-        "line": 66,
-        "file": "Sources/WikiFSLinks/WikiLinkFixer.swift"
-      },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "        let alias = (displayName?.isEmpty ?? true) ? id : displayName!"
   },
   {
-    "text": "    private static let regex = try! NSRegularExpression(pattern: pattern)",
     "violation": {
-      "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
+      "ruleName": "Force Unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "severity": "warning",
+      "reason": "Force unwrapping should be avoided",
       "location": {
-        "character": 32,
-        "line": 40,
-        "file": "Sources/WikiFSLinks/WikiLinkParser.swift"
+        "file": "Sources/WikiFSLinks/WikiLinkFixer.swift",
+        "character": 67,
+        "line": 66
       },
-      "ruleName": "Force Try",
-      "severity": "error",
-      "reason": "Force tries should be avoided"
-    }
+      "ruleIdentifier": "force_unwrapping"
+    },
+    "text": "            let aliasPart = result.alias != nil ? \"|\\(result.alias!)\" : \"\""
   },
   {
-    "text": "    private static let versionPinRegex = try! NSRegularExpression(",
+    "violation": {
+      "ruleName": "Force Try",
+      "ruleIdentifier": "force_try",
+      "ruleDescription": "Force tries should be avoided",
+      "severity": "error",
+      "reason": "Force tries should be avoided",
+      "location": {
+        "file": "Sources/WikiFSLinks/WikiLinkParser.swift",
+        "line": 40,
+        "character": 32
+      }
+    },
+    "text": "    private static let regex = try! NSRegularExpression(pattern: pattern)"
+  },
+  {
     "violation": {
       "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
       "location": {
         "character": 42,
-        "line": 117,
-        "file": "Sources/WikiFSLinks/WikiLinkParser.swift"
+        "file": "Sources/WikiFSLinks/WikiLinkParser.swift",
+        "line": 117
       },
+      "reason": "Force tries should be avoided",
       "ruleName": "Force Try",
       "severity": "error",
-      "reason": "Force tries should be avoided"
-    }
+      "ruleIdentifier": "force_try"
+    },
+    "text": "    private static let versionPinRegex = try! NSRegularExpression("
   },
   {
-    "text": "    public static let regex = try! NSRegularExpression(pattern: pattern)",
     "violation": {
-      "ruleDescription": "Force tries should be avoided",
+      "reason": "Force tries should be avoided",
+      "ruleName": "Force Try",
       "ruleIdentifier": "force_try",
+      "severity": "error",
+      "ruleDescription": "Force tries should be avoided",
       "location": {
         "character": 31,
-        "line": 21,
-        "file": "Sources/WikiFSLinks/WikiLinkSpan.swift"
-      },
-      "ruleName": "Force Try",
-      "severity": "error",
-      "reason": "Force tries should be avoided"
-    }
+        "file": "Sources/WikiFSLinks/WikiLinkSpan.swift",
+        "line": 21
+      }
+    },
+    "text": "    public static let regex = try! NSRegularExpression(pattern: pattern)"
   },
   {
-    "text": "public final class MiniLMEmbedder: Embedder, @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 46,
+        "file": "Sources/WikiFSMLX/MiniLMEmbedder.swift",
         "line": 21,
-        "file": "Sources/WikiFSMLX/MiniLMEmbedder.swift"
+        "character": 46
       },
+      "severity": "error",
+      "ruleDescription": "",
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "public final class MiniLMEmbedder: Embedder, @unchecked Sendable {"
   },
   {
-    "text": "public final class MarkdownLinter: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "location": {
+        "file": "Sources/WikiFSMarkdown/MarkdownLinter.swift",
         "character": 36,
-        "line": 42,
-        "file": "Sources/WikiFSMarkdown/MarkdownLinter.swift"
+        "line": 42
       },
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleDescription": "",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "public final class MarkdownLinter: @unchecked Sendable {"
   },
   {
-    "text": "public final class MermaidValidator: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 38,
         "line": 48,
         "file": "Sources/WikiFSMarkdown/MermaidValidator.swift"
       },
-      "ruleName": "@unchecked Sendable",
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleDescription": ""
+    },
+    "text": "public final class MermaidValidator: @unchecked Sendable {"
   },
   {
-    "text": "final class ExceptionSink: @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
+      "severity": "error",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 28,
-        "line": 496,
-        "file": "Sources/WikiFSMarkdown/MermaidValidator.swift"
+        "file": "Sources/WikiFSMarkdown/MermaidValidator.swift",
+        "line": 496
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class ExceptionSink: @unchecked Sendable {"
   },
   {
-    "text": "    private static let referenceRegex = try! NSRegularExpression(pattern: referencePattern)",
     "violation": {
+      "ruleName": "Force Try",
       "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
+      "severity": "error",
       "location": {
         "character": 41,
-        "line": 38,
-        "file": "Sources/WikiFSMarkdown/WikiFootnoteMarkdown.swift"
+        "file": "Sources/WikiFSMarkdown/WikiFootnoteMarkdown.swift",
+        "line": 38
       },
-      "ruleName": "Force Try",
-      "severity": "error",
-      "reason": "Force tries should be avoided"
-    }
+      "reason": "Force tries should be avoided",
+      "ruleIdentifier": "force_try"
+    },
+    "text": "    private static let referenceRegex = try! NSRegularExpression(pattern: referencePattern)"
   },
   {
     "text": "    private static let definitionRegex = try! NSRegularExpression(pattern: definitionPattern)",
     "violation": {
-      "ruleDescription": "Force tries should be avoided",
-      "ruleIdentifier": "force_try",
+      "reason": "Force tries should be avoided",
+      "severity": "error",
       "location": {
-        "character": 42,
+        "file": "Sources/WikiFSMarkdown/WikiFootnoteMarkdown.swift",
         "line": 40,
-        "file": "Sources/WikiFSMarkdown/WikiFootnoteMarkdown.swift"
+        "character": 42
       },
       "ruleName": "Force Try",
-      "severity": "error",
-      "reason": "Force tries should be avoided"
+      "ruleIdentifier": "force_try",
+      "ruleDescription": "Force tries should be avoided"
     }
   },
   {
     "text": "    nonisolated(unsafe) private static var _embedder: (any Embedder)?",
     "violation": {
-      "ruleDescription": "",
+      "severity": "error",
       "ruleIdentifier": "nonisolated_unsafe",
       "location": {
         "character": 5,
-        "line": 20,
-        "file": "Sources/WikiFSSearch/EmbeddingService.swift"
+        "file": "Sources/WikiFSSearch/EmbeddingService.swift",
+        "line": 20
       },
+      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
       "ruleName": "nonisolated(unsafe)",
-      "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
+      "ruleDescription": ""
     }
   },
   {
     "text": "    public nonisolated(unsafe) static var miniLMFactory: (@Sendable (URL) async throws -> any Embedder)?",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
-      "location": {
-        "character": 12,
-        "line": 33,
-        "file": "Sources/WikiFSSearch/EmbeddingService.swift"
-      },
-      "ruleName": "nonisolated(unsafe)",
       "severity": "error",
+      "ruleIdentifier": "nonisolated_unsafe",
+      "ruleName": "nonisolated(unsafe)",
+      "location": {
+        "line": 33,
+        "file": "Sources/WikiFSSearch/EmbeddingService.swift",
+        "character": 12
+      },
+      "ruleDescription": "",
       "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
     }
   },
   {
     "text": "    nonisolated(unsafe) private static var _model: NLEmbedding?",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
-      "location": {
-        "character": 5,
-        "line": 17,
-        "file": "Sources/WikiFSSearch/NLEmbedder.swift"
-      },
-      "ruleName": "nonisolated(unsafe)",
       "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
+      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
+      "ruleDescription": "",
+      "location": {
+        "line": 17,
+        "file": "Sources/WikiFSSearch/NLEmbedder.swift",
+        "character": 5
+      },
+      "ruleIdentifier": "nonisolated_unsafe",
+      "ruleName": "nonisolated(unsafe)"
     }
   },
   {
     "text": "            let sa = score[a]!, sb = score[b]!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
+      "reason": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
+      "ruleDescription": "Force unwrapping should be avoided",
       "location": {
         "character": 30,
-        "line": 36,
-        "file": "Sources/WikiFSSearch/RankFusion.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+        "file": "Sources/WikiFSSearch/RankFusion.swift",
+        "line": 36
+      }
     }
   },
   {
@@ -1819,14 +1819,14 @@
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "severity": "warning",
+      "reason": "Force unwrapping should be avoided",
       "location": {
         "character": 46,
         "line": 36,
         "file": "Sources/WikiFSSearch/RankFusion.swift"
-      },
-      "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      }
     }
   },
   {
@@ -1834,14 +1834,14 @@
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
-      "location": {
-        "character": 33,
-        "line": 38,
-        "file": "Sources/WikiFSSearch/RankFusion.swift"
-      },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "location": {
+        "character": 33,
+        "file": "Sources/WikiFSSearch/RankFusion.swift",
+        "line": 38
+      }
     }
   },
   {
@@ -1851,282 +1851,252 @@
       "ruleIdentifier": "force_unwrapping",
       "location": {
         "character": 52,
-        "line": 38,
-        "file": "Sources/WikiFSSearch/RankFusion.swift"
+        "file": "Sources/WikiFSSearch/RankFusion.swift",
+        "line": 38
       },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "severity": "warning"
     }
   },
   {
     "text": "            return firstSeen[a]! < firstSeen[b]!",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
       "location": {
+        "file": "Sources/WikiFSSearch/RankFusion.swift",
         "character": 32,
-        "line": 40,
-        "file": "Sources/WikiFSSearch/RankFusion.swift"
+        "line": 40
       },
-      "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleIdentifier": "force_unwrapping"
     }
   },
   {
     "text": "            return firstSeen[a]! < firstSeen[b]!",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
       "location": {
         "character": 48,
-        "line": 40,
-        "file": "Sources/WikiFSSearch/RankFusion.swift"
+        "file": "Sources/WikiFSSearch/RankFusion.swift",
+        "line": 40
       },
+      "reason": "Force unwrapping should be avoided",
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "        }.map { repr[$0]! }",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
+      "ruleName": "Force Unwrapping",
+      "reason": "Force unwrapping should be avoided",
       "location": {
-        "character": 25,
         "line": 41,
+        "character": 25,
         "file": "Sources/WikiFSSearch/RankFusion.swift"
       },
-      "ruleName": "Force Unwrapping",
+      "ruleIdentifier": "force_unwrapping",
       "severity": "warning",
-      "reason": "Force unwrapping should be avoided"
+      "ruleDescription": "Force unwrapping should be avoided"
     }
   },
   {
     "text": "    public nonisolated(unsafe) static var verboseLogging: Bool = {",
     "violation": {
       "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
+      "ruleName": "nonisolated(unsafe)",
+      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
       "location": {
         "character": 12,
-        "line": 101,
-        "file": "Sources/WikiFSTypes/DebugLog.swift"
+        "file": "Sources/WikiFSTypes/DebugLog.swift",
+        "line": 111
       },
-      "ruleName": "nonisolated(unsafe)",
-      "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
+      "ruleIdentifier": "nonisolated_unsafe",
+      "severity": "error"
     }
   },
   {
-    "text": "        case .chat(let id):           return ResourceKind.chat.linkPrefix! + id",
     "violation": {
       "ruleDescription": "Force unwrapping should be avoided",
       "ruleIdentifier": "force_unwrapping",
+      "severity": "warning",
       "location": {
         "character": 74,
         "line": 66,
         "file": "Sources/WikiFSTypes/PageAuthor.swift"
       },
       "ruleName": "Force Unwrapping",
-      "severity": "warning",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "        case .chat(let id):           return ResourceKind.chat.linkPrefix! + id"
   },
   {
-    "text": "        public var linkPrefix: String { resourceKind.linkPrefix! }",
     "violation": {
-      "ruleDescription": "Force unwrapping should be avoided",
-      "ruleIdentifier": "force_unwrapping",
       "location": {
-        "character": 64,
+        "file": "Sources/WikiFSTypes/ParsedLink.swift",
         "line": 32,
-        "file": "Sources/WikiFSTypes/ParsedLink.swift"
+        "character": 64
       },
-      "ruleName": "Force Unwrapping",
       "severity": "warning",
+      "ruleIdentifier": "force_unwrapping",
+      "ruleDescription": "Force unwrapping should be avoided",
+      "ruleName": "Force Unwrapping",
       "reason": "Force unwrapping should be avoided"
-    }
+    },
+    "text": "        public var linkPrefix: String { resourceKind.linkPrefix! }"
   },
   {
-    "text": "final class NSLockBox<Value>: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
+      "ruleName": "@unchecked Sendable",
       "location": {
         "character": 31,
         "line": 47,
         "file": "Sources/WikiFSTypes/PortableLock.swift"
       },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "severity": "error",
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": ""
+    },
+    "text": "final class NSLockBox<Value>: @unchecked Sendable {"
+  },
+  {
+    "violation": {
       "ruleName": "@unchecked Sendable",
       "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "    private nonisolated(unsafe) static var lastTimestamp: UInt64 = 0",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
-      "location": {
-        "character": 13,
-        "line": 39,
-        "file": "Sources/WikiFSTypes/ULID.swift"
-      },
-      "ruleName": "nonisolated(unsafe)",
-      "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
-    }
-  },
-  {
-    "text": "    private nonisolated(unsafe) static var lastRandom: [UInt8] = [UInt8](repeating: 0, count: 10)",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "nonisolated_unsafe",
-      "location": {
-        "character": 13,
-        "line": 40,
-        "file": "Sources/WikiFSTypes/ULID.swift"
-      },
-      "ruleName": "nonisolated(unsafe)",
-      "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`."
-    }
-  },
-  {
-    "text": "final class RefreshResultBox: @unchecked Sendable {",
-    "violation": {
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 31,
         "line": 277,
+        "character": 31,
         "file": "Sources/wikictl/main.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      }
+    },
+    "text": "final class RefreshResultBox: @unchecked Sendable {"
   },
   {
-    "text": "final class DaemonChatHost: @unchecked Sendable {",
     "violation": {
+      "ruleName": "@unchecked Sendable",
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 29,
+        "file": "Sources/wikid/DaemonChatHost.swift",
         "line": 30,
-        "file": "Sources/wikid/DaemonChatHost.swift"
+        "character": 29
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "severity": "error"
+    },
+    "text": "final class DaemonChatHost: @unchecked Sendable {"
   },
   {
-    "text": "final class WikiDaemon: @unchecked Sendable {",
     "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
-        "character": 25,
         "line": 15,
-        "file": "Sources/wikid/WikiDaemon.swift"
+        "file": "Sources/wikid/WikiDaemon.swift",
+        "character": 25
       },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
       "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+      "ruleIdentifier": "unchecked_sendable",
+      "ruleDescription": "",
+      "severity": "error"
+    },
+    "text": "final class WikiDaemon: @unchecked Sendable {"
   },
   {
-    "text": "final class DaemonEmitBox<T>: @unchecked Sendable {",
     "violation": {
+      "ruleName": "@unchecked Sendable",
       "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
       "location": {
         "character": 31,
-        "line": 810,
+        "line": 814,
         "file": "Sources/wikid/WikiDaemon.swift"
       },
-      "ruleName": "@unchecked Sendable",
       "severity": "error",
+      "ruleIdentifier": "unchecked_sendable",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class DaemonEmitBox<T>: @unchecked Sendable {"
   },
   {
-    "text": "final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendable {",
     "violation": {
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "ruleName": "@unchecked Sendable",
       "location": {
+        "file": "Sources/wikid/main.swift",
         "character": 63,
-        "line": 59,
-        "file": "Sources/wikid/main.swift"
+        "line": 59
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendable {"
   },
   {
-    "text": "private struct SendableDataReply: @unchecked Sendable {",
+    "violation": {
+      "severity": "error",
+      "location": {
+        "file": "Sources/wikid/main.swift",
+        "character": 35,
+        "line": 428
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
+      "ruleIdentifier": "unchecked_sendable"
+    },
+    "text": "private struct SendableDataReply: @unchecked Sendable {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "ruleName": "@unchecked Sendable",
+      "location": {
+        "file": "Sources/wikid/main.swift",
+        "line": 434,
+        "character": 35
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`.",
+      "ruleDescription": ""
+    },
+    "text": "private struct SendableVoidReply: @unchecked Sendable {"
+  },
+  {
     "violation": {
       "ruleDescription": "",
+      "ruleName": "@unchecked Sendable",
       "ruleIdentifier": "unchecked_sendable",
+      "severity": "error",
+      "location": {
+        "line": 439,
+        "file": "Sources/wikid/main.swift",
+        "character": 34
+      },
+      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
+    },
+    "text": "private struct SendableIntReply: @unchecked Sendable {"
+  },
+  {
+    "violation": {
       "location": {
         "character": 35,
-        "line": 427,
-        "file": "Sources/wikid/main.swift"
+        "file": "Sources/wikid/main.swift",
+        "line": 444
       },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "private struct SendableVoidReply: @unchecked Sendable {",
-    "violation": {
       "ruleDescription": "",
       "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 35,
-        "line": 433,
-        "file": "Sources/wikid/main.swift"
-      },
       "ruleName": "@unchecked Sendable",
       "severity": "error",
       "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "private struct SendableIntReply: @unchecked Sendable {",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 34,
-        "line": 438,
-        "file": "Sources/wikid/main.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
-  },
-  {
-    "text": "private struct SendableBoolReply: @unchecked Sendable {",
-    "violation": {
-      "ruleDescription": "",
-      "ruleIdentifier": "unchecked_sendable",
-      "location": {
-        "character": 35,
-        "line": 443,
-        "file": "Sources/wikid/main.swift"
-      },
-      "ruleName": "@unchecked Sendable",
-      "severity": "error",
-      "reason": "`@unchecked Sendable` asserts thread safety the compiler cannot verify. Prefer making the type actually Sendable (value types, `let` properties, or an actor). If the unchecked conformance is genuinely required, state the invariant that makes it safe \u2014 what lock or isolation covers the mutable state \u2014 in a comment, then `// swiftlint:disable:next unchecked_sendable`."
-    }
+    },
+    "text": "private struct SendableBoolReply: @unchecked Sendable {"
   }
 ]

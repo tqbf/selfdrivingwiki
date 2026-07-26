@@ -20,7 +20,7 @@ struct AgentsSettingsViewModelStatusTests {
         // A disabled provider shows no status line — the leading `○` switch
         // glyph already conveys it.
         let disabled = AgentProvider(
-            id: "claude-acp", label: "Claude",
+            id: ProviderID(rawValue: "claude-acp"), label: "Claude",
             command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
             env: [:], enabled: false, isDefault: false)
         let config = AgentProvidersConfig(providers: [disabled])
@@ -72,7 +72,7 @@ struct AgentsSettingsViewModelStatusTests {
         // Matches `modelWarning`'s "No model captured yet" branch string-for-
         // string (the sibling helper stays load-bearing — correction §6).
         let provider = AgentProvider(
-            id: "gemini", label: "Gemini",
+            id: ProviderID(rawValue: "gemini"), label: "Gemini",
             command: ["gemini", "--acp"],
             env: [:], enabled: true, isDefault: false)
         let config = AgentProvidersConfig(providers: [provider])
@@ -85,7 +85,7 @@ struct AgentsSettingsViewModelStatusTests {
         // Second state: enabled + no model + cached models exist. Orange
         // "pick one before running" guidance line — matches `modelWarning`.
         let provider = AgentProvider(
-            id: "opencode", label: "OpenCode",
+            id: ProviderID(rawValue: "opencode"), label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:], enabled: true, isDefault: false)
         let config = AgentProvidersConfig(
@@ -119,11 +119,11 @@ struct AgentsSettingsViewModelStatusTests {
         // produce the same `.noneCaptured` status — pins the format so a
         // future regression can't special-case a particular provider id.
         let opencode = AgentProvider(
-            id: "opencode", label: "OpenCode",
+            id: ProviderID(rawValue: "opencode"), label: "OpenCode",
             command: ["opencode", "acp"],
             env: [:], enabled: true, isDefault: false)
         let hermes = AgentProvider(
-            id: "hermes", label: "Hermes",
+            id: ProviderID(rawValue: "hermes"), label: "Hermes",
             command: ["hermes", "acp"],
             env: [:], enabled: true, isDefault: false)
         let config = AgentProvidersConfig(providers: [opencode, hermes])

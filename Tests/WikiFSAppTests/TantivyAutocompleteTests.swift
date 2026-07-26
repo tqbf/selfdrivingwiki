@@ -53,7 +53,7 @@ struct TantivyAutocompleteTests {
 
     private func makeService(source: InMemoryContentSource, dir: URL) throws -> TantivySearchService {
         try TantivySearchService(
-            wikiID: "autocomplete-test",
+            wikiID: WikiID(rawValue: "autocomplete-test"),
             containerDirectory: dir,
             contentSource: source)
     }

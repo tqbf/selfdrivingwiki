@@ -46,11 +46,11 @@ struct QueueEngineClientConformanceTests {
         // enqueue
         let request = QueueItemRequest(
             queue: .extraction,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             payload: QueueItemPayload(sourceIDs: [])
         )
         let itemID = try await client.enqueue(request)
-        #expect(!itemID.isEmpty)
+        #expect(!itemID.rawValue.isEmpty)
 
         // cancelItem
         await client.cancelItem(itemID)
@@ -76,7 +76,7 @@ struct QueueEngineClientConformanceTests {
         #expect(snapshot.activeItems.count == 1)
 
         // hasActiveWork — true because the item is queued for "test-wiki".
-        let hasWork = await client.hasActiveWork(for: "test-wiki")
+        let hasWork = await client.hasActiveWork(for: WikiID(rawValue: "test-wiki"))
         #expect(hasWork)
 
         // Cancel the item so waitForCompletion returns immediately (otherwise
@@ -128,7 +128,7 @@ struct QueueEngineClientConformanceTests {
 
 /// A no-op factory for test engines — never dispatches workers.
 private struct NoopWorkerFactory: QueueWorkerFactory {
-    func providerID(for item: QueueItem) async -> String? { nil }
+    func providerID(for item: QueueItem) async -> ProviderID? { nil }
     func worker(for item: QueueItem) async throws -> any QueueWorker {
         throw QueueIngestionError.noSources
     }
