@@ -94,7 +94,7 @@ func run() async -> Int32 {
         }
         let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
 
-        let result = try execute(
+        let result = try await execute(
             command,
             in: store,
             wikiID: descriptor.id,
@@ -153,10 +153,14 @@ func execute(
     in store: GRDBWikiStore,
     wikiID: WikiID,
     containerDirectory: URL
-) throws -> SourceCommand.Result {
+) async throws -> SourceCommand.Result {
     switch command {
     case .page(let action):
-        let leg: [WikiPageSummary]? = cliPageLegIfSearch(action, wikiID: wikiID, containerDirectory: containerDirectory, store: store)
+        let leg = await cliPageLegIfSearch(
+            action,
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store)
         let r = try PageCommand.run(action, in: store, bm25Leg: leg)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .logAppend(let kind, let title, let note, let source):
@@ -168,36 +172,27 @@ func execute(
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .source(let action):
         if case .refresh(let selector) = action {
-            // `runRefresh` is async (network I/O). Bridge it to the sync
-            // `execute` context via a semaphore — the standard CLI async→sync
-            // pattern. Safe because `DispatchSemaphore.wait()` blocks only the
-            // main thread; the async task signals from its own continuation
-            // thread, which never needs to acquire the main thread to signal
-            // (signaling is thread-agnostic). WebsiteMaterializer does not hop
-            // to the main actor, so no deadlock.
-            let box = RefreshResultBox()
-            let semaphore = DispatchSemaphore(value: 0)
-            Task {
-                do {
-                    box.result = try await SourceCommand.runRefresh(
-                        selector, in: store, fetcher: URLSessionFetcher())
-                } catch {
-                    box.error = error
-                }
-                semaphore.signal()
-            }
-            semaphore.wait()
-            if let error = box.error { throw error }
-            return box.result ?? SourceCommand.Result(payload: .text(""), didCommit: false)
+            return try await SourceCommand.runRefresh(
+                selector,
+                in: store,
+                fetcher: URLSessionFetcher())
         }
         return try SourceCommand.run(
             action, in: store,
             cwd: FileManager.default.currentDirectoryPath,
-            bm25Leg: cliSourceLegIfSearch(action, wikiID: wikiID, containerDirectory: containerDirectory, store: store))
+            bm25Leg: await cliSourceLegIfSearch(
+                action,
+                wikiID: wikiID,
+                containerDirectory: containerDirectory,
+                store: store))
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
     case .chat(let action):
-        return try runChatCommand(action, in: store, wikiID: wikiID, containerDirectory: containerDirectory)
+        return try await runChatCommand(
+            action,
+            in: store,
+            wikiID: wikiID,
+            containerDirectory: containerDirectory)
     case .bookmark(let action):
         let r = try BookmarkCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
@@ -225,10 +220,10 @@ private func runChatCommand(
     in store: GRDBWikiStore,
     wikiID: WikiID,
     containerDirectory: URL
-) throws -> SourceCommand.Result {
+) async throws -> SourceCommand.Result {
     let leg: [ChatSummary]?
     if case .search(let query, let limit) = action {
-        leg = CLITantivyLegResolver.resolveChatLeg(
+        leg = await CLITantivyLegResolver.resolveChatLeg(
             wikiID: wikiID, containerDirectory: containerDirectory,
             store: store, query: query, limit: limit)
     } else {
@@ -247,9 +242,9 @@ private func cliSourceLegIfSearch(
     wikiID: WikiID,
     containerDirectory: URL,
     store: GRDBWikiStore
-) -> [SourceSummary]? {
+) async -> [SourceSummary]? {
     guard case .search(let query, let limit) = action else { return nil }
-    return CLITantivyLegResolver.resolveSourceLeg(
+    return await CLITantivyLegResolver.resolveSourceLeg(
         wikiID: wikiID, containerDirectory: containerDirectory,
         store: store, query: query, limit: limit)
 }
@@ -263,30 +258,11 @@ private func cliPageLegIfSearch(
     wikiID: WikiID,
     containerDirectory: URL,
     store: GRDBWikiStore
-) -> [WikiPageSummary]? {
+) async -> [WikiPageSummary]? {
     guard case .search(let query, let limit) = action else { return nil }
-    return CLITantivyLegResolver.resolvePageLeg(
+    return await CLITantivyLegResolver.resolvePageLeg(
         wikiID: wikiID, containerDirectory: containerDirectory,
         store: store, query: query, limit: limit)
-}
-
-/// Thread-safe box for the wikictl async→sync semaphore bridge (Phase 3b).
-/// `@unchecked Sendable` — the semaphore guarantees the write (in the async
-/// task) happens-before the read (after `semaphore.wait()` returns), so the
-/// lock is belt-and-suspenders for Swift 6's data-race checker.
-final class RefreshResultBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _result: SourceCommand.Result?
-    private var _error: Error?
-
-    var result: SourceCommand.Result? {
-        get { lock.lock(); defer { lock.unlock() }; return _result }
-        set { lock.lock(); defer { lock.unlock() }; _result = newValue }
-    }
-    var error: Error? {
-        get { lock.lock(); defer { lock.unlock() }; return _error }
-        set { lock.lock(); defer { lock.unlock() }; _error = newValue }
-    }
 }
 
 /// Read an upsert body: `-` reads stdin to EOF; anything else is a file path.

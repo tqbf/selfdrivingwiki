@@ -19,14 +19,7 @@ import Testing
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
 ///
-/// `.serialized` (#925, mirrors #664's fallback direction): every resolver
-/// call in this suite funnels through `CLITantivyLegResolver.runSearch`,
-/// which blocks a cooperative-pool thread on `DispatchSemaphore.wait()`.
-/// Under full-suite `swift test` concurrency this can starve the pool
-/// alongside other suites; `.serialized` removes intra-suite concurrency so
-/// this suite's own semaphore waits don't compound. `.timeLimit` is the
-/// per-test backstop against a hang that still gets through.
-@Suite(.timeLimit(.minutes(5)), .serialized)
+@Suite(.timeLimit(.minutes(5)))
 struct CLITantivyLegResolverTests {
 
     // MARK: - Helpers
@@ -50,7 +43,7 @@ struct CLITantivyLegResolverTests {
 
     // MARK: - resolvePageLeg
 
-    @Test func resolvePageLegReturnsNilWhenIndexEmpty() throws {
+    @Test func resolvePageLegReturnsNilWhenIndexEmpty() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
         let wikiID = WikiID(rawValue: "01TEST0001")
@@ -59,7 +52,7 @@ struct CLITantivyLegResolverTests {
         // (the app would normally kick it off in `TantivyShadowSync.start()`).
         // The resolver must return nil so the store falls back to FTS5
         // (the #637 contract — empty leg = no BM25 signal).
-        let leg = CLITantivyLegResolver.resolvePageLeg(
+        let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "anything", limit: 10)
         #expect(leg == nil)
@@ -83,7 +76,7 @@ struct CLITantivyLegResolverTests {
         // pre-build it in the test. The first call pays the rebuild cost;
         // subsequent calls see a populated index and short-circuit on
         // `count()`.
-        let leg = CLITantivyLegResolver.resolvePageLeg(
+        let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "rust", limit: 10)
         // The leg is non-nil (the index returned hits) and contains BOTH pages.
@@ -112,7 +105,7 @@ struct CLITantivyLegResolverTests {
         // matching (edit-distance 1) should still surface the page. The
         // resolver's internal `rebuildIfNeeded()` populates the index from
         // the store on first call.
-        let leg = CLITantivyLegResolver.resolvePageLeg(
+        let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "erikson", limit: 10)
         #expect(leg != nil, "fuzzy match should find Erickson despite the typo")
@@ -136,7 +129,7 @@ struct CLITantivyLegResolverTests {
             content: "A longitudinal study of autonomous vehicle safety.",
             origin: .extraction, note: nil, technique: nil)
 
-        let leg = CLITantivyLegResolver.resolveSourceLeg(
+        let leg = await CLITantivyLegResolver.resolveSourceLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "autonomous", limit: 10)
         #expect(leg != nil)
@@ -156,7 +149,7 @@ struct CLITantivyLegResolverTests {
             .assistantText("We discussed terraforming the Martian surface."),
         ])
 
-        let leg = CLITantivyLegResolver.resolveChatLeg(
+        let leg = await CLITantivyLegResolver.resolveChatLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "terraforming", limit: 10)
         #expect(leg != nil)
@@ -164,9 +157,143 @@ struct CLITantivyLegResolverTests {
         #expect(leg?.first?.id == chat.id)
     }
 
+    @Test func concurrentResolversReturnExpectedResults() async throws {
+        enum SearchKind: Sendable {
+            case page
+            case source
+            case chat
+        }
+
+        struct SearchOutcome: Sendable {
+            let kind: SearchKind
+            let id: PageID?
+        }
+
+        let (pageContainer, pageFM) = try makeTempContainer()
+        defer { try? pageFM.removeItem(at: pageContainer) }
+        let pageWikiID = WikiID(rawValue: "01TEST0007")
+        let pageStore = try tempStore(in: pageContainer, wikiID: pageWikiID)
+        let page = try pageStore.createPage(title: "Rust Ownership")
+        try pageStore.updatePage(
+            id: page.id,
+            title: "Rust Ownership",
+            body: "ownership borrowing lifetimes ownership")
+
+        let (sourceContainer, sourceFM) = try makeTempContainer()
+        defer { try? sourceFM.removeItem(at: sourceContainer) }
+        let sourceWikiID = WikiID(rawValue: "01TEST0008")
+        let sourceStore = try tempStore(in: sourceContainer, wikiID: sourceWikiID)
+        _ = try sourceStore.addSource(filename: "async-search.pdf", data: Data("%PDF".utf8))
+        let source = try #require(sourceStore.listSources().first)
+        _ = try sourceStore.appendProcessedMarkdown(
+            sourceID: source.id,
+            content: "Concurrent search regression coverage for wikictl tantivy.",
+            origin: .extraction,
+            note: nil,
+            technique: nil)
+
+        let (chatContainer, chatFM) = try makeTempContainer()
+        defer { try? chatFM.removeItem(at: chatContainer) }
+        let chatWikiID = WikiID(rawValue: "01TEST0009")
+        let chatStore = try tempStore(in: chatContainer, wikiID: chatWikiID)
+        let chat = try chatStore.createChat(kind: .edit, title: "Async Search")
+        _ = try chatStore.appendChatMessages(chatID: chat.id, events: [
+            .assistantText("Async search should not block concurrent resolver calls."),
+        ])
+
+        let initialPageLeg = await CLITantivyLegResolver.resolvePageLeg(
+            wikiID: pageWikiID,
+            containerDirectory: pageContainer,
+            store: pageStore,
+            query: "ownership",
+            limit: 5)
+        let initialSourceLeg = await CLITantivyLegResolver.resolveSourceLeg(
+            wikiID: sourceWikiID,
+            containerDirectory: sourceContainer,
+            store: sourceStore,
+            query: "Concurrent",
+            limit: 5)
+        let initialChatLeg = await CLITantivyLegResolver.resolveChatLeg(
+            wikiID: chatWikiID,
+            containerDirectory: chatContainer,
+            store: chatStore,
+            query: "concurrent",
+            limit: 5)
+        #expect(initialPageLeg?.first?.id == page.id)
+        #expect(initialSourceLeg?.first?.id == source.id)
+        #expect(initialChatLeg?.first?.id == chat.id)
+
+        let outcomes = await withTaskGroup(of: SearchOutcome.self, returning: [SearchOutcome].self) { group in
+            for _ in 0..<3 {
+                group.addTask {
+                    _ = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: pageWikiID,
+                        containerDirectory: pageContainer,
+                        store: pageStore,
+                        query: "ownership",
+                        limit: 5)
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: pageWikiID,
+                        containerDirectory: pageContainer,
+                        store: pageStore,
+                        query: "ownership",
+                        limit: 5)
+                    return SearchOutcome(kind: .page, id: leg?.first?.id)
+                }
+                group.addTask {
+                    _ = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: sourceWikiID,
+                        containerDirectory: sourceContainer,
+                        store: sourceStore,
+                        query: "Concurrent",
+                        limit: 5)
+                    let leg = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: sourceWikiID,
+                        containerDirectory: sourceContainer,
+                        store: sourceStore,
+                        query: "Concurrent",
+                        limit: 5)
+                    return SearchOutcome(kind: .source, id: leg?.first?.id)
+                }
+                group.addTask {
+                    _ = await CLITantivyLegResolver.resolveChatLeg(
+                        wikiID: chatWikiID,
+                        containerDirectory: chatContainer,
+                        store: chatStore,
+                        query: "concurrent",
+                        limit: 5)
+                    let leg = await CLITantivyLegResolver.resolveChatLeg(
+                        wikiID: chatWikiID,
+                        containerDirectory: chatContainer,
+                        store: chatStore,
+                        query: "concurrent",
+                        limit: 5)
+                    return SearchOutcome(kind: .chat, id: leg?.first?.id)
+                }
+            }
+
+            var collected: [SearchOutcome] = []
+            for await outcome in group {
+                collected.append(outcome)
+            }
+            return collected
+        }
+
+        #expect(outcomes.count == 9)
+        let pageHits = outcomes.filter { $0.kind == .page }
+        let sourceHits = outcomes.filter { $0.kind == .source }
+        let chatHits = outcomes.filter { $0.kind == .chat }
+        #expect(pageHits.count == 3)
+        #expect(sourceHits.count == 3)
+        #expect(chatHits.count == 3)
+        #expect(pageHits.allSatisfy { $0.id == page.id }, "pageHits: \(pageHits)")
+        #expect(sourceHits.allSatisfy { $0.id == source.id }, "sourceHits: \(sourceHits)")
+        #expect(chatHits.allSatisfy { $0.id == chat.id }, "chatHits: \(chatHits)")
+    }
+
     // MARK: - FTS5 fallback when no Tantivy service can be built
 
-    @Test func resolvePageLegReturnsNilWhenServiceConstructionFails() throws {
+    @Test func resolvePageLegReturnsNilWhenServiceConstructionFails() async throws {
         // Point the resolver at a container path that doesn't exist and can't
         // be created (a file in place of the container dir). `makeService`
         // catches the throw and returns nil — the store then falls back to
@@ -184,7 +311,7 @@ struct CLITantivyLegResolverTests {
         let wikiID = WikiID(rawValue: "01TEST0006")
         let store = try tempStore(in: container, wikiID: wikiID)
 
-        let leg = CLITantivyLegResolver.resolvePageLeg(
+        let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: fileAsContainer,
             store: store, query: "anything", limit: 10)
         #expect(leg == nil)
