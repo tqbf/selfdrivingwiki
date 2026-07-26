@@ -91,32 +91,190 @@ enum WikiLinkMenuNSItems {
     }
 
     /// A submenu listing the closest pages to `query`; choosing one navigates to
-    /// it. Shows a disabled "No similar pages" item when the search is empty so
-    /// the submenu is never mysteriously blank.
+    /// it. Shows a disabled "No similar pages" item when the search finds
+    /// nothing so the submenu is never mysteriously blank.
     ///
-    /// #637: builds with `store.searchSimilarResolvingTantivy(query:limit:)`
+    /// #637: searches with `store.searchSimilarResolvingTantivy(query:limit:)`
     /// (rather than the FTS5-fallback `searchSimilar(query:limit:)`) so the menu
     /// surfaces Tantivy-BM25-fused results — gaining the indexer's `fuzzyFields`
     /// edit-distance-1 matches (already configured at
     /// `TantivyIndexer.swift:108-111`) for free, and surviving #634's FTS5 drop
     /// without regression.
+    ///
+    /// #925: that search is now `async`, so this returns immediately with a
+    /// disabled "Searching…" row and a ``SimilarPagesMenuLoader`` delegate that
+    /// fills the submenu in when the user actually opens it. Nothing runs at
+    /// right-click time; nothing blocks the main actor.
     private static func similarPagesItem(
         title: String, query: String, store: WikiStoreModel
     ) -> NSMenuItem {
+        similarPagesItem(
+            title: title,
+            query: query,
+            search: { query, limit in await store.searchSimilarResolvingTantivy(query: query, limit: limit) },
+            navigate: { page in
+                // Prefer the rename-stable id path (#922 strong types); fall back
+                // to the title lookup when the summary list hasn't reloaded since
+                // the search, which is the only case `selectPage(byID:)` rejects.
+                if !store.selectPage(byID: page.id) { store.selectPage(byTitle: page.title) }
+            })
+    }
+
+    /// Seam-injected form of ``similarPagesItem(title:query:store:)`` — the
+    /// production overload wires `store`; tests pass a controlled `search` to
+    /// drive the lazy submenu deterministically.
+    static func similarPagesItem(
+        title: String,
+        query: String,
+        search: @escaping SimilarPagesMenuLoader.Search,
+        navigate: @escaping SimilarPagesMenuLoader.Navigate
+    ) -> NSMenuItem {
         let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let matches = query.isEmpty ? [] : store.searchSimilarResolvingTantivy(query: query, limit: 8)
         let menu = NSMenu()
-        if matches.isEmpty {
-            let none = NSMenuItem(title: "No similar pages", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            menu.addItem(none)
-        } else {
-            for page in matches {
-                menu.addItem(.wikiItem(page.title) { store.selectPage(byTitle: page.title) })
-            }
+        // An empty query can never match, so skip the loader entirely and show
+        // the settled empty state rather than a "Searching…" row that resolves
+        // to the same thing.
+        guard !query.isEmpty else {
+            menu.addItem(SimilarPagesMenuLoader.disabledItem(SimilarPagesMenuLoader.noResultsTitle))
+            parent.submenu = menu
+            return parent
         }
+        menu.addItem(SimilarPagesMenuLoader.disabledItem(SimilarPagesMenuLoader.searchingTitle))
+        let loader = SimilarPagesMenuLoader(query: query, search: search, navigate: navigate)
+        menu.delegate = loader
+        // `NSMenu.delegate` is a weak reference, so the loader needs an owner for
+        // the submenu's lifetime. The parent item's `representedObject` is that
+        // owner (same trick `wikiItem` uses for its closure target) and is not a
+        // cycle: the loader holds neither the item nor the menu strongly.
+        parent.representedObject = loader
         parent.submenu = menu
         return parent
+    }
+}
+
+// MARK: - Lazy "Suggest…" / "Find Similar…" submenu
+
+/// Fills a "Suggest…" / "Find Similar…" submenu when it is about to open,
+/// replacing the disabled "Searching…" placeholder with ranked page titles.
+///
+/// #925: the search this drives (`searchSimilarResolvingTantivy`) is async
+/// because resolving the Tantivy BM25 leg hops to the indexer actor. AppKit
+/// builds a context menu synchronously, so the work cannot happen during
+/// construction — it happens here, on `menuNeedsUpdate(_:)`, which AppKit calls
+/// just before the submenu is displayed. A right-click that never opens the
+/// submenu therefore performs no search at all.
+///
+/// Lifecycle:
+/// - Retained by the parent `NSMenuItem`'s `representedObject` (`NSMenu.delegate`
+///   is weak). The loader captures neither back, so there is no cycle.
+/// - `menuNeedsUpdate(_:)` fires every time the submenu is displayed *and* can
+///   repeat for a single display pass, so the `State` machine — not a pile of
+///   booleans — is what makes "exactly one search per open" true.
+/// - `menuDidClose(_:)` cancels an in-flight search and bumps `generation`, so a
+///   late completion cannot mutate a submenu the user has already dismissed.
+///   Reopening starts a fresh search from the placeholder that is still in place.
+@MainActor
+final class SimilarPagesMenuLoader: NSObject, NSMenuDelegate {
+
+    /// Runs the page search. `(query, limit) -> ranked pages`.
+    typealias Search = @MainActor (String, Int) async -> [WikiPageSummary]
+    /// Navigates to a chosen result.
+    typealias Navigate = @MainActor (WikiPageSummary) -> Void
+
+    /// #637 parity: the submenu has always shown at most 8 pages.
+    static let resultLimit = 8
+    /// Transient placeholder shown while the async search runs (#925).
+    static let searchingTitle = "Searching…"
+    /// Settled empty state — unchanged user-visible label.
+    static let noResultsTitle = "No similar pages"
+
+    /// One lifecycle, one stored value: `.idle` may start a search, `.searching`
+    /// owns the cancellable task, `.loaded` is terminal for this open. Encoding
+    /// this as separate `isSearching` / `hasLoaded` flags would make "searching
+    /// *and* loaded" representable and put the duplicate-search guard in two
+    /// places.
+    private enum State {
+        case idle
+        case searching(generation: Int, task: Task<Void, Never>)
+        case loaded
+    }
+
+    private let query: String
+    private let search: Search
+    private let navigate: Navigate
+    private var state: State = .idle
+    /// Bumped on every start and every close; a completion whose captured value
+    /// no longer matches is stale and must not touch the menu.
+    private var generation = 0
+
+    init(query: String, search: @escaping Search, navigate: @escaping Navigate) {
+        self.query = query
+        self.search = search
+        self.navigate = navigate
+        super.init()
+    }
+
+    /// A disabled, action-less row. `NSMenu.autoenablesItems` would disable a
+    /// nil-action item anyway; setting it explicitly keeps the intent readable
+    /// and assertable before the menu is ever displayed.
+    static func disabledItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    // MARK: - NSMenuDelegate
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        // Only `.idle` starts work: repeated update callbacks during one display
+        // pass, and reopening an already-filled submenu, are both no-ops.
+        guard case .idle = state else { return }
+        generation += 1
+        let started = generation
+        let task = Task { [weak self, weak menu] in
+            guard let self else { return }
+            let matches = await self.search(self.query, Self.resultLimit)
+            // Three ways to be stale: the task was cancelled, the menu closed and
+            // bumped the generation, or the menu itself was torn down.
+            guard !Task.isCancelled, started == self.generation, let menu else { return }
+            self.apply(matches, to: menu)
+            self.state = .loaded
+        }
+        // Safe to assign after creating the task: this method is main-actor
+        // isolated and has no suspension point, so the task cannot start (and
+        // overwrite `state` with `.loaded`) before this line runs.
+        state = .searching(generation: started, task: task)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard case .searching(_, let task) = state else { return }
+        task.cancel()
+        generation += 1
+        // Back to `.idle` — the "Searching…" placeholder is still in the menu, so
+        // the next open simply retries.
+        state = .idle
+    }
+
+    // MARK: - Internals
+
+    private func apply(_ matches: [WikiPageSummary], to menu: NSMenu) {
+        menu.removeAllItems()
+        guard !matches.isEmpty else {
+            menu.addItem(Self.disabledItem(Self.noResultsTitle))
+            return
+        }
+        // Rank order is the search's; the menu preserves it verbatim.
+        for page in matches {
+            menu.addItem(.wikiItem(page.title) { [navigate] in navigate(page) })
+        }
+    }
+
+    /// Test seam: the in-flight search, so AppKit menu tests can `await` a
+    /// settled submenu instead of polling or sleeping. `nil` when idle or
+    /// loaded. Reading it before `menuDidClose(_:)` is also how the stale-
+    /// completion test keeps a handle on a task the loader has let go of.
+    var inFlightSearch: Task<Void, Never>? {
+        if case .searching(_, let task) = state { task } else { nil }
     }
 }
 
