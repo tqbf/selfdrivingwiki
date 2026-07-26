@@ -112,6 +112,25 @@ public struct VacuumReport: Equatable, Sendable {
     }
 }
 
+public enum PageSourceLinkRole: String, Sendable {
+    case cite
+    case embed
+}
+
+public struct PageSourceLink: Equatable, Sendable {
+    public let pageID: PageID
+    public let sourceID: PageID
+    public let linkText: String
+    public let role: PageSourceLinkRole
+
+    public init(pageID: PageID, sourceID: PageID, linkText: String, role: PageSourceLinkRole) {
+        self.pageID = pageID
+        self.sourceID = sourceID
+        self.linkText = linkText
+        self.role = role
+    }
+}
+
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.

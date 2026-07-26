@@ -71,10 +71,19 @@ struct PageMarkdownFormatTests {
             version: 1
         )
         let content = PageMarkdownFormat.fileContent(for: page)
-        #expect(content.hasPrefix("---\n"))
-        #expect(content.contains("title: \"My Page\""))
-        #expect(content.contains("# My Page"))
-        #expect(content.contains("Some content here."))
+        #expect(content == """
+        ---
+        type: "Page"
+        title: "My Page"
+        generated:
+          by: "process:legacy-import"
+          at: 1970-01-01T00:00:00Z
+        ---
+
+        # My Page
+
+        Some content here.
+        """)
     }
 
     @Test func fileContentStripsExistingH1BeforeGenerating() {
@@ -105,7 +114,7 @@ struct PageMarkdownFormatTests {
             version: 1
         )
         let content = PageMarkdownFormat.fileContent(for: page)
-        #expect(content.contains("\\\"Test\\\""))
+        #expect(content.contains("title: \"It's a \\\"Test\\\"\""))
     }
 
     @Test func fileContentHandlesEmptyBody() {
@@ -120,5 +129,21 @@ struct PageMarkdownFormatTests {
         )
         let content = PageMarkdownFormat.fileContent(for: page)
         #expect(content.hasSuffix("# Empty Page"))
+    }
+
+    @Test func fileContentEscapesBackslashInTitle() {
+        let page = WikiPage(
+            id: PageID(rawValue: "01KW6BDW000000000000000000"),
+            title: #"Path \ "Quote""#,
+            slug: "path-quote",
+            bodyMarkdown: "Body.",
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            version: 1
+        )
+
+        let content = PageMarkdownFormat.fileContent(for: page)
+
+        #expect(content.contains(#"title: "Path \\ \"Quote\"""#))
     }
 }
