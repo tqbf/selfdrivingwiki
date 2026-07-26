@@ -482,11 +482,15 @@ struct Projection {
     /// singleton row exactly like the system-prompt node.
     private func wikiIndexNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode {
         let index = wikiIndexDocument()
-        let body = Data(index.body.utf8)
+        let body = wikiIndexBody(index)
         let version = Data(String(index.version).utf8)
         return .file(id: id, parent: .rootContainer, name: "index.md", size: body.count,
                      version: version, metadataVersion: version,
                      created: nil, modified: index.updatedAt)
+    }
+
+    private func wikiIndexBody(_ index: WikiIndex) -> Data {
+        Data(OKFRootIndexFormat.fileContent(body: index.body).utf8)
     }
 
     // MARK: - log.md (append-only log)
@@ -566,6 +570,62 @@ struct Projection {
         return raw
     }
 
+    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) -> String {
+        let links = (DebugLog.trying("sourceLinks", operation: { try store.sourceLinks(from: page.id) }) ?? [])
+            .filter { $0.role == .cite }
+        var references: [OKFSourceReference] = []
+        references.reserveCapacity(links.count)
+        var seenSourceIDs = Set<PageID>()
+        for link in links where seenSourceIDs.insert(link.sourceID).inserted {
+            guard let source = DebugLog.trying("getSource", operation: { try store.getSource(id: link.sourceID) }) else {
+                continue
+            }
+            references.append(
+                OKFSourceReference(
+                    resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md"))"),
+                    title: source.effectiveName
+                )
+            )
+        }
+
+        let generated = OKFGenerated(
+            by: OKFActor(pageAuthorRawValue: page.lastEditedBy ?? page.createdBy),
+            at: page.updatedAt
+        )
+        return PageMarkdownFormat.fileContent(
+            for: page,
+            metadata: PageOKFMetadata(generated: generated, sources: references)
+        )
+    }
+
+    private func sourceMarkdownContent(for source: SourceSummary,
+                                       head: SourceMarkdownVersion,
+                                       in store: GRDBWikiStore) -> String {
+        let producer = DebugLog.trying("processedMarkdownProducer", operation: {
+            try store.processedMarkdownProducer(versionID: head.id)
+        })
+        let generated = OKFGenerated(
+            by: OKFActor.sourceActor(
+                producerName: producer?.name,
+                producerVersion: producer?.version,
+                fallbackOrigin: head.origin
+            ),
+            at: head.createdAt
+        )
+        let resource = OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext))"),
+            title: source.effectiveName
+        )
+        return SourceMarkdownFormat.fileContent(
+            for: head,
+            metadata: SourceOKFMetadata(
+                title: source.effectiveName,
+                generated: generated,
+                sources: [resource]
+            )
+        )
+    }
+
     // MARK: - Flat resource projections (slice 2b)
 
     /// Describes how one flat resource kind (`pages`, `sources`) projects onto
@@ -607,23 +667,27 @@ struct Projection {
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+            let body = projection.pageContent(for: page, in: store)
             // For by-title pages, size must match the rewritten bytes that
             // contents(for:) will serve — a mismatch truncates cat (#216).
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
-                let data = projection.byTitleContent(for: page, maps: projection.cachedLinkMaps())
+                let data = projection.rewriteLinks(body, maps: projection.cachedLinkMaps(),
+                                                   baseDir: Self.pagesByTitleDir)
                 return Self.pageFileNode(for: id, page: page, contentData: data)
             }
-            return Self.pageFileNode(for: id, page: page)
+            return Self.pageFileNode(for: id, page: page, contentData: Data(body.utf8))
         },
         contentForLeaf: { projection, id in
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+            let body = projection.pageContent(for: page, in: store)
             // By-title view: rewrite [[wikilinks]] to relative Markdown links.
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
-                return projection.byTitleContent(for: page, maps: projection.cachedLinkMaps())
+                return projection.rewriteLinks(body, maps: projection.cachedLinkMaps(),
+                                               baseDir: Self.pagesByTitleDir)
             }
-            return Data(PageMarkdownFormat.fileContent(for: page).utf8)
+            return Data(body.utf8)
         }
     )
 
@@ -644,13 +708,15 @@ struct Projection {
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
+                let wrapped = projection.sourceMarkdownContent(for: file, head: head, in: store)
                 // For by-name markdown siblings, size must match rewritten bytes.
                 if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
-                    let data = projection.rewriteLinks(head.content, maps: projection.cachedLinkMaps(),
+                    let data = projection.rewriteLinks(wrapped, maps: projection.cachedLinkMaps(),
                                                        baseDir: Self.sourcesByNameDir)
                     return Self.sourceMarkdownNode(for: id, source: file, head: head, contentData: data)
                 }
-                return Self.sourceMarkdownNode(for: id, source: file, head: head)
+                return Self.sourceMarkdownNode(for: id, source: file, head: head,
+                                               contentData: Data(wrapped.utf8))
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
@@ -667,12 +733,12 @@ struct Projection {
         },
         contentForLeaf: { projection, id in
             if let ulid = Identity.sourceMarkdownULID(from: id) {
-                guard projection.openReadStore() != nil,
+                guard let store = projection.openReadStore(),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: PageID(rawValue: ulid)) }),
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
-                // Wrap with provenance frontmatter (#131).
-                let wrapped = SourceMarkdownFormat.fileContent(for: head)
+                let wrapped = projection.sourceMarkdownContent(for: file, head: head, in: store)
                 // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
                 if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
                     return projection.rewriteLinks(wrapped, maps: projection.cachedLinkMaps(),
@@ -797,7 +863,7 @@ struct Projection {
     static let wikiIndexDoc = SingletonDoc(
         entries: [.init(id: Identity.indexMD, name: "index.md")],
         nodeFor: { projection, id, _ in projection.wikiIndexNode(for: id) },
-        contentFor: { Data($0.wikiIndexDocument().body.utf8) },
+        contentFor: { projection in projection.wikiIndexBody(projection.wikiIndexDocument()) },
         participatesInWorkingSet: true
     )
 
@@ -995,7 +1061,7 @@ struct Projection {
             if let targetID = node.targetID,
                let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) {
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
-                let body = rewriteLinks(PageMarkdownFormat.fileContent(for: page),
+                let body = rewriteLinks(pageContent(for: page, in: store),
                                         maps: maps, baseDir: baseDir)
                 let name = Self.sanitizeFilename(page.title) + ".md"
                 return .file(id: id, parent: parent, name: name, size: body.count,
@@ -1085,7 +1151,7 @@ struct Projection {
                   let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
-            return rewriteLinks(PageMarkdownFormat.fileContent(for: page),
+            return rewriteLinks(pageContent(for: page, in: store),
                                 maps: cachedLinkMaps(),
                                 baseDir: bookmarkBaseDir(for: node, in: nodes))
         case .sourceRef:
@@ -1201,7 +1267,7 @@ struct Projection {
                 filename: humanName, ext: "md", sourceID: source.id)
             : FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
-        let size = contentData?.count ?? SourceMarkdownFormat.fileContent(for: head).utf8.count
+        let size = contentData?.count ?? head.content.utf8.count
         return .file(
             id: id, parent: parent, name: name, size: size,
             version: Data(head.id.rawValue.utf8),
@@ -1438,7 +1504,10 @@ struct Projection {
 
     /// The rewritten by-title page content (page bodies live in `pages/by-title`).
     private func byTitleContent(for page: WikiPage, maps: LinkMaps) -> Data {
-        rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
+        guard let store = openReadStore() else {
+            return rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
+        }
+        return rewriteLinks(pageContent(for: page, in: store), maps: maps, baseDir: Self.pagesByTitleDir)
     }
 
     /// Rewrite relative image srcs in a markdown-native verbatim source's own
@@ -1777,4 +1846,3 @@ struct ProjectedNode {
     }
 }
 #endif  // os(macOS)
-

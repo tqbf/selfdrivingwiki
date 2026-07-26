@@ -100,8 +100,21 @@ struct ProjectionTests {
         #expect(node.ingestedExt == "md")
         // mimeType is "text/markdown"
         #expect(node.mimeType == "text/markdown")
-        // size is the frontmatter-wrapped content
-        #expect(node.size == SourceMarkdownFormat.fileContent(for: head).utf8.count)
+        // size matches the provided rendered bytes
+        let rendered = SourceMarkdownFormat.fileContent(
+            for: head,
+            metadata: SourceOKFMetadata(
+                title: source.effectiveName,
+                generated: .init(by: OKFActor(rawValue: "process:extraction"), at: createdAt),
+                sources: [.init(
+                    resource: .bundlePath("/sources/by-id/\(sourceID).pdf"),
+                    title: source.effectiveName
+                )]
+            )
+        )
+        let renderedData = Data(rendered.utf8)
+        let sizedNode = Projection.sourceMarkdownNode(for: identifier, source: source, head: head, contentData: renderedData)
+        #expect(sizedNode.size == renderedData.count)
         // created and modified are head.createdAt
         #expect(node.created == createdAt)
         #expect(node.modified == createdAt)
@@ -154,8 +167,20 @@ struct ProjectionTests {
         #expect(node.ingestedExt == "md")
         // mimeType is "text/markdown"
         #expect(node.mimeType == "text/markdown")
-        // size is the frontmatter-wrapped content
-        #expect(node.size == SourceMarkdownFormat.fileContent(for: head).utf8.count)
+        let rendered = SourceMarkdownFormat.fileContent(
+            for: head,
+            metadata: SourceOKFMetadata(
+                title: source.effectiveName,
+                generated: .init(by: OKFActor(rawValue: "process:extraction"), at: createdAt),
+                sources: [.init(
+                    resource: .bundlePath("/sources/by-id/\(sourceID).pdf"),
+                    title: source.effectiveName
+                )]
+            )
+        )
+        let renderedData = Data(rendered.utf8)
+        let sizedNode = Projection.sourceMarkdownNode(for: identifier, source: source, head: head, contentData: renderedData)
+        #expect(sizedNode.size == renderedData.count)
         // created and modified are head.createdAt
         #expect(node.created == createdAt)
         #expect(node.modified == createdAt)
