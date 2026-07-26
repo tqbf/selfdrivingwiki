@@ -20,7 +20,7 @@ import WikiFSCore
         QueueItem(
             id: "TESTITEM001",
             queue: queue,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(
                 sourceIDs: sourceIDs,
                 lintPageIDs: lintPageIDs),

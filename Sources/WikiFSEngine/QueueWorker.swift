@@ -146,14 +146,14 @@ public struct QueueSnapshot: Sendable, Codable {
     /// Per-provider active (running) item counts.
     public var providerCounts: [ProviderID: Int]
     /// Wikis with an active ingestion item (the per-wiki invariant).
-    public var activeIngestionWikis: Set<String>
+    public var activeIngestionWikis: Set<WikiID>
 
     public init(
         activeItems: [QueueItem] = [],
         recentItems: [QueueItem] = [],
         runStates: [QueueKind: QueueRunState] = [:],
         providerCounts: [ProviderID: Int] = [:],
-        activeIngestionWikis: Set<String> = []
+        activeIngestionWikis: Set<WikiID> = []
     ) {
         self.activeItems = activeItems
         self.recentItems = recentItems

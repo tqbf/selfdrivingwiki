@@ -33,7 +33,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
     private let containerDirectory: URL
     private let extractionCoordinator: ExtractionCoordinator
-    private let storeResolver: @Sendable (String) -> GRDBWikiStore?
+    private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     private let resolveSelectedProvider: @Sendable () -> AgentProvider
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
@@ -52,7 +52,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private var statePollTasks: [PageID: Task<Void, Never>] = [:]
 
     private struct ChatSession {
-        let wikiID: String
+        let wikiID: WikiID
         let chatID: PageID
         let launcher: AgentLauncher
     }
@@ -62,7 +62,7 @@ final class DaemonChatHost: @unchecked Sendable {
     init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
-        storeResolver: @escaping @Sendable (String) -> GRDBWikiStore?,
+        storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
         resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void
@@ -96,7 +96,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     /// Get an existing launcher for a chat, or create a new one.
-    private func getOrCreateLauncher(chatID: PageID, wikiID: String) async -> AgentLauncher {
+    private func getOrCreateLauncher(chatID: PageID, wikiID: WikiID) async -> AgentLauncher {
         if let existing = queue.sync(execute: { sessions[chatID]?.launcher }) {
             return existing
         }
@@ -116,7 +116,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// chat existed (`ProviderSelector` on a `.draft` session) — nil/nil for
     /// every pre-existing caller.
     func startChat(
-        wikiID: String, firstMessage: String,
+        wikiID: WikiID, firstMessage: String,
         providerId: String? = nil, modelId: String? = nil
     ) async throws -> PageID {
         guard let store = storeResolver(wikiID) else {
@@ -128,7 +128,7 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.emptyMessage
         }
 
-        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId ?? "nil") modelId=\(modelId ?? "nil")")
+        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID.rawValue) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId ?? "nil") modelId=\(modelId ?? "nil")")
 
         // 1. Create the chat row + seed the first user message.
         let title = ChatSummary.title(fromFirstMessage: trimmed)
@@ -163,7 +163,7 @@ final class DaemonChatHost: @unchecked Sendable {
             },
             onLock: { },
             onUnlock: {
-                DarwinNotifier.postChange(forWikiID: wikiIDCapture)
+                DarwinNotifier.postChange(forWikiID: wikiIDCapture.rawValue)
             },
             onTranscript: { [weak self] events in
                 self?.handleTranscript(
@@ -204,7 +204,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Continue a chat with a new user turn. Reads the history + `acpSessionId`
     /// from the store, builds the adaptive preamble, and starts a fresh
     /// interactive session writing to the SAME chat row.
-    func continueChat(wikiID: String, chatID: PageID, message: String) async throws {
+    func continueChat(wikiID: WikiID, chatID: PageID, message: String) async throws {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -278,7 +278,7 @@ final class DaemonChatHost: @unchecked Sendable {
             },
             onLock: { },
             onUnlock: {
-                DarwinNotifier.postChange(forWikiID: wikiIDCapture)
+                DarwinNotifier.postChange(forWikiID: wikiIDCapture.rawValue)
             },
             onTranscript: { [weak self] events in
                 self?.handleTranscript(
@@ -505,7 +505,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Private: store sink handlers
 
     private func handleAcpSessionId(
-        chatID: PageID, sessionId: AcpSessionID?, wikiID: String
+        chatID: PageID, sessionId: AcpSessionID?, wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
         do {
@@ -519,7 +519,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     private func handleTranscript(
-        chatID: PageID, events: [AgentEvent], wikiID: String
+        chatID: PageID, events: [AgentEvent], wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
         do {
@@ -542,7 +542,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chats.summary` (issue #411) — the sole writer of that column now that
     /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
-        chatID: PageID, wikiID: String, launcher: AgentLauncher
+        chatID: PageID, wikiID: WikiID, launcher: AgentLauncher
     ) {
         guard let store = storeResolver(wikiID) else { return }
 
@@ -632,7 +632,7 @@ final class DaemonChatHost: @unchecked Sendable {
 // MARK: - Errors
 
 enum DaemonChatError: Error, LocalizedError {
-    case noStore(String)
+    case noStore(WikiID)
     case noSession(String)
     case emptyMessage
     case preflightFailed(String)

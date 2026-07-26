@@ -38,7 +38,7 @@ public final class WikiRegistryClient {
     /// in the app layer's `.onChange(of: activeWikiID)` handler. The
     /// registry never opens a store itself — the per-wiki ``WikiSession``
     /// is constructed in the app layer.
-    public private(set) var activeWikiID: String?
+    public private(set) var activeWikiID: WikiID?
 
     /// The App Group container directory holding every `<ulid>.sqlite` and the
     /// `wikis.json` registry. Injected so tests can use a temp dir.
@@ -59,10 +59,10 @@ public final class WikiRegistryClient {
     /// layer (which imports `FileProvider`). Both are async + best-effort.
     /// `registerDomain(id:displayName:)` adds the domain if absent;
     /// `removeDomain(id:)` tears it down on delete.
-    @ObservationIgnored public var registerDomain: ((_ id: String, _ displayName: String) async -> Void)?
-    @ObservationIgnored public var removeDomain: ((_ id: String) async -> Void)?
+    @ObservationIgnored public var registerDomain: ((_ id: WikiID, _ displayName: String) async -> Void)?
+    @ObservationIgnored public var removeDomain: ((_ id: WikiID) async -> Void)?
     /// Update a wiki domain's user-visible display name. Identity stays the ULID.
-    @ObservationIgnored public var renameDomain: ((_ id: String, _ displayName: String) async -> Void)?
+    @ObservationIgnored public var renameDomain: ((_ id: WikiID, _ displayName: String) async -> Void)?
 
     /// Flush any pending autosaves in the named wiki's model before the
     /// registry deletes its DB (``deleteWiki(id:)``) or runs a WAL checkpoint
@@ -71,7 +71,7 @@ public final class WikiRegistryClient {
     /// exported/deleted — the registry client itself never holds a store, so
     /// it cannot flush directly. Safe to leave `nil` in tests that never
     /// invoke those paths against an active wiki.
-    @ObservationIgnored public var flushActiveStore: ((_ wikiID: String) -> Void)?
+    @ObservationIgnored public var flushActiveStore: ((_ wikiID: WikiID) -> Void)?
 
     // MARK: - Init
 
@@ -88,13 +88,13 @@ public final class WikiRegistryClient {
     /// the whole client is hermetically testable against a temp dir. The
     /// extension resolves the identical filename from `domain.identifier` on
     /// its side.
-    private func databaseURL(forWikiID id: String) -> URL {
-        containerDirectory.appendingPathComponent("\(id).sqlite", isDirectory: false)
+    private func databaseURL(forWikiID id: WikiID) -> URL {
+        containerDirectory.appendingPathComponent("\(id.rawValue).sqlite", isDirectory: false)
     }
 
     /// Delete a wiki's `<ulid>.sqlite` plus its WAL `-wal`/`-shm` sidecars from
     /// the container directory. Best-effort; a missing sidecar is fine.
-    private func deleteDatabaseFiles(forWikiID id: String) {
+    private func deleteDatabaseFiles(forWikiID id: WikiID) {
         let fm = FileManager.default
         let main = databaseURL(forWikiID: id).path
         for suffix in ["", "-wal", "-shm"] {
@@ -194,7 +194,7 @@ public final class WikiRegistryClient {
     /// No-op if it's already active or unknown. Setting ``activeWikiID`` is
     /// observed by the app layer, which constructs the matching
     /// ``WikiSession`` (this client never opens a store itself).
-    public func select(_ id: String) {
+    public func select(_ id: WikiID) {
         guard descriptorExists(id) else { return }
         guard id != activeWikiID else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
@@ -205,7 +205,7 @@ public final class WikiRegistryClient {
     }
 
     /// Rename a wiki: change ONLY its display name (identity/DB untouched).
-    public func renameWiki(id: String, to displayName: String) async {
+    public func renameWiki(id: WikiID, to displayName: String) async {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
@@ -217,7 +217,7 @@ public final class WikiRegistryClient {
 
     /// Set (or clear, with `nil`) a wiki's home page — the page its home
     /// button navigates to.
-    public func setHomePage(id: String, pageID: PageID?) {
+    public func setHomePage(id: WikiID, pageID: PageID?) {
         guard descriptorExists(id) else { return }
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.setHomePage(id: id, pageID: pageID)
@@ -230,7 +230,7 @@ public final class WikiRegistryClient {
     /// index, and log without requiring `-wal` / `-shm` sidecars. If the wiki
     /// is active, flushes pending autosaves first via the injected
     /// ``flushActiveStore`` closure (this client does not own the store).
-    public func exportWiki(id: String, to destinationURL: URL) throws {
+    public func exportWiki(id: WikiID, to destinationURL: URL) throws {
         guard descriptorExists(id) else { throw WikiRegistryError.unknownWiki(id) }
         flushActiveStore?(id)
         let sourceURL = databaseURL(forWikiID: id)
@@ -280,7 +280,7 @@ public final class WikiRegistryClient {
     /// most-recently-used wiki (or clear ``activeWikiID`` if it was the last
     /// one). The app layer's `.onChange(of: activeWikiID)` tears down the old
     /// session and stands up the new one — this client never holds a session.
-    public func deleteWiki(id: String) async {
+    public func deleteWiki(id: WikiID) async {
         // Flush any pending edits in the wiki being deleted, so we don't
         // strand writes in a DB we're about to delete. The closure resolves
         // to the live session's store at the app layer; nil-safe.
@@ -305,7 +305,7 @@ public final class WikiRegistryClient {
 
     // MARK: - Internals
 
-    private func descriptorExists(_ id: String) -> Bool {
+    private func descriptorExists(_ id: WikiID) -> Bool {
         wikis.contains { $0.id == id }
     }
 
@@ -322,7 +322,7 @@ public final class WikiRegistryClient {
                 return model.newPage(title: "Home")
             }
         } catch {
-            DebugLog.store("WikiRegistryClient: createDatabase failed for \(descriptor.id): \(error)")
+            DebugLog.store("WikiRegistryClient: createDatabase failed for \(descriptor.id.rawValue): \(error)")
         }
         return nil
     }
@@ -431,7 +431,7 @@ public enum WikiRegistryError: Error, Equatable, CustomStringConvertible {
     case emptyDisplayName
     case exportWouldOverwriteSource
     case sqlite(String)
-    case unknownWiki(String)
+    case unknownWiki(WikiID)
 
     public var description: String {
         switch self {
@@ -442,7 +442,7 @@ public enum WikiRegistryError: Error, Equatable, CustomStringConvertible {
         case .sqlite(let message):
             return "SQLite checkpoint failed: \(message)"
         case .unknownWiki(let id):
-            return "No wiki exists with id \(id)."
+            return "No wiki exists with id \(id.rawValue)."
         }
     }
 }

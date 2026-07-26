@@ -43,8 +43,8 @@ struct CLITantivyLegResolverTests {
         return (url, fm)
     }
 
-    private func tempStore(in container: URL, wikiID: String) throws -> GRDBWikiStore {
-        let dbURL = container.appendingPathComponent("\(wikiID).sqlite", isDirectory: false)
+    private func tempStore(in container: URL, wikiID: WikiID) throws -> GRDBWikiStore {
+        let dbURL = container.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         return try GRDBWikiStore(databaseURL: dbURL)
     }
 
@@ -53,7 +53,7 @@ struct CLITantivyLegResolverTests {
     @Test func resolvePageLegReturnsNilWhenIndexEmpty() throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0001"
+        let wikiID = WikiID(rawValue: "01TEST0001")
         let store = try tempStore(in: container, wikiID: wikiID)
         // No Tantivy index exists yet — `rebuildIfNeeded` was never called
         // (the app would normally kick it off in `TantivyShadowSync.start()`).
@@ -68,7 +68,7 @@ struct CLITantivyLegResolverTests {
     @Test func resolvePageLegReturnsIndexedPagesInBestFirstOrder() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0002"
+        let wikiID = WikiID(rawValue: "01TEST0002")
         let store = try tempStore(in: container, wikiID: wikiID)
         // Seed a page whose body repeats "rust" (high BM25 signal) and another
         // with a single mention.
@@ -102,7 +102,7 @@ struct CLITantivyLegResolverTests {
         // even though the query is misspelled.
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0003"
+        let wikiID = WikiID(rawValue: "01TEST0003")
         let store = try tempStore(in: container, wikiID: wikiID)
         let page = try store.createPage(title: "Milton H. Erickson")
         try store.updatePage(id: page.id, title: "Milton H. Erickson",
@@ -124,7 +124,7 @@ struct CLITantivyLegResolverTests {
     @Test func resolveSourceLegReturnsIndexedSources() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0004"
+        let wikiID = WikiID(rawValue: "01TEST0004")
         let store = try tempStore(in: container, wikiID: wikiID)
         _ = try store.addSource(
             filename: "self-driving-cars.pdf", data: Data("%PDF".utf8))
@@ -149,7 +149,7 @@ struct CLITantivyLegResolverTests {
     @Test func resolveChatLegReturnsIndexedChats() async throws {
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0005"
+        let wikiID = WikiID(rawValue: "01TEST0005")
         let store = try tempStore(in: container, wikiID: wikiID)
         let chat = try store.createChat(kind: .edit, title: "Mars Colony")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
@@ -181,7 +181,7 @@ struct CLITantivyLegResolverTests {
         // makeService throws first).
         let (container, fm) = try makeTempContainer()
         defer { try? fm.removeItem(at: container) }
-        let wikiID = "01TEST0006"
+        let wikiID = WikiID(rawValue: "01TEST0006")
         let store = try tempStore(in: container, wikiID: wikiID)
 
         let leg = CLITantivyLegResolver.resolvePageLeg(

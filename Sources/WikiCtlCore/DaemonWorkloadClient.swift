@@ -191,10 +191,10 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     // MARK: - Status
 
     /// Whether the daemon has queued or running items for the given wiki.
-    public func hasActiveWork(for wikiID: String) async throws -> Bool {
+    public func hasActiveWork(for wikiID: WikiID) async throws -> Bool {
         try await withTimeout {
             await withCheckedContinuation { cont in
-                self.proxy.hasActiveWork(wikiID: wikiID) { result in
+                self.proxy.hasActiveWork(wikiID: wikiID.rawValue) { result in
                     cont.resume(returning: result)
                 }
             }

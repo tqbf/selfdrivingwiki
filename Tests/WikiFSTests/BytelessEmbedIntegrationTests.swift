@@ -223,7 +223,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func vimeoURLWritesSyntheticMarkdownFromFullMetadata() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         let outcome = try await model.addURL(
             "https://vimeo.com/76979871", fetcher: VimeoMetadataFetcher())
@@ -245,7 +245,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func spotifyURLWritesSyntheticMarkdownEvenWithPartialMetadata() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         // ExplodingFetcher serves title + author only (Spotify-shape: no
         // description / duration).
@@ -267,7 +267,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func remoteMediaWritesMinimalSyntheticMarkdownWhenNoOEmbed() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         // remote-media has no oEmbed endpoint → MediaTitleFetcher.oembedURL
         // returns nil → fetchMediaMetadata returns nil → synthesizer renders
@@ -289,7 +289,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func bytelessSyntheticMarkdownIsEmptyOEmbedFallback() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         // An empty oEmbed body ⇒ metadata = nil (best-effort) ⇒ minimal page.
         let outcome = try await model.addURL(
@@ -345,7 +345,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func youtubeURLWithTranscriptCreatesEmbedAndMarkdown() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         #if PODCAST_TRANSCRIPTS
         let outcome = try await model.addURL(
@@ -404,7 +404,7 @@ struct BytelessEmbedIntegrationTests {
 
     @Test func youtubeURLWithNoCaptionsFallsBackToSyntheticMarkdown() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         let emptyFetcher = YouTubeNoCaptionsFetcher()
         #if PODCAST_TRANSCRIPTS

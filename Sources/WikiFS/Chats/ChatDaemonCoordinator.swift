@@ -184,7 +184,7 @@ public final class ChatDaemonCoordinator {
     /// (there's no `chats` row to write it to before the chat exists).
     @discardableResult
     public func startChat(
-        wikiID: String, firstMessage: String,
+        wikiID: WikiID, firstMessage: String,
         providerId: String? = nil, modelId: String? = nil
     ) async throws -> PageID {
         try await client.startChat(ChatStartRequest(
@@ -192,7 +192,7 @@ public final class ChatDaemonCoordinator {
     }
 
     /// Continue a persisted chat with a new user turn.
-    public func continueChat(wikiID: String, chatID: PageID, message: String) async throws {
+    public func continueChat(wikiID: WikiID, chatID: PageID, message: String) async throws {
         try await client.continueChat(ChatContinueRequest(wikiID: wikiID, chatID: chatID, message: message))
     }
 

@@ -355,7 +355,8 @@ public final class QueueStore: @unchecked Sendable {
     private static func readItem(from row: Row) throws -> QueueItem {
         let id: String = row["id"]
         let queueRaw: String = row["queue"]
-        let wikiID: String = row["wiki_id"]
+        // SQL/Row boundary: the column is a raw TEXT String — wrap as WikiID.
+        let wikiID = WikiID(rawValue: (row["wiki_id"] as String? ?? ""))
         let payloadText: String = row["payload"]
         let stateRaw: String = row["state"]
         let orderingKey: Int64 = row["ordering_key"]
@@ -426,7 +427,7 @@ public final class QueueStore: @unchecked Sendable {
                         (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, NULL, NULL);
                     """,
                     arguments: [
-                        id, request.queue.rawValue, request.wikiID, payloadJSON,
+                        id, request.queue.rawValue, request.wikiID.rawValue, payloadJSON,
                         QueueItemState.queued.rawValue, orderingKey, now,
                     ])
 

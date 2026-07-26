@@ -112,7 +112,7 @@ public struct QueueItem: Codable, Sendable, Identifiable {
 
     public let id: ID
     public let queue: QueueKind
-    public let wikiID: String
+    public let wikiID: WikiID
     public let payload: QueueItemPayload
     public var state: QueueItemState
     /// Monotonically increasing within a queue kind, spaced by 1000. Determines
@@ -132,7 +132,7 @@ public struct QueueItem: Codable, Sendable, Identifiable {
     public init(
         id: ID,
         queue: QueueKind,
-        wikiID: String,
+        wikiID: WikiID,
         payload: QueueItemPayload,
         state: QueueItemState,
         orderingKey: Int64,
@@ -165,10 +165,10 @@ public struct QueueItem: Codable, Sendable, Identifiable {
 /// what to do and for which wiki.
 public struct QueueItemRequest: Codable, Sendable {
     public var queue: QueueKind
-    public var wikiID: String
+    public var wikiID: WikiID
     public var payload: QueueItemPayload
 
-    public init(queue: QueueKind, wikiID: String, payload: QueueItemPayload) {
+    public init(queue: QueueKind, wikiID: WikiID, payload: QueueItemPayload) {
         self.queue = queue
         self.wikiID = wikiID
         self.payload = payload

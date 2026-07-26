@@ -74,7 +74,7 @@ import WikiFSCore
         await launcher.startInteractiveQuery(
             firstMessage: "hello",
             stateMarkdown: "",
-            wikiID: "wiki-test",
+            wikiID: WikiID(rawValue: "wiki-test"),
             wikiRoot: "/tmp/wiki-test",
             systemPrompt: "",
             wikictlDirectory: "/tmp/wiki-test",

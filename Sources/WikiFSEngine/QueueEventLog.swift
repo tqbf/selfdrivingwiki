@@ -50,7 +50,7 @@ struct QueueLogRecord: Codable, Sendable {
     let queue: String?
 
     /// The wiki this item belongs to. `nil` for `runStateChanged`.
-    let wikiID: String?
+    let wikiID: WikiID?
 
     /// The provider that claimed the item. `nil` until `markRunning`.
     let providerID: ProviderID?

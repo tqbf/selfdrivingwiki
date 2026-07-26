@@ -155,7 +155,7 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: tempDirectory())
         registry.bootstrap()
         let id = try #require(registry.activeWikiID)
-        var renamedDomain: (id: String, displayName: String)?
+        var renamedDomain: (id: WikiID, displayName: String)?
         registry.renameDomain = { id, displayName in
             renamedDomain = (id, displayName)
         }

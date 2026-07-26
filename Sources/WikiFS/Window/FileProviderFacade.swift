@@ -29,7 +29,7 @@ final class FileProviderFacade: ChangeSignaler {
 
     /// The wiki whose mount `path` currently reflects, so `signalChange` and the
     /// path popover target the right domain.
-    private var activeWikiID: String?
+    private var activeWikiID: WikiID?
     private var activeDisplayName: String?
 
     /// The daemon's domain-lifecycle calls (add / remove / list), injected so the
@@ -54,7 +54,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// `bus.unsubscribe(token)` — the bus instance owns its subscriber list)
     /// and the subscription token. Unsubscribed in `unsubscribeBus(for:)`
     /// when a session is released (window close / in-window switch).
-    private var activeBusSubscriptions: [String: (bus: WikiEventBus, token: SubscriptionToken)] = [:]
+    private var activeBusSubscriptions: [WikiID: (bus: WikiEventBus, token: SubscriptionToken)] = [:]
     /// Collapses a burst of store events into a single FP signal per wiki.
     private var signalCoalescer: ChangeCoalescer?
 
@@ -81,17 +81,17 @@ final class FileProviderFacade: ChangeSignaler {
     /// version is stale, tears down every registered domain so the daemon
     /// picks up the new container layout on re-registration.  Idempotent
     /// (subsequent calls are a no-op after the version is recorded).
-    func migrateDomainsIfNeeded(wikiIDs: [String]) async {
+    func migrateDomainsIfNeeded(wikiIDs: [WikiID]) async {
         let stored = UserDefaults.standard.integer(forKey: Self.schemaVersionKey)
         guard stored != Self.currentSchemaVersion else { return }
 
         DebugLog.fileprovider("schema migration: \(stored) → \(Self.currentSchemaVersion) — removing \(wikiIDs.count) domain(s)")
         for id in wikiIDs {
             do {
-                try await domainService.remove(id: id, reason: .schemaMigration)
-                DebugLog.fileprovider("schema migration: removed domain \(id)")
+                try await domainService.remove(id: id.rawValue, reason: .schemaMigration)
+                DebugLog.fileprovider("schema migration: removed domain \(id.rawValue)")
             } catch {
-                DebugLog.fileprovider("schema migration: remove domain \(id) failed: \(error.localizedDescription)")
+                DebugLog.fileprovider("schema migration: remove domain \(id.rawValue) failed: \(error.localizedDescription)")
             }
         }
         UserDefaults.standard.set(Self.currentSchemaVersion, forKey: Self.schemaVersionKey)
@@ -105,9 +105,9 @@ final class FileProviderFacade: ChangeSignaler {
 
     /// Build the File Provider domain for a wiki. Identifier is the ULID (stable
     /// across rename); displayName drives the `Self Driving Wiki-<name>` mount label.
-    private func domain(id: String, displayName: String) -> NSFileProviderDomain {
+    private func domain(id: WikiID, displayName: String) -> NSFileProviderDomain {
         NSFileProviderDomain(
-            identifier: NSFileProviderDomainIdentifier(rawValue: id),
+            identifier: NSFileProviderDomainIdentifier(rawValue: id.rawValue),
             displayName: displayName
         )
     }
@@ -141,17 +141,17 @@ final class FileProviderFacade: ChangeSignaler {
     /// `WIKIFS_REENUMERATE` one-shot remove+re-add hatch is preserved. The backoff
     /// is an async sleep — it never blocks the main actor.
     @discardableResult
-    func registerDomain(id: String, displayName: String) async -> Bool {
+    func registerDomain(id: WikiID, displayName: String) async -> Bool {
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
-            do { try await domainService.remove(id: id, reason: .reenumerateHatch) }
+            do { try await domainService.remove(id: id.rawValue, reason: .reenumerateHatch) }
             catch { DebugLog.fileprovider("registerDomain: re-enumerate remove failed: \(error)") }
         }
 
         // Schema migration: tear down the old domain so the daemon picks up
         // the new container layout (e.g. `files` → `sources` rename).
         if needsDomainMigration {
-            DebugLog.fileprovider("registerDomain: removing \(id) for schema migration")
-            do { try await domainService.remove(id: id, reason: .schemaMigration) }
+            DebugLog.fileprovider("registerDomain: removing \(id.rawValue) for schema migration")
+            do { try await domainService.remove(id: id.rawValue, reason: .schemaMigration) }
             catch { DebugLog.fileprovider("registerDomain: migration remove failed: \(error)") }
         }
 
@@ -161,7 +161,7 @@ final class FileProviderFacade: ChangeSignaler {
             // racing add that won) must not error out the whole flow.
             if !(await isDomainRegistered(id: id)) {
                 do {
-                    try await domainService.add(id: id, displayName: displayName)
+                    try await domainService.add(id: id.rawValue, displayName: displayName)
                 } catch {
                     // Distinguish benign already-exists (the verify below confirms
                     // presence) from a real failure we must not bury: log it AND
@@ -188,7 +188,7 @@ final class FileProviderFacade: ChangeSignaler {
 
             case .failed:
                 DebugLog.fileprovider("""
-                    FileProviderFacade.registerDomain(\(displayName)): domain \(id) \
+                    FileProviderFacade.registerDomain(\(displayName)): domain \(id.rawValue) \
                     still absent after \(attemptsMade) attempts — daemon may be wedged.
                     """)
                 status = "Register \(displayName) failed: domain did not appear after \(attemptsMade) tries."
@@ -202,17 +202,17 @@ final class FileProviderFacade: ChangeSignaler {
     /// `domains()` result to raw identifiers and defers the membership test to the
     /// pure policy helper. A failed `domains()` call reads as "not present" so the
     /// retry loop keeps trying.
-    private func isDomainRegistered(id: String) async -> Bool {
+    private func isDomainRegistered(id: WikiID) async -> Bool {
         let domainIDs = await domainService.domains().map(\.id)
-        return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
+        return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id.rawValue)
     }
 
     /// Nudge the freshly-registered domain's root + working-set enumerator so the
     /// daemon materializes the root promptly after create. Reuses the same
     /// `signalEnumerator` path `signalChange` uses, scoped to THIS domain.
     /// Best-effort.
-    private func nudgeInitialEnumeration(forWikiID id: String) async {
-        let domain = domain(id: id, displayName: id)
+    private func nudgeInitialEnumeration(forWikiID id: WikiID) async {
+        let domain = domain(id: id, displayName: id.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return }
         for container in [NSFileProviderItemIdentifier.rootContainer, .workingSet] {
             await signalEnumerator(manager: manager, container: container, timeout: .seconds(3))
@@ -221,9 +221,9 @@ final class FileProviderFacade: ChangeSignaler {
 
     /// Remove ONE wiki's domain (on delete). Clears the cached active path if it
     /// belonged to that wiki.
-    func removeDomain(id: String) async {
+    func removeDomain(id: WikiID) async {
         do {
-            try await domainService.remove(id: id, reason: .wikiDeleted)
+            try await domainService.remove(id: id.rawValue, reason: .wikiDeleted)
             if activeWikiID == id {
                 activeWikiID = nil
                 path = nil
@@ -253,20 +253,20 @@ final class FileProviderFacade: ChangeSignaler {
     /// add-if-absent guard would short-circuit on the already-present domain and
     /// never apply the new name. No `activate` either: the identifier is stable
     /// and the domain never leaves the daemon, so the mount path is unchanged.
-    func renameDomain(id: String, displayName: String) async {
+    func renameDomain(id: WikiID, displayName: String) async {
         // Log whether the domain was already present: a present domain means this
         // `add` is the documented in-place display-name update, an absent one means
         // we're registering from scratch (and could hit NSFileWriteFileExistsError
         // against a leftover replica). Those fail very differently — worth one
         // `domains()` call on an operation the user triggers by hand.
-        let previousName = await domainService.displayName(for: id)
+        let previousName = await domainService.displayName(for: id.rawValue)
         DebugLog.fileprovider("""
-            FileProviderFacade.renameDomain(\(id) → \(displayName)): \
+            FileProviderFacade.renameDomain(\(id.rawValue) → \(displayName)): \
             in-place add; wasRegistered=\(previousName != nil), \
             daemonName=\(previousName ?? "<absent>"), isActive=\(activeWikiID == id)
             """)
         do {
-            try await domainService.add(id: id, displayName: displayName)
+            try await domainService.add(id: id.rawValue, displayName: displayName)
             if activeWikiID == id { activeDisplayName = displayName }
             status = "Renamed \(displayName)"
 
@@ -276,24 +276,24 @@ final class FileProviderFacade: ChangeSignaler {
             // whole fix rests on documented-but-unobservable behaviour, confirm it
             // against what the daemon now reports. Diagnostic only — the operation
             // has already succeeded as far as the user is concerned.
-            let observed = await domainService.displayName(for: id)
+            let observed = await domainService.displayName(for: id.rawValue)
             if observed != displayName {
                 DebugLog.fileprovider("""
-                    FileProviderFacade.renameDomain(\(id)): MISMATCH — add succeeded but \
+                    FileProviderFacade.renameDomain(\(id.rawValue)): MISMATCH — add succeeded but \
                     daemon reports \(observed ?? "<absent>"), expected \(displayName)
                     """)
             } else {
-                DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id)): display name now \(displayName)")
+                DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id.rawValue)): display name now \(displayName)")
             }
         } catch {
-            DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id) → \(displayName)): add failed: \(error)")
+            DebugLog.fileprovider("FileProviderFacade.renameDomain(\(id.rawValue) → \(displayName)): add failed: \(error)")
             status = "Rename \(displayName) failed: \(error.localizedDescription)"
         }
     }
 
     /// Make `id` the active wiki for path/signal purposes and resolve its mount
     /// path. Called when the user switches wikis.
-    func activate(id: String, displayName: String) async {
+    func activate(id: WikiID, displayName: String) async {
         activeWikiID = id
         activeDisplayName = displayName
         await resolvePath(id: id, displayName: displayName)
@@ -306,7 +306,7 @@ final class FileProviderFacade: ChangeSignaler {
         await resolvePath(id: id, displayName: name)
     }
 
-    func resolvePath(id: String, displayName: String) async {
+    func resolvePath(id: WikiID, displayName: String) async {
         path = nil
         isResolvingPath = true
         defer { isResolvingPath = false }
@@ -374,16 +374,16 @@ final class FileProviderFacade: ChangeSignaler {
     /// drift), then hands it to `NSWorkspace`. URL asked at click time. Pass
     /// `appURL` to launch a specific app instead of the default handler.
     func openSource(id: PageID, with appURL: URL? = nil) async {
-        DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID ?? "nil") app=\(appURL?.lastPathComponent ?? "default")")
+        DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID?.rawValue ?? "nil") app=\(appURL?.lastPathComponent ?? "default")")
         status = ""   // clear any stale error from a prior attempt
         guard let wikiID = activeWikiID else {
             DebugLog.agent("openSource: ABORT — no active wiki")
             status = "Can’t open file — no active wiki."
             return
         }
-        let domain = domain(id: wikiID, displayName: wikiID)
+        let domain = domain(id: wikiID, displayName: wikiID.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else {
-            DebugLog.agent("openSource: ABORT — no NSFileProviderManager for domain \(wikiID)")
+            DebugLog.agent("openSource: ABORT — no NSFileProviderManager for domain \(wikiID.rawValue)")
             status = "No manager for domain"
             return
         }
@@ -401,7 +401,7 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    func revealPageInFinder(id: PageID, wikiID: String? = nil) async {
+    func revealPageInFinder(id: PageID, wikiID: WikiID? = nil) async {
         guard let url = await resolvePageByTitleURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -409,7 +409,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// Reveal a chat transcript file in Finder via its `chat-by-name` leaf
     /// identifier. Mirrors `revealPageInFinder`. Best-effort: silently no-ops if
     /// the domain isn't active or the daemon can't resolve the item.
-    func revealChatInFinder(id: PageID, wikiID: String? = nil) async {
+    func revealChatInFinder(id: PageID, wikiID: WikiID? = nil) async {
         guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -428,9 +428,9 @@ final class FileProviderFacade: ChangeSignaler {
     /// Finder" buttons routing to the wrong wiki's extension → "file doesn't
     /// exist"). Detail views pass `session.wikiID`; legacy call sites without
     /// session context leave the default (`activeWikiID`).
-    func openPage(id: PageID, with appURL: URL? = nil, wikiID: String? = nil) async {
+    func openPage(id: PageID, with appURL: URL? = nil, wikiID: WikiID? = nil) async {
         guard let url = await resolvePageByTitleURL(id: id, wikiID: wikiID) else {
-            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID ?? "nil(active=\(activeWikiID ?? "nil"))")")
+            DebugLog.agent("openPage: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID?.rawValue ?? "nil(active=\(activeWikiID?.rawValue ?? "nil"))")")
             status = "Couldn’t resolve page for open."
             return
         }
@@ -443,9 +443,9 @@ final class FileProviderFacade: ChangeSignaler {
     /// (the same resolution `revealChatInFinder` uses) and hands it to
     /// `NSWorkspace`. Pass `appURL` to launch a specific app instead of the
     /// default handler. Mirrors `openPage`.
-    func openChat(id: PageID, with appURL: URL? = nil, wikiID: String? = nil) async {
+    func openChat(id: PageID, with appURL: URL? = nil, wikiID: WikiID? = nil) async {
         guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else {
-            DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID ?? "nil(active=\(activeWikiID ?? "nil"))")")
+            DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID?.rawValue ?? "nil(active=\(activeWikiID?.rawValue ?? "nil"))")")
             status = "Couldn’t resolve chat for open."
             return
         }
@@ -477,7 +477,7 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    func revealSourceInFinder(id: PageID, wikiID: String? = nil) async {
+    func revealSourceInFinder(id: PageID, wikiID: WikiID? = nil) async {
         guard let url = await resolveSourceByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -497,13 +497,13 @@ final class FileProviderFacade: ChangeSignaler {
     /// FP extension (issue #672). The returned "file doesn't exist" error from
     /// `getUserVisibleURL` is the symptom of routing to the wrong domain — the
     /// extension reads the wrong wiki's DB and naturally doesn't find the item.
-    func resolveSourceByNameURL(id: PageID, wikiID: String? = nil) async -> URL? {
+    func resolveSourceByNameURL(id: PageID, wikiID: WikiID? = nil) async -> URL? {
         let resolvedWikiID = wikiID ?? activeWikiID
         guard let wiki = resolvedWikiID else {
             DebugLog.fileprovider("resolveSourceByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
             return nil
         }
-        let domain = domain(id: wiki, displayName: wiki)
+        let domain = domain(id: wiki, displayName: wiki.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.sourceByName(id.rawValue))
         do {
@@ -511,10 +511,10 @@ final class FileProviderFacade: ChangeSignaler {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
+            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki.rawValue)")
             return url
         } catch {
-            DebugLog.fileprovider("resolveSourceByNameURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolveSourceByNameURL: failed wikiID=\(wiki.rawValue) explicitWikiIDArg=\(wikiID?.rawValue ?? "nil") activeWikiID=\(activeWikiID?.rawValue ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }
@@ -525,13 +525,13 @@ final class FileProviderFacade: ChangeSignaler {
     /// to resolve.  Returns `nil` if the domain isn't active.
     ///
     /// See `resolveSourceByNameURL` for the `wikiID` parameter's role (issue #672).
-    func resolvePageByTitleURL(id: PageID, wikiID: String? = nil) async -> URL? {
+    func resolvePageByTitleURL(id: PageID, wikiID: WikiID? = nil) async -> URL? {
         let resolvedWikiID = wikiID ?? activeWikiID
         guard let wiki = resolvedWikiID else {
             DebugLog.fileprovider("resolvePageByTitleURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
             return nil
         }
-        let domain = domain(id: wiki, displayName: wiki)
+        let domain = domain(id: wiki, displayName: wiki.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier("page-by-title:\(id.rawValue)")
         do {
@@ -539,10 +539,10 @@ final class FileProviderFacade: ChangeSignaler {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.fileprovider("resolvePageByTitleURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
+            DebugLog.fileprovider("resolvePageByTitleURL: resolved \(url.lastPathComponent) wikiID=\(wiki.rawValue)")
             return url
         } catch {
-            DebugLog.fileprovider("resolvePageByTitleURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolvePageByTitleURL: failed wikiID=\(wiki.rawValue) explicitWikiIDArg=\(wikiID?.rawValue ?? "nil") activeWikiID=\(activeWikiID?.rawValue ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }
@@ -554,13 +554,13 @@ final class FileProviderFacade: ChangeSignaler {
     /// daemon can't resolve the item.
     ///
     /// See `resolveSourceByNameURL` for the `wikiID` parameter's role (issue #672).
-    func resolveChatByNameURL(id: PageID, wikiID: String? = nil) async -> URL? {
+    func resolveChatByNameURL(id: PageID, wikiID: WikiID? = nil) async -> URL? {
         let resolvedWikiID = wikiID ?? activeWikiID
         guard let wiki = resolvedWikiID else {
             DebugLog.fileprovider("resolveChatByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")
             return nil
         }
-        let domain = domain(id: wiki, displayName: wiki)
+        let domain = domain(id: wiki, displayName: wiki.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
         let identifier = NSFileProviderItemIdentifier(WikiFSContainerID.chatByName(id.rawValue))
         do {
@@ -568,10 +568,10 @@ final class FileProviderFacade: ChangeSignaler {
                 manager: manager,
                 itemIdentifier: identifier,
                 timeout: .seconds(5))
-            DebugLog.fileprovider("resolveChatByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki)")
+            DebugLog.fileprovider("resolveChatByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki.rawValue)")
             return url
         } catch {
-            DebugLog.fileprovider("resolveChatByNameURL: failed wikiID=\(wiki) explicitWikiIDArg=\(wikiID ?? "nil") activeWikiID=\(activeWikiID ?? "nil") — \(error.localizedDescription)")
+            DebugLog.fileprovider("resolveChatByNameURL: failed wikiID=\(wiki.rawValue) explicitWikiIDArg=\(wikiID?.rawValue ?? "nil") activeWikiID=\(activeWikiID?.rawValue ?? "nil") — \(error.localizedDescription)")
             return nil
         }
     }
@@ -589,8 +589,8 @@ final class FileProviderFacade: ChangeSignaler {
     /// can land in a wiki that is NOT the one on screen, and that wiki's mount
     /// must still refresh. Signals the same container set as the active-wiki
     /// path, scoped to the named wiki's domain. Best-effort.
-    func signalChange(forWikiID wikiID: String) async {
-        let domain = domain(id: wikiID, displayName: wikiID)
+    func signalChange(forWikiID wikiID: WikiID) async {
+        let domain = domain(id: wikiID, displayName: wikiID.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return }
         let containers: [NSFileProviderItemIdentifier] = [
             NSFileProviderItemIdentifier(WikiFSContainerID.pagesByTitle),
@@ -649,7 +649,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// needs its own subscription, stored in `activeBusSubscriptions`.
     /// Calling this for a wiki ID that already has a subscription drops the
     /// old one first (no leak).
-    func subscribeBus(for wikiID: String, bus: WikiEventBus?) {
+    func subscribeBus(for wikiID: WikiID, bus: WikiEventBus?) {
         ensureSignalCoalescer()
         // Drop any existing subscription for this wiki.
         unsubscribeBus(for: wikiID)
@@ -663,7 +663,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// Unsubscribe the FP signaler from a wiki's store bus. Called when a
     /// session is released (window close / in-window switch). Safe to call
     /// with a wiki ID that has no subscription (no-op).
-    func unsubscribeBus(for wikiID: String) {
+    func unsubscribeBus(for wikiID: WikiID) {
         if let entry = activeBusSubscriptions.removeValue(forKey: wikiID) {
             entry.bus.unsubscribe(entry.token)
         }

@@ -46,7 +46,7 @@ struct QueueEngineClientConformanceTests {
         // enqueue
         let request = QueueItemRequest(
             queue: .extraction,
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             payload: QueueItemPayload(sourceIDs: [])
         )
         let itemID = try await client.enqueue(request)
@@ -76,7 +76,7 @@ struct QueueEngineClientConformanceTests {
         #expect(snapshot.activeItems.count == 1)
 
         // hasActiveWork — true because the item is queued for "test-wiki".
-        let hasWork = await client.hasActiveWork(for: "test-wiki")
+        let hasWork = await client.hasActiveWork(for: WikiID(rawValue: "test-wiki"))
         #expect(hasWork)
 
         // Cancel the item so waitForCompletion returns immediately (otherwise

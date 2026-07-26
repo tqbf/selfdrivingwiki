@@ -174,19 +174,19 @@ struct ChatDaemonCoordinatorTests {
         let stub = StubChatDaemonCommands()
         stub.nextStartChatID = PageID(rawValue: "01NEW")
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let id = try await coord.startChat(wikiID: "wiki-1", firstMessage: "hi")
+        let id = try await coord.startChat(wikiID: WikiID(rawValue: "wiki-1"), firstMessage: "hi")
         #expect(id == PageID(rawValue: "01NEW"))
         let req = try #require(stub.startChatCalls.first)
-        #expect(req.wikiID == "wiki-1")
+        #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
         #expect(req.firstMessage == "hi")
     }
 
     @Test func continueChat_forwardsTypedRequest() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        try await coord.continueChat(wikiID: "wiki-1", chatID: PageID(rawValue: "chat-1"), message: "more")
+        try await coord.continueChat(wikiID: WikiID(rawValue: "wiki-1"), chatID: PageID(rawValue: "chat-1"), message: "more")
         let req = try #require(stub.continueChatCalls.first)
-        #expect(req.wikiID == "wiki-1")
+        #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
         #expect(req.chatID == PageID(rawValue: "chat-1"))
         #expect(req.message == "more")
     }

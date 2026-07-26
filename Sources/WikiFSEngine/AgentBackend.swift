@@ -106,7 +106,7 @@ public struct CLIProfile: Sendable {
     /// The wiki's live File Provider mount path (used for the task-prompt path (not exported as an env var by default, #441)).
     public var wikiRoot: String
     /// The active wiki's ULID (exported as `WIKI_DB`).
-    public var wikiID: String
+    public var wikiID: WikiID
     /// The directory holding the embedded `wikictl` binary (prepended to PATH).
     public var wikictlDirectory: String
     /// Raw stdout chunk callback (fires on the pipe's background queue). The
@@ -121,7 +121,7 @@ public struct CLIProfile: Sendable {
     public init(
         operation: WikiOperation,
         wikiRoot: String,
-        wikiID: String,
+        wikiID: WikiID,
         wikictlDirectory: String,
         onStdoutChunk: (@Sendable (String) -> Void)? = nil,
         onStderrChunk: (@Sendable (String) -> Void)? = nil

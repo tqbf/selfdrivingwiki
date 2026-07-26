@@ -17,7 +17,7 @@ struct UnavailableQueueEngineTests {
         let engine = UnavailableQueueEngine(reason: reason)
         let request = QueueItemRequest(
             queue: .extraction,
-            wikiID: "wiki",
+            wikiID: WikiID(rawValue: "wiki"),
             payload: QueueItemPayload(sourceIDs: [])
         )
         await #expect(throws: UnavailableQueueEngine.Error.self) {
@@ -52,7 +52,7 @@ struct UnavailableQueueEngineTests {
 
     @Test func hasActiveWorkIsFalse() async {
         let engine = UnavailableQueueEngine(reason: reason)
-        let hasWork = await engine.hasActiveWork(for: "wiki")
+        let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki"))
         #expect(hasWork == false)
     }
 

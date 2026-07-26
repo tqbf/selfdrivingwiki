@@ -23,7 +23,7 @@ final class WikiDaemon: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
     private var registry: WikiRegistry
-    private var openStores: [String: GRDBWikiStore] = [:]
+    private var openStores: [WikiID: GRDBWikiStore] = [:]
 
     /// The per-connection event-sink proxies the daemon pushes live workload
     /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
@@ -220,15 +220,16 @@ final class WikiDaemon: @unchecked Sendable {
 
     func deleteWiki(id: String) -> Bool {
         queue.sync { () -> Bool in
+            let wikiID = WikiID(rawValue: id)
             // Close the held store if open
-            openStores.removeValue(forKey: id)
+            openStores.removeValue(forKey: wikiID)
 
             // Remove from registry
-            registry.remove(id: id)
+            registry.remove(id: wikiID)
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
 
             // Delete DB files (main + WAL sidecars)
-            let dbURL = databaseURL(forWikiID: id)
+            let dbURL = databaseURL(forWikiID: wikiID)
             let fm = FileManager.default
             for suffix in ["", "-wal", "-shm"] {
                 let path = dbURL.path + suffix
@@ -242,8 +243,9 @@ final class WikiDaemon: @unchecked Sendable {
         queue.sync { () -> Bool in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return false }
-            guard registry.descriptor(id: id) != nil else { return false }
-            registry.rename(id: id, to: trimmed)
+            let wikiID = WikiID(rawValue: id)
+            guard registry.descriptor(id: wikiID) != nil else { return false }
+            registry.rename(id: wikiID, to: trimmed)
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
             return true
         }
@@ -252,7 +254,7 @@ final class WikiDaemon: @unchecked Sendable {
     func resolveWiki(selector: String) -> Data? {
         queue.sync {
             // Mirrors WikiResolver.descriptor(forSelector:): ULID first, then displayName
-            let descriptor = registry.descriptor(id: selector)
+            let descriptor = registry.descriptor(id: WikiID(rawValue: selector))
                 ?? registry.wikis.first { $0.displayName == selector }
             return descriptor.flatMap { desc in DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(desc) }) }
         }
@@ -260,7 +262,7 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Store lifecycle
 
-    func openStore(wikiID: String) -> Bool {
+    func openStore(wikiID: WikiID) -> Bool {
         queue.sync { () -> Bool in
             // Already open — no-op
             if openStores[wikiID] != nil { return true }
@@ -274,13 +276,13 @@ final class WikiDaemon: @unchecked Sendable {
                 cacheStore(store, wikiID: wikiID)
                 return true
             } catch {
-                DebugLog.store("wikid: openStore failed for \(wikiID): \(error)")
+                DebugLog.store("wikid: openStore failed for \(wikiID.rawValue): \(error)")
                 return false
             }
         }
     }
 
-    func closeStore(wikiID: String) {
+    func closeStore(wikiID: WikiID) {
         queue.sync {
             // Best-effort: remove from the held-open dict. The store is deinit'd by ARC.
             // If another client had a session, it will re-open on next use.
@@ -297,7 +299,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// open) and cache it. Returns `nil` for an unregistered wikiID or if the
     /// open throws. Same lazy-open pattern as `openStore(wikiID:)`, but returns
     /// the store instead of a `Bool` (#867).
-    func resolveStoreLazily(wikiID: String) -> GRDBWikiStore? {
+    func resolveStoreLazily(wikiID: WikiID) -> GRDBWikiStore? {
         queue.sync { () -> GRDBWikiStore? in
             if let store = openStores[wikiID] {
                 return store
@@ -308,10 +310,10 @@ final class WikiDaemon: @unchecked Sendable {
                 let store = try GRDBWikiStore(databaseURL: dbURL)
                 wireEventBus(on: store, wikiID: wikiID)
                 cacheStore(store, wikiID: wikiID)
-                DebugLog.store("wikid: store lazily opened for \(wikiID)")
+                DebugLog.store("wikid: store lazily opened for \(wikiID.rawValue)")
                 return store
             } catch {
-                DebugLog.store("wikid: lazy openStore failed for \(wikiID): \(error)")
+                DebugLog.store("wikid: lazy openStore failed for \(wikiID.rawValue): \(error)")
                 return nil
             }
         }
@@ -326,7 +328,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// Contrast with `""`, which means the wikiID is unknown (not registered).
     static let errorTokenSentinel = "<<changeToken-read-error>>"
 
-    func changeToken(wikiID: String) -> String {
+    func changeToken(wikiID: WikiID) -> String {
         queue.sync { () -> String in
             // If the store is open, read the token directly.
             // Never swallow a thrown error as `""` (which would be reported to
@@ -335,7 +337,7 @@ final class WikiDaemon: @unchecked Sendable {
                 do {
                     return try store.changeToken().rawString
                 } catch {
-                    DebugLog.store("wikid: changeToken() failed for \(wikiID) (open store): \(error)")
+                    DebugLog.store("wikid: changeToken() failed for \(wikiID.rawValue) (open store): \(error)")
                     return Self.errorTokenSentinel
                 }
             }
@@ -348,13 +350,13 @@ final class WikiDaemon: @unchecked Sendable {
             do {
                 store = try GRDBWikiStore(databaseURL: dbURL)
             } catch {
-                DebugLog.store("wikid: changeToken() failed to open transient store for \(wikiID): \(error)")
+                DebugLog.store("wikid: changeToken() failed to open transient store for \(wikiID.rawValue): \(error)")
                 return Self.errorTokenSentinel
             }
             do {
                 return try store.changeToken().rawString
             } catch {
-                DebugLog.store("wikid: changeToken() failed for \(wikiID) (transient store): \(error)")
+                DebugLog.store("wikid: changeToken() failed for \(wikiID.rawValue) (transient store): \(error)")
                 return Self.errorTokenSentinel
             }
         }
@@ -362,8 +364,8 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Internal
 
-    private func databaseURL(forWikiID id: String) -> URL {
-        containerDirectory.appendingPathComponent("\(id).sqlite", isDirectory: false)
+    private func databaseURL(forWikiID id: WikiID) -> URL {
+        containerDirectory.appendingPathComponent("\(id.rawValue).sqlite", isDirectory: false)
     }
 
     /// Attach a per-wiki `WikiEventBus` to `store` whose all-events listener
@@ -387,11 +389,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// daemon, however, treats a busless store as a programming error: the
     /// trailing `assert` is the **mandatory-bus invariant** — it fires in debug
     /// builds if wiring was skipped or the assignment didn't stick.
-    private func wireEventBus(on store: GRDBWikiStore, wikiID: String) {
+    private func wireEventBus(on store: GRDBWikiStore, wikiID: WikiID) {
         if store.eventBus == nil {
             let bus = WikiEventBus(wikiID: wikiID)
             bus.subscribe(nil) { event in
-                DarwinNotifier.postChange(forWikiID: event.wikiID)
+                DarwinNotifier.postChange(forWikiID: event.wikiID.rawValue)
             }
             store.eventBus = bus
         }
@@ -407,7 +409,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// tries to cache the store. Removals (`closeStore`/`deleteWiki`) bypass
     /// this. Do NOT assign `openStores[...] = ...` directly elsewhere.
     @discardableResult
-    private func cacheStore(_ store: GRDBWikiStore, wikiID: String) -> GRDBWikiStore {
+    private func cacheStore(_ store: GRDBWikiStore, wikiID: WikiID) -> GRDBWikiStore {
         assert(
             store.eventBus != nil,
             "Daemon store must have a WikiEventBus attached — DarwinNotifier will never fire without it")
@@ -474,7 +476,7 @@ final class WikiDaemon: @unchecked Sendable {
                 localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         }
 
-        let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
+        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
         }
 
@@ -583,7 +585,7 @@ final class WikiDaemon: @unchecked Sendable {
                 localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         }
 
-        let storeResolver: @Sendable (String) -> GRDBWikiStore? = { [weak self] wikiID in
+        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
         }
 

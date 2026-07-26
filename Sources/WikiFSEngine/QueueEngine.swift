@@ -43,7 +43,7 @@ public actor QueueEngine {
 
     /// Wikis with an active (`.running`) ingestion item. Enforces the
     /// per-wiki invariant: at most one ingestion per wiki at a time.
-    private var activeIngestionWikis: Set<String> = []
+    private var activeIngestionWikis: Set<WikiID> = []
 
     /// Bonne: the `Task` for each running item, so `halt` can cancel them.
     private var runningTasks: [QueueItem.ID: Task<Void, Never>] = [:]
@@ -144,7 +144,7 @@ public actor QueueEngine {
     public func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
         // Synchronous shape validation (AC4.2): reject empty wikiID before the
         // store write so doomed items never enter the queue.
-        guard !request.wikiID.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !request.wikiID.rawValue.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw QueueStoreError.invalidRequest("wikiID must not be empty")
         }
         let item = try store.enqueue(request)
@@ -357,7 +357,7 @@ public actor QueueEngine {
     /// Whether the engine has any queued or running items for the given wiki.
     /// Used by `RootScene.onDisappear` to decide whether to retain a session
     /// (if work is pending) or release it.
-    public func hasActiveWork(for wikiID: String) -> Bool {
+    public func hasActiveWork(for wikiID: WikiID) -> Bool {
         let active: [QueueItem]
         do {
             active = try store.loadActive()

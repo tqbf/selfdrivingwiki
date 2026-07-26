@@ -33,14 +33,14 @@ public final class ChangeCoalescer {
     private let schedule: (_ work: @escaping () -> Void) -> Handle
 
     /// Invoked once per coalesced burst, with the wiki id that changed.
-    private let flush: (_ wikiID: String) -> Void
+    private let flush: (_ wikiID: WikiID) -> Void
 
     /// Pending flush handles, keyed by wiki id — at most one per wiki in flight.
-    private var pending: [String: Handle] = [:]
+    private var pending: [WikiID: Handle] = [:]
 
     public init(
         schedule: @escaping (_ work: @escaping () -> Void) -> Handle,
-        flush: @escaping (_ wikiID: String) -> Void
+        flush: @escaping (_ wikiID: WikiID) -> Void
     ) {
         self.schedule = schedule
         self.flush = flush
@@ -51,7 +51,7 @@ public final class ChangeCoalescer {
     /// window goes quiet. Other wikis' pending flushes are untouched (the
     /// coalescing is strictly per wiki, so one wiki's burst can't delay another's
     /// refresh).
-    public func noteChange(forWikiID wikiID: String) {
+    public func noteChange(forWikiID wikiID: WikiID) {
         pending[wikiID]?.cancel()
         pending[wikiID] = schedule { [weak self] in
             guard let self else { return }

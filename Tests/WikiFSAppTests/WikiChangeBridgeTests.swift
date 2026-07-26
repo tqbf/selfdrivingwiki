@@ -31,7 +31,7 @@ struct WikiChangeBridgeTests {
 
     /// Helper: create a session for a wiki + return it.
     private func makeSession(
-        wikiID: String, descriptor: WikiDescriptor, dir: URL
+        wikiID: WikiID, descriptor: WikiDescriptor, dir: URL
     ) throws -> WikiSession {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
@@ -95,7 +95,7 @@ struct WikiChangeBridgeTests {
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
-        var pokedSessions: [String] = []
+        var pokedSessions: [WikiID] = []
         bridge.sessionLookup = { wikiID in
             if wikiID == descriptor.id {
                 pokedSessions = [session1.wikiID, session2.wikiID]
@@ -122,7 +122,7 @@ struct WikiChangeBridgeTests {
 
         // Create a second wiki.
         let descriptorB = WikiDescriptor.make(displayName: "Wiki B")
-        let urlB = dir.appendingPathComponent("\(descriptorB.id).sqlite", isDirectory: false)
+        let urlB = dir.appendingPathComponent("\(descriptorB.id.rawValue).sqlite", isDirectory: false)
         _ = try? GRDBWikiStore(databaseURL: urlB)
 
         let sessionA = try makeSession(wikiID: descriptorA.id, descriptor: descriptorA, dir: dir)
@@ -130,7 +130,7 @@ struct WikiChangeBridgeTests {
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
-        var pokedWikiIDs: [String] = []
+        var pokedWikiIDs: [WikiID] = []
         bridge.sessionLookup = { wikiID in
             let matching = [sessionA, sessionB].filter { $0.wikiID == wikiID }
             pokedWikiIDs = matching.map(\.wikiID)
@@ -166,7 +166,7 @@ struct WikiChangeBridgeTests {
 
         // Flush for a non-matching wiki id — the bridge should not crash and
         // should not poke the session's bus (wikiID mismatch).
-        let nonActiveID = "non-active-wiki-id"
+        let nonActiveID = WikiID(rawValue: "non-active-wiki-id")
         bridge.flush(wikiID: nonActiveID)
 
         // Give the async FP signal a tick to land.
@@ -193,10 +193,10 @@ private final class StubExtractor: MarkdownExtractor {
 /// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
-        wikiID: String, sourceID: PageID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? { nil }
     func persistExtraction(
-        wikiID: String, sourceID: PageID, markdown: String,
+        wikiID: WikiID, sourceID: PageID, markdown: String,
         backend: ExtractionBackend, modelVersion: String?,
         technique: String?
     ) async throws {}

@@ -80,7 +80,7 @@ struct TantivyShadowIndexTests {
 
         let source = InMemoryContentSource()
         let service = try TantivySearchService(
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             containerDirectory: indexDir,
             contentSource: source
         )
@@ -124,7 +124,7 @@ struct TantivyShadowIndexTests {
 
         let source = InMemoryContentSource()
         let service = try TantivySearchService(
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             containerDirectory: indexDir,
             contentSource: source
         )
@@ -152,7 +152,7 @@ struct TantivyShadowIndexTests {
         await source.upsert(makeSnapshot(ulid: "01CHAT0001", kind: .chat, title: "Existing Chat", body: "A conversation about search engines."))
 
         let service = try TantivySearchService(
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             containerDirectory: indexDir,
             contentSource: source
         )
@@ -179,7 +179,7 @@ struct TantivyShadowIndexTests {
 
         let source = InMemoryContentSource()
         let service = try TantivySearchService(
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             containerDirectory: indexDir,
             contentSource: source
         )

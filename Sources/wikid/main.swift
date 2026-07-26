@@ -95,16 +95,16 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func openStore(wikiID: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.openStore(wikiID: wikiID))
+        reply(daemon.openStore(wikiID: WikiID(rawValue: wikiID)))
     }
 
     func closeStore(wikiID: String, reply: @escaping () -> Void) {
-        daemon.closeStore(wikiID: wikiID)
+        daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
         reply()
     }
 
     func changeToken(wikiID: String, reply: @escaping (String) -> Void) {
-        reply(daemon.changeToken(wikiID: wikiID))
+        reply(daemon.changeToken(wikiID: WikiID(rawValue: wikiID)))
     }
 
     // MARK: - Workload: event sink registration (Phase 0)
@@ -238,7 +238,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let result = await engine.hasActiveWork(for: wikiID)
+                let result = await engine.hasActiveWork(for: WikiID(rawValue: wikiID))
                 sendableReply.reply(result)
             } else {
                 sendableReply.reply(false)
@@ -619,14 +619,14 @@ while let line = readLine() {
             result = nil
         }
     case "openStore":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         result = daemon.openStore(wikiID: wikiID)
     case "closeStore":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         daemon.closeStore(wikiID: wikiID)
         result = nil
     case "changeToken":
-        let wikiID = params["wikiID"] as? String ?? ""
+        let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         result = daemon.changeToken(wikiID: wikiID)
     case "queueSnapshot":
         // Phase 0 scaffold: returns an empty JSON snapshot (no WikiFSEngine

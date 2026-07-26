@@ -209,7 +209,7 @@ struct WikiDaemonWorkloadHostTests {
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: "test-wiki",
+            queue: .extraction, wikiID: WikiID(rawValue: "test-wiki"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
@@ -269,7 +269,7 @@ struct WikiDaemonWorkloadHostTests {
             let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: "reconnect-wiki",
+                queue: .extraction, wikiID: WikiID(rawValue: "reconnect-wiki"),
                 payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
             let requestData = try JSONEncoder().encode(request)
 
@@ -305,7 +305,7 @@ struct WikiDaemonWorkloadHostTests {
 
         let snapshot = try JSONDecoder().decode(QueueSnapshot.self, from: snapshotData)
         // The item enqueued via the first connection is still visible.
-        #expect(snapshot.activeItems.contains { $0.wikiID == "reconnect-wiki" })
+        #expect(snapshot.activeItems.contains { $0.wikiID == WikiID(rawValue: "reconnect-wiki") })
 
         listener.invalidate()
     }
@@ -333,7 +333,7 @@ struct WikiDaemonWorkloadHostTests {
 
         // Enqueue with a valid request.
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: "roundtrip-wiki",
+            queue: .extraction, wikiID: WikiID(rawValue: "roundtrip-wiki"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
@@ -350,7 +350,7 @@ struct WikiDaemonWorkloadHostTests {
 
         // Enqueue with empty wikiID — should return an error.
         let badRequest = QueueItemRequest(
-            queue: .extraction, wikiID: "",
+            queue: .extraction, wikiID: WikiID(rawValue: ""),
             payload: QueueItemPayload(sourceIDs: []))
         let badData = try JSONEncoder().encode(badRequest)
 
@@ -389,7 +389,7 @@ struct WikiDaemonWorkloadHostTests {
 
         // Enqueue an item, then mark it completed directly via the engine.
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: "wait-wiki",
+            queue: .extraction, wikiID: WikiID(rawValue: "wait-wiki"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 

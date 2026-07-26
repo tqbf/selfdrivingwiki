@@ -35,7 +35,7 @@ struct DaemonChatHostTests {
     @Test func chatStoreCreatesRowAndSeedsFirstMessage() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        #expect(daemon.openStore(wikiID: "test-wiki") || true)
+        #expect(daemon.openStore(wikiID: WikiID(rawValue: "test-wiki")) || true)
 
         // Create a wiki + open the store
         _ = daemon.createWiki(name: "Test")
@@ -229,7 +229,7 @@ struct DaemonChatHostTests {
 
         // Start a chat — will fail at preflight (no claude binary in tests)
         // but the XPC plumbing + error handling is what we're verifying.
-        let request = ChatStartRequest(wikiID: "test-wiki", firstMessage: "Hello")
+        let request = ChatStartRequest(wikiID: WikiID(rawValue: "test-wiki"), firstMessage: "Hello")
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -344,10 +344,10 @@ struct DaemonChatHostTests {
         defer { connection.invalidate() }
 
         // Verify the ChatStartRequest encodes/decodes correctly
-        let request = ChatStartRequest(wikiID: "wiki-123", firstMessage: "test message")
+        let request = ChatStartRequest(wikiID: WikiID(rawValue: "wiki-123"), firstMessage: "test message")
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(ChatStartRequest.self, from: data)
-        #expect(decoded.wikiID == "wiki-123")
+        #expect(decoded.wikiID == WikiID(rawValue: "wiki-123"))
         #expect(decoded.firstMessage == "test message")
     }
 

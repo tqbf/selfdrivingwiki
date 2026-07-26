@@ -22,7 +22,7 @@ struct WikiStoreModelAddURLTests {
 
     @Test func htmlURLLandsVerbatimWithoutMarkdownSidecar() async throws {
         let store = try tempStore()
-        store.eventBus = WikiEventBus(wikiID: "test")
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         let recorder = SignalRecorder()
         store.eventBus?.subscribe(nil) { recorder.append($0) }

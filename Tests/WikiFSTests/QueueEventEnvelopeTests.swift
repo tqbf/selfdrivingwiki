@@ -10,7 +10,7 @@ struct QueueEventEnvelopeTests {
 
     private func makeItem() -> QueueItem {
         QueueItem(
-            id: "01ABCDEF", queue: .extraction, wikiID: "wiki1",
+            id: "01ABCDEF", queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
     }

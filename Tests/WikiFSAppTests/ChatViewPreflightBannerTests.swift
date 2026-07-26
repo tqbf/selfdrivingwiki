@@ -143,7 +143,7 @@ import WikiFSCore
             firstMessage: "hello",
             launcher: launcher,
             store: model,
-            wikiID: "wiki-test",
+            wikiID: WikiID(rawValue: "wiki-test"),
             changeSignaler: StubChangeSignaler(),
             wikictlDirectory: "/tmp/wiki-test"
         )

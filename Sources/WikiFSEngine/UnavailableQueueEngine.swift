@@ -81,7 +81,7 @@ public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendabl
 
     public func snapshot() async -> QueueSnapshot { QueueSnapshot() }
 
-    public func hasActiveWork(for wikiID: String) async -> Bool { false }
+    public func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
 
     public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Swift.Error> {
         .failure(Error.unavailable(reason: reason))

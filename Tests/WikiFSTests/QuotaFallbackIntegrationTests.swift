@@ -93,7 +93,7 @@ struct QuotaFallbackIntegrationTests {
 
         await launcher.run(
             request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
-            wikiID: "test-wiki", wikiRoot: "/tmp", systemPrompt: "sys",
+            wikiID: WikiID(rawValue: "test-wiki"), wikiRoot: "/tmp", systemPrompt: "sys",
             wikictlDirectory: "/tmp", ingestingSourceIDs: [],
             onEvent: nil, onLock: {}, onUnlock: {}
         )
@@ -146,7 +146,7 @@ struct QuotaFallbackIntegrationTests {
 
         await launcher.run(
             request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
-            wikiID: "test-wiki", wikiRoot: "/tmp", systemPrompt: "sys",
+            wikiID: WikiID(rawValue: "test-wiki"), wikiRoot: "/tmp", systemPrompt: "sys",
             wikictlDirectory: "/tmp", ingestingSourceIDs: [],
             onEvent: nil, onLock: {}, onUnlock: {}
         )
@@ -195,7 +195,7 @@ struct QuotaFallbackIntegrationTests {
 
         await launcher.run(
             request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
-            wikiID: "test-wiki", wikiRoot: "/tmp", systemPrompt: "sys",
+            wikiID: WikiID(rawValue: "test-wiki"), wikiRoot: "/tmp", systemPrompt: "sys",
             wikictlDirectory: "/tmp", ingestingSourceIDs: [],
             onEvent: nil, onLock: {}, onUnlock: {}
         )
@@ -234,7 +234,7 @@ struct QuotaFallbackIntegrationTests {
 
         await launcher.run(
             request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
-            wikiID: "test-wiki", wikiRoot: "/tmp", systemPrompt: "sys",
+            wikiID: WikiID(rawValue: "test-wiki"), wikiRoot: "/tmp", systemPrompt: "sys",
             wikictlDirectory: "/tmp", ingestingSourceIDs: [],
             onEvent: nil, onLock: {}, onUnlock: {}
         )

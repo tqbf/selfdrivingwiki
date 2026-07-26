@@ -30,14 +30,14 @@ public enum ChangeKind: String, Sendable {
 /// model now subscribes to ALL events and reloads through the bus for both
 /// in-app writes and cross-process (`wikictl`) writes — one path, not two.
 public struct ResourceChangeEvent: Sendable, Equatable {
-    public let wikiID: String
+    public let wikiID: WikiID
     public let kind: ResourceKind?
     public let id: String
     public let change: ChangeKind
     public let seq: UInt64
 
     public init(
-        wikiID: String,
+        wikiID: WikiID,
         kind: ResourceKind?,
         id: String,
         change: ChangeKind,
@@ -85,7 +85,7 @@ public final class WikiEventBus: @unchecked Sendable {
     /// The wiki this bus belongs to. Stamped onto every emitted event so a
     /// subscriber does not need to carry the id separately. The store reads it
     /// when building events.
-    public let wikiID: String
+    public let wikiID: WikiID
 
     private typealias Handler = @MainActor @Sendable (ResourceChangeEvent) -> Void
 
@@ -98,7 +98,7 @@ public final class WikiEventBus: @unchecked Sendable {
     /// Guarded by `lock`.
     private var seqCounter: UInt64 = 0
 
-    public init(wikiID: String) {
+    public init(wikiID: WikiID) {
         self.wikiID = wikiID
     }
 

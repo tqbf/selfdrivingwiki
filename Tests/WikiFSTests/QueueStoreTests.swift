@@ -41,9 +41,9 @@ struct QueueStoreTests {
         let id3: QueueItem.ID
         do {
             let store = try QueueStore(databaseURL: url)
-            let req1 = QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload())
-            let req2 = QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: makePayload())
-            let req3 = QueueItemRequest(queue: .ingestion, wikiID: "wiki2", payload: makePayload())
+            let req1 = QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
+            let req2 = QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
+            let req3 = QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "wiki2"), payload: makePayload())
             id1 = try store.enqueue(req1).id
             id2 = try store.enqueue(req2).id
             id3 = try store.enqueue(req3).id
@@ -80,8 +80,8 @@ struct QueueStoreTests {
         #expect(item3?.queue == .ingestion)
 
         // Wiki ID preserved.
-        #expect(item1?.wikiID == "wiki1")
-        #expect(item3?.wikiID == "wiki2")
+        #expect(item1?.wikiID == WikiID(rawValue: "wiki1"))
+        #expect(item3?.wikiID == WikiID(rawValue: "wiki2"))
     }
 
     @Test func testStateTransitionsPersistAcrossReopen() throws {
@@ -91,7 +91,7 @@ struct QueueStoreTests {
         do {
             let store = try QueueStore(databaseURL: url)
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: "wiki1", payload: makePayload())
+                queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
             let item = try store.enqueue(request)
             itemID = item.id
 
@@ -145,7 +145,7 @@ struct QueueStoreTests {
         do {
             let store = try QueueStore(databaseURL: url)
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: "wiki1", payload: makePayload())
+                queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
             let item = try store.enqueue(request)
             itemID = item.id
             originalOrderingKey = item.orderingKey
@@ -189,7 +189,7 @@ struct QueueStoreTests {
         var completedIDs: [QueueItem.ID] = []
         for _ in 0..<250 {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: "wiki1", payload: makePayload())
+                queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
             let item = try store.enqueue(request)
             completedIDs.append(item.id)
             try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p"))
@@ -204,7 +204,7 @@ struct QueueStoreTests {
         var queuedIDs: [QueueItem.ID] = []
         for _ in 0..<5 {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: "wiki1", payload: makePayload())
+                queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
             let item = try store.enqueue(request)
             queuedIDs.append(item.id)
         }
@@ -245,7 +245,7 @@ struct QueueStoreTests {
             let store = try QueueStore(databaseURL: url)
             func completeOne() throws -> QueueItem.ID {
                 let item = try store.enqueue(
-                    QueueItemRequest(queue: .ingestion, wikiID: "wiki1", payload: makePayload()))
+                    QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
                 try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p"))
                 try store.markCompleted(id: item.id)
                 return item.id
@@ -322,11 +322,11 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item1 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let item2 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let item3 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         #expect(item1.orderingKey == 1000)
         #expect(item2.orderingKey == 2000)
@@ -334,7 +334,7 @@ struct QueueStoreTests {
 
         // Independent sequencing per queue kind.
         let ing1 = try store.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         #expect(ing1.orderingKey == 1000)
     }
 
@@ -344,7 +344,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         // queued → running
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
@@ -374,7 +374,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: item.id, error: "something broke")
 
@@ -389,7 +389,7 @@ struct QueueStoreTests {
 
         // queued → cancelled
         let item1 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let key1 = item1.orderingKey
         try store.markCancelled(id: item1.id)
         let cancelled1 = try store.getItem(item1.id)
@@ -400,7 +400,7 @@ struct QueueStoreTests {
 
         // running → cancelled
         let item2 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: item2.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCancelled(id: item2.id)
         let cancelled2 = try store.getItem(item2.id)
@@ -418,7 +418,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let oldKey = item.orderingKey
         let oldAttempt = item.attempt
 
@@ -436,7 +436,7 @@ struct QueueStoreTests {
 
         // Invalid: retry a non-failed item should throw.
         let item2 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         #expect(throws: QueueStoreError.self) {
             try store.retryItem(id: item2.id)
         }
@@ -454,7 +454,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let oldKey = item.orderingKey
         let oldAttempt = item.attempt
 
@@ -486,7 +486,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "iw1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "iw1"), payload: makePayload()))
 
         // First lifecycle: queued → running → cancelled.
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
@@ -513,7 +513,7 @@ struct QueueStoreTests {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let oldKey = item.orderingKey
 
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
@@ -540,23 +540,23 @@ struct QueueStoreTests {
 
         // Enqueue several items in various terminal/non-terminal states.
         let queued = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let running = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: running.id, providerID: ProviderID(rawValue: "p1"))
 
         let completed = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: completed.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCompleted(id: completed.id)
 
         let failed = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: failed.id, providerID: ProviderID(rawValue: "p1"))
         try store.markFailed(id: failed.id, error: "err")
 
         let cancelled = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markCancelled(id: cancelled.id)
 
         let active = try store.loadActive(for: .extraction)
@@ -577,7 +577,7 @@ struct QueueStoreTests {
         var ids: [QueueItem.ID] = []
         for i in 0..<3 {
             let item = try store.enqueue(
-                QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
             try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p\(i)"))
             try store.markCompleted(id: item.id)
             ids.append(item.id)
@@ -637,11 +637,11 @@ struct QueueStoreTests {
 
         // Enqueue 3 items, mark 2 as running.
         let item1 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let item2 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let item3 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         try store.markRunning(id: item1.id, providerID: ProviderID(rawValue: "p1"))
         try store.markRunning(id: item2.id, providerID: ProviderID(rawValue: "p2"))
@@ -676,7 +676,7 @@ struct QueueStoreTests {
         do {
             let store = try QueueStore(databaseURL: url)
             let item = try store.enqueue(
-                QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+                QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
             itemID = item.id
             try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markCompleted(id: itemID)
@@ -701,7 +701,7 @@ struct QueueStoreTests {
     @Test func testActivityUpsertCOALESCEPreservesExistingFields() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let item = try store.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         // usage only.
         try store.upsertItemActivity(itemID: item.id, usageJSON: "{}", logURL: nil, debugURL: nil)
@@ -717,7 +717,7 @@ struct QueueStoreTests {
     @Test func testProgressAppendJoinsWithNewline() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.appendItemProgress(itemID: item.id, line: "line one")
         try store.appendItemProgress(itemID: item.id, line: "line two")
         try store.appendItemProgress(itemID: item.id, line: "line three")
@@ -730,7 +730,7 @@ struct QueueStoreTests {
     @Test func testActivityCascadesOnPrune() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let item = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "p1"))
         try store.markCompleted(id: item.id)
         try store.upsertItemActivity(itemID: item.id, usageJSON: "{}",
@@ -748,9 +748,9 @@ struct QueueStoreTests {
     @Test func testLoadAllActivity() throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
         let item1 = try store.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         let item2 = try store.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "w1", payload: makePayload()))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         try store.upsertItemActivity(itemID: item1.id, usageJSON: "{}",
                                      logURL: "/a", debugURL: nil)
         try store.appendItemProgress(itemID: item2.id, line: "progress")

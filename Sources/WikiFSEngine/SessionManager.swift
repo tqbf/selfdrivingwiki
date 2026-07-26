@@ -26,7 +26,7 @@ import WikiFSCore
 public final class SessionManager {
     /// Live sessions keyed by wiki ID. A wiki open in multiple windows
     /// shares ONE session (one store, one bus, one gate).
-    public private(set) var sessions: [String: WikiSession] = [:]
+    public private(set) var sessions: [WikiID: WikiSession] = [:]
 
     /// Per-wiki store-open failures (issue #881). When `session(for:)` throws
     /// (the on-disk DB couldn't be opened), the error message is recorded here
@@ -34,21 +34,21 @@ public final class SessionManager {
     /// ("Could not open wiki database…") instead of silently showing an empty
     /// wiki. Cleared by ``clearOpenError(for:)`` (Retry button) so the next
     /// `session(for:)` call attempts a fresh open.
-    public private(set) var openErrors: [String: String] = [:]
+    public private(set) var openErrors: [WikiID: String] = [:]
 
     /// The user-visible error message for a wiki that failed to open, or nil.
-    public func openError(for wikiID: String) -> String? { openErrors[wikiID] }
+    public func openError(for wikiID: WikiID) -> String? { openErrors[wikiID] }
 
     /// Clear a recorded open error so the next `session(for:)` retry attempts a
     /// fresh open (Retry button in the error view).
-    public func clearOpenError(for wikiID: String) { openErrors.removeValue(forKey: wikiID) }
+    public func clearOpenError(for wikiID: WikiID) { openErrors.removeValue(forKey: wikiID) }
 
     /// The wiki ID of the frontmost window. Updated by per-window scenePhase
     /// transitions (`.active`). Used by `VacuumCommands` (which lives at the
     /// scene level — `.commands` is a `Scene` modifier, not a `View`
     /// modifier, so it can't go on `RootScene`) to resolve the correct
     /// session for the menu-bar "Vacuum/Lint/Activity Log" actions.
-    public var frontmostWikiID: String?
+    public var frontmostWikiID: WikiID?
 
     /// The shared extraction backend resolver (created once at app scope and
     /// passed into every session). Carries no per-wiki state, so sharing
@@ -143,7 +143,7 @@ public final class SessionManager {
     ///   message) and rethrown. There is no in-memory fallback (#881) — a
     ///   failed open leaves `sessions[wikiID]` unset, and the caller renders
     ///   an error view instead of an empty wiki.
-    public func session(for wikiID: String, descriptor: WikiDescriptor) throws -> WikiSession {
+    public func session(for wikiID: WikiID, descriptor: WikiDescriptor) throws -> WikiSession {
         if let existing = sessions[wikiID] {
             // Refresh the descriptor in case the registry mutated (rename /
             // set home page) since this session was created.
@@ -171,9 +171,9 @@ public final class SessionManager {
             // view. No in-memory fallback (#881) — the on-disk file is left
             // untouched for recovery.
             let dbPath = containerDirectory
-                .appendingPathComponent("\(wikiID).sqlite", isDirectory: false).path
+                .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
             let message = "Could not open the wiki database at \(dbPath). The file may be corrupt. \(error)"
-            DebugLog.store("SessionManager: failed to open wiki \(wikiID): \(error)")
+            DebugLog.store("SessionManager: failed to open wiki \(wikiID.rawValue): \(error)")
             openErrors[wikiID] = message
             throw error
         }
@@ -192,14 +192,14 @@ public final class SessionManager {
     /// Remove a session from the cache (called when the last window for a
     /// wiki closes). Flushes pending saves before removal so no buffered
     /// edits are stranded.
-    public func releaseSession(for wikiID: String) {
+    public func releaseSession(for wikiID: WikiID) {
         guard let session = sessions.removeValue(forKey: wikiID) else { return }
         session.store.flushPendingSaves()
     }
 
     /// Flush pending saves for ONE session (used by the registry's
     /// `flushActiveStore` closure before export/delete of a specific wiki).
-    public func flushSession(for wikiID: String) {
+    public func flushSession(for wikiID: WikiID) {
         sessions[wikiID]?.store.flushPendingSaves()
     }
 
@@ -213,7 +213,7 @@ public final class SessionManager {
     // MARK: - Derived accessors (for bridge routing + FP multi-subscribe)
 
     /// All active wiki IDs (for bridge routing + FP multi-subscribe).
-    public var activeWikiIDs: Set<String> { Set(sessions.keys) }
+    public var activeWikiIDs: Set<WikiID> { Set(sessions.keys) }
 
     /// All live sessions (for bridge flush routing).
     public var allSessions: [WikiSession] { Array(sessions.values) }
@@ -238,21 +238,21 @@ public final class SessionManager {
     /// by `==`, so a focus-if-open), then delivers the navigation once the
     /// session resolves. The open-window case is handled directly by the
     /// caller (it has the live store) and never reaches this stash.
-    public var pendingWikiLinks: [String: (url: URL, openInNewTab: Bool)] = [:]
+    public var pendingWikiLinks: [WikiID: (url: URL, openInNewTab: Bool)] = [:]
 
     /// Stash a deferred `wiki://` navigation for `wikiID` — for a wiki whose
     /// window is NOT yet open. ``session(for:descriptor:)`` transfers the
     /// stash onto the new session; `RootView.onAppear` consumes it. Call this
     /// ONLY when the wiki window is closed; an open window's store can route
     /// the click directly.
-    public func stashPendingWikiLink(_ wikiID: String, url: URL, openInNewTab: Bool) {
+    public func stashPendingWikiLink(_ wikiID: WikiID, url: URL, openInNewTab: Bool) {
         pendingWikiLinks[wikiID] = (url: url, openInNewTab: openInNewTab)
     }
 
     /// Consume (clear) the stashed deferred link for `wikiID`. Called by
     /// ``session(for:descriptor:)`` once it has transferred the stash onto
     /// the freshly-created session. One-shot: a second call returns nil.
-    public func consumePendingWikiLink(for wikiID: String) -> (url: URL, openInNewTab: Bool)? {
+    public func consumePendingWikiLink(for wikiID: WikiID) -> (url: URL, openInNewTab: Bool)? {
         pendingWikiLinks.removeValue(forKey: wikiID)
     }
 }

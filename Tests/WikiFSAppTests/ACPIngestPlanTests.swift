@@ -508,7 +508,7 @@ struct ACPIngestCollapsedRoutingTests {
 
         await launcher.run(
             request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",

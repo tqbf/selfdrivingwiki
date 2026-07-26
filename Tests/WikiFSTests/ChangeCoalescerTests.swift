@@ -41,59 +41,59 @@ struct ChangeCoalescerTests {
 
     @Test func burstForOneWikiCoalescesToSingleFlush() {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let coalescer = ChangeCoalescer(
             schedule: { scheduler.schedule($0) },
             flush: { flushes.append($0) }
         )
 
         // 15 notifications in a burst (one ingest), like the doc describes.
-        for _ in 0..<15 { coalescer.noteChange(forWikiID: "WIKI_A") }
+        for _ in 0..<15 { coalescer.noteChange(forWikiID: WikiID(rawValue: "WIKI_A")) }
         // Only one timer is live — the prior 14 were cancelled on reschedule.
         #expect(scheduler.pendingCount == 1)
         #expect(scheduler.cancelledIDs.count == 14)
 
         scheduler.fireAll()
-        #expect(flushes == ["WIKI_A"])
+        #expect(flushes == [WikiID(rawValue: "WIKI_A")])
     }
 
     @Test func distinctWikisFlushIndependently() {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let coalescer = ChangeCoalescer(
             schedule: { scheduler.schedule($0) },
             flush: { flushes.append($0) }
         )
 
-        coalescer.noteChange(forWikiID: "A")
-        coalescer.noteChange(forWikiID: "B")
-        coalescer.noteChange(forWikiID: "A")    // coalesces with A only
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "B"))
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))    // coalesces with A only
 
         // Two live timers (one per wiki); A's first was cancelled.
         #expect(scheduler.pendingCount == 2)
         #expect(scheduler.cancelledIDs.count == 1)
 
         scheduler.fireAll()
-        #expect(flushes.sorted() == ["A", "B"])
+        #expect(flushes.sorted { $0.rawValue < $1.rawValue } == [WikiID(rawValue: "A"), WikiID(rawValue: "B")])
     }
 
     @Test func aSecondBurstAfterFlushSchedulesAgain() {
         let scheduler = ManualScheduler()
-        var flushes: [String] = []
+        var flushes: [WikiID] = []
         let coalescer = ChangeCoalescer(
             schedule: { scheduler.schedule($0) },
             flush: { flushes.append($0) }
         )
 
-        coalescer.noteChange(forWikiID: "A")
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
         scheduler.fireAll()
-        #expect(flushes == ["A"])
+        #expect(flushes == [WikiID(rawValue: "A")])
 
         // A later, separate burst re-arms a fresh flush (the pending slot was
         // cleared on the first flush).
-        coalescer.noteChange(forWikiID: "A")
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
         #expect(scheduler.pendingCount == 1)
         scheduler.fireAll()
-        #expect(flushes == ["A", "A"])
+        #expect(flushes == [WikiID(rawValue: "A"), WikiID(rawValue: "A")])
     }
 }

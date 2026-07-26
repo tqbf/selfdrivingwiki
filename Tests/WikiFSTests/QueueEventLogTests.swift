@@ -27,7 +27,7 @@ struct QueueEventLogTests {
         QueueItem(
             id: "TESTCOMPLETED001",
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .completed,
             orderingKey: 1000,
@@ -45,7 +45,7 @@ struct QueueEventLogTests {
         QueueItem(
             id: "TESTQUEUED001",
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .queued,
             orderingKey: 1000,
@@ -63,7 +63,7 @@ struct QueueEventLogTests {
         QueueItem(
             id: "TESTRUNNING001",
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .running,
             orderingKey: 1000,
@@ -81,7 +81,7 @@ struct QueueEventLogTests {
         QueueItem(
             id: "TESTFAILED001",
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .failed,
             orderingKey: 1000,
@@ -99,7 +99,7 @@ struct QueueEventLogTests {
         QueueItem(
             id: "TESTCANCELLED001",
             queue: .extraction,
-            wikiID: "wiki1",
+            wikiID: WikiID(rawValue: "wiki1"),
             payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
             state: .cancelled,
             orderingKey: 1000,
@@ -197,7 +197,7 @@ struct QueueEventLogTests {
         #expect(records.count == 1)
         #expect(records[0].eventType == .cancelled)
         #expect(records[0].itemID == "TESTCANCELLED001")
-        #expect(records[0].wikiID == "wiki1")
+        #expect(records[0].wikiID == WikiID(rawValue: "wiki1"))
         #expect(records[0].durationMs == nil)
     }
 
@@ -431,7 +431,7 @@ struct QueueEventLogTests {
 
         await engine.start()
         let itemID = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: "wiki1", payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
 
         // Wait for the item to complete (deterministic, avoids timing flakes on CI).
         _ = try await engine.waitForCompletion(of: itemID).get()

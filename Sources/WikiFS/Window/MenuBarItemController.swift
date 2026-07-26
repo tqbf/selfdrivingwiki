@@ -400,7 +400,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // WindowGroup; a wiki adopted by the main window is invisible to it,
         // so we look the window up by the identifier WindowIdentifierTagger
         // stamps on it.
-        if let existing = windowForWiki(wikiID) {
+        if let existing = windowForWiki(WikiID(rawValue: wikiID)) {
             existing.makeKeyAndOrderFront(nil)
             return
         }
@@ -412,8 +412,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// any. Used to focus an already-open wiki window (avoiding duplicates in
     /// `openWikiWindow`) and to show the "open" icon in the Wikis submenu for
     /// wikis that are loaded.
-    private func windowForWiki(_ wikiID: String) -> NSWindow? {
-        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID)
+    private func windowForWiki(_ wikiID: WikiID) -> NSWindow? {
+        let identifier = NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + wikiID.rawValue)
         return NSApplication.shared.windows.first { $0.identifier == identifier }
     }
 

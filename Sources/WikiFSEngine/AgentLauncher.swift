@@ -1075,7 +1075,7 @@ public final class AgentLauncher {
     ///   it. Nil is fine (the model id alone still shows).
     public func run(
         request: OperationRequest,
-        wikiID: String,
+        wikiID: WikiID,
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
@@ -1375,7 +1375,7 @@ public final class AgentLauncher {
             debugLogURL: debugFolderURL)
 
         do {
-            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID) exe=\(resolvedPath)")
+            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID.rawValue) exe=\(resolvedPath)")
             let runToken = UUID()
             let session: SessionHandle
 
@@ -1523,7 +1523,7 @@ public final class AgentLauncher {
         scratch: URL,
         operation: WikiOperation,
         wikiRoot: String,
-        wikiID: String,
+        wikiID: WikiID,
         systemPrompt: String,
         wikictlDirectory: String
     ) async {
@@ -2177,7 +2177,7 @@ public final class AgentLauncher {
         makeCLIProfile: (WikiOperation) -> CLIProfile,
         operation: WikiOperation,
         wikiRoot: String,
-        wikiID: String,
+        wikiID: WikiID,
         phaseName: String
     ) async -> SessionHandle? {
         var attemptChain = chain
@@ -2855,7 +2855,7 @@ public final class AgentLauncher {
         firstMessage: String,
         firstMessageDisplay: String? = nil,
         stateMarkdown: String,
-        wikiID: String,
+        wikiID: WikiID,
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
@@ -2886,7 +2886,7 @@ public final class AgentLauncher {
             events = historySeed
             persistedEventCount = historySeed.count
         }
-        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID) historySeed=\(historySeed.count)")
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID.rawValue) historySeed=\(historySeed.count)")
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
@@ -4005,7 +4005,7 @@ public final class AgentLauncher {
     /// write-capable. The former read-only Ask sandbox is retained in-tree but
     /// unwired.)
     private func resolveSandboxInvocation(
-        wikiID: String,
+        wikiID: WikiID,
         scratch: URL,
         dir: URL,
         pdf2mdScriptPath: String?
@@ -4019,7 +4019,7 @@ public final class AgentLauncher {
         // `<container>/<ulid>.sqlite`. `dir` is the App Group container the DB lives in.
         // Symlink resolution is performed inside `SandboxProfile.invocation` (the
         // tested core layer) so the canonical path reaches the seatbelt profile.
-        let dbPath = dir.appendingPathComponent("\(wikiID).sqlite", isDirectory: false).path
+        let dbPath = dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
 
         // Fail-open if any required path is empty/relative (misconfiguration).
         guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),

@@ -84,7 +84,7 @@ struct InMemoryStoreTests {
     @MainActor
     @Test func inMemoryStore_emitsEventAfterMutate() async throws {
         let store = try TestStoreFactory.inMemory()
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
 
         let recorder = LockRecorder()
@@ -107,7 +107,7 @@ struct InMemoryStoreTests {
     @MainActor
     @Test func inMemoryStore_reentrantMutationEmitsOnceNoDeadlock() async throws {
         let store = try TestStoreFactory.inMemory()
-        let bus = WikiEventBus(wikiID: "W")
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "W"))
         store.eventBus = bus
 
         let recorder = LockRecorder()

@@ -78,7 +78,7 @@ struct WikiRegistryTests {
     @Test func dbFileNameAndDomainDeriveFromULIDNeverDisplayName() {
         let wiki = WikiDescriptor.make(displayName: "Has Spaces & Symbols!")
         #expect(wiki.dbFileName == "\(wiki.id).sqlite")
-        #expect(wiki.domainIdentifier == wiki.id)
+        #expect(wiki.domainIdentifier == wiki.id.rawValue)
         // Display name characters never leak into the on-disk identity.
         #expect(!wiki.dbFileName.contains(" "))
         #expect(!wiki.dbFileName.contains("!"))
@@ -111,7 +111,7 @@ struct WikiRegistryTests {
 
     @Test func setHomePageNoOpForUnknownID() {
         var registry = WikiRegistry()
-        registry.setHomePage(id: "unknown", pageID: PageID(rawValue: "page-1"))
+        registry.setHomePage(id: WikiID(rawValue: "unknown"), pageID: PageID(rawValue: "page-1"))
         #expect(registry.isEmpty)
     }
 
@@ -122,7 +122,7 @@ struct WikiRegistryTests {
         """
         try Data(legacyJSON.utf8).write(to: dir.appendingPathComponent(WikiRegistry.fileName))
         let loaded = WikiRegistry.load(from: dir)
-        #expect(loaded.descriptor(id: "01ABC")?.homePageID == nil)
+        #expect(loaded.descriptor(id: WikiID(rawValue: "01ABC"))?.homePageID == nil)
     }
 
     @Test func homePageSurvivesRoundTrip() throws {

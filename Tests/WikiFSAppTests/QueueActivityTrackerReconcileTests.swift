@@ -107,11 +107,11 @@ struct QueueActivityTrackerReconcileTests {
             lintPageIDs: [page])
 
         tracker.handle(.started(item))
-        #expect(tracker.isLinting(pageID: page, wikiID: "wiki1"))
+        #expect(tracker.isLinting(pageID: page, wikiID: WikiID(rawValue: "wiki1")))
 
         tracker.reconcile(with: QueueSnapshot(activeItems: [], recentItems: [item]))
 
-        #expect(!tracker.isLinting(pageID: page, wikiID: "wiki1"))
+        #expect(!tracker.isLinting(pageID: page, wikiID: WikiID(rawValue: "wiki1")))
     }
 
     @Test func reconcileClearsWholeWikiLintWhenItemFinishedOnDaemon() {
@@ -121,11 +121,11 @@ struct QueueActivityTrackerReconcileTests {
             lintPageIDs: [])  // empty → whole-wiki lint
 
         tracker.handle(.started(item))
-        #expect(tracker.isLinting(pageID: PageID(rawValue: "anyPage"), wikiID: "wiki1"))
+        #expect(tracker.isLinting(pageID: PageID(rawValue: "anyPage"), wikiID: WikiID(rawValue: "wiki1")))
 
         tracker.reconcile(with: QueueSnapshot(activeItems: [], recentItems: [item]))
 
-        #expect(!tracker.isLinting(pageID: PageID(rawValue: "anyPage"), wikiID: "wiki1"))
+        #expect(!tracker.isLinting(pageID: PageID(rawValue: "anyPage"), wikiID: WikiID(rawValue: "wiki1")))
     }
 
     // MARK: - Idempotency
@@ -176,7 +176,7 @@ struct QueueActivityTrackerReconcileTests {
         queue: QueueKind,
         sourceIDs: [String] = [],
         lintPageIDs: [PageID]? = nil,
-        wikiID: String = "wiki1"
+        wikiID: WikiID = WikiID(rawValue: "wiki1")
     ) -> QueueItem {
         QueueItem(
             id: id, queue: queue, wikiID: wikiID,
@@ -211,7 +211,7 @@ actor FakeQueueEngineClient: QueueEngineClient {
     nonisolated func halt(_ queue: QueueKind) async {}
     nonisolated func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {}
     func snapshot() async -> QueueSnapshot { snapshotValue }
-    nonisolated func hasActiveWork(for wikiID: String) async -> Bool { false }
+    nonisolated func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
     nonisolated func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
     nonisolated func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] { [] }
     nonisolated func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }

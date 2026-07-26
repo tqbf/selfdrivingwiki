@@ -110,7 +110,7 @@ struct AgentLauncherCeilingWiringTests {
                     sourceID: PageID(rawValue: "01TEST01KQ8HDDR3ZXK72XHG6R")
                 )],
                 stateMarkdown: "# State"),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",
@@ -142,7 +142,7 @@ struct AgentLauncherCeilingWiringTests {
 
         await launcher.run(
             request: .lint(stateMarkdown: "# State"),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",
@@ -171,7 +171,7 @@ struct AgentLauncherCeilingWiringTests {
         await launcher.startInteractiveQuery(
             firstMessage: "hello",
             stateMarkdown: "",
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "",
             wikictlDirectory: "/tmp",

@@ -41,7 +41,7 @@ struct QueueEngineHotSwapTests {
             snapshotCallCount += 1
             return QueueSnapshot()
         }
-        func hasActiveWork(for wikiID: String) async -> Bool { false }
+        func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
         func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
         func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] { [] }
         func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
@@ -129,7 +129,7 @@ struct QueueEngineHotSwapTests {
         let router = QueueEngineHotSwap(engine)
 
         let id = try await router.enqueue(QueueItemRequest(
-            queue: .extraction, wikiID: "wiki", payload: QueueItemPayload(sourceIDs: [])))
+            queue: .extraction, wikiID: WikiID(rawValue: "wiki"), payload: QueueItemPayload(sourceIDs: [])))
         #expect(id == "engine-X")
     }
 
@@ -137,7 +137,7 @@ struct QueueEngineHotSwapTests {
 
     private func makeItem(id: String) -> QueueItem {
         QueueItem(
-            id: id, queue: .extraction, wikiID: "wiki",
+            id: id, queue: .extraction, wikiID: WikiID(rawValue: "wiki"),
             payload: QueueItemPayload(sourceIDs: []),
             state: .queued, orderingKey: 0, attempt: 0,
             createdAt: Int64(Date().timeIntervalSince1970 * 1000))

@@ -109,7 +109,7 @@ func run() async -> Int32 {
         // Post the change notification ONLY after a committing write, so a read
         // never wakes the app's change bridge.
         if result.didCommit {
-            DarwinNotifier.postChange(forWikiID: descriptor.id)
+            DarwinNotifier.postChange(forWikiID: descriptor.id.rawValue)
         }
         return 0
     } catch let failure as PageCommand.Failure {
@@ -151,7 +151,7 @@ func run() async -> Int32 {
 func execute(
     _ command: ArgumentParser.Command,
     in store: GRDBWikiStore,
-    wikiID: String,
+    wikiID: WikiID,
     containerDirectory: URL
 ) throws -> SourceCommand.Result {
     switch command {
@@ -223,7 +223,7 @@ func execute(
 private func runChatCommand(
     _ action: ChatCommand.Action,
     in store: GRDBWikiStore,
-    wikiID: String,
+    wikiID: WikiID,
     containerDirectory: URL
 ) throws -> SourceCommand.Result {
     let leg: [ChatSummary]?
@@ -244,7 +244,7 @@ private func runChatCommand(
 /// helper so the switch in `execute(...)` reads cleanly.
 private func cliSourceLegIfSearch(
     _ action: SourceCommand.Action,
-    wikiID: String,
+    wikiID: WikiID,
     containerDirectory: URL,
     store: GRDBWikiStore
 ) -> [SourceSummary]? {
@@ -260,7 +260,7 @@ private func cliSourceLegIfSearch(
 /// `page search` / `source search` paths share the same resolve step.
 private func cliPageLegIfSearch(
     _ action: PageCommand.Action,
-    wikiID: String,
+    wikiID: WikiID,
     containerDirectory: URL,
     store: GRDBWikiStore
 ) -> [WikiPageSummary]? {
@@ -367,14 +367,14 @@ func runWikiDelete(id: String) async -> Int32 {
         let resolver = try WikiResolver.appGroupContainer()
         let container = resolver.containerDirectory
         var registry = WikiRegistry.load(from: container)
-        guard let descriptor = registry.descriptor(id: id) else {
+        guard let descriptor = registry.descriptor(id: WikiID(rawValue: id)) else {
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
             return 1
         }
 
         // Remove from the registry first, then drop the DB files (main + WAL
         // sidecars). Mirrors WikiDaemon.deleteWiki.
-        registry.remove(id: id)
+        registry.remove(id: WikiID(rawValue: id))
         try registry.save(to: container)
 
         let dbURL = resolver.databaseURL(for: descriptor)
@@ -399,11 +399,11 @@ func runWikiRename(id: String, name: String) async -> Int32 {
             return 1
         }
         var registry = WikiRegistry.load(from: container)
-        guard registry.descriptor(id: id) != nil else {
+        guard registry.descriptor(id: WikiID(rawValue: id)) != nil else {
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
             return 1
         }
-        registry.rename(id: id, to: trimmed)
+        registry.rename(id: WikiID(rawValue: id), to: trimmed)
         try registry.save(to: container)
         return 0
     } catch {

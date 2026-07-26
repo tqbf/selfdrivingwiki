@@ -130,7 +130,7 @@ import ACPModel
         let cli = CLIProfile(
             operation: .queryChat(stateFilePath: "/tmp/state.md"),
             wikiRoot: "/tmp/fake-mount",
-            wikiID: "FAKEWIKIID",
+            wikiID: WikiID(rawValue: "FAKEWIKIID"),
             wikictlDirectory: "/tmp/wikictl-bin")
         let env = ACPBackend.buildAgentEnv(
             from: cli,
@@ -147,7 +147,7 @@ import ACPModel
         let cli = CLIProfile(
             operation: .queryChat(stateFilePath: "/tmp/state.md"),
             wikiRoot: "/tmp/fake-mount",
-            wikiID: "FAKEWIKIID",
+            wikiID: WikiID(rawValue: "FAKEWIKIID"),
             wikictlDirectory: "/tmp/wikictl-bin")
         let env = ACPBackend.buildAgentEnv(
             from: cli,

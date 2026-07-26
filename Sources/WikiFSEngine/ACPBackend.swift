@@ -1856,7 +1856,7 @@ public actor ACPBackend: AgentBackend {
         spawnEnvironment: [String: String]
     ) -> [String: String] {
         var env = baseEnv
-        env[AgentEnvKey.wikiDB] = cli.wikiID
+        env[AgentEnvKey.wikiDB] = cli.wikiID.rawValue
         // WIKI_ROOT is intentionally NOT exported — mount is optional; wikictl is the primary read surface (#441).
         env[AgentEnvKey.wikictl] = cli.wikictlDirectory + "/wikictl"
         let existingPath = env[AgentEnvKey.path] ?? AgentEnvKey.defaultPath

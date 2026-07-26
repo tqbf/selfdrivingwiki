@@ -109,7 +109,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         }
     }
 
-    func hasActiveWork(for wikiID: String) async -> Bool {
+    func hasActiveWork(for wikiID: WikiID) async -> Bool {
         do {
             return try await workloadClient.hasActiveWork(for: wikiID)
         } catch {

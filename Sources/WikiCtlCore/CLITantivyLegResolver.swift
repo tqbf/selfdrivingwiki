@@ -40,7 +40,7 @@ public enum CLITantivyLegResolver {
     /// leg (FTS5 was dropped in #634; the cosine leg still answers when
     /// NLEmbedding/MLX is loaded).
     public static func resolvePageLeg(
-        wikiID: String,
+        wikiID: WikiID,
         containerDirectory: URL,
         store: WikiStore,
         query: String,
@@ -64,7 +64,7 @@ public enum CLITantivyLegResolver {
     /// Resolve a Tantivy BM25 leg for `wikictl source search`. Same contract
     /// as ``resolvePageLeg(wikiID:containerDirectory:store:query:limit:)``.
     public static func resolveSourceLeg(
-        wikiID: String,
+        wikiID: WikiID,
         containerDirectory: URL,
         store: WikiStore,
         query: String,
@@ -88,7 +88,7 @@ public enum CLITantivyLegResolver {
     /// Resolve a Tantivy BM25 leg for `wikictl chat search`. Same contract as
     /// ``resolvePageLeg(wikiID:containerDirectory:store:query:limit:)``.
     public static func resolveChatLeg(
-        wikiID: String,
+        wikiID: WikiID,
         containerDirectory: URL,
         store: WikiStore,
         query: String,
@@ -116,7 +116,7 @@ public enum CLITantivyLegResolver {
     /// can't be opened — failures are logged via `DebugLog.store` so they're
     /// visible in Console.app even from the CLI invocation.
     private static func makeService(
-        wikiID: String,
+        wikiID: WikiID,
         containerDirectory: URL,
         store: WikiStore
     ) -> TantivySearchService? {
@@ -128,7 +128,7 @@ public enum CLITantivyLegResolver {
                 contentSource: contentSource
             )
         } catch {
-            DebugLog.store("wikictl: Tantivy search index unavailable for wiki \(wikiID): \(error)")
+            DebugLog.store("wikictl: Tantivy search index unavailable for wiki \(wikiID.rawValue): \(error)")
             return nil
         }
     }
@@ -212,17 +212,17 @@ private final class SearchBox: @unchecked Sendable {
 /// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
 public enum CLITantivyLegResolver {
     public static func resolvePageLeg(
-        wikiID: String, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
     ) -> [WikiPageSummary]? { nil }
 
     public static func resolveSourceLeg(
-        wikiID: String, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
     ) -> [SourceSummary]? { nil }
 
     public static func resolveChatLeg(
-        wikiID: String, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
         query: String, limit: Int
     ) -> [ChatSummary]? { nil }
 }

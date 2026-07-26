@@ -22,7 +22,7 @@ struct WikiSwitcher: View {
     /// `registry.activeWikiID` for the label + checkmark — in multi-window,
     /// `activeWikiID` is the MRU wiki (for launch), not the current window's
     /// wiki. Each window's switcher reflects its own wiki.
-    let currentWikiID: String?
+    let currentWikiID: WikiID?
     @Environment(\.openWindow) private var openWindow
 
     @State private var newWikiName = ""

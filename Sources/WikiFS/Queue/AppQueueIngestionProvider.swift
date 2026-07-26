@@ -102,7 +102,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - QueueIngestionProvider
 
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
@@ -286,7 +286,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - Lint (payload variant of .ingestion)
 
     func runLint(
-        wikiID: String,
+        wikiID: WikiID,
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
@@ -332,7 +332,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     }
 
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
@@ -411,7 +411,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         queueItemID: String,
         changeSignaler: any ChangeSignaler,
         ingestingSourceIDs: Set<PageID>,
@@ -461,7 +461,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         queueItemID: String,
         changeSignaler: any ChangeSignaler,
         onProgress: @escaping @Sendable (String) -> Void,

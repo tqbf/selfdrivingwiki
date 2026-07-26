@@ -30,7 +30,7 @@ struct SourceDetailView: View {
     /// `getUserVisibleURL`. Multi-window means the shared `activeWikiID` is
     /// last-activate-wins, so passing the session's explicit `wikiID` here is
     /// required to reach the correct FP extension (issue #672).
-    let wikiID: String
+    let wikiID: WikiID
     let runIngest: (PageID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
@@ -1500,7 +1500,7 @@ struct SourceDetailView: View {
         // pdf2md limit 1), readiness checks, and progress reporting.
         do {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)
@@ -1588,7 +1588,7 @@ struct SourceDetailView: View {
     private func runTranscription() async {
         do {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)
@@ -1614,7 +1614,7 @@ struct SourceDetailView: View {
         DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
         do {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
             let result = await queueEngine.waitForCompletion(of: itemID)
@@ -1667,7 +1667,7 @@ struct SourceDetailView: View {
                     openWindow(value: ExtractionCompareContext(
                         sourceID: file.id,
                         filename: file.filename,
-                        wikiID: store.eventBus?.wikiID ?? ""))
+                        wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: "")))
                 }
                 .disabled(!hasMultipleExtractions)
                 .help(hasMultipleExtractions
@@ -1782,7 +1782,7 @@ struct SourceDetailView: View {
         // chosen backend instead of the configured default.
         do {
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: store.eventBus?.wikiID ?? "",
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(
                     sourceIDs: [file.id],
                     stageRouting: [StageRoutingKey.backend.rawValue: backend.rawValue]))

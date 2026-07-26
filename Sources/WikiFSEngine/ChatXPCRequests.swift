@@ -12,7 +12,7 @@ import WikiFSCore
 /// Start a new chat. Sent by the client; the daemon creates the `chats` row +
 /// seeds the first user message, then starts an interactive session.
 public struct ChatStartRequest: Codable, Sendable {
-    public let wikiID: String
+    public let wikiID: WikiID
     public let firstMessage: String
     /// The per-chat model override picked in the composer's `ProviderSelector`
     /// BEFORE the chat existed (a `.draft` session has no `chats` row yet to
@@ -21,7 +21,7 @@ public struct ChatStartRequest: Codable, Sendable {
     public let providerId: String?
     public let modelId: String?
 
-    public init(wikiID: String, firstMessage: String, providerId: String? = nil, modelId: String? = nil) {
+    public init(wikiID: WikiID, firstMessage: String, providerId: String? = nil, modelId: String? = nil) {
         self.wikiID = wikiID
         self.firstMessage = firstMessage
         self.providerId = providerId
@@ -45,11 +45,11 @@ public struct ChatStartReply: Codable, Sendable {
 /// preamble (or attempts ACP resume), and starts a fresh session writing to
 /// the SAME chat row.
 public struct ChatContinueRequest: Codable, Sendable {
-    public let wikiID: String
+    public let wikiID: WikiID
     public let chatID: PageID
     public let message: String
 
-    public init(wikiID: String, chatID: PageID, message: String) {
+    public init(wikiID: WikiID, chatID: PageID, message: String) {
         self.wikiID = wikiID
         self.chatID = chatID
         self.message = message

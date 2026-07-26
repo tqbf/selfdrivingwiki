@@ -12,7 +12,7 @@ public enum AgentOperationRunner {
         question: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -35,7 +35,7 @@ public enum AgentOperationRunner {
         firstMessage: String,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -79,7 +79,7 @@ public enum AgentOperationRunner {
         // Start the interactive session. The agent-run lifecycle is ref-counted
         // (agentRunStarted/agentRunEnded) for sidebar reload on last-run-end;
         // no edit lock — CAS (page versions, W0) prevents data races.
-        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chat?.id.rawValue ?? "nil")")
+        DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chat?.id.rawValue ?? "nil")")
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
             stateMarkdown: store.currentStateSnapshot().renderStateFile(),
@@ -370,7 +370,7 @@ public enum AgentOperationRunner {
         message: String,
         store: WikiStoreModel,
         launcher: AgentLauncher,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -447,7 +447,7 @@ public enum AgentOperationRunner {
         // flips ChatDetailView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
-        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID) chatID=\(chatID.rawValue)")
+        DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chatID.rawValue)")
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
             firstMessageDisplay: trimmed,
@@ -480,7 +480,7 @@ public enum AgentOperationRunner {
     public static func runLint(
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -500,7 +500,7 @@ public enum AgentOperationRunner {
         pages: [(id: PageID, title: String)],
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
@@ -532,7 +532,7 @@ public enum AgentOperationRunner {
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,
-        wikiID: String,
+        wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<PageID> = [],

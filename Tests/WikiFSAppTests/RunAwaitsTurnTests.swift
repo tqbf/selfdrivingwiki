@@ -71,7 +71,7 @@ struct RunAwaitsTurnTests {
     ) async {
         await launcher.run(
             request: makeRequest(),
-            wikiID: "test-wiki",
+            wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: "/tmp",
             systemPrompt: "sys",
             wikictlDirectory: "/tmp",

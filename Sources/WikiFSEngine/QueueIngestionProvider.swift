@@ -58,7 +58,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///     rejected / auto-rejected). May never fire if the agent isn't
     ///     configured for `always-ask`.
     func runIngestion(
-        wikiID: String,
+        wikiID: WikiID,
         sourceIDs: [PageID],
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
@@ -81,7 +81,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLint(
-        wikiID: String,
+        wikiID: WikiID,
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
@@ -105,7 +105,7 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
     func runLintPages(
-        wikiID: String,
+        wikiID: WikiID,
         pageIDs: [PageID],
         queueItemID: String,
         onProgress: @escaping @Sendable (String) -> Void,

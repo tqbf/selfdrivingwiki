@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WikiFSCore
 
 /// The `NSUserInterfaceItemIdentifier` prefix used to tag a wiki's hosting
 /// `NSWindow` with its wiki ID. `MenuBarItemController` scans
@@ -19,7 +20,7 @@ let wikiWindowIdentifierPrefix = "wiki:"
 /// bound `wikiID` changes — e.g. an in-window Option+click switch — so the
 /// tag always reflects the wiki the window is currently showing.
 struct WindowIdentifierTagger: NSViewRepresentable {
-    let wikiID: String?
+    let wikiID: WikiID?
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -37,7 +38,7 @@ struct WindowIdentifierTagger: NSViewRepresentable {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             window.identifier = wikiID.map {
-                NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + $0)
+                NSUserInterfaceItemIdentifier(wikiWindowIdentifierPrefix + $0.rawValue)
             }
         }
     }

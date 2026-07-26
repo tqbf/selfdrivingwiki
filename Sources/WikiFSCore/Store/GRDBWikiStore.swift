@@ -115,7 +115,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The wiki ID this store belongs to (stamped onto emitted events).
     /// Defaults to empty when the bus is nil (mirrors `SQLiteWikiStore`'s
     /// `localEvent` fallback).
-    private var wikiID: String { eventBus?.wikiID ?? "" }
+    private var wikiID: WikiID { eventBus?.wikiID ?? WikiID(rawValue: "") }
 
     // MARK: - Init
 

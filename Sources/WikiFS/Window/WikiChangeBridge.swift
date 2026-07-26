@@ -33,12 +33,12 @@ final class WikiChangeBridge {
     /// returns all matching sessions so `flush(wikiID:)` can poke each one's
     /// bus. The app sets this to `{ wikiID in sessionManager.allSessions.filter
     /// { $0.wikiID == wikiID } }`.
-    var sessionLookup: @MainActor @Sendable (String) -> [WikiSession] = { _ in [] }
+    var sessionLookup: @MainActor @Sendable (WikiID) -> [WikiSession] = { _ in [] }
     private var coalescer: ChangeCoalescer?
 
     /// The wiki ids we currently observe, so `refreshObservations()` is
     /// idempotent — it only adds newly-registered wikis and drops removed ones.
-    private var observedWikiIDs: Set<String> = []
+    private var observedWikiIDs: Set<WikiID> = []
 
     init(registry: WikiRegistryClient, fileProvider: FileProviderFacade) {
         self.registry = registry
@@ -67,9 +67,9 @@ final class WikiChangeBridge {
 
     // MARK: - Darwin observation
 
-    private func addObserver(forWikiID id: String) {
+    private func addObserver(forWikiID id: WikiID) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id) as CFString)
+        let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id.rawValue) as CFString)
         // The observer pointer is `self` (unretained — we remove on teardown). The
         // callback is a C function, so it can capture nothing; it recovers `self`
         // and the wiki id from the notification name and hops to the main actor.
@@ -88,9 +88,9 @@ final class WikiChangeBridge {
         )
     }
 
-    private func removeObserver(forWikiID id: String) {
+    private func removeObserver(forWikiID id: WikiID) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id) as CFString)
+        let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id.rawValue) as CFString)
         CFNotificationCenterRemoveObserver(
             center,
             Unmanaged.passUnretained(self).toOpaque(),
@@ -104,7 +104,7 @@ final class WikiChangeBridge {
     /// rather than string-splitting, so a malformed name is simply ignored.
     private func didReceiveDarwinNotification(named posted: String) {
         guard let wikiID = observedWikiIDs.first(where: {
-            posted == WikiChangeNotification.name(forWikiID: $0)
+            posted == WikiChangeNotification.name(forWikiID: $0.rawValue)
         }) else { return }
         coalescer?.noteChange(forWikiID: wikiID)
     }
@@ -147,7 +147,7 @@ final class WikiChangeBridge {
     ///
     /// Marked `internal` (not `private`) so `WikiChangeBridgeTests` can call it
     /// directly via `@testable import WikiFS`.
-    func flush(wikiID: String) {
+    func flush(wikiID: WikiID) {
         // Always refresh the File Provider — direct, not via the bus subscriber,
         // so the mount is consistent for every wiki the bridge observes.
         Task { await fileProvider.signalChange(forWikiID: wikiID) }

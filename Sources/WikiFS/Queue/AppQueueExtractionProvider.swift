@@ -31,11 +31,11 @@ final class SessionLookupBox: @unchecked Sendable {
     /// Returns the live `WikiStoreModel` for a wikiID, or nil if no session is
     /// open. `@MainActor` + `@Sendable` so it can be called from a
     /// `@MainActor`-isolated provider.
-    private var lookup: @MainActor @Sendable (String) -> WikiStoreModel?
+    private var lookup: @MainActor @Sendable (WikiID) -> WikiStoreModel?
 
     /// Returns the live `WikiSession` for a wikiID, or nil if no session is
     /// open. Used by the ingestion provider to access the session's launcher.
-    private var sessionLookup: @MainActor @Sendable (String) -> WikiSession?
+    private var sessionLookup: @MainActor @Sendable (WikiID) -> WikiSession?
 
     init() {
         // No sessions exist yet — return nil. Replaced after SessionManager
@@ -45,22 +45,22 @@ final class SessionLookupBox: @unchecked Sendable {
     }
 
     /// Synchronous resolution (caller must be on the main actor).
-    func resolve(wikiID: String) -> WikiStoreModel? {
+    func resolve(wikiID: WikiID) -> WikiStoreModel? {
         lookup(wikiID)
     }
 
     /// Synchronous session resolution (caller must be on the main actor).
-    func resolveSession(for wikiID: String) -> WikiSession? {
+    func resolveSession(for wikiID: WikiID) -> WikiSession? {
         sessionLookup(wikiID)
     }
 
     /// Wire the box to the real session manager (called after construction).
-    func setLookup(_ lookup: @escaping @MainActor @Sendable (String) -> WikiStoreModel?) {
+    func setLookup(_ lookup: @escaping @MainActor @Sendable (WikiID) -> WikiStoreModel?) {
         self.lookup = lookup
     }
 
     /// Wire the session-lookup closure to the real session manager.
-    func setSessionLookup(_ lookup: @escaping @MainActor @Sendable (String) -> WikiSession?) {
+    func setSessionLookup(_ lookup: @escaping @MainActor @Sendable (WikiID) -> WikiSession?) {
         self.sessionLookup = lookup
     }
 }
@@ -89,7 +89,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     // MARK: - QueueExtractionProvider
 
     func resolveExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
@@ -181,7 +181,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     }
 
     func persistExtraction(
-        wikiID: String,
+        wikiID: WikiID,
         sourceID: PageID,
         markdown: String,
         backend: ExtractionBackend,
