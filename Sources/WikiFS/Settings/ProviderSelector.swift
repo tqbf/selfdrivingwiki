@@ -30,11 +30,22 @@ import WikiFSCore
 ///
 /// **Default = agent default by default:** a provider with no model selected
 /// uses the agent's advertised default. Existing users see zero behavior change.
+///
+/// **Chat-scoped, not global:** selecting a row pins a provider + model to
+/// THIS chat only (`ChatSummary.modelProviderId`/`.modelId`, or
+/// `RemoteChatSession.pendingModelOverride` before the chat exists) —
+/// outranking both the "chat" stage pin AND the global default provider. This
+/// picker no longer writes the global default; see `chatModelOverride`.
 struct ProviderSelector: View {
-    /// The daemon-mirrored chat session — backs provider-config reads/writes
-    /// (the same shared config file the daemon reads at spawn). Replaces the
-    /// chat `AgentLauncher` after Phase C4.
+    /// The daemon-mirrored chat session — backs provider-config reads (the
+    /// same shared config file the daemon reads at spawn) and holds the
+    /// pending override for a not-yet-created (`.draft`) chat.
     var remoteSession: RemoteChatSession
+
+    /// The client-side store — direct SQLite access to `chats`, used to read
+    /// and write THIS chat's model override (`ChatSummary.modelProviderId`/
+    /// `.modelId`). Same direct-write pattern as `renameChat`/`deleteChat`.
+    var store: WikiStoreModel
 
     /// The selector's view of the config. Refreshed from the persisted file on
     /// appear + after each selection, so a change made in Settings is visible
@@ -55,8 +66,9 @@ struct ProviderSelector: View {
 
     @Environment(\.openSettings) private var openSettings
 
-    init(remoteSession: RemoteChatSession) {
+    init(remoteSession: RemoteChatSession, store: WikiStoreModel) {
         self.remoteSession = remoteSession
+        self.store = store
         // Seed off-main via the session's accessor so the composer never
         // blocks on file I/O at first paint.
         _config = State(initialValue: remoteSession.providersConfig())
@@ -70,17 +82,35 @@ struct ProviderSelector: View {
         config.enabledProviders
     }
 
-    /// The effective provider for chat: the chat stage's pinned provider when
-    /// set + enabled, else the global default. **Decision A**
-    /// (`plans/agent-settings-tabs.md` §6.5): the composer chip must reflect
-    /// the provider chat will ACTUALLY use, so when the chat stage is pinned
-    /// the chip shows the pinned provider — no silent mismatch. Selecting a
-    /// row in the popover still sets the GLOBAL default via
-    /// `setSelectedModelAndDefault(...)` (unchanged behavior); picking in the
-    /// composer affects everything that follows "Default", just not a pinned
-    /// chat stage.
+    /// THIS chat's model override, if any: `ChatSummary.modelProviderId`/
+    /// `.modelId` for a persisted chat, or `RemoteChatSession.pendingModelOverride`
+    /// for a `.draft` chat that has no row yet. `nil` = no override for this
+    /// chat — `current` falls through to the stage pin / global default,
+    /// unchanged from before this picker became chat-scoped.
+    private var chatModelOverride: (providerId: String, modelId: String?)? {
+        switch remoteSession.chatID {
+        case .draft:
+            return remoteSession.pendingModelOverride
+        case .chat(let pageID):
+            guard let providerId = store.chats.first(where: { $0.id == pageID })?.modelProviderId else {
+                return nil
+            }
+            return (providerId, store.chats.first(where: { $0.id == pageID })?.modelId)
+        }
+    }
+
+    /// The effective provider for chat: THIS chat's own override when set +
+    /// enabled (highest priority — see `chatModelOverride`), else the chat
+    /// stage's pinned provider when set + enabled, else the global default
+    /// (**Decision A**, `plans/agent-settings-tabs.md` §6.5, now extended with
+    /// the per-chat tier). Selecting a row in the popover writes THIS chat's
+    /// override (`selectRow`) — it no longer touches the global default.
     private var current: AgentProvider {
-        config.provider(forStage: "chat")
+        if let overrideProviderId = chatModelOverride?.providerId,
+           let p = config.provider(id: overrideProviderId), p.enabled {
+            return p
+        }
+        return config.provider(forStage: "chat")
     }
 
     var body: some View {
@@ -314,8 +344,18 @@ struct ProviderSelector: View {
 
     /// The id of the row that matches the current selection (provider + model),
     /// or the provider's "default" row when no model is pinned. nil when nothing
-    /// matches (no providers / provider not in list).
+    /// matches (no providers / provider not in list). When THIS chat has an
+    /// override (`chatModelOverride`, and `current` resolved to that override's
+    /// provider), the checkmark tracks the override's model — NOT the
+    /// provider's global `selectedModelId` — so a chat pinned to a model the
+    /// global default doesn't use still shows the right checkmark.
     private var selectedRowID: String? {
+        if let override = chatModelOverride, override.providerId == current.id {
+            if let modelId = override.modelId {
+                return "\(current.id):\(modelId)"
+            }
+            return "\(current.id):default"
+        }
         let selectedModel = config.selectedModelId(forProvider: current.id)
         if let selectedModel {
             return "\(current.id):\(selectedModel)"
@@ -356,11 +396,27 @@ struct ProviderSelector: View {
     /// (or "default" when none is selected); for Claude it's the selected
     /// alias (or "default").
     private var triggerLabel: String {
-        "\(current.label) · \(modelSegment(for: current))"
+        "\(current.label) · \(currentModelSegment)"
     }
 
-    /// The model text shown in the trigger for a provider: the user's
-    /// selection, else "default".
+    /// The model text shown in the trigger for `current`: THIS chat's override
+    /// model when one is active, else the provider's global selection (via
+    /// `modelSegment(for:)`), else "default".
+    private var currentModelSegment: String {
+        if let override = chatModelOverride, override.providerId == current.id {
+            guard let modelId = override.modelId else { return "default" }
+            if let cached = config.cachedModels(forProvider: current.id)
+                .first(where: { $0.modelId == modelId }) {
+                return cached.displayLabel
+            }
+            return modelId
+        }
+        return modelSegment(for: current)
+    }
+
+    /// The model text for a provider's global selection: the user's
+    /// selection, else "default". Only reached when this chat has no override
+    /// (`currentModelSegment` short-circuits otherwise).
     private func modelSegment(for provider: AgentProvider) -> String {
         if let selected = config.selectedModelId(forProvider: provider.id) {
             // Use the cached friendly name when available.
@@ -374,15 +430,17 @@ struct ProviderSelector: View {
     }
 
     private var defaultHelpText: String {
-        "Provider and model for new chats"
+        "Provider and model for this chat"
     }
 
     // MARK: - Actions
 
     /// Selecting a row parses its id back into (provider, modelId) and persists
-    /// both atomically (provider as default + model as the provider's
-    /// selection), then closes the popover. Mirrors paseo's "choosing a model
-    /// implies choosing its provider".
+    /// both as THIS CHAT's override, then closes the popover. Mirrors paseo's
+    /// "choosing a model implies choosing its provider" — but scoped to the
+    /// chat, not the global default (see the type doc comment). For a `.draft`
+    /// chat (no row yet), stashes the pick on `remoteSession` for
+    /// `ChatDetailView.submitMessage` to seed at creation.
     private func selectRow(_ rowID: String?) {
         guard let rowID else { return }
         // Split "providerId:modelId" (or "providerId:default"). The provider id
@@ -391,7 +449,12 @@ struct ProviderSelector: View {
         guard parts.count == 2, let provider = config.provider(id: String(parts[0])) else { return }
         let modelId: String? = parts[1] == "default" ? nil : String(parts[1])
         DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
-        config = remoteSession.setSelectedModelAndDefault(modelId, provider: provider)
+        switch remoteSession.chatID {
+        case .draft:
+            remoteSession.pendingModelOverride = (provider.id, modelId)
+        case .chat(let pageID):
+            store.updateChatModelOverride(id: pageID, providerId: provider.id, modelId: modelId)
+        }
         isPresented = false
         searchText = ""
     }

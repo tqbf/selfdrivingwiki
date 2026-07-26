@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 44)
+        #expect(GRDBWikiStore.schemaVersion == 45)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -292,16 +292,132 @@ import SQLite3
         """, nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
 
-        // Open via GRDBWikiStore — triggers the migration ladder (v42→v43→v44).
+        // Open via GRDBWikiStore — triggers the migration ladder (v42→v43→v44→v45).
         let store = try GRDBWikiStore(databaseURL: url)
 
-        // After the full ladder, version is 44 and both migration steps ran.
-        #expect(store.pragmaValue("user_version") == "44")
+        // After the full ladder, version is 45 and every migration step ran.
+        #expect(store.pragmaValue("user_version") == "45")
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
         let hasDraftCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chat_messages') WHERE name='is_draft';")
         #expect(hasDraftCol == "1")
+        let hasModelProviderCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
+        #expect(hasModelProviderCol == "1")
+        let hasModelCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_id';")
+        #expect(hasModelCol == "1")
+    }
+
+    // MARK: - Per-chat model override (composer ProviderSelector pin)
+
+    /// A fresh schema has the `model_provider_id`/`model_id` columns on `chats`.
+    @Test func freshSchemaHasChatModelOverrideColumns() throws {
+        let store = try tempStore()
+        #expect(GRDBWikiStore.schemaVersion == 45)
+        let hasProviderCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
+        #expect(hasProviderCol == "1")
+        let hasModelCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_id';")
+        #expect(hasModelCol == "1")
+    }
+
+    /// `createChat(modelProviderId:modelId:)` seeds the override at creation.
+    @Test func createChatSeedsModelOverride() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(
+            kind: .edit, title: "Test", modelProviderId: "acme", modelId: "acme-1")
+        #expect(chat.modelProviderId == "acme")
+        #expect(chat.modelId == "acme-1")
+        let fetched = try store.getChat(id: chat.id)
+        #expect(fetched.modelProviderId == "acme")
+        #expect(fetched.modelId == "acme-1")
+    }
+
+    /// `createChat(kind:title:)` (no override args) leaves both columns nil —
+    /// every pre-existing call site is unaffected.
+    @Test func createChatWithoutOverrideLeavesModelOverrideNil() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+        #expect(chat.modelProviderId == nil)
+        #expect(chat.modelId == nil)
+    }
+
+    /// Round-trip write + read + clear of the per-chat model override.
+    @Test func updateChatModelOverrideRoundTrip() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+
+        // Initially nil.
+        #expect(try store.getChat(id: chat.id).modelProviderId == nil)
+
+        // Write.
+        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        let written = try store.getChat(id: chat.id)
+        #expect(written.modelProviderId == "acme")
+        #expect(written.modelId == "acme-1")
+
+        // Clear (providerId: nil clears both columns — a lone modelId with no
+        // providerId is not representable).
+        try store.updateChatModelOverride(id: chat.id, providerId: nil, modelId: nil)
+        let cleared = try store.getChat(id: chat.id)
+        #expect(cleared.modelProviderId == nil)
+        #expect(cleared.modelId == nil)
+    }
+
+    /// `listChats` includes the model override in the result set.
+    @Test func listChatsIncludesModelOverride() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Test")
+        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        let listed = try store.listChats()
+        #expect(listed.first(where: { $0.id == chat.id })?.modelProviderId == "acme")
+        #expect(listed.first(where: { $0.id == chat.id })?.modelId == "acme-1")
+    }
+
+    /// Migration v44→v45: a DB at v44 without the two columns gets them added,
+    /// landing at v45, with existing rows reading back nil (no backfill).
+    @Test func chatModelOverrideMigrationAddsColumns() throws {
+        let url = tempDatabaseURL()
+
+        // Build a v44 DB by hand: chats + chat_messages WITHOUT
+        // model_provider_id / model_id, user_version=44.
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chats (id TEXT PRIMARY KEY, kind TEXT, title TEXT,
+            created_at REAL, updated_at REAL, summary TEXT, summary_at REAL,
+            acp_session_id TEXT);
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES ('existing-chat', 'edit', 'Pre-migration chat', 0, 0);
+        """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chat_messages (id TEXT PRIMARY KEY, chat_id TEXT, seq INTEGER,
+            role TEXT, event_json TEXT, text TEXT, created_at REAL,
+            summary TEXT, summary_kind TEXT, summary_at REAL,
+            is_draft INTEGER NOT NULL DEFAULT 0, draft_handle TEXT);
+        """, nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 44;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+        raw = nil
+
+        // Open via GRDBWikiStore — triggers the v44→v45 migration step.
+        let store = try GRDBWikiStore(databaseURL: url)
+        #expect(store.pragmaValue("user_version") == "45")
+        let hasProviderCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
+        #expect(hasProviderCol == "1")
+        let hasModelCol = store.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_id';")
+        #expect(hasModelCol == "1")
+
+        // The pre-existing row reads back nil for both — no backfill.
+        let existing = try store.getChat(id: PageID(rawValue: "existing-chat"))
+        #expect(existing.modelProviderId == nil)
+        #expect(existing.modelId == nil)
     }
 }

@@ -102,6 +102,18 @@ public final class RemoteChatSession {
         thinkingOption?.choices ?? []
     }
 
+    /// A per-chat model override (`ProviderSelector` pick) made on a `.draft`
+    /// session — one that has no `chats` row yet to write it to. Consumed by
+    /// `ChatDetailView.submitMessage`'s draft branch, which passes it as
+    /// `startChat`'s `providerId`/`modelId` so it seeds `ChatSummary` at
+    /// creation. Meaningless (and unused) once `chatID` is `.chat(_)` — an
+    /// existing chat's picker writes straight to the `chats` row instead
+    /// (`WikiStoreModel.updateChatModelOverride`). Never read/written for a
+    /// `.chat(_)` session; no clearing needed, since starting the chat
+    /// discards this whole draft `RemoteChatSession` (a fresh one is created
+    /// for the new `PageID`, per `chatID`'s `let`-ness).
+    public var pendingModelOverride: (providerId: String, modelId: String?)?
+
     // MARK: - Private: streaming-row bookkeeping
 
     /// Which kind of row (if any) `events.last` is still accumulating from
@@ -354,27 +366,6 @@ public final class RemoteChatSession {
     /// Mirrors `AgentLauncher.resolveSelectedProvider()`.
     public func resolveSelectedProvider() -> AgentProvider {
         providersConfig().selectedProvider()
-    }
-
-    /// Atomically set the default provider AND a per-provider model selection
-    /// in one load→mutate→save cycle. Choosing a model implies choosing its
-    /// provider (paseo two-step); both land together. Mirrors
-    /// `AgentLauncher.setSelectedModelAndDefault(_:provider:)`.
-    @discardableResult
-    public func setSelectedModelAndDefault(
-        _ modelId: String?, provider: AgentProvider
-    ) -> AgentProvidersConfig {
-        let dir = resolveProvidersContainerDirectory()
-        DebugLog.store("RemoteChatSession.setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save")
-        let updated = providersConfig()
-            .settingDefault(id: provider.id)
-            .settingSelectedModel(modelId, forProvider: provider.id)
-        do {
-            try updated.save(to: dir)
-        } catch {
-            DebugLog.store("RemoteChatSession.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId ?? "nil")): \(error)")
-        }
-        return updated
     }
 
     /// The user's persisted model selection for `providerId` (nil = agent

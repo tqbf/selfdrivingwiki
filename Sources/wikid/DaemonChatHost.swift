@@ -111,8 +111,14 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Start a new chat
 
     /// Create a `chats` row, seed the first user message, and start an
-    /// interactive session. Returns the chat ULID.
-    func startChat(wikiID: String, firstMessage: String) async throws -> String {
+    /// interactive session. Returns the chat ULID. `providerId`/`modelId`
+    /// seed the per-chat model override picked in the composer BEFORE the
+    /// chat existed (`ProviderSelector` on a `.draft` session) — nil/nil for
+    /// every pre-existing caller.
+    func startChat(
+        wikiID: String, firstMessage: String,
+        providerId: String? = nil, modelId: String? = nil
+    ) async throws -> String {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -122,11 +128,12 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.emptyMessage
         }
 
-        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID) msg=\"\(trimmed.prefix(80))\"")
+        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId ?? "nil") modelId=\(modelId ?? "nil")")
 
         // 1. Create the chat row + seed the first user message.
         let title = ChatSummary.title(fromFirstMessage: trimmed)
-        let chat = try store.createChat(kind: .edit, title: title)
+        let chat = try store.createChat(
+            kind: .edit, title: title, modelProviderId: providerId, modelId: modelId)
         _ = try store.appendChatMessages(chatID: chat.id, events: [.userText(trimmed)])
 
         // 2. Build wiki-state markdown + read the system prompt (RC2).
@@ -148,6 +155,8 @@ final class DaemonChatHost: @unchecked Sendable {
             wikictlDirectory: HelpersLocation.wikictlDirectory,
             chatID: chat.id.rawValue,
             firstMessagePrePersisted: true,
+            chatOverrideProviderId: providerId,
+            chatOverrideModelId: modelId,
             onAcpSessionId: { [weak self] sessionId in
                 self?.handleAcpSessionId(
                     chatID: chatIDPage, sessionId: sessionId, wikiID: wikiIDCapture)
@@ -226,9 +235,12 @@ final class DaemonChatHost: @unchecked Sendable {
         // Finalize stale drafts from an interrupted turn.
         try store.finalizeStaleDrafts(forChat: chatIDPage)
 
-        // Read history + prior ACP session ID.
+        // Read history + prior ACP session ID + the chat's own model override
+        // (`ChatSummary.modelProviderId`/`.modelId`, set by the composer's
+        // `ProviderSelector`) in one fetch.
         let history = try store.chatMessages(chatID: chatIDPage)
-        let priorAcpSessionId = try store.getChat(id: chatIDPage).acpSessionId
+        let chatRow = try store.getChat(id: chatIDPage)
+        let priorAcpSessionId = chatRow.acpSessionId
 
         // Build the adaptive preamble (#825) — these are @MainActor static
         // funcs on AgentOperationRunner, so we hop to the main actor.
@@ -258,6 +270,8 @@ final class DaemonChatHost: @unchecked Sendable {
             chatID: chatID,
             historySeed: history.map(\.event),
             priorAcpSessionId: priorAcpSessionId,
+            chatOverrideProviderId: chatRow.modelProviderId,
+            chatOverrideModelId: chatRow.modelId,
             onAcpSessionId: { [weak self] sessionId in
                 self?.handleAcpSessionId(
                     chatID: chatIDPage, sessionId: sessionId, wikiID: wikiIDCapture)

@@ -14,10 +14,18 @@ import WikiFSCore
 public struct ChatStartRequest: Codable, Sendable {
     public let wikiID: String
     public let firstMessage: String
+    /// The per-chat model override picked in the composer's `ProviderSelector`
+    /// BEFORE the chat existed (a `.draft` session has no `chats` row yet to
+    /// write it to). `nil` = no override. Seeds `ChatSummary.modelProviderId`/
+    /// `.modelId` at creation (`DaemonChatHost.startChat`).
+    public let providerId: String?
+    public let modelId: String?
 
-    public init(wikiID: String, firstMessage: String) {
+    public init(wikiID: String, firstMessage: String, providerId: String? = nil, modelId: String? = nil) {
         self.wikiID = wikiID
         self.firstMessage = firstMessage
+        self.providerId = providerId
+        self.modelId = modelId
     }
 }
 

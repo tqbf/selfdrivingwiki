@@ -4279,6 +4279,18 @@ public final class WikiStoreModel {
         DebugLog.trying("getChat", operation: { try store.getChat(id: id) })
     }
 
+    /// `@MainActor` wrapper for the per-chat model override write/clear (the
+    /// composer's `ProviderSelector` picking a model for THIS chat). No
+    /// manual reload — the bus fires `reloadFromStore()` async after the
+    /// `.chat .updated` emit, same as `renameChat`.
+    public func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) {
+        do {
+            try store.updateChatModelOverride(id: id, providerId: providerId, modelId: modelId)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatModelOverride failed: \(error)")
+        }
+    }
+
     /// `@MainActor` wrapper for the per-message summary write (chat-summary
     /// plan §3.5). The summarizer's off-main compute marshals back here for the
     /// DB write (no inference inside a transaction). No manual reload — the bus

@@ -295,10 +295,10 @@ struct MessageSummaryTests {
     // MARK: - Store round-trip (AC.1 + AC.6, integration)
 
     @Test func freshDB_isAtSchemaVersion44() throws {
-        // AC.1: a fresh DB is at user_version = 44.
+        // AC.1: a fresh DB is at the current schema version.
         let store = try TestStoreFactory.inMemory()
         let version = Int(store.pragmaValue("user_version")) ?? 0
-        #expect(version == 44)
+        #expect(version == GRDBWikiStore.schemaVersion)
     }
 
     @Test func summaryNullForNewMessages() throws {
