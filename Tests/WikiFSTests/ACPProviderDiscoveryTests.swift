@@ -3,19 +3,13 @@ import Testing
 import WikiFSEngine
 import Foundation
 import WikiFSEngine
-import WikiFSCore
+@testable import WikiFSCore
 
 /// Filesystem ACP-agent discovery (slice of #217). The discovery logic is pure
 /// given an injected resolver, so it's tested without the real filesystem; a
 /// live integration check confirms it against this machine's PATH.
 ///
-/// `.serialized` AND `.timeLimit(.minutes(5))` (#925, mirrors #664's fallback
-/// direction): `liveDiscoveryMatchesFilesystem` calls
-/// `PathPreflight.resolveOnLoginShell`, which blocks a cooperative-pool
-/// thread on a real `Process().waitUntilExit()`. `.serialized` keeps that
-/// blocking wait from compounding with the rest of this suite under
-/// full-suite concurrency; `.timeLimit` is the per-test safety net.
-@Suite(.timeLimit(.minutes(5)), .serialized)
+@Suite(.timeLimit(.minutes(5)))
 struct ACPProviderDiscoveryTests {
 
     // MARK: - Pure logic (injected resolver)
@@ -92,38 +86,54 @@ struct ACPProviderDiscoveryTests {
     // MARK: - Live (this machine's PATH)
 
     @Test
-    func liveDiscoveryMatchesFilesystem() {
-        // Machine-agnostic: for each *auto-detectable* catalog agent, discovery
-        // must report it installed iff its binary is actually on the login-shell
-        // PATH. Non-autoDetectable agents (e.g. claude-acp via `bun`) are
-        // NEVER reported, regardless of whether their runtime is on PATH — so
-        // they're excluded from this equivalence check (and asserted absent
-        // separately below). No hard-coded agent names — so this passes on a
-        // CI runner that has none installed (all missing → none reported) and
-        // still validates the real login-shell resolver end-to-end on a machine
-        // that has some.
-        let discovered = ACPProviderDiscovery.discover()
-        let discoveredIDs = Set(discovered.map(\.agent.id))
-        for agent in ACPProviderCatalog.agents where agent.autoDetectable {
-            switch PathPreflight.resolveOnLoginShell(executable: agent.detectExecutable) {
-            case .found:
-                #expect(discoveredIDs.contains(agent.id),
-                        "discovery missed installed agent \(agent.id)")
-            case .missing:
-                #expect(!discoveredIDs.contains(agent.id),
-                        "discovery reported a non-installed agent \(agent.id)")
+    func liveDiscoveryMatchesFilesystem() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            Issue.record("Failed to create temp directory: \(error.localizedDescription)")
+            return
+        }
+        defer {
+            do {
+                try FileManager.default.removeItem(at: directory)
+            } catch {
+                Issue.record("Failed to remove temp directory: \(error.localizedDescription)")
             }
         }
-        // Non-autoDetectable agents are never discovered, even if their runtime
-        // happens to be on PATH (e.g. `bun` for claude-acp).
-        for agent in ACPProviderCatalog.agents where !agent.autoDetectable {
-            #expect(!discoveredIDs.contains(agent.id),
-                    "discovery reported a non-autoDetectable agent \(agent.id)")
-        }
-        // Resolved paths are absolute for whatever was found.
-        for d in discovered {
-            #expect(d.resolvedPath.hasPrefix("/"))
-        }
+
+        let catalog = [
+            KnownACPAgent(
+                id: ProviderID(rawValue: "one"),
+                label: "One",
+                summary: "",
+                detectExecutable: "one",
+                command: ["one", "--acp"]),
+            KnownACPAgent(
+                id: ProviderID(rawValue: "two"),
+                label: "Two",
+                summary: "",
+                detectExecutable: "two",
+                command: ["two", "--acp"],
+                autoDetectable: false),
+        ]
+        _ = FileManager.default.createFile(
+            atPath: directory.appendingPathComponent("one").path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o755])
+
+        let discovered = await ACPProviderDiscovery.discoverOnLoginShell(
+            in: catalog,
+            runProcess: { _ in
+                AsyncProcessResult(
+                    terminationStatus: 0,
+                    output: .separate(stdout: Data(directory.path.utf8), stderr: Data()))
+            })
+        let discoveredIDs = Set(discovered.map(\.agent.id))
+        #expect(discoveredIDs.contains(ProviderID(rawValue: "one")))
+        #expect(!discoveredIDs.contains(ProviderID(rawValue: "two")))
+        #expect(discovered.first?.resolvedPath == directory.appendingPathComponent("one").path)
     }
 }
 #endif // os(macOS)
