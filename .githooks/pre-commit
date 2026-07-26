@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs `make lint` (swiftlint --strict) before every commit. See the `hooks:`
+# target in Makefile for how this directory gets wired up via
+# core.hooksPath, and .swiftlint.yml for what the lint gate actually checks.
+#
+# Bypass for a genuine emergency: git commit --no-verify.
+
+make lint
