@@ -300,7 +300,9 @@ struct WikiFSApp: App {
         // matter which Scene/window materializes or whether AppKit's
         // delegate callback path is ever reached.
         Task { @MainActor [self] in
-            try? await Task.sleep(for: .seconds(10))
+            await DebugLog.trying("daemon connect watchdog sleep", operation: {
+                try await Task.sleep(for: .seconds(10))
+            })
             guard !Self.didConnectDaemon else { return }
             DebugLog.store("WikiFSApp: daemon connect watchdog fired — no entry point called connectToDaemon()")
             connectToDaemon()
