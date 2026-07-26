@@ -351,6 +351,19 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        // Confirm-before-quit toggle. The Settings UI toggle for this was
+        // removed along with the old Permissions tab, but `AppDelegate` still
+        // reads `confirmBeforeQuitting` to gate the quit dialog — this menu
+        // item is now the only way to turn it off, so it lives in the
+        // always-reachable status menu rather than Settings.
+        let confirmQuitItem = NSMenuItem(
+            title: "Confirm Before Quitting",
+            action: #selector(toggleConfirmBeforeQuitting(_:)),
+            keyEquivalent: "")
+        confirmQuitItem.target = self
+        confirmQuitItem.state = AppDelegate.confirmBeforeQuitting ? .on : .off
+        menu.addItem(confirmQuitItem)
+
         // About + Quit.
         let aboutItem = NSMenuItem(
             title: "About Self Driving Wiki",
@@ -405,6 +418,12 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         } else {
             backgroundIngestCoordinator?.stop()
         }
+    }
+
+    @objc private func toggleConfirmBeforeQuitting(_ sender: NSMenuItem?) {
+        let newValue = !AppDelegate.confirmBeforeQuitting
+        UserDefaults.standard.set(newValue, forKey: AppDelegate.confirmQuitKey)
+        sender?.state = newValue ? .on : .off
     }
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
