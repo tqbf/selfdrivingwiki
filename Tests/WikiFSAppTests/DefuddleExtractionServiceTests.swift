@@ -16,6 +16,24 @@ import Testing
         DefuddleExtractionService.resolve()
     }
 
+    /// Wait for a process to exit without blocking the cooperative thread
+    /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
+    /// thread; under `swift test`'s shared pool that starves every other
+    /// suite scheduled onto it (#732, same fix as `PdfExtractionServiceTests`).
+    /// Use `terminationHandler` + `CheckedContinuation` instead — same
+    /// semantics, non-blocking.
+    private func asyncWaitUntilExit(_ process: Process) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            if !process.isRunning {
+                cont.resume()
+                return
+            }
+            process.terminationHandler = { _ in
+                cont.resume()
+            }
+        }
+    }
+
     // MARK: - End-to-end extraction (real subprocess)
 
     @Test func extractsMarkdownAndMetadata() async throws {
@@ -126,7 +144,7 @@ import Testing
         reg.untrack(p)
     }
 
-    @Test func processRegistryTerminatesTracked() {
+    @Test func processRegistryTerminatesTracked() async throws {
         let reg = DefuddleExtractionService.ProcessRegistry()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -136,7 +154,7 @@ import Testing
 
         reg.track(p)
         reg.terminateAllForTesting()
-        p.waitUntilExit()
+        try await asyncWaitUntilExit(p)
         #expect(!p.isRunning)
         #expect(p.terminationStatus != 0)
     }

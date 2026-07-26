@@ -50,13 +50,14 @@ struct YouTubeEmbedWebViewTests {
                       userInfo: [NSLocalizedDescriptionKey: "no WKWebView found in hosted window"])
     }
 
-    /// Evaluate `js` and return its result coerced to a String inside the
-    /// completion (Sendable-safe — only the `String?` crosses the continuation).
+    /// Evaluate `js` and return its result coerced to a String, or `nil` if
+    /// it times out. Timeout-guarded — see `evaluateJavaScriptWithTimeout`
+    /// for why this suite's live `evaluateJavaScript` calls can otherwise
+    /// hang forever under cooperative thread-pool starvation from other
+    /// concurrently-running suites (#664/#732).
     @MainActor
     private func evalString(_ webView: WKWebView, _ js: String) async -> String? {
-        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            webView.evaluateJavaScript(js) { result, _ in cont.resume(returning: result as? String) }
-        }
+        await evaluateJavaScriptWithTimeout(webView, js)
     }
 
     /// Poll the live DOM until the reader has painted the embed iframe, returning
