@@ -194,21 +194,12 @@ public enum MessageSummarizer {
     public static func resolveProfile(
         config: AgentProvidersConfig,
         credentialStore: any ACPCredentialStore,
-        resolveCommand: (AgentProvider) -> [String]? = { provider in
-            guard let command = provider.command, let exe = command.first else {
-                return nil
-            }
-            if exe == "bun", let bundled = AgentLauncher.bundledHelperPath("bun") {
-                return [bundled] + Array(command.dropFirst())
-            }
-            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
-            case .found(let path):
-                return [path] + Array(command.dropFirst())
-            case .missing:
-                return nil
-            }
-        }
+        searchPath: String? = nil,
+        resolveCommand: ((AgentProvider) -> [String]?)? = nil
     ) -> BackendProfile? {
+        let commandResolver = resolveCommand ?? { provider in
+            AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
+        }
         // Read the pin DIRECTLY — never `provider(forStage:)` (chat-summary
         // plan §5.1 invariant). This method is only called after the caller has
         // confirmed model mode, but the guard is here too for defense in depth.
@@ -219,7 +210,7 @@ public enum MessageSummarizer {
             return nil
         }
 
-        guard let resolvedCommand = resolveCommand(provider) else {
+        guard let resolvedCommand = commandResolver(provider) else {
             DebugLog.agent("MessageSummarizer.resolveProfile: command not resolved for provider=\(provider.id)")
             return nil
         }

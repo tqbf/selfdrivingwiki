@@ -327,7 +327,13 @@ struct ACPProviderModelProbeTests {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-probe-persist-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tmp)
+            } catch {
+                Issue.record("Failed to remove temp directory: \(error.localizedDescription)")
+            }
+        }
 
         // A provider with maxConcurrent set — the field the parent's `save(_)`,
         // helper DROPS (pre-existing bug). `settingCachedModels` (the path the
@@ -474,14 +480,8 @@ struct ACPProviderModelProbeTests {
 /// ACP_SMOKE=1 ANTHROPIC_API_KEY=sk-... swift test --filter ACPProviderModelProbeLiveTests
 /// ```
 ///
-/// `.serialized` (#925, mirrors #664's fallback direction): this suite
-/// resolves the agent path via `PathPreflight.resolveOnLoginShell`, which
-/// blocks a cooperative-pool thread on a real `Process().waitUntilExit()`,
-/// alongside spawning a real ACP subprocess for the probe. `.serialized`
-/// prevents that from compounding with other tests in the same run.
 @Suite(
     .timeLimit(.minutes(5)),
-    .serialized,
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full probe) to run the live model-probe test.")
@@ -506,7 +506,7 @@ struct ACPProviderModelProbeLiveTests {
         // check does — the probe needs an absolute path (the SDK's launch
         // does NOT do PATH lookup).
         let resolvedAgentPath: String
-        switch PathPreflight.resolveOnLoginShell(executable: agentPath) {
+        switch await PathPreflight.resolveOnLoginShell(executable: agentPath) {
         case .found(let path):
             resolvedAgentPath = path
         case .missing(let reason):

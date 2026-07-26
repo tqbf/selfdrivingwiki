@@ -6,9 +6,7 @@ import Foundation
 /// the user to enable).
 ///
 /// PURE-ish: the PATH resolver is injectable so the discovery logic is unit-
-/// tested without touching the real filesystem (the production resolver is
-/// `PathPreflight.resolveOnLoginShell`, which does a real `zsh -lc` hop because
-/// the GUI app's PATH isn't the user's login PATH).
+/// tested without touching the real filesystem.
 ///
 /// Discovery checks the BINARY exists — it does NOT verify the agent actually
 /// speaks ACP (that's validated when `ACPBackend` launches it). A found agent is
@@ -33,15 +31,19 @@ public enum ACPProviderDiscovery {
 
     /// Discover installed ACP agents from `catalog` (defaults to the known
     /// catalog). `resolve` maps an executable name to a `PathPreflight.Result`;
-    /// the default resolves on the login-shell PATH. Returns the catalog agents
-    /// whose binary was found, each with its resolved path.
+    /// the default resolves on the current process PATH. Returns the catalog
+    /// agents whose binary was found, each with its resolved path.
     ///
     /// Non-autoDetectable entries (runtime-launched agents like `claude-acp`
     /// via `bun`, or npx/uvx packages) are skipped — see
     /// `KnownACPAgent.autoDetectable`.
     public static func discover(
         in catalog: [KnownACPAgent] = ACPProviderCatalog.agents,
-        resolve: (String) -> PathPreflight.Result = PathPreflight.resolveOnLoginShell
+        resolve: (String) -> PathPreflight.Result = { executable in
+            PathPreflight.resolve(
+                executable: executable,
+                usingSearchPath: ProcessInfo.processInfo.environment["PATH"] ?? "")
+        }
     ) -> [DiscoveredACPAgent] {
         catalog.compactMap { agent in
             // Skip runtime-launched agents — finding the runtime on PATH does
@@ -53,6 +55,23 @@ public enum ACPProviderDiscovery {
             case .missing:
                 return nil
             }
+        }
+    }
+
+    public static func discoverOnLoginShell(
+        in catalog: [KnownACPAgent] = ACPProviderCatalog.agents
+    ) async -> [DiscoveredACPAgent] {
+        await discoverOnLoginShell(in: catalog, runProcess: AsyncProcessRunner.run)
+    }
+
+    static func discoverOnLoginShell(
+        in catalog: [KnownACPAgent] = ACPProviderCatalog.agents,
+        runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> [DiscoveredACPAgent] {
+        let path = await PathPreflight.loginShellPATH(using: runProcess)
+            ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return discover(in: catalog) { executable in
+            PathPreflight.resolve(executable: executable, usingSearchPath: path)
         }
     }
 }

@@ -603,8 +603,11 @@ final class DaemonChatHost: @unchecked Sendable {
         containerDir: URL, credentialStore: any ACPCredentialStore,
         store: GRDBWikiStore, chatSummaryMessageID: PageID?
     ) async {
+        let loginShellPath = await PathPreflight.loginShellPATH()
         guard let profile = MessageSummarizer.resolveProfile(
-            config: config, credentialStore: credentialStore) else {
+            config: config,
+            credentialStore: credentialStore,
+            searchPath: loginShellPath) else {
             DebugLog.agent("DaemonChatHost.runModelSummarization: profile resolution failed")
             return
         }
