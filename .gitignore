@@ -19,6 +19,7 @@ Resources/mlx.metallib
 /default.metallib
 
 .vscode/
+.codex/
 
 .xcodebuildmcp/
 tmp/
