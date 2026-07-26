@@ -267,19 +267,50 @@ struct WikiFSApp: App {
         // The wikid daemon is now a bundled XPC service
         // (Contents/XPCServices/wikid.xpc). The system auto-launches it on
         // first NSXPCConnection(serviceName:) — no LaunchAgent, no launchctl,
-        // no plist management. The connection is established in
-        // `connectToDaemon()` from the main WindowGroup's .task. If the daemon
-        // isn't available yet, the app starts on a local QueueEngine and the
-        // DaemonHealthMonitor retries until the XPC service responds.
+        // no plist management. If the daemon isn't available yet, the app
+        // starts on a local QueueEngine and the DaemonHealthMonitor retries
+        // until the XPC service responds.
 
         // Call bootstrap directly from init.
         bootstrapApp()
+
+        // #929 follow-up: window-appearance-dependent startup work (status
+        // item, appearance sync, daemon connect) used to run ONLY from
+        // Scene `.task` modifiers. That's fragile — which window macOS
+        // materializes first on launch (e.g. state restoration reopening a
+        // per-wiki window directly) is not something the app controls, and
+        // `connectToDaemon()` had no other entry point, so it silently never
+        // ran when the "main" WindowGroup's .task didn't fire. Route it
+        // through `AppDelegate.applicationDidFinishLaunching` instead, which
+        // AppKit calls unconditionally regardless of which Scene/window ends
+        // up on screen. Every call below is idempotent (static-flag guarded),
+        // so the `.task` copies that remain are harmless redundant fallbacks,
+        // not the primary path. Add new one-time launch work HERE, not to an
+        // individual window's `.task`.
+        appDelegate.bootstrap = { [self] in
+            startStatusItem()
+            applyAppKitAppearance()
+            connectToDaemon()
+        }
+
+        // Watchdog (defense-in-depth): if nothing has attempted a daemon
+        // connection 10s after launch — e.g. a future refactor breaks every
+        // wired call site the way #929 did — retry directly. Scheduled from
+        // init(), the one call site that's unconditionally guaranteed no
+        // matter which Scene/window materializes or whether AppKit's
+        // delegate callback path is ever reached.
+        Task { @MainActor [self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Self.didConnectDaemon else { return }
+            DebugLog.store("WikiFSApp: daemon connect watchdog fired — no entry point called connectToDaemon()")
+            connectToDaemon()
+        }
     }
 
-    /// App-level bootstrap: status item, file provider, activateMostRecent,
-    /// change bridge. Called from BOTH AppDelegate.applicationDidFinishLaunching
-    /// (guaranteed) AND the main WindowGroup's .task (fallback). Idempotent —
-    /// guarded by a static flag.
+    /// App-level bootstrap: activateMostRecent + file provider wiring. Called
+    /// directly and unconditionally from `init()` — no Scene/window needs to
+    /// appear first. Idempotent — guarded by a static flag, so the redundant
+    /// calls from both windows' `.task` are harmless no-ops.
     private static var didBootstrap = false
     @MainActor
     private func bootstrapApp() {
@@ -294,15 +325,13 @@ struct WikiFSApp: App {
         registry.flushActiveStore = { [sessionManager] wikiID in
             sessionManager.flushSession(for: wikiID)
         }
-
-        // Status item + File Provider setup run from .task (on the first
-        // WindowGroup that appears) via bootstrapApp's idempotent guard.
-        // The async Task parts also run from there.
     }
 
-    /// Create and start the menu-bar status item. Called from .task (runs
-    /// when a window appears — guaranteed even with state restoration).
-    /// Idempotent — guarded by `didStartStatusItem`.
+    /// Create and start the menu-bar status item. Primary call site is
+    /// `AppDelegate.bootstrap` (wired in `init()`, invoked from the
+    /// guaranteed `applicationDidFinishLaunching`); also called from both
+    /// windows' `.task` as a redundant fallback (see #929). Idempotent —
+    /// guarded by `didStartStatusItem`.
     @MainActor
     private static var didStartStatusItem = false
     @MainActor
@@ -418,10 +447,18 @@ struct WikiFSApp: App {
 
     // MARK: - Daemon connection (#878 BLOCKER 2 — async, non-blocking)
 
-    /// Attempt to connect to the wikid daemon after the first render. Called
-    /// from the main WindowGroup's `.task`. If the daemon is healthy, swaps the
-    /// queue engine router from the local fallback to the XPC proxy and starts
-    /// the health monitor. Never blocks the main thread.
+    /// Attempt to connect to the wikid daemon. If the daemon is healthy, swaps
+    /// the queue engine router from the local fallback to the XPC proxy and
+    /// starts the health monitor. Never blocks the main thread.
+    ///
+    /// Primary call site is `AppDelegate.bootstrap` (wired in `init()`,
+    /// invoked from the guaranteed `applicationDidFinishLaunching`) — NOT a
+    /// window's `.task`. #929: this used to run ONLY from the "main"
+    /// WindowGroup's `.task`, which silently never fired when macOS restored
+    /// a per-wiki window directly on launch, leaving the daemon connection
+    /// permanently unattempted. It's still called redundantly from both
+    /// windows' `.task` and from an init()-scheduled watchdog — idempotent
+    /// via `didConnectDaemon`, so extra calls are harmless.
     ///
     /// #885 startup race fix: if the initial connection fails (the XPC service
     /// may not be available yet on first launch or mid-replacement), the
@@ -734,6 +771,13 @@ struct WikiFSApp: App {
             .task {
                 bootstrapApp()
                 startStatusItem()
+                // #929 follow-up: when macOS restores a per-wiki window
+                // directly on launch (a window was open at quit), the "main"
+                // WindowGroup's .task — the only other caller — never runs,
+                // so `connectToDaemon()` must be reachable from here too.
+                // Idempotent via `didConnectDaemon`, so calling it from both
+                // windows' .task is safe regardless of which fires.
+                connectToDaemon()
             }
             // The presented value can arrive AFTER first render (state
             // restoration) or change in place (openWindow(value:) routing to
@@ -878,6 +922,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so without a strong owner it deallocates the moment `start()` returns
     /// (same pattern as `menuBarItemController`).
     @MainActor var operationNotifier: OperationNotifier?
+    /// Window-independent launch work (status item, appearance sync, daemon
+    /// connect) — wired in `WikiFSApp.init()`, invoked from
+    /// `applicationDidFinishLaunching` below. This is the ONE call site
+    /// AppKit guarantees regardless of which Scene/window macOS decides to
+    /// materialize first (see #929). Each step it calls is independently
+    /// idempotent, so add new one-time launch work to that closure, not to
+    /// an individual window's `.task`.
     @MainActor var bootstrap: (@MainActor () -> Void)?
 
     // MARK: - Quit confirmation (folded in from the former QuitConfirmationDelegate;
