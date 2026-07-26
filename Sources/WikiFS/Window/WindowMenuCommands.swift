@@ -5,7 +5,7 @@ import WikiFSEngine
 
 /// Tracks the app's open windows so the standard Window menu can list them.
 ///
-/// SwiftUI's `WindowGroup(for: String.self)` should auto-populate the Window
+/// SwiftUI's `WindowGroup(for: WikiID.self)` should auto-populate the Window
 /// menu's open-windows list, but value-driven windows aren't reliably surfaced
 /// (issue #567). This tracker re-derives the list from
 /// `NSApplication.shared.windows` whenever a window becomes key/main, changes

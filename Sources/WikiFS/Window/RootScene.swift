@@ -4,7 +4,7 @@ import WikiFSCore
 
 /// Per-window scene view for multi-window UI (`plans/multi-window-ui.md`
 /// Phase 2b). Instantiated inside both the single-identity main `WindowGroup`
-/// (launch) and the value-driven `WindowGroup(for: String.self)` (additional
+/// (launch) and the value-driven `WindowGroup(for: WikiID.self)` (additional
 /// wiki windows opened from the switcher).
 ///
 /// Each `RootScene` resolves (or creates) its own `WikiSession` via the shared
@@ -17,7 +17,7 @@ import WikiFSCore
 /// `registry.activeWikiID`; the `.onChange` below adopts it, then the session
 /// resolves via the `else if let wikiID` branch.
 ///
-/// **Additional window path:** `WindowGroup(for: String.self)` passes the wiki
+/// **Additional window path:** `WindowGroup(for: WikiID.self)` passes the wiki
 /// ID via the binding; the session resolves immediately via the same branch.
 ///
 /// **In-window switch (Option+click):** `WikiSwitcher` calls
@@ -28,7 +28,7 @@ struct RootScene: View {
     /// The wiki ID for this window. `nil` before the MRU wiki is resolved at
     /// launch (the main window receives its ID from
     /// `registry.activeWikiID` after `activateMostRecent()`). Additional
-    /// windows receive their ID from `WindowGroup(for: String.self)`'s
+    /// windows receive their ID from `WindowGroup(for: WikiID.self)`'s
     /// binding.
     @State var wikiID: WikiID?
     @Bindable var registry: WikiRegistryClient
@@ -100,7 +100,7 @@ struct RootScene: View {
                     DebugLog.tabs("RootScene [No Wikis]: wikiID=nil session=nil registry.wikis.count=\(registry.wikis.count) activeWikiID=\(registry.activeWikiID?.rawValue ?? "nil") isSceneActive=\(isSceneActive)")
                     // Only adopt activeWikiID for the main launch window (which
                     // starts with wikiID==nil from the single-identity WindowGroup).
-                    // Wiki windows (from WindowGroup(for: String.self)) should receive
+                    // Wiki windows (from WindowGroup(for: WikiID.self)) should receive
                     // their ID from the binding — if they're nil here, it's a state-
                     // restoration edge case; adopt activeWikiID as a fallback.
                     if wikiID == nil, let activeID = registry.activeWikiID {

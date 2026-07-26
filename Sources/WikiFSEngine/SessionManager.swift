@@ -12,7 +12,7 @@ import WikiFSCore
 /// sessions with independent gates, so a long ingest in one window cannot
 /// block a query in another.
 ///
-/// `WindowGroup(for: String.self)` deduplicates by `==` on the value, so it
+/// `WindowGroup(for: WikiID.self)` deduplicates by `==` on the value, so it
 /// won't open two windows for the same wiki ID anyway — but `SessionManager`
 /// handles the case where the user opens wiki A, closes that window, then
 /// opens wiki A again (the session was released on close, a fresh one is

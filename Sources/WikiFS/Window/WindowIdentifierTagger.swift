@@ -9,7 +9,7 @@ import WikiFSCore
 ///
 /// Duplicates arise because the main `WindowGroup(id: "main")` window *adopts*
 /// a wiki (via `registry.activeWikiID`) but is invisible to the value-driven
-/// `WindowGroup(for: String.self)`'s `==` dedup — so `openWindow(value: id)`
+/// `WindowGroup(for: WikiID.self)`'s `==` dedup — so `openWindow(value: id)`
 /// can't see that the wiki is already on screen and opens a second window.
 /// Tagging every wiki-showing window (main or value-driven) with a stable
 /// identifier gives AppKit a reliable way to find and focus it.
