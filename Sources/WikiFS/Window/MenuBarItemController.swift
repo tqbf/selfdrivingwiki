@@ -207,7 +207,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // Open Wiki section: lists every wiki so the user can get back to a
         // window even when all windows are closed (accessory mode). Each item
         // calls `openWindowBridge.openWiki(wiki.id)` which opens or focuses
-        // that wiki's window via SwiftUI's `WindowGroup(for: String.self)`.
+        // that wiki's window via SwiftUI's `WindowGroup(for: WikiID.self)`.
         if !registry.wikis.isEmpty {
             // Nest the wiki list under a "Wikis" submenu to keep the top-level
             // status menu compact — the list can grow arbitrarily long.
@@ -392,7 +392,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openWikiWindow(_ sender: NSMenuItem?) {
-        guard let wikiID = sender?.representedObject as? String else { return }
+        guard let wikiID = sender?.representedObject as? WikiID else { return }
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         // Focus an already-open window for this wiki rather than opening a
@@ -400,7 +400,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // WindowGroup; a wiki adopted by the main window is invisible to it,
         // so we look the window up by the identifier WindowIdentifierTagger
         // stamps on it.
-        if let existing = windowForWiki(WikiID(rawValue: wikiID)) {
+        if let existing = windowForWiki(wikiID) {
             existing.makeKeyAndOrderFront(nil)
             return
         }

@@ -771,7 +771,7 @@ struct ActivityWindowView: View {
             return
         }
         store.openTab(.page(pageID))
-        openWindowBridge?.openWiki?(wikiID.rawValue)
+        openWindowBridge?.openWiki?(wikiID)
         DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.rawValue.prefix(8))")
     }
 
@@ -787,7 +787,7 @@ struct ActivityWindowView: View {
             return
         }
         store.requestSidebarReveal(.source(sourceID))
-        openWindowBridge?.openWiki?(wikiID.rawValue)
+        openWindowBridge?.openWiki?(wikiID)
         DebugLog.tabs("Extraction Reveal Source: revealed source \(sourceID) in wiki \(wikiID.rawValue.prefix(8))")
     }
 
@@ -809,7 +809,7 @@ struct ActivityWindowView: View {
         } else {
             DebugLog.tabs("Lint Browse Pages: no pages to reveal in wiki \(wikiID.rawValue.prefix(8)); focusing window only")
         }
-        openWindowBridge?.openWiki?(wikiID.rawValue)
+        openWindowBridge?.openWiki?(wikiID)
     }
 
     // MARK: - Reveal debug folder
@@ -930,7 +930,7 @@ struct ActivityWindowView: View {
                 self.sessionManager?.stashPendingWikiLink(
                     wikiID, url: url, openInNewTab: openInNewTab
                 )
-                self.openWindowBridge?.openWiki?(wikiID.rawValue)
+                self.openWindowBridge?.openWiki?(wikiID)
             }
         }
     }

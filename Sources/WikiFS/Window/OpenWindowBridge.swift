@@ -6,7 +6,7 @@ import WikiFSCore
 /// can't access the SwiftUI environment (notably `MenuBarItemController` and
 /// `AppDelegate.applicationShouldHandleReopen`).
 ///
-/// The app is single-window-per-wiki: `WindowGroup(for: String.self)`
+/// The app is single-window-per-wiki: `WindowGroup(for: WikiID.self)`
 /// deduplicates by `==`, so `openWiki(id)` either opens a new wiki window or
 /// focuses the existing one for that wiki — the Safari/Xcode "open in new
 /// window" pattern used by `WikiSwitcher`.
@@ -25,7 +25,7 @@ final class OpenWindowBridge {
     /// Opens (or focuses) the wiki window for the given wiki ID. Set by
     /// `WindowBridgeProbe` from a SwiftUI view that has access to
     /// `@Environment(\.openWindow)`.
-    var openWiki: ((String) -> Void)?
+    var openWiki: ((WikiID) -> Void)?
 
     /// Opens the main (launch) window — used when there are no wikis yet, or
     /// as a fallback from `applicationShouldHandleReopen`. Set by
@@ -84,7 +84,7 @@ struct WindowBridgeProbe: View {
     }
 
     private func wire() {
-        // `openWindow(value: wikiID)` targets `WindowGroup(for: String.self)`,
+        // `openWindow(value: wikiID)` targets `WindowGroup(for: WikiID.self)`,
         // deduplicating by ==: if a window for that wiki is already open, it's
         // focused instead of spawning a duplicate.
         bridge.openWiki = { wikiID in

@@ -448,7 +448,7 @@ struct WikiFSApp: App {
         }
         appDelegate.reopenMostRecentWiki = { [registry, openWindowBridge] in
             if let wikiID = registry.activeWikiID ?? registry.wikis.first?.id {
-                openWindowBridge.openWiki?(wikiID.rawValue)
+                openWindowBridge.openWiki?(wikiID)
             } else {
                 openWindowBridge.openMain?()
             }

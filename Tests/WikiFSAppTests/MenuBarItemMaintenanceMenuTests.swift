@@ -16,6 +16,30 @@ import Testing
 @MainActor
 struct MenuBarItemMaintenanceMenuTests {
 
+    @Test("Selecting a wiki dispatches its typed ID to the window bridge")
+    func selectingWikiOpensItsWindow() throws {
+        let bridge = OpenWindowBridge()
+        var openedWikiID: WikiID?
+        bridge.openWiki = { openedWikiID = $0 }
+        let controller = try makeController(openWindowBridge: bridge, bootstrapRegistry: true)
+        let menu = NSMenu()
+        controller.menuNeedsUpdate(menu)
+
+        let wikis = try #require(
+            menu.items.first(where: { $0.title == "Wikis" })?.submenu,
+            "A bootstrapped registry should produce a Wikis submenu")
+        let wikiItem = try #require(wikis.items.first)
+        let representedWikiID = try #require(wikiItem.representedObject as? WikiID)
+
+        #expect(wikiItem.target === controller)
+        #expect(wikiItem.action == NSSelectorFromString("openWikiWindow:"))
+        #expect(NSApplication.shared.sendAction(
+            try #require(wikiItem.action),
+            to: wikiItem.target,
+            from: wikiItem))
+        #expect(openedWikiID == representedWikiID)
+    }
+
     @Test("Maintenance submenu includes a wired Restart Daemon item")
     func restartDaemonMenuItemExists() throws {
         let controller = try makeController()
@@ -49,7 +73,10 @@ struct MenuBarItemMaintenanceMenuTests {
     /// dependencies. `buildMenu` only reads `registry.wikis` (empty here) and
     /// `activityTracker.todayUsage` (no data on a fresh tracker), so none of
     /// the heavier session/engine machinery is exercised by the menu build.
-    private func makeController() throws -> MenuBarItemController {
+    private func makeController(
+        openWindowBridge: OpenWindowBridge = OpenWindowBridge(),
+        bootstrapRegistry: Bool = false
+    ) throws -> MenuBarItemController {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("menu-item-controller-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -65,13 +92,16 @@ struct MenuBarItemMaintenanceMenuTests {
             extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil })
         let registry = WikiRegistryClient(containerDirectory: dir)
+        if bootstrapRegistry {
+            registry.bootstrap(activateNow: false)
+        }
 
         return MenuBarItemController(
             queueEngine: engine,
             activityTracker: QueueActivityTracker(),
             sessionManager: sessionManager,
             registry: registry,
-            openWindowBridge: OpenWindowBridge())
+            openWindowBridge: openWindowBridge)
     }
 }
 

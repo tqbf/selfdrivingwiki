@@ -6,6 +6,12 @@
 makes sessions truly per-window: each window holds its own `WikiSession`,
 keyed by the wiki ID passed to `WindowGroup(for: String.self)`.
 
+**Current implementation note (2026-07-26):** the scene identity was
+subsequently strengthened from raw `String` to `WikiID`; all current
+`openWindow(value:)` routes and menu represented objects must carry `WikiID` to
+match `WindowGroup(for: WikiID.self)`. The original design record below retains
+its historical `String` spelling.
+
 **Decisions (confirmed with operator):**
 - **M1: `WindowGroup(for: String.self)` — wiki ID is the window value.**
   `String` is already `Codable + Hashable`, so no wrapper type needed (unlike
