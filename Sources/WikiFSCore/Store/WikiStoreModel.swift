@@ -618,21 +618,25 @@ public final class WikiStoreModel {
 
     /// #637: one-shot page search that resolves a Tantivy BM25 leg before
     /// calling the store's 3-arg `searchSimilar` — mirrors `scheduleSearch()`
-    /// but synchronous (the caller — `WikiLinkMenuNSItems.similarPagesItem` —
-    /// builds its submenu once per right-click, not per render, so blocking the
-    /// main actor for the Tantivy query is the same trade-off the existing
-    /// `searchSimilar(query:limit:)` already makes for MiniLM inference).
+    /// without the debounce, for callers that search once per user gesture
+    /// rather than per keystroke (the "Suggest…" / "Find Similar…" link
+    /// submenu, via `WikiLinkMenuNSItems`).
     ///
-    /// The Tantivy `indexer.search` runs on its actor (off-main); the async→
-    /// sync bridge uses `Task { ... }.value` on `@MainActor` — safe because
-    /// the search never hops back to the main actor to make progress. Returns
-    /// cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable or
-    /// returns no hits — post-#634 that's the documented contract (FTS5 was
+    /// #925: this used to bridge the actor-isolated Tantivy query back to a
+    /// synchronous main-actor call with a `DispatchSemaphore`. That parked the
+    /// main thread *and* a cooperative-pool thread on every right-click, which
+    /// is one of the four starvation sites the issue tracks; the awaited leg
+    /// below is the whole fix. Callers that need a menu item synchronously must
+    /// render a placeholder and fill it in when this returns — see
+    /// `SimilarPagesMenuLoader`.
+    ///
+    /// Returns cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable
+    /// or returns no hits — post-#634 that's the documented contract (FTS5 was
     /// dropped; nil leg = no BM25 leg, cosine still answers when
     /// NLEmbedding/MLX are loaded).
-    public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) -> [WikiPageSummary] {
+    public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) async -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
-        let leg = resolveTantivyLegSync(query: query, kind: .page, limit: limit, catalog: summaries)
+        let leg = await resolveTantivyLeg(query: query, kind: .page, limit: limit, catalog: summaries)
         do {
             return try store.searchSimilar(query: query, limit: limit, bm25Leg: leg)
         } catch {
@@ -3775,66 +3779,6 @@ public final class WikiStoreModel {
         return resolved.isEmpty ? nil : resolved
     }
 
-    /// #637: synchronous variant of ``resolveTantivyLeg(query:kind:limit:catalog:)``
-    /// for one-shot main-actor callers that need the leg inline (the "Find
-    /// Similar…" right-click menu — `WikiLinkMenuNSItems.similarPagesItem`).
-    /// Bridges the actor-isolated `TantivySearchService.search` to the
-    /// main-actor sync contract the existing `searchSimilar(query:limit:)`
-    /// wrapper already upholds.
-    ///
-    /// Deadlock safety: the awaited `TantivySearchService.search` runs on the
-    /// `TantivyIndexer` actor (pure off-main compute — touches no SQLite file,
-    /// no actor needs the main thread to release a lock). The semaphore-bridge
-    /// (mirrors `wikictl`'s `runRefresh` async→sync pattern at
-    /// `Sources/wikictl/main.swift:180-200`) blocks only the calling main
-    /// thread; the `Task.detached` body runs in the cooperative pool and hops
-    /// to the indexer actor to query — never back to the main actor — so
-    /// `semaphore.wait()` cannot self-deadlock. `Task.detached` (not
-    /// `Task { ... }`) is intentional: an unstructured `Task` would inherit
-    /// the main-actor executor and could starve under load.
-    ///
-    /// Returns `nil` (→ store falls back to FTS5) when `tantivySearch` is
-    /// `nil`, the index returned no hits, or every hit was missing from
-    /// `catalog`. Same contract as the async variant.
-    @MainActor
-    private func resolveTantivyLegSync<T: Identifiable & Sendable>(
-        query: String,
-        kind: TantivyDocumentKind,
-        limit: Int,
-        catalog: [T]
-    ) -> [T]? where T.ID == PageID {
-        guard let svc = tantivySearch, !query.isEmpty else { return nil }
-        let box = TantivyLegBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        Task.detached {
-            box.result = await svc.search(query: query, kinds: [kind], limit: limit)
-            semaphore.signal()
-        }
-        semaphore.wait()
-        guard let hits = box.result, !hits.isEmpty else { return nil }
-        let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let resolved = hits.compactMap { hit -> T? in
-            let id = PageID(rawValue: hit.ulid)
-            return byID[id]
-        }
-        return resolved.isEmpty ? nil : resolved
-    }
-
-    /// Thread-safe box for the sync Tantivy leg bridge — mirrors
-    /// `RefreshResultBox` at `Sources/wikictl/main.swift`. `@unchecked Sendable`
-    /// is belt-and-suspenders: the semaphore guarantees the `Task.detached`
-    /// write happens-before the read after `semaphore.wait()` returns, so the
-    /// NSLock exists only to satisfy Swift 6's data-race checker.
-    private final class TantivyLegBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _result: [TantivyShadowSearchResult]?
-
-        var result: [TantivyShadowSearchResult]? {
-            get { lock.lock(); defer { lock.unlock() }; return _result }
-            set { lock.lock(); defer { lock.unlock() }; _result = newValue }
-        }
-    }
-
     #else
     // Linux: Tantivy is unavailable — the BM25 leg is always nil (FTS5 fallback).
     private func resolveTantivyLeg<T: Identifiable & Sendable>(
@@ -3843,14 +3787,6 @@ public final class WikiStoreModel {
         limit: Int,
         catalog: [T]
     ) async -> [T]? where T.ID == PageID { nil }
-
-    @MainActor
-    private func resolveTantivyLegSync<T: Identifiable & Sendable>(
-        query: String,
-        kind: TantivyDocumentKind,
-        limit: Int,
-        catalog: [T]
-    ) -> [T]? where T.ID == PageID { nil }
     #endif
 
     /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
