@@ -473,8 +473,15 @@ struct ACPProviderModelProbeTests {
 /// # with a key (needs an agent that advertises models):
 /// ACP_SMOKE=1 ANTHROPIC_API_KEY=sk-... swift test --filter ACPProviderModelProbeLiveTests
 /// ```
+///
+/// `.serialized` (#925, mirrors #664's fallback direction): this suite
+/// resolves the agent path via `PathPreflight.resolveOnLoginShell`, which
+/// blocks a cooperative-pool thread on a real `Process().waitUntilExit()`,
+/// alongside spawning a real ACP subprocess for the probe. `.serialized`
+/// prevents that from compounding with other tests in the same run.
 @Suite(
     .timeLimit(.minutes(5)),
+    .serialized,
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full probe) to run the live model-probe test.")
