@@ -281,31 +281,54 @@ final class SimilarPagesMenuLoader: NSObject, NSMenuDelegate {
 // MARK: - NSMenuItem + closure bridge
 
 extension NSMenuItem {
-    /// Build an enabled menu item whose action invokes `action` when selected.
+    /// Build a menu item whose action invokes `action` when selected, enabled
+    /// according to `isEnabled`.
     ///
     /// `NSMenuItem.action` is a selector, so the closure is wrapped in an
     /// Objective-C target object. The item's `representedObject` retains the
     /// target for the lifetime of the menu (the menu owns its items), and the
     /// target is released when the menu is torn down — so no manual cleanup is
     /// needed and there's no lingering reference.
+    ///
+    /// `isEnabled` is a **closure**, not a stored `Bool`. When
+    /// `NSMenu.autoenablesItems` is on (the default, and what WebKit's context
+    /// menu uses) AppKit re-derives enablement immediately before the menu is
+    /// displayed by asking the item's target through `NSMenuItemValidation` —
+    /// so the closure is what actually decides what the user sees, and it
+    /// reports the state at display time rather than at assembly time. The value
+    /// is also applied up front, so an item is already correct before any
+    /// validation pass and stays correct on a menu with automatic enabling off.
     @MainActor
-    static func wikiItem(_ title: String, isEnabled: Bool = true, action: @escaping () -> Void) -> NSMenuItem {
-        let target = ClosureMenuItemTarget(action)
+    static func wikiItem(
+        _ title: String,
+        isEnabled: @escaping @MainActor () -> Bool = { true },
+        action: @escaping () -> Void
+    ) -> NSMenuItem {
+        let target = ClosureMenuItemTarget(action, isEnabled: isEnabled)
         let item = NSMenuItem(title: title, action: #selector(ClosureMenuItemTarget.invoke), keyEquivalent: "")
         item.target = target
-        item.isEnabled = isEnabled
+        item.isEnabled = isEnabled()
         item.representedObject = target
         return item
     }
 }
 
 /// A retainable target that bridges a Swift closure to `NSMenuItem`'s
-/// selector-based action. Retained via the menu item's `representedObject`.
+/// selector-based action, and answers AppKit's automatic menu validation.
+/// Retained via the menu item's `representedObject`.
 @MainActor
-private final class ClosureMenuItemTarget: NSObject {
+private final class ClosureMenuItemTarget: NSObject, NSMenuItemValidation {
     private let closure: () -> Void
-    init(_ closure: @escaping () -> Void) { self.closure = closure }
+    private let isEnabled: @MainActor () -> Bool
+
+    init(_ closure: @escaping () -> Void, isEnabled: @escaping @MainActor () -> Bool = { true }) {
+        self.closure = closure
+        self.isEnabled = isEnabled
+    }
+
     @objc func invoke() { closure() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { isEnabled() }
 }
 
 private struct AddURLHandlerKey: EnvironmentKey {
