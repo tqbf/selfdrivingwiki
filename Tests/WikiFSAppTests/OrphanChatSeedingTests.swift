@@ -153,7 +153,7 @@ struct OrphanChatSeedingTests {
         let (model, store) = try tempModel()
         // No chat created — rolling back a never-created id must not throw and
         // must leave the store untouched.
-        let phantom = PageID(rawValue: "01PHANTOMCHAT0000000000Z")
+        let phantom = ChatID(rawValue: "01PHANTOMCHAT0000000000Z")
         model.rollbackChatCreation(id: phantom, toDraft: .newChat)
         model.reloadChats()
         #expect(try store.listChats().isEmpty)

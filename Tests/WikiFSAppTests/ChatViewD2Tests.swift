@@ -54,7 +54,7 @@ struct ChatViewD2Tests {
 
     @Test func sourceOfTruth_liveChat_matchesActiveChatID() {
         let launcher = makeLauncher()
-        let chatID = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         launcher.activeChatID = chatID.rawValue
         // The view's isLiveChat predicate:
         let isLive = launcher.activeChatID == chatID.rawValue
@@ -63,7 +63,7 @@ struct ChatViewD2Tests {
 
     @Test func sourceOfTruth_persistedChat_doesNotMatchActiveChatID() {
         let launcher = makeLauncher()
-        let chatID = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         // activeChatID is nil (no live session) → persisted path.
         let isLive = launcher.activeChatID == chatID.rawValue
         #expect(!isLive)
@@ -114,11 +114,12 @@ struct ChatViewD2Tests {
         let orderBefore = model.tabs.map(\.id)
 
         // Retarget the middle tab (.newChat → .chat).
-        model.retargetTab(id: askTabID, to: .chat(pageA.id))
+        let chat = try store.createChat(kind: .edit, title: "Chat")
+        model.retargetTab(id: askTabID, to: .chat(chat.id))
 
         let orderAfter = model.tabs.map(\.id)
         #expect(orderBefore == orderAfter)  // order preserved
-        #expect(model.tabs[1].selection == .chat(pageA.id))
+        #expect(model.tabs[1].selection == .chat(chat.id))
     }
 
     @Test func retargetTab_updatesActiveTabSelection() throws {
@@ -127,7 +128,7 @@ struct ChatViewD2Tests {
         let askTabID = model.tabs[0].id
         #expect(model.selection == .newChat)
 
-        let chatID = PageID(rawValue: "01J" + String(repeating: "B", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "B", count: 22))
         model.retargetTab(id: askTabID, to: .chat(chatID))
 
         #expect(model.selection == .chat(chatID))
@@ -146,22 +147,22 @@ struct ChatViewD2Tests {
 
     @Test func retargetActiveTabToChat_morphsActiveTab() throws {
         let (model, store) = try tempModel()
-        let page = try store.createPage(title: "Chat")
+        let chat = try store.createChat(kind: .edit, title: "Chat")
         model.reloadFromStore()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
 
-        model.retargetActiveTabToChat(chatID: page.id)
+        model.retargetActiveTabToChat(chatID: chat.id)
 
         #expect(model.tabs[0].id == askTabID)  // same tab
-        #expect(model.tabs[0].selection == .chat(page.id))
-        #expect(model.selection == .chat(page.id))
+        #expect(model.tabs[0].selection == .chat(chat.id))
+        #expect(model.selection == .chat(chat.id))
     }
 
     @Test func retargetActiveTabToChat_noActiveTab_isNoOp() throws {
         let (model, _) = try tempModel()
         #expect(model.activeTabID == nil)
-        let chatID = PageID(rawValue: "01J" + String(repeating: "C", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
         model.retargetActiveTabToChat(chatID: chatID)
         #expect(model.tabs.isEmpty)
     }
@@ -174,7 +175,7 @@ struct ChatViewD2Tests {
         let askTabID = model.tabs[0].id
 
         // Simulate the first send: runner creates chat row and retargets.
-        let chatID = PageID(rawValue: "01J" + String(repeating: "D", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "D", count: 22))
         model.retargetActiveTabToChat(chatID: chatID)
 
         #expect(model.tabs.count == 1)
@@ -189,7 +190,7 @@ struct ChatViewD2Tests {
         model.openTab(.newChat)
         let editTabID = model.tabs[0].id
 
-        let chatID = PageID(rawValue: "01J" + String(repeating: "E", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "E", count: 22))
         model.retargetActiveTabToChat(chatID: chatID)
 
         #expect(model.tabs.count == 1)
@@ -214,7 +215,7 @@ struct ChatViewD2Tests {
     @Test func startNewChat_retargetBackToDraft_preservesTab() throws {
         let (model, _) = try tempModel()
         // Start in .chat(id) state (post-morph).
-        let chatID = PageID(rawValue: "01J" + String(repeating: "F", count: 22))
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "F", count: 22))
         model.openTab(.chat(chatID))
         let chatTabID = model.tabs[0].id
         #expect(model.tabs[0].selection == .chat(chatID))

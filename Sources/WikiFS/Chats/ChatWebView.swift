@@ -56,7 +56,7 @@ enum TranscriptID: Hashable, Sendable {
     /// A chat's persisted row (`ChatDetailView` → `ChatTranscriptView`). The
     /// draft composer (`chatID == nil`) has no transcript to render, so there
     /// is deliberately no draft case.
-    case chat(PageID)
+    case chat(ChatID)
     /// A queue item's activity feed (`ActivityWindowView`).
     case queueItem(QueueItem.ID)
 }

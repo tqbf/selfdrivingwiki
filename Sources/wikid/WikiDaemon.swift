@@ -664,7 +664,7 @@ final class WikiDaemon: @unchecked Sendable {
                 let reply = ChatErrorReply(error: "invalid request")
                 return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
             }
-            try await host.sendChatMessage(chatID: PageID(rawValue: chatID), message: message)
+            try await host.sendChatMessage(chatID: ChatID(rawValue: chatID), message: message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
@@ -677,7 +677,7 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     /// Stop a chat.
-    func stopChat(chatID: PageID) async {
+    func stopChat(chatID: ChatID) async {
         #if canImport(WikiFSEngine)
         if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }) {
             await host.stopChat(chatID: chatID)
@@ -686,7 +686,7 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     /// Get the chat session state. Returns JSON `ChatSessionState`.
-    func chatSessionStateData(chatID: PageID) async -> Data {
+    func chatSessionStateData(chatID: ChatID) async -> Data {
         #if canImport(WikiFSEngine)
         do {
             let host = try await ensureChatHost()

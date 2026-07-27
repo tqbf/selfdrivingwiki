@@ -107,7 +107,7 @@ public enum AgentOperationRunner {
             onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) -> Void) in
                 return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
             },
-            onMessageSummary: chat.map { chat -> (@MainActor (PageID) -> Void) in
+            onMessageSummary: chat.map { chat -> (@MainActor (ChatID) -> Void) in
                 return { [weak store] id in
                     Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
                 }
@@ -366,7 +366,7 @@ public enum AgentOperationRunner {
     /// - **mid-generation** → refuse (the composer is already disabled; this is a
     ///   guard). Returns without spawning.
     public static func continueChat(
-        chatID: PageID,
+        chatID: ChatID,
         message: String,
         store: WikiStoreModel,
         launcher: AgentLauncher,
@@ -457,7 +457,7 @@ public enum AgentOperationRunner {
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: wikictlDirectory,
             chatID: chatID.rawValue,
-            historySeed: history.map(\.event),
+        historySeed: history.map { $0.event },
             priorAcpSessionId: priorAcpSessionId,
             onAcpSessionId: { [weak store] sessionId in
                 guard let store else { return }
@@ -603,7 +603,7 @@ public enum AgentOperationRunner {
     /// subtitle abbreviate even in Model mode.
     @MainActor
     private static func summarizePendingMessages(
-        chatID: PageID, store: WikiStoreModel?, launcher: AgentLauncher
+        chatID: ChatID, store: WikiStoreModel?, launcher: AgentLauncher
     ) {
         guard let store else {
             DebugLog.ingest("summarizePendingMessages: store torn down, skipping")
@@ -668,7 +668,7 @@ public enum AgentOperationRunner {
     /// summary and eliding it would chop the answer.
     @MainActor
     private static func runModelSummarization(
-        chatID: PageID, pending: [ChatMessage], config: AgentProvidersConfig,
+        chatID: ChatID, pending: [ChatMessage], config: AgentProvidersConfig,
         containerDir: URL, credentialStore: any ACPCredentialStore,
         store: WikiStoreModel, chatSummaryMessageID: PageID?
     ) async {

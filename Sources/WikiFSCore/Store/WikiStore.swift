@@ -7,6 +7,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case open(String)
     case sqlite(code: Int32, message: String)
     case notFound(PageID)
+    case chatNotFound(ChatID)
     case sourceNotFound(SourceID)
     case invalidBookmarkRow(id: String, reason: String)
     case unexpected(String)
@@ -21,6 +22,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .open(let m): return "WikiStore open failed: \(m)"
         case .sqlite(let code, let message): return "SQLite error \(code): \(message)"
         case .notFound(let id): return "Page not found: \(id.rawValue)"
+        case .chatNotFound(let id): return "Page not found: \(id.rawValue)"
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
         case .unexpected(let m): return "Unexpected: \(m)"
@@ -673,7 +675,7 @@ public protocol WikiStore: Sendable {
     /// empty. Throws `.notFound` if `chatID` has no row. Returns the inserted
     /// messages in `seq` order.
     @discardableResult
-    func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage]
+    func appendChatMessages(chatID: ChatID, events: [AgentEvent]) throws -> [ChatMessage]
 
     /// All chat summaries, most-recently-updated first (ties broken by
     /// insertion order), for the history list.
@@ -682,33 +684,33 @@ public protocol WikiStore: Sendable {
     /// A chat's messages in `seq` order. Tolerant read: a row whose
     /// `event_json` fails to decode (e.g. a future event case) is skipped
     /// rather than failing the whole read.
-    func chatMessages(chatID: PageID) throws -> [ChatMessage]
+    func chatMessages(chatID: ChatID) throws -> [ChatMessage]
 
     /// Rename a chat's title, bumping `updated_at`. Throws `.notFound` if no
     /// chat has `id`.
-    func renameChat(id: PageID, to title: String) throws
+    func renameChat(id: ChatID, to title: String) throws
 
     /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
     /// `id` doesn't exist.
-    func deleteChat(id: PageID) throws
+    func deleteChat(id: ChatID) throws
 
     /// Write the one-line summary of the model's first response (issue #411),
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
-    func updateChatSummary(chatID: PageID, summary: String) throws
+    func updateChatSummary(chatID: ChatID, summary: String) throws
 
     /// Write or clear the ACP session ID for resume (#830). Pass `nil` to
     /// clear (terminal teardown / permanent resume failure). Bumps
     /// `updated_at`.
-    func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) throws
+    func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
 
     /// Write or clear the per-chat model override (composer `ProviderSelector`
     /// pin — outranks both the "chat" stage pin and the global default
     /// provider for THIS chat only). Pass `providerId: nil` to clear. Bumps
     /// `updated_at`. Throws `.notFound` if no chat has `id`.
-    func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) throws
+    func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) throws
 
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
-    func getChat(id: PageID) throws -> ChatSummary
+    func getChat(id: ChatID) throws -> ChatSummary
 
     /// Write the cached one-line summary for a single assistant message
     /// (chat-summary plan §3.5). The chat row is the change-emission resource
@@ -716,7 +718,7 @@ public protocol WikiStore: Sendable {
     /// chat's id. Idempotent at the SQL level; the caller short-circuits on a
     /// non-nil cached summary to enforce compute-once (AC.6).
     func updateMessageSummary(
-        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
     ) throws
 
     /// Upsert a streaming assistant row under a stable draft handle (#826).
@@ -725,13 +727,13 @@ public protocol WikiStore: Sendable {
     /// bumps `chats.updated_at` + refreshes chat_search). Draft checkpoints do
     /// NOT bump `updated_at` (C6). Throws `.notFound` if `chatID` has no row.
     func checkpointStreamingMessage(
-        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
     ) throws
 
     /// Finalize any stale draft rows for a chat (C8). Called on chat reopen
     /// so a draft left by an interrupted turn (hard kill) is no longer marked
     /// in-progress. Sets `is_draft=0` for all draft rows belonging to `chatID`.
-    func finalizeStaleDrafts(forChat chatID: PageID) throws
+    func finalizeStaleDrafts(forChat chatID: ChatID) throws
 
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
@@ -739,18 +741,18 @@ public protocol WikiStore: Sendable {
 
     /// Resolve a `[[chat:…]]` target to a chat id. Case-insensitive; lowest
     /// ULID wins on a duplicate-title collision.
-    func resolveChatByTitle(_ title: String) throws -> PageID?
+    func resolveChatByTitle(_ title: String) throws -> ChatID?
 
     // MARK: - Semantic chat search (v28 chat chunk embeddings)
 
     /// Store or replace ALL chunk embeddings for a chat. Mirrors
     /// `storePageChunks`/`storeSourceChunks` (used by the bulk search-index
     /// upgrade; incremental appends embed inline).
-    func storeChatChunks(id: PageID, chunks: [Data]) throws
+    func storeChatChunks(id: ChatID, chunks: [Data]) throws
 
     /// Chats with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
     /// `missingPageEmbeddingWork`/`missingSourceEmbeddingWork`.
-    func missingChatEmbeddingWork() -> [(id: PageID, text: String)]
+    func missingChatEmbeddingWork() -> [(id: ChatID, text: String)]
 
     /// Search chats semantically + lexically (hybrid RRF, same as
     /// `searchSimilar`/`searchSimilarSources`). The semantic cosine leg runs

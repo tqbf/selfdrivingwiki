@@ -17,13 +17,25 @@ import WikiFSEngine
 final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {
     private let broadcaster = QueueEventBroadcaster()
 
-    private let chatContinuation: AsyncStream<(PageID, QueueEventEnvelope)>.Continuation
-    private let chatStream: AsyncStream<(PageID, QueueEventEnvelope)>
+    private let chatContinuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation
+    private let chatStream: AsyncStream<(ChatID, QueueEventEnvelope)>
 
     override init() {
-        var chatContinuation: AsyncStream<(PageID, QueueEventEnvelope)>.Continuation!
-        self.chatStream = AsyncStream { c in chatContinuation = c }
-        self.chatContinuation = chatContinuation
+        let chatComponents = Self.makeChatStream()
+        self.chatStream = chatComponents.stream
+        self.chatContinuation = chatComponents.continuation
+    }
+
+    private static func makeChatStream() -> (
+        stream: AsyncStream<(ChatID, QueueEventEnvelope)>,
+        continuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation
+    ) {
+        var continuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation?
+        let stream = AsyncStream<(ChatID, QueueEventEnvelope)> { continuation = $0 }
+        guard let continuation else {
+            preconditionFailure("AsyncStream must synchronously provide its continuation.")
+        }
+        return (stream, continuation)
     }
 
     deinit {
@@ -36,7 +48,7 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     /// Chat envelopes from the daemon, demuxed by chatID. The app's chat
     /// session registry subscribes and routes each envelope to the matching
     /// `RemoteChatSession.ingest(_:)`.
-    var chatEnvelopes: AsyncStream<(PageID, QueueEventEnvelope)> { chatStream }
+    var chatEnvelopes: AsyncStream<(ChatID, QueueEventEnvelope)> { chatStream }
 
     func deliverEvent(_ payload: Data) {
         guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }

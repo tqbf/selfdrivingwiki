@@ -21,7 +21,7 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
 
     /// Whether the target is a page, a source, or a chat.
     public let kind: Kind
-    /// `PageID.rawValue` of the target page/source/chat.
+    /// Stable raw identifier text of the target page/source/chat.
     public let id: String
 
     public init(kind: Kind, id: String) {
@@ -35,7 +35,7 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
         switch kind {
         case .page:   return .page(pageID)
         case .source: return .source(SourceID(rawValue: id))
-        case .chat:   return .chat(pageID)
+        case .chat:   return .chat(ChatID(rawValue: id))
         }
     }
 }

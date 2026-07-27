@@ -60,18 +60,18 @@ struct ChatsListView: NSViewControllerRepresentable {
 struct ChatsListCallbacks {
     /// Open (foreground tab). Context-menu "Open N" passes the effective
     /// selection.
-    var onOpen: ([PageID]) -> Void
+    var onOpen: ([ChatID]) -> Void
     /// Open in a background tab. Single or batch.
-    var onOpenBackground: ([PageID]) -> Void
+    var onOpenBackground: ([ChatID]) -> Void
     var onRename: (ChatSummary) -> Void
-    var onDelete: ([PageID]) -> Void
+    var onDelete: ([ChatID]) -> Void
 }
 
 /// Carries the right-clicked row + the effective selection (selected ∪ clicked)
 /// to the `@objc` menu handlers.
 private struct ChatsMenuPayload {
     let clicked: ChatSummary
-    let effectiveIDs: [PageID]
+    let effectiveIDs: [ChatID]
 }
 
 // MARK: - View controller
@@ -92,7 +92,7 @@ final class ChatsListViewController: NSViewController {
     private var isReconcilingHighlight = false
     /// TEMPORARY (stuck "responding…" badge): last live set reported by
     /// `logLiveState`, so the trace emits one line per transition.
-    private var loggedLiveIDs: Set<PageID> = []
+    private var loggedLiveIDs: Set<ChatID> = []
 
     override func loadView() {
         scrollView = NSScrollView()
@@ -220,7 +220,7 @@ final class ChatsListViewController: NSViewController {
     /// (an explicit user action should win over a Cmd/Shift selection) and always
     /// scrolls.
     @discardableResult
-    func revealAndSelect(id: PageID) -> Bool {
+    func revealAndSelect(id: ChatID) -> Bool {
         guard let row = items.firstIndex(where: { $0.id == id }) else { return false }
         isReconcilingHighlight = true
         tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)

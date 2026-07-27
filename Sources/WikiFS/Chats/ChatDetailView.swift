@@ -18,7 +18,7 @@ import WikiFSCore
 struct ChatDetailView: View {
     /// The persisted chat id, or `nil` for the draft state (.newChat). When
     /// non-nil AND equal to `remoteSession.activeChatID`, the view renders live.
-    let chatID: PageID?
+    let chatID: ChatID?
 
     @Bindable var store: WikiStoreModel
     /// The daemon-mirrored chat session (replaces the in-process chat
@@ -882,7 +882,7 @@ struct ChatDetailView: View {
     }
 
     @ViewBuilder
-    private func revealDebugFolderButton(chatID: PageID, debugURL: URL?) -> some View {
+    private func revealDebugFolderButton(chatID: ChatID, debugURL: URL?) -> some View {
         Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
             DebugLog.agent("ChatDetailView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
             if let debugURL {
@@ -932,7 +932,7 @@ struct ChatDetailView: View {
     /// explains WHY the draft is visible.
     nonisolated static func shouldShowPreflightBanner(
         preflightError: String?,
-        chatID: PageID?,
+        chatID: ChatID?,
         isLiveChat: Bool
     ) -> Bool {
         guard let message = preflightError, !message.isEmpty else { return false }
@@ -947,7 +947,7 @@ struct ChatDetailView: View {
     /// tree (following the `composerCaptionText` / `canSendPredicate` pattern).
     nonisolated static func preflightBannerMessage(
         preflightError: String?,
-        chatID: PageID?,
+        chatID: ChatID?,
         isLiveChat: Bool
     ) -> String? {
         guard shouldShowPreflightBanner(
@@ -1609,7 +1609,7 @@ private struct ChatAttachment: Identifiable, Hashable {
 /// transcript's message count changes (so the anchor is consumed only once the
 /// persisted messages have loaded).
 private struct ChatAnchorTaskKey: Hashable {
-    let chatID: PageID?
+    let chatID: ChatID?
     let anchorVersion: Int
     let messageCount: Int
 }

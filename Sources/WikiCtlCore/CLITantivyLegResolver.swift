@@ -222,7 +222,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listPages(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
+        return resolveHits(hits, catalog: catalog, idFromRawValue: { PageID(rawValue: $0) })
     }
 
     /// Resolve a Tantivy BM25 leg for `wikictl source search`. Same contract
@@ -276,7 +276,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listChats(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
+        return resolveHits(hits, catalog: catalog, idFromRawValue: { ChatID(rawValue: $0) })
     }
 
     // MARK: - Internal

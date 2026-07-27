@@ -178,7 +178,7 @@ struct CLITantivyLegResolverTests {
         enum SearchOutcomeID: Sendable, Equatable {
             case page(PageID)
             case source(SourceID)
-            case chat(PageID)
+            case chat(ChatID)
         }
 
         struct SearchOutcome: Sendable {

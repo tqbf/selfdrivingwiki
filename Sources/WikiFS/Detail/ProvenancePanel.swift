@@ -225,7 +225,7 @@ struct ProvenancePanel: View {
         switch PageAuthor(rawValue: entry.agentName) {
         case .chat(let chatID):
             guard !chatID.isEmpty else { return }
-            let id = PageID(rawValue: chatID)
+            let id = ChatID(rawValue: chatID)
             DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
             store?.openTab(.chat(id))
         case .agent:

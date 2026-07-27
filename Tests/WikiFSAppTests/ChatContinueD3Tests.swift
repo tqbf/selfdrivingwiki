@@ -34,7 +34,7 @@ struct ChatContinueD3Tests {
     private func msg(_ seq: Int, _ event: AgentEvent) -> ChatMessage {
         ChatMessage(
             id: PageID(rawValue: "01MSG\(seq)\(String(repeating: "0", count: 20))"),
-            chatID: PageID(rawValue: "01CHAT\(String(repeating: "0", count: 22))"),
+            chatID: ChatID(rawValue: "01CHAT\(String(repeating: "0", count: 22))"),
             seq: seq,
             event: event,
             createdAt: Date(timeIntervalSince1970: TimeInterval(1000 + seq)))

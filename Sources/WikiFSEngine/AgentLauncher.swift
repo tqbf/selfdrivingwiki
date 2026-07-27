@@ -707,7 +707,7 @@ public final class AgentLauncher {
     /// `updateMessageSummary`. nil when the session has no chatID (one-shot
     /// runs) or the caller didn't wire the sink. Cleared in `finish()` and
     /// `resetRunArtifacts()` for hygiene.
-    @ObservationIgnored private var messageSummarySink: (@MainActor (PageID) -> Void)?
+    @ObservationIgnored private var messageSummarySink: (@MainActor (ChatID) -> Void)?
     /// Mid-generation streaming-checkpoint sink (#826). Called by the periodic
     /// checkpoint timer and at turn-end finalize with (chatID, draftHandle,
     /// event, isDraft). Returns `true` on success so the launcher advances its
@@ -716,7 +716,7 @@ public final class AgentLauncher {
     /// loss). `nil` for one-shot runs and when no chat is active (one-shot runs
     /// don't persist). Cleared in `finish()` and `resetRunArtifacts()`.
     @ObservationIgnored private var streamingCheckpointSink:
-        (@MainActor (PageID, String, AgentEvent, Bool) -> Bool)?
+        (@MainActor (ChatID, String, AgentEvent, Bool) -> Bool)?
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
@@ -2891,8 +2891,8 @@ public final class AgentLauncher {
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
-        onMessageSummary: (@MainActor (PageID) -> Void)? = nil,
-        onStreamingCheckpoint: (@MainActor (PageID, String, AgentEvent, Bool) -> Bool)? = nil
+        onMessageSummary: (@MainActor (ChatID) -> Void)? = nil,
+        onStreamingCheckpoint: (@MainActor (ChatID, String, AgentEvent, Bool) -> Bool)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -3465,7 +3465,7 @@ public final class AgentLauncher {
             return
         }
         DebugLog.ingest("fireMessageSummarySink: activeChatID=\(chatID)")
-        messageSummarySink?(PageID(rawValue: chatID))
+        messageSummarySink?(ChatID(rawValue: chatID))
     }
 
     /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
@@ -3546,7 +3546,7 @@ public final class AgentLauncher {
               case .assistantText = events[idx],
               streamingRowDirty || finalize else { return }
         let isDraft = !finalize
-        let ok = sink(PageID(rawValue: chatID), handle, events[idx], isDraft)
+        let ok = sink(ChatID(rawValue: chatID), handle, events[idx], isDraft)
         if ok {
             streamingRowDirty = false
             persistedEventCount = max(persistedEventCount, idx + 1)

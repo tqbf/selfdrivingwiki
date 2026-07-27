@@ -746,7 +746,7 @@ public final class WikiStoreModel {
         case .source:
             return sources.first { $0.id.rawValue == pageID.rawValue }?.effectiveName
         case .chat:
-            return chats.first { $0.id == pageID }?.title
+            return chats.first { $0.id.rawValue == pageID.rawValue }?.title
         }
     }
 
@@ -766,7 +766,7 @@ public final class WikiStoreModel {
 
     /// Resolve a chat title to its id (lowest-ULID on a duplicate-title
     /// collision). Best-effort: `nil` on any error or when no chat matches.
-    public func chatID(forTitle title: String) -> PageID? {
+    public func chatID(forTitle title: String) -> ChatID? {
         do { return try store.resolveChatByTitle(title) } catch { return nil }
     }
 
@@ -849,7 +849,7 @@ public final class WikiStoreModel {
     ///   passage — the chat analogue of `selectSource(anchor:)`. Mirrors the
     ///   page/source anchor seam: tagged with `.chat(id)` + versioned.
     @discardableResult
-    public func selectChat(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+    public func selectChat(byID id: ChatID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard chats.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.chat(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
@@ -1112,7 +1112,7 @@ public final class WikiStoreModel {
     /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
     /// draft-state morph on first send (the active tab is .newChat → .chat).
     /// No-op if there is no active tab.
-    public func retargetActiveTabToChat(chatID: PageID) {
+    public func retargetActiveTabToChat(chatID: ChatID) {
         guard let activeID = activeTabID else { return }
         retargetTab(id: activeID, to: .chat(chatID))
     }
@@ -3889,7 +3889,7 @@ public final class WikiStoreModel {
             let t0 = DispatchTime.now()
             let bm25Leg = await self.resolveTantivyLeg(
                 query: query, kind: .chat, limit: 20, catalog: self.chats,
-                id: PageID.init(rawValue:))
+                id: ChatID.init(rawValue:))
             // Use the main store (same connection as chatMessages load) so the
             // search results and the body load see the same WAL snapshot —
             // eliminates cross-connection staleness where the read pool could
@@ -4000,7 +4000,7 @@ public final class WikiStoreModel {
 
     /// Add a chat reference to a folder. Pass `position` to insert at a specific
     /// sibling index (the store shifts later siblings down); omit it to append.
-    public func addChatRef(parentID: String?, chatID: PageID, position: Int? = nil) {
+    public func addChatRef(parentID: String?, chatID: ChatID, position: Int? = nil) {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
@@ -4061,7 +4061,7 @@ public final class WikiStoreModel {
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
         sourceIDs: Set<SourceID>,
-        chatIDs: Set<PageID>
+        chatIDs: Set<ChatID>
     ) -> Bool {
         switch value {
         case .page(let id):
@@ -4111,7 +4111,7 @@ public final class WikiStoreModel {
     /// tab that was retargeted to it back to the draft composer — so the user
     /// isn't left on a dead `.chat` selection. Best-effort: a store failure is
     /// logged, never thrown.
-    public func rollbackChatCreation(id: PageID, toDraft draft: WikiSelection) {
+    public func rollbackChatCreation(id: ChatID, toDraft draft: WikiSelection) {
         do {
             try store.deleteChat(id: id)
         } catch {
@@ -4127,7 +4127,7 @@ public final class WikiStoreModel {
 
     /// Append the persistable subset of `events` to a chat. Non-persistable
     /// events (deltas, messageStop, raw) are filtered here as defense in depth.
-    public func appendChatEvents(chatID: PageID, events: [AgentEvent]) {
+    public func appendChatEvents(chatID: ChatID, events: [AgentEvent]) {
         let persistable = events.filter(\.isPersistable)
         guard !persistable.isEmpty else { return }
         do {
@@ -4147,7 +4147,7 @@ public final class WikiStoreModel {
     /// checkpoints skip `updated_at`; only finalize bumps it).
     @discardableResult
     public func checkpointStreamingMessage(
-        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
     ) -> Bool {
         do {
             try store.checkpointStreamingMessage(
@@ -4160,7 +4160,7 @@ public final class WikiStoreModel {
     }
 
     /// Finalize stale drafts for a chat on reopen (C8). Cheap single UPDATE.
-    public func finalizeStaleDrafts(forChat chatID: PageID) {
+    public func finalizeStaleDrafts(forChat chatID: ChatID) {
         do {
             try store.finalizeStaleDrafts(forChat: chatID)
         } catch {
@@ -4168,11 +4168,11 @@ public final class WikiStoreModel {
         }
     }
 
-    public func chatMessages(chatID: PageID) -> [ChatMessage] {
+    public func chatMessages(chatID: ChatID) -> [ChatMessage] {
         DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chatID) }) ?? []
     }
 
-    public func renameChat(id: PageID, to title: String) {
+    public func renameChat(id: ChatID, to title: String) {
         do {
             try store.renameChat(id: id, to: title)
             // No manual reload — the bus fires reloadFromStore() async after the
@@ -4185,7 +4185,7 @@ public final class WikiStoreModel {
         }
     }
 
-    public func updateChatSummary(chatID: PageID, summary: String) {
+    public func updateChatSummary(chatID: ChatID, summary: String) {
         do {
             try store.updateChatSummary(chatID: chatID, summary: summary)
             // No manual reload — the bus fires reloadFromStore() async after the
@@ -4198,7 +4198,7 @@ public final class WikiStoreModel {
     /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
     /// at spawn time (persist) and on resume failure (clear). No manual reload
     /// — the bus fires `reloadFromStore()` async after the store write.
-    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) {
+    public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) {
         do {
             try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: acpSessionId)
         } catch {
@@ -4208,7 +4208,7 @@ public final class WikiStoreModel {
 
     /// `@MainActor` wrapper for `getChat(id:)` (#830). Returns `nil` if the
     /// chat doesn't exist or the read fails.
-    public func getChat(id: PageID) -> ChatSummary? {
+    public func getChat(id: ChatID) -> ChatSummary? {
         DebugLog.trying("getChat", operation: { try store.getChat(id: id) })
     }
 
@@ -4216,7 +4216,7 @@ public final class WikiStoreModel {
     /// composer's `ProviderSelector` picking a model for THIS chat). No
     /// manual reload — the bus fires `reloadFromStore()` async after the
     /// `.chat .updated` emit, same as `renameChat`.
-    public func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) {
+    public func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) {
         do {
             try store.updateChatModelOverride(id: id, providerId: providerId, modelId: modelId)
         } catch {
@@ -4229,7 +4229,7 @@ public final class WikiStoreModel {
     /// DB write (no inference inside a transaction). No manual reload — the bus
     /// fires `reloadFromStore()` async after the `.chat .updated` emit.
     public func updateMessageSummary(
-        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
     ) {
         do {
             try store.updateMessageSummary(
@@ -4239,7 +4239,7 @@ public final class WikiStoreModel {
         }
     }
 
-    public func deleteChat(id: PageID) {
+    public func deleteChat(id: ChatID) {
         do {
             try store.deleteChat(id: id)
             removeFromHistory(.chat(id))

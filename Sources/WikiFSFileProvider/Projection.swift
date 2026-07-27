@@ -771,7 +771,7 @@ struct Projection {
         nodeForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: PageID(rawValue: ulid)) }) else { return nil }
+                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
             // Size from the cached transcript bytes so size==content holds for
             // both by-id and by-name views (#503 P1).
             let data = projection.cachedChatTranscript(for: id, chat: chat, in: store)
@@ -780,7 +780,7 @@ struct Projection {
         contentForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: PageID(rawValue: ulid)) }) else { return nil }
+                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
             // Serve the cached transcript bytes (rendered + cached during
             // `nodeForLeaf` sizing or `chatNodes` enumeration) instead of
             // re-rendering (#503 P1).

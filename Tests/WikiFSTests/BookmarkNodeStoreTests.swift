@@ -147,7 +147,7 @@ import SQLite3
         case .sourceRef:
             content = .source(SourceID(rawValue: ""))
         case .chatRef:
-            content = .chat(PageID(rawValue: ""))
+            content = .chat(ChatID(rawValue: ""))
         case .folder:
             Issue.record("folder is not a reference bookmark kind")
             return

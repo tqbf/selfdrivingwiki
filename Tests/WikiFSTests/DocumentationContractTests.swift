@@ -11,6 +11,14 @@ struct DocumentationContractTests {
         "Raw-string boundaries:",
         "Deferred identifier work:",
     ]
+    private static let chatPlanPath = "plans/chat-id-separation.md"
+    private static let chatProgressHeading = "## 2026-07-27 — ChatID namespace separation (#954)"
+    private static let requiredChatPlanMarkers = [
+        "Introduce a public `ChatID` namespace for persisted chat entities",
+        "Do not alter SQLite schema versions, tables, columns, indexes, foreign keys, or stored ULID text.",
+        "Do not introduce a separate `ChatMessageID` in this work; retain `ChatMessage.id: PageID` and document it as deferred.",
+        "A non-empty chat API signature manifest passes and the final audit finds no persisted chat entity API still typed as `PageID` or an untagged internal `String`.",
+    ]
 
     @Test func pageSourceIDPlanIsIndexedAndComplete() throws {
         let root = try #require(Self.locateRepositoryRoot())
@@ -31,6 +39,28 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.progressHeading))
         for marker in Self.requiredPlanMarkers {
             #expect(plan.contains(marker), "missing documentation marker: \(marker)")
+        }
+    }
+
+    @Test func chatIDSeparationContractIsDocumented() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let plan = try String(
+            contentsOf: root.appendingPathComponent(Self.chatPlanPath),
+            encoding: .utf8
+        )
+        let index = try String(
+            contentsOf: root.appendingPathComponent("PLAN.md"),
+            encoding: .utf8
+        )
+        let progress = try String(
+            contentsOf: root.appendingPathComponent("PROGRESS.md"),
+            encoding: .utf8
+        )
+
+        #expect(index.contains("[`\(Self.chatPlanPath)`](\(Self.chatPlanPath))"))
+        #expect(progress.contains(Self.chatProgressHeading))
+        for marker in Self.requiredChatPlanMarkers {
+            #expect(plan.contains(marker), "missing chat documentation marker: \(marker)")
         }
     }
 

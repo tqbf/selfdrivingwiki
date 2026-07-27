@@ -26,7 +26,7 @@ public enum ChatCommand {
 
     /// How a chat is selected for `get`.
     public enum Selector: Equatable {
-        case id(PageID)
+        case id(ChatID)
         case title(String)
     }
 
@@ -138,7 +138,7 @@ public enum ChatCommand {
 
     // MARK: - Selector resolution
 
-    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> PageID {
+    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> ChatID {
         switch selector {
         case .id(let id):
             return id

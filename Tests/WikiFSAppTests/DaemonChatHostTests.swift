@@ -313,7 +313,7 @@ struct DaemonChatHostTests {
         // The chat host lazily creates one gate and shares it across all chats.
         // Verify the host is constructed without error.
         let host = try await daemon.ensureChatHost()
-        #expect(host.hasLiveSession(PageID(rawValue: "any-chat")) == false)
+        #expect(host.hasLiveSession(ChatID(rawValue: "any-chat")) == false)
     }
 
     // MARK: - AC.4a: DaemonWorkloadClient chat round-trip (RC6)
@@ -353,7 +353,7 @@ struct DaemonChatHostTests {
 
     @Test func chatSessionStateEncodingDecoding() throws {
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-abc"),
+            chatID: ChatID(rawValue: "chat-abc"),
             events: [.userText("hello"), .assistantText("hi there")],
             isRunning: true,
             isGenerating: false,
@@ -372,7 +372,7 @@ struct DaemonChatHostTests {
         let data = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(ChatSessionState.self, from: data)
 
-        #expect(decoded.chatID == PageID(rawValue: "chat-abc"))
+        #expect(decoded.chatID == ChatID(rawValue: "chat-abc"))
         #expect(decoded.events.count == 2)
         #expect(decoded.isRunning == true)
         #expect(decoded.thinkingOption?.currentValue == "high")
@@ -404,7 +404,7 @@ struct DaemonChatHostTests {
 
         // setChatConfigOption on a non-existent chat → error reply, no crash.
         let request = ChatConfigOptionRequest(
-            chatID: PageID(rawValue: "nonexistent"), option: "thought_level", value: "high")
+            chatID: ChatID(rawValue: "nonexistent"), option: "thought_level", value: "high")
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -424,11 +424,11 @@ struct DaemonChatHostTests {
     @Test func chatConfigOptionRequestEncodingDecoding() throws {
         // Verify the request type round-trips cleanly.
         let request = ChatConfigOptionRequest(
-            chatID: PageID(rawValue: "chat-xyz"), option: "thought_level", value: "medium")
+            chatID: ChatID(rawValue: "chat-xyz"), option: "thought_level", value: "medium")
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: data)
 
-        #expect(decoded.chatID == PageID(rawValue: "chat-xyz"))
+        #expect(decoded.chatID == ChatID(rawValue: "chat-xyz"))
         #expect(decoded.option == "thought_level")
         #expect(decoded.value == "medium")
     }
@@ -437,7 +437,7 @@ struct DaemonChatHostTests {
         // Verify the three new fields (stderr, lastActivityAt, currentProcessID)
         // survive JSON encode/decode through the XPC envelope.
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-fields"),
+            chatID: ChatID(rawValue: "chat-fields"),
             events: [],
             isRunning: true,
             isGenerating: false,

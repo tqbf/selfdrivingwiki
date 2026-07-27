@@ -63,7 +63,7 @@ struct ChatSummaryTests {
     private func messages(_ events: [AgentEvent]) -> [ChatMessage] {
         events.enumerated().map { idx, event in
             ChatMessage(
-                id: PageID(rawValue: "m\(idx)"), chatID: PageID(rawValue: "chat"),
+                id: PageID(rawValue: "m\(idx)"), chatID: ChatID(rawValue: "chat"),
                 seq: idx, event: event, createdAt: Date(timeIntervalSince1970: 0))
         }
     }

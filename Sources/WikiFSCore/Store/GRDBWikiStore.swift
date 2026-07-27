@@ -1853,7 +1853,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 : { _ in nil }
 
             let hasChats = try Self.tableExists("chats", in: db)
-            let resolveChat: (String) throws -> PageID? = hasChats
+            let resolveChat: (String) throws -> ChatID? = hasChats
                 ? { [self] in try self.resolveChatByTitleLocked($0, in: db) }
                 : { _ in nil }
 
@@ -2273,13 +2273,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     /// `resolveChatByTitle` taking a `Database` directly.
-    private func resolveChatByTitleLocked(_ title: String, in db: Database) throws -> PageID? {
+    private func resolveChatByTitleLocked(_ title: String, in db: Database) throws -> ChatID? {
         if let id = try String.fetchOne(
             db,
             sql: "SELECT id FROM chats WHERE title = ? COLLATE NOCASE ORDER BY id ASC LIMIT 1;",
             arguments: [title]
         ) {
-            return PageID(rawValue: id)
+            return ChatID(rawValue: id)
         }
         return nil
     }
@@ -6079,7 +6079,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
         }) { db in
-            let id = PageID(rawValue: ULID.generate())
+            let id = ChatID(rawValue: ULID.generate())
             let now = Date()
             try db.execute(sql: """
             INSERT INTO chats (id, kind, title, created_at, updated_at, model_provider_id, model_id)
@@ -6098,7 +6098,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func appendChatMessages(chatID: PageID, events: [AgentEvent]) throws -> [ChatMessage] {
+    public func appendChatMessages(chatID: ChatID, events: [AgentEvent]) throws -> [ChatMessage] {
         guard !events.isEmpty else { return [] }
         return try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
@@ -6110,7 +6110,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 arguments: [chatID.rawValue]
             ) ?? 0
             guard exists != 0 else {
-                throw WikiStoreError.notFound(chatID)
+                throw WikiStoreError.chatNotFound(chatID)
             }
 
             // Dense per-chat seq, continuing from the current max (-1 when empty
@@ -6187,7 +6187,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `appendChatMessages` style). Idempotent: re-checkpointing the same
     /// content is a no-op UPDATE. Throws `.notFound` if `chatID` has no row.
     public func checkpointStreamingMessage(
-        chatID: PageID, handle: String, event: AgentEvent, isDraft: Bool
+        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
     ) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
@@ -6199,7 +6199,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 arguments: [chatID.rawValue]
             ) ?? 0
             guard exists != 0 else {
-                throw WikiStoreError.notFound(chatID)
+                throw WikiStoreError.chatNotFound(chatID)
             }
 
             let now = Date()
@@ -6278,7 +6278,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// should no longer be marked as in-progress. Sets `is_draft=0` for all
     /// draft rows belonging to `chatID`. Cheap single UPDATE. Bumps
     /// `chats.updated_at` so the chat list reflects the finalized state.
-    public func finalizeStaleDrafts(forChat chatID: PageID) throws {
+    public func finalizeStaleDrafts(forChat chatID: ChatID) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
@@ -6340,7 +6340,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func chatMessages(chatID: PageID) throws -> [ChatMessage] {
+    public func chatMessages(chatID: ChatID) throws -> [ChatMessage] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT id, seq, event_json, created_at, summary, summary_kind, summary_at, is_draft
@@ -6378,7 +6378,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func renameChat(id: PageID, to title: String) throws {
+    public func renameChat(id: ChatID, to title: String) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: id.rawValue, change: .updated)
         }) { db in
@@ -6389,7 +6389,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // A 0-row UPDATE means the chat id is gone — throw .notFound inside
             // `mutate`'s body so the savepoint rolls back and no event is emitted
             // (mirrors updatePage / SQLiteWikiStore.renameChat).
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
+            guard db.changesCount > 0 else { throw WikiStoreError.chatNotFound(id) }
 
             // Refresh the FTS sidecar title so keyword search reflects the new
             // name (the body is unchanged). A no-op if no chat_search row exists
@@ -6410,7 +6410,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func deleteChat(id: PageID) throws {
+    public func deleteChat(id: ChatID) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: id.rawValue, change: .deleted)
         }) { db in
@@ -6420,7 +6420,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func updateChatSummary(chatID: PageID, summary: String) throws {
+    public func updateChatSummary(chatID: ChatID, summary: String) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
@@ -6436,7 +6436,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `updated_at`. Routes through `mutate(event:_:)` so it emits a
     /// `.chat .updated` event. Pass `nil` to clear (terminal teardown /
     /// permanent resume failure).
-    public func updateChatAcpSessionId(chatID: PageID, acpSessionId: AcpSessionID?) throws {
+    public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
@@ -6445,7 +6445,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE id = ?;
             """, arguments: [acpSessionId?.rawValue, Date().timeIntervalSince1970,
                             chatID.rawValue])
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(chatID) }
+            guard db.changesCount > 0 else { throw WikiStoreError.chatNotFound(chatID) }
         }
     }
 
@@ -6458,7 +6458,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// representable state). Bumps `updated_at`. Routes through
     /// `mutate(event:_:)` so it emits a `.chat .updated` event, same as
     /// `updateChatAcpSessionId`.
-    public func updateChatModelOverride(id: PageID, providerId: String?, modelId: String?) throws {
+    public func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: id.rawValue, change: .updated)
         }) { db in
@@ -6467,7 +6467,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE id = ?;
             """, arguments: [providerId, providerId == nil ? nil : modelId,
                             Date().timeIntervalSince1970, id.rawValue])
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(id) }
+            guard db.changesCount > 0 else { throw WikiStoreError.chatNotFound(id) }
         }
     }
 
@@ -6480,7 +6480,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// row overwrites the cached values), but the caller is expected to
     /// short-circuit when `summary` is non-nil (compute-once, AC.6).
     public func updateMessageSummary(
-        chatID: PageID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
     ) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
@@ -6518,14 +6518,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func resolveChatByTitle(_ title: String) throws -> PageID? {
+    public func resolveChatByTitle(_ title: String) throws -> ChatID? {
         try dbWriter.read { db in
             if let id = try String.fetchOne(
                 db,
                 sql: "SELECT id FROM chats WHERE title = ? COLLATE NOCASE ORDER BY id ASC LIMIT 1;",
                 arguments: [title]
             ) {
-                return PageID(rawValue: id)
+                return ChatID(rawValue: id)
             }
             return nil
         }
@@ -6533,7 +6533,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - WikiStore protocol: Semantic chat search
 
-    public func storeChatChunks(id: PageID, chunks: [Data]) throws {
+    public func storeChatChunks(id: ChatID, chunks: [Data]) throws {
         try mutate(event: { _ in nil }) { db in
             try db.execute(sql: "DELETE FROM chat_chunks WHERE chat_id = ?;",
                            arguments: [id.rawValue])
@@ -6546,7 +6546,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func missingChatEmbeddingWork() -> [(id: PageID, text: String)] {
+    public func missingChatEmbeddingWork() -> [(id: ChatID, text: String)] {
         do {
             return try dbWriter.read { db in
                 // Build the embeddable text from the chat title + concatenated
@@ -6568,8 +6568,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 )
                 ORDER BY c.id;
                 """)
-                return rows.map { row -> (id: PageID, text: String) in
-                    let id = PageID(rawValue: row["id"])
+                return rows.map { row -> (id: ChatID, text: String) in
+                    let id = ChatID(rawValue: row["id"])
                     let title: String = row["title"]
                     let body: String = row["body"]
                     return (id, body.isEmpty ? title : "\(title)\n\n\(body)")
@@ -6841,7 +6841,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let modelProviderId: String? = row["model_provider_id"]
         let modelId: String? = row["model_id"]
         return ChatSummary(
-            id: PageID(rawValue: row["id"]),
+            id: ChatID(rawValue: row["id"]),
             kind: ChatKind(rawValue: row["kind"]) ?? .edit,
             title: row["title"],
             createdAt: Date(timeIntervalSince1970: row["created_at"]),
@@ -7775,9 +7775,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// One chat summary by id. Ported from the former
     /// SQLiteWikiStore.getChat(id:).
-    public func getChat(id: PageID) throws -> ChatSummary {
+    public func getChat(id: ChatID) throws -> ChatSummary {
         try dbWriter.read { db in
-            guard chatsSchemaIsReady(in: db) else { throw WikiStoreError.notFound(id) }
+            guard chatsSchemaIsReady(in: db) else { throw WikiStoreError.chatNotFound(id) }
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
@@ -7788,7 +7788,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]
-            ) else { throw WikiStoreError.notFound(id) }
+            ) else { throw WikiStoreError.chatNotFound(id) }
             let summary: String? = row["summary"]
             let summaryAt: Double? = row["summary_at"]
             return Self.readChatSummary(

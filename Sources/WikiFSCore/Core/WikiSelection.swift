@@ -15,5 +15,5 @@ public enum WikiSelection: Hashable, Sendable {
     /// a bookmark folder highlights it but does not open a tab.
     case bookmark(String)
     /// A persisted agent chat, by id (issue #119).
-    case chat(PageID)
+    case chat(ChatID)
 }

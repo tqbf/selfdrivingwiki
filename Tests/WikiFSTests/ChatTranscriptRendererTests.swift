@@ -17,7 +17,7 @@ import WikiFSCore
         title: String = "Test Chat", kind: ChatKind = .edit, messageCount: Int = 1
     ) -> ChatSummary {
         ChatSummary(
-            id: PageID(rawValue: "01H8H000000000000000000AAA"),
+            id: ChatID(rawValue: "01H8H000000000000000000AAA"),
             kind: kind, title: title,
             createdAt: created, updatedAt: updated, messageCount: messageCount)
     }
@@ -25,7 +25,7 @@ import WikiFSCore
     private func message(_ event: AgentEvent, seq: Int = 0) -> ChatMessage {
         ChatMessage(
             id: PageID(rawValue: "01H8H000000000000000000BB\(seq)"),
-            chatID: PageID(rawValue: "01H8H000000000000000000AAA"),
+            chatID: ChatID(rawValue: "01H8H000000000000000000AAA"),
             seq: seq, event: event, createdAt: created)
     }
 

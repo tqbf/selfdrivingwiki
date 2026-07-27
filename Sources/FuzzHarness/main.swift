@@ -472,12 +472,16 @@ func fuzzRewriter(_ input: FuzzInput, _ iter: Int, _ seed: UInt64, r: inout Fuzz
             if s.isEmpty || r.nextInt(4) == 0 { return nil }
             return PageID(rawValue: randomULID(&r))
         }
+        let resolveChat: (String) throws -> ChatID? = { s in
+            if s.isEmpty || r.nextInt(4) == 0 { return nil }
+            return ChatID(rawValue: randomULID(&r))
+        }
         let resolveSource: (String) throws -> SourceID? = { s in
             if s.isEmpty || r.nextInt(4) == 0 { return nil }
             return SourceID(rawValue: randomULID(&r))
         }
         _ = try WikiLinkRewriter.canonicalize(
-            in: text, resolvePage: resolve, resolveSource: resolveSource, resolveChat: resolve)
+            in: text, resolvePage: resolve, resolveSource: resolveSource, resolveChat: resolveChat)
     }
 }
 

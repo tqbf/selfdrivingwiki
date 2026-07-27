@@ -28,7 +28,7 @@ public enum WikiLinkRewriter {
         in body: String,
         resolvePage: (String) throws -> PageID?,
         resolveSource: (String) throws -> SourceID?,
-        resolveChat: (String) throws -> PageID? = { _ in nil }
+        resolveChat: (String) throws -> ChatID? = { _ in nil }
     ) throws -> String? {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)

@@ -19,7 +19,7 @@ struct BookmarkTargetPickerContext: Identifiable, Sendable {
     enum Targets: Sendable {
         case pages([PageID])
         case sources([SourceID])
-        case chats([PageID])
+        case chats([ChatID])
 
         var kind: BookmarkRefKind {
             switch self {
