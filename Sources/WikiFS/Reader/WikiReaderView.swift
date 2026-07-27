@@ -374,6 +374,13 @@ final class WikiReaderWebView: WKWebView {
     /// in-file message-handler proxy can write it without exposing a public setter.
     fileprivate(set) var hoveredLinkHref: String?
 
+    /// How "Print Page…" prints (issue #933). Production runs WebKit's own
+    /// `printOperation(with:)` against *this* view, so the job is whatever the
+    /// reader is currently showing. It is a stored seam purely so tests can
+    /// observe that the menu item targets the right web view without a real
+    /// print panel appearing; nothing in the app reassigns it.
+    var printRenderedPage: @MainActor (WKWebView) -> Void = ReaderPrinting.run(for:)
+
     /// The Coordinator that owns this view's load lifecycle + the Plan v2
     /// embed-fetch handler. Set by `WikiReaderRep.makeNSView` so the
     /// `EmbedFetchMessageHandler` proxy can forward `WKScriptMessage` bodies
@@ -503,13 +510,12 @@ final class WikiReaderWebView: WKWebView {
             return
         }
 
-        // Non-link right-click: add a Share item below "Reload" so the user
-        // can share the current page/source document directly.
+        // Non-link right-click: this is the *page* menu (issue #933) — Back /
+        // Forward above WebKit's Reload, then Print Page… and Share… in the
+        // document group below it.
         guard hasLinkItem || hasWikiHref else {
-            if let sel = currentSelection {
-                addInlineShareItem(to: menu, for: sel, store: store, event: event)
-            }
-            DebugLog.reader("willOpenMenu: no link → added inline Share, bailing")
+            addPageItems(to: menu, store: store, event: event)
+            DebugLog.reader("willOpenMenu: no link → added page items, bailing")
             return
         }
 
@@ -656,19 +662,46 @@ final class WikiReaderWebView: WKWebView {
         }
     }
 
-    /// Insert a Share item after WebKit's "Reload" (or at the end) for
-    /// right-clicks on non-link text.  Resolves the canonical URL from the
-    /// daemon so the share sheet gets a human-readable filename.
-    private func addInlineShareItem(
-        to menu: NSMenu,
-        for selection: WikiSelection,
-        store: WikiStoreModel,
-        event: NSEvent
-    ) {
+    /// Build the page (non-link) context menu: the ``PageContextMenuNSItems``
+    /// group — Back / Forward at the top and Print Page… below WebKit's Reload —
+    /// plus the inline Share item, which joins Print in the document group.
+    ///
+    /// Everything here is synchronous, because AppKit assembles a context menu in
+    /// one turn: Back / Forward read the store's history stacks directly, Print
+    /// hands the closure straight to ``printRenderedPage``, and Share kicks off
+    /// its File Provider resolution as a detached task whose result is only
+    /// needed if the user actually chooses it.
+    ///
+    /// `store` is *this* reader's store — set by `WikiReaderRep` from the window's
+    /// session — so with several windows open each menu navigates and prints its
+    /// own wiki.
+    func addPageItems(to menu: NSMenu, store: WikiStoreModel, event: NSEvent) {
+        let inserted = PageContextMenuNSItems.insert(into: menu, store: store) { [weak self] in
+            guard let self else { return }
+            self.printRenderedPage(self)
+        }
+        // Share sits with Print in the document group. Anchor off the Print item
+        // itself rather than recomputing a WebKit index, so the two can't drift.
+        let afterPrint = inserted.last.map { menu.index(of: $0) + 1 } ?? menu.items.count
+        if let selection = currentSelection,
+           let share = inlineShareItem(for: selection, event: event) {
+            menu.insertItem(share, at: afterPrint)
+            menu.insertItem(.separator(), at: afterPrint + 1)
+        } else {
+            menu.insertItem(.separator(), at: afterPrint)
+        }
+        collapseMenuSeparators(menu)
+    }
+
+    /// A Share item for the document being read. Resolves the canonical URL from
+    /// the daemon so the share sheet gets a human-readable filename. `nil` for
+    /// selections with no shareable File Provider URL (chats, the system prompt),
+    /// which is how the item omits itself rather than sharing nothing.
+    private func inlineShareItem(for selection: WikiSelection, event: NSEvent) -> NSMenuItem? {
         let shareWebView = self
         let viewPoint = convert(event.locationInWindow, from: nil)
 
-        let shareTask: Task<URL?, Never>?
+        let shareTask: Task<URL?, Never>
         switch selection {
         case .page(let id):
             shareTask = Task { [weak fileProvider] in
@@ -679,12 +712,12 @@ final class WikiReaderWebView: WKWebView {
                 await fileProvider?.resolveSourceByNameURL(id: id)
             }
         default:
-            return
+            return nil
         }
 
         let item = NSMenuItem.wikiItem("Share…") {
             Task { @MainActor in
-                guard let fileURL = await shareTask?.value as? URL else { return }
+                guard let fileURL = await shareTask.value else { return }
                 let picker = NSSharingServicePicker(items: [fileURL])
                 let rect = NSRect(x: viewPoint.x, y: viewPoint.y, width: 1, height: 1)
                 picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
@@ -692,16 +725,7 @@ final class WikiReaderWebView: WKWebView {
         }
         item.image = NSImage(systemSymbolName: "square.and.arrow.up",
                              accessibilityDescription: "Share")
-
-        // Insert after "Reload" if present.
-        if let reloadIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }) {
-            menu.insertItem(NSMenuItem.separator(), at: reloadIdx + 1)
-            menu.insertItem(item, at: reloadIdx + 2)
-        } else {
-            menu.addItem(NSMenuItem.separator())
-            menu.addItem(item)
-        }
-        collapseMenuSeparators(menu)
+        return item
     }
 
     // MARK: - Pure, testable hit-test helpers
