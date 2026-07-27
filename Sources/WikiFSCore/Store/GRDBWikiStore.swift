@@ -8178,6 +8178,49 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func sourceLinks(from pageID: PageID) throws -> [PageSourceLink] {
+        try dbWriter.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT from_page_id, to_source_id, link_text, role
+                FROM source_links
+                WHERE from_page_id = ?
+                ORDER BY to_source_id, role, COALESCE(pinned_version_id, '');
+                """,
+                arguments: [pageID.rawValue]
+            )
+            return rows.compactMap { row in
+                guard let role = PageSourceLinkRole(rawValue: row["role"]) else { return nil }
+                return PageSourceLink(
+                    pageID: PageID(rawValue: row["from_page_id"]),
+                    sourceID: PageID(rawValue: row["to_source_id"]),
+                    linkText: row["link_text"],
+                    role: role
+                )
+            }
+        }
+    }
+
+    public func processedMarkdownProducer(versionID: PageID) throws -> SourceMarkdownProducer? {
+        try dbWriter.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT a.name, a.version
+                FROM source_markdown_versions smv
+                LEFT JOIN activities act ON act.id = smv.activity_id
+                LEFT JOIN agents a ON a.id = act.agent_id
+                WHERE smv.id = ?;
+                """,
+                arguments: [versionID.rawValue]
+            )
+            guard let row, let name: String = row["name"] else { return nil }
+            let version: String? = row["version"]
+            return SourceMarkdownProducer(name: name, version: version)
+        }
+    }
+
     // MARK: - Test hooks (#if DEBUG)
 
     // No C-scalar registration test hook anymore — the vendored scalar target

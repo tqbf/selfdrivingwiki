@@ -3,6 +3,7 @@ import FileProvider
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSLinks
 @testable import WikiFSFileProvider
 
 /// Characterization tests for the projection **tree** — `node(for:)` /
@@ -33,14 +34,20 @@ struct ProjectionTreeTests {
             .appendingPathComponent("wikifs-proj-\(UUID().uuidString).sqlite")
         let store = try GRDBWikiStore(databaseURL: url)
         let alpha = try store.createPage(title: "Alpha")
-        try store.updatePage(id: alpha.id, title: "Alpha", body: "Alpha body")
-        _ = try store.createPage(title: "Beta")
-        let textSource = try store.addSource(
-            filename: "notes.txt", data: Data("plain text".utf8), mimeType: "text/plain")
         let pdfSource = try store.addSource(
             filename: "doc.pdf", data: Data("%PDF-1.4 fake".utf8), mimeType: "application/pdf")
         _ = try store.appendProcessedMarkdown(
             sourceID: pdfSource.id, content: "# Extracted", origin: .extraction, note: nil)
+        let alphaBody = "Alpha body with [[source:\(pdfSource.id.rawValue)|Doc]]."
+        try store.updatePage(
+            id: alpha.id,
+            title: "Alpha",
+            body: alphaBody
+        )
+        try store.replaceLinks(from: alpha.id, parsedLinks: WikiLinkParser.parse(alphaBody))
+        _ = try store.createPage(title: "Beta")
+        let textSource = try store.addSource(
+            filename: "notes.txt", data: Data("plain text".utf8), mimeType: "text/plain")
         let pages = try store.listAllPagesOrderedByID()   // ULID order
         let projection = Projection(wikiID: "proj-tree-\(UUID().uuidString)", databaseURL: url)
         return Seeded(projection: projection, store: store, pages: pages,
@@ -83,9 +90,15 @@ struct ProjectionTreeTests {
         }
         #expect(node.parent == Projection.Identity.pagesByID)
         #expect(node.name == FilenameEscaping.byIDFilename(pageID: page.id.rawValue))
-        let expected = Data(PageMarkdownFormat.fileContent(for: page).utf8)
-        #expect(node.size == expected.count)
-        #expect(s.projection.contents(for: id) == expected)
+        guard let bytes = s.projection.contents(for: id) else {
+            Issue.record("page content not found"); return
+        }
+        let text = String(decoding: bytes, as: UTF8.self)
+        #expect(node.size == bytes.count)
+        #expect(text.contains(#"type: "Page""#))
+        #expect(text.contains(#"generated:"#))
+        #expect(text.contains(#"sources:"#))
+        #expect(text.contains(#"resource: "/sources/by-id/\#(s.pdfSource.id.rawValue).md""#))
     }
 
     @Test func byTitlePageRewritesLinksAndSizeMatchesBytes() throws {
@@ -148,10 +161,17 @@ struct ProjectionTreeTests {
         #expect(node.parent == Projection.Identity.sourcesByID)
         #expect(node.ingestedExt == "md")
         #expect(node.mimeType == "text/markdown")
-        guard let head = try s.store.processedMarkdownHead(sourceID: s.pdfSource.id) else {
-            Issue.record("markdown head not found"); return
+        guard let bytes = s.projection.contents(for: id) else {
+            Issue.record("markdown content not found"); return
         }
-        #expect(s.projection.contents(for: id) == Data(SourceMarkdownFormat.fileContent(for: head).utf8))
+        let text = String(decoding: bytes, as: UTF8.self)
+        #expect(text.contains(#"type: "Source""#))
+        #expect(text.contains(#"generated:"#))
+        #expect(text.contains(#"sources:"#))
+        #expect(text.contains(#"resource: "/sources/by-id/\#(s.pdfSource.id.rawValue).pdf""#))
+        #expect(!text.contains("origin:"))
+        #expect(!text.contains("technique:"))
+        #expect(!text.contains("note:"))
     }
 
     @Test func markdownSiblingAppearsForNonTextSource() throws {
@@ -288,6 +308,13 @@ struct ProjectionTreeTests {
         let data = s.projection.contents(for: Projection.Identity.indexMD)
         #expect(data != nil)
         #expect(s.projection.node(for: Projection.Identity.indexMD)?.name == "index.md")
+        let text = data.map { String(decoding: $0, as: UTF8.self) }
+        #expect(text?.hasPrefix("""
+        ---
+        okf_version: "0.2"
+        ---
+
+        """) == true)
     }
 
     @Test func logNodeServesContent() throws {

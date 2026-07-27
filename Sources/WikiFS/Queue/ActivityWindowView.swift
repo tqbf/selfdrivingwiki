@@ -41,7 +41,7 @@ struct ActivityWindowView: View {
 
     private var queueTitle: String {
         switch queue {
-        case .extraction: return "Extraction Queue"
+        case .extraction, .transcription: return "Extraction Queue"
         case .ingestion: return "Agent Queue"
         }
     }
@@ -49,7 +49,7 @@ struct ActivityWindowView: View {
     /// The toolbar/menu icon for this queue's window.
     private var queueControlIcon: String {
         switch queue {
-        case .extraction: return "doc.text.magnifyingglass"
+        case .extraction, .transcription: return "doc.text.magnifyingglass"
         case .ingestion: return "tray.full"
         }
     }
@@ -58,7 +58,7 @@ struct ActivityWindowView: View {
     /// when this queue has no relevant Settings tab.
     private var configureCTA: (tab: String, label: String)? {
         switch queue {
-        case .extraction:
+        case .extraction, .transcription:
             return (tab: "extraction", label: "Configure Extraction…")
         case .ingestion:
             return (tab: "agents", label: "Configure Agents…")
@@ -246,7 +246,7 @@ struct ActivityWindowView: View {
     private var emptyState: some View {
         let description: String
         switch queue {
-        case .extraction:
+        case .extraction, .transcription:
             description = "PDF extraction and transcription tasks appear here as they run."
         case .ingestion:
             description = "Ingestion and lint tasks appear here as they run."
@@ -1024,7 +1024,7 @@ struct ActivityWindowView: View {
     private func kindLabel(for item: QueueItem) -> String {
         if item.payload.lintPageIDs != nil { return "Lint" }
         switch item.queue {
-        case .extraction: return "Extraction"
+        case .extraction, .transcription: return "Extraction"
         case .ingestion: return "Ingestion"
         }
     }

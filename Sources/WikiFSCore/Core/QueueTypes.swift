@@ -20,10 +20,20 @@ public enum QueueKind: String, Hashable, Codable, Sendable {
     /// transcript sources resolve to a `transcriptFetch` closure in the
     /// `ExtractionResolution` instead of bytes-based extraction.
     case extraction
+    /// Legacy persisted raw value for transcript jobs from before
+    /// transcription merged into `.extraction`. Kept so older `queue.sqlite`
+    /// rows still decode in every linked target; runtime code should
+    /// canonicalize it back to `.extraction`.
+    case transcription
     /// Content ingestion (extracted markdown → wiki pages). Also covers
     /// lint operations — a `.ingestion` item with `lintPageIDs` in its
     /// payload runs lint instead of ingestion.
     case ingestion
+
+    /// Canonical live queue kind used by current runtime code.
+    public var canonical: QueueKind {
+        self == .transcription ? .extraction : self
+    }
 }
 
 // MARK: - Item lifecycle states

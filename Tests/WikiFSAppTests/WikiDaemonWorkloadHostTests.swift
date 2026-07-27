@@ -1,5 +1,10 @@
 #if os(macOS)
 import Foundation
+#if canImport(CSQLite)
+import CSQLite
+#else
+import SQLite3
+#endif
 import Testing
 import WikiDaemonContract
 @testable import WikiFSCore
@@ -60,6 +65,34 @@ struct WikiDaemonWorkloadHostTests {
         // Empty engine → empty snapshot.
         #expect(snapshot.activeItems.isEmpty)
         #expect(snapshot.recentItems.isEmpty)
+    }
+
+    @Test func queueSnapshotDataDecodesLegacyTranscriptionRowsAsExtraction() async throws {
+        let dir = makeTempDir()
+        let queueURL = dir.appendingPathComponent("queue.sqlite")
+        let store = try QueueStore(databaseURL: queueURL)
+        let item = try store.enqueue(
+            QueueItemRequest(
+                queue: .extraction,
+                wikiID: WikiID(rawValue: "legacy-wiki"),
+                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "legacy-src")])
+            )
+        )
+        store.close()
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(queueURL.path, &db) == SQLITE_OK)
+        let updateSQL = "UPDATE queue_items SET queue = 'transcription' WHERE id = '\(item.id.rawValue)';"
+        #expect(sqlite3_exec(db, updateSQL, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let data = await daemon.queueSnapshotData()
+        let snapshot = try JSONDecoder().decode(QueueSnapshot.self, from: data)
+
+        let restored = snapshot.activeItems.first { $0.id == item.id }
+        #expect(restored != nil)
+        #expect(restored?.queue == .extraction)
     }
 
     @Test func queueSnapshotDataIsConsistent() async throws {

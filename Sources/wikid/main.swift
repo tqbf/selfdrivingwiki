@@ -196,7 +196,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue) {
+               let queueKind = QueueKind(rawValue: queue)?.canonical {
                 await engine.pause(queueKind)
             }
             sendableReply.reply()
@@ -207,7 +207,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue) {
+               let queueKind = QueueKind(rawValue: queue)?.canonical {
                 await engine.resume(queueKind)
             }
             sendableReply.reply()
@@ -218,7 +218,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue) {
+               let queueKind = QueueKind(rawValue: queue)?.canonical {
                 await engine.halt(queueKind)
             }
             sendableReply.reply()
