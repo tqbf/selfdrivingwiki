@@ -3,6 +3,11 @@ import Testing
 @testable import WikiFSCore
 
 struct PageIDLegacyCodableCharacterizationTests {
+    private func normalizedJSONString(from object: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try #require(String(data: data, encoding: .utf8))
+    }
+
     /// A local copy of the payload shape that existed before `SourceID` was
     /// introduced. Keeping this type local prevents the characterization from
     /// accidentally proving only the new `QueueItemPayload` implementation.
@@ -30,6 +35,6 @@ struct PageIDLegacyCodableCharacterizationTests {
             with: Data(#"{"sourceIDs":["LEGACY-SOURCE-ID"]}"#.utf8)
         )
 
-        #expect((object as AnyObject).isEqual(expected))
+        #expect(try normalizedJSONString(from: object) == normalizedJSONString(from: expected))
     }
 }

@@ -7,6 +7,10 @@ import Testing
 /// Tests for `QueueEventEnvelope` Codable round-trip. Each extraction-relevant
 /// `QueueEvent` case must survive encode → decode → reconstruct.
 struct QueueEventEnvelopeTests {
+    private func normalizedJSONString(from object: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try #require(String(data: data, encoding: .utf8))
+    }
 
     private func makeItem() -> QueueItem {
         QueueItem(
@@ -44,7 +48,7 @@ struct QueueEventEnvelopeTests {
         let reencoded = try JSONEncoder().encode(decoded)
         let legacyObject = try JSONSerialization.jsonObject(with: legacyEvent)
         let reencodedObject = try JSONSerialization.jsonObject(with: reencoded)
-        #expect((legacyObject as AnyObject).isEqual(reencodedObject))
+        #expect(try normalizedJSONString(from: legacyObject) == normalizedJSONString(from: reencodedObject))
     }
 
     @Test func failedEventRoundTrip() throws {

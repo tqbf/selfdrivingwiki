@@ -9,16 +9,9 @@ struct SourceIDTests {
         let legacyPageIDEncoding = try JSONEncoder().encode(
             PageID(rawValue: sourceID.rawValue)
         )
-
-        let sourceObject = try JSONSerialization.jsonObject(
-            with: encoded,
-            options: .fragmentsAllowed
-        )
-        let legacyObject = try JSONSerialization.jsonObject(
-            with: legacyPageIDEncoding,
-            options: .fragmentsAllowed
-        )
-        #expect((sourceObject as AnyObject).isEqual(legacyObject))
+        let sourceValue = try JSONDecoder().decode(String.self, from: encoded)
+        let legacyValue = try JSONDecoder().decode(String.self, from: legacyPageIDEncoding)
+        #expect(sourceValue == legacyValue)
     }
 
     @Test func sourceIDPreservesRawValue() throws {
