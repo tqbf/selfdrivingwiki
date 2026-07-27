@@ -104,7 +104,7 @@ public final class AgentLauncher {
     /// claude spawn is actually committed (around `onLock`), and cleared in
     /// `finish()`. Drives the per-file "Ingesting…" row label and the cross-file
     /// `isAnySourceIngesting` Ingest-button greyout.
-    public var ingestingSourceIDs: Set<PageID> = []
+    public var ingestingSourceIDs: Set<SourceID> = []
     /// The in-flight ingest operation Task (set by `IngestSheetView`). Cancelling
     /// it aborts a running `pdf2md` conversion (via its task-cancellation handler).
     /// Held here so `stop()` can cancel the conversion phase, not just the agent
@@ -1080,7 +1080,7 @@ public final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
-        ingestingSourceIDs: Set<PageID> = [],
+        ingestingSourceIDs: Set<SourceID> = [],
         workspaceID: String? = nil,
         queueItemID: QueueItem.ID? = nil,
         queueStore: QueueStore? = nil,

@@ -9,7 +9,7 @@ import WikiFSEngine
 /// Compare for the same source in the same wiki focuses the existing window.
 /// `Codable` is required by the value-driven scene.
 struct ExtractionCompareContext: Codable, Hashable {
-    let sourceID: PageID
+    let sourceID: SourceID
     let filename: String
     let wikiID: WikiID
 
@@ -58,7 +58,7 @@ struct ExtractionCompareWindow: View {
 /// No new markdown-rendering code: both rendered panes reuse `WikiReaderView`.
 struct ExtractionCompareSheet: View {
     @Bindable var store: WikiStoreModel
-    let sourceID: PageID
+    let sourceID: SourceID
     let filename: String
 
     @Environment(\.dismiss) private var dismiss
@@ -68,7 +68,7 @@ struct ExtractionCompareSheet: View {
     @State private var rightID: PageID?
     @State private var showDiff = false
 
-    init(store: WikiStoreModel, sourceID: PageID, filename: String, startInDiff: Bool = false) {
+    init(store: WikiStoreModel, sourceID: SourceID, filename: String, startInDiff: Bool = false) {
         self._store = Bindable(wrappedValue: store)
         self.sourceID = sourceID
         self.filename = filename

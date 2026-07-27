@@ -1,8 +1,7 @@
 import SwiftUI
 import WikiFSCore
 
-/// Sheet for editing a bookmark's name (label). Works for folders, page refs,
-/// and source refs. Shows the target info read-only for refs.
+/// Sheet for editing a bookmark folder's name.
 struct EditBookmarkSheet: View {
     let store: WikiStoreModel
     let nodeID: String
@@ -19,7 +18,7 @@ struct EditBookmarkSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text(node?.kind == .folder ? "Edit Folder" : "Edit Bookmark")
+            Text("Edit Folder")
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -30,22 +29,6 @@ struct EditBookmarkSheet: View {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
                     .font(.body)
-
-                if let node, node.kind != .folder {
-                    if let target = node.targetID.flatMap({ id in
-                        store.summaries.first { $0.id == id }
-                    }) {
-                        Text("Points to page: \(target.title)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if let target = node.targetID.flatMap({ id in
-                        store.sources.first { $0.id == id }
-                    }) {
-                        Text("Points to source: \(target.effectiveName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
 
                 // Timestamps (read-only) — issue #242. Relative date mirrors
                 // ChatsCellView's treatment of chat.updatedAt; the absolute date
@@ -68,28 +51,6 @@ struct EditBookmarkSheet: View {
             Spacer()
 
             HStack {
-                if node?.kind != .folder, node?.label != nil {
-                    Button("Reset Name") {
-                        let fallback: String
-                        switch node?.kind {
-                        case .pageRef:
-                            fallback = node?.targetID.flatMap { id in
-                                store.summaries.first { $0.id == id }?.title
-                            } ?? ""
-                        case .chatRef:
-                            fallback = node?.targetID.flatMap { id in
-                                store.chats.first { $0.id == id }?.title
-                            } ?? ""
-                        default:
-                            fallback = node?.targetID.flatMap { id in
-                                store.sources.first { $0.id == id }?.effectiveName
-                            } ?? ""
-                        }
-                        name = fallback
-                    }
-                    .buttonStyle(.bordered)
-                }
-
                 Spacer()
 
                 Button("Cancel") { dismiss() }

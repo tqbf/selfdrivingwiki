@@ -13,11 +13,11 @@ struct WikiLinkCanonicalizerTests {
     private let paperID = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
 
     /// Build resolver closures from name→id maps (non-throwing satisfies the
-    /// `throws -> PageID?` requirement).
+    /// `throws -> PageID?` / `throws -> SourceID?` requirements).
     private func resolvers(pages: [String: String] = [:], sources: [String: String] = [:])
-        -> (resolvePage: (String) throws -> PageID?, resolveSource: (String) throws -> PageID?) {
+        -> (resolvePage: (String) throws -> PageID?, resolveSource: (String) throws -> SourceID?) {
         let rp: (String) throws -> PageID? = { pages[$0].map { PageID(rawValue: $0) } }
-        let rs: (String) throws -> PageID? = { sources[$0].map { PageID(rawValue: $0) } }
+        let rs: (String) throws -> SourceID? = { sources[$0].map { SourceID(rawValue: $0) } }
         return (rp, rs)
     }
 
@@ -29,7 +29,7 @@ struct WikiLinkCanonicalizerTests {
         #expect(out == "See [[page:\(homeID)|Home]] now.")
     }
 
-    @Test func canonicalizesSourceLink() throws {
+    @Test func sourceULIDCanonicalFormIsUnchanged() throws {
         let (rp, rs) = resolvers(sources: ["Paper": paperID])
         let out = try WikiLinkRewriter.canonicalize(in: "Cite [[source:Paper]].", resolvePage: rp, resolveSource: rs)
         #expect(out == "Cite [[source:\(paperID)|Paper]].")
@@ -156,7 +156,7 @@ struct WikiLinkCanonicalizerTests {
         let name = "Standup | 2026-01-01"
         let rc: (String) throws -> PageID? = { _ in PageID(rawValue: "01JCHATCHATCHATCHATCHATCHAT") }
         let rp: (String) throws -> PageID? = { _ in nil }
-        let rs: (String) throws -> PageID? = { _ in nil }
+        let rs: (String) throws -> SourceID? = { _ in nil }
         let out = try WikiLinkRewriter.canonicalize(
             in: "[[chat:\(name)]]", resolvePage: rp, resolveSource: rs, resolveChat: rc)
         #expect(out == "[[chat:01JCHATCHATCHATCHATCHATCHAT|\(name)]]")

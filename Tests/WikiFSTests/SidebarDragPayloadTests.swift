@@ -26,9 +26,9 @@ import Testing
     #expect(payload.selection == .page(PageID(rawValue: "abc123")))
 }
 
-@Test func sidebarDragPayloadSelection_source() {
+@Test func sourceSelectionRetainsSourceID() {
     let payload = SidebarDragPayload(kind: .source, id: "xyz789")
-    #expect(payload.selection == .source(PageID(rawValue: "xyz789")))
+    #expect(payload.selection == .source(SourceID(rawValue: "xyz789")))
 }
 
 /// The pasteboard JSON carries a stable, human-readable shape: the enum cases

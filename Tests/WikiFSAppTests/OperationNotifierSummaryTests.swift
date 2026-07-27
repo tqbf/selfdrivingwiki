@@ -14,7 +14,7 @@ import WikiFSCore
     /// Build a queue item with the given parameters.
     private func makeItem(
         queue: QueueKind,
-        sourceIDs: [PageID] = [],
+        sourceIDs: [SourceID] = [],
         lintPageIDs: [PageID]? = nil
     ) -> QueueItem {
         QueueItem(

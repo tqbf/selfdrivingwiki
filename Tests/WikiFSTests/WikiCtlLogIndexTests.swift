@@ -37,7 +37,7 @@ struct WikiCtlLogIndexTests {
             ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T", "--source", "FILE123"],
             env: noEnv)
         #expect(invocation.command
-            == .logAppend(kind: .ingest, title: "T", note: nil, source: PageID(rawValue: "FILE123")))
+            == .logAppend(kind: .ingest, title: "T", note: nil, source: SourceID(rawValue: "FILE123")))
     }
 
     @Test func logAppendRejectsBadKind() {

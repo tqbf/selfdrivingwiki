@@ -12,9 +12,9 @@ final class BackgroundIngestCoordinator {
     private let quotaCoordinator: QuotaFallbackCoordinator
     private var scanTask: Task<Void, Never>?
 
-    private var recentlyFailedIDs: Set<PageID> = []
+    private var recentlyFailedIDs: Set<SourceID> = []
     private let maxBackoffCycles = 3
-    private var backoffCount: [PageID: Int] = [:]
+    private var backoffCount: [SourceID: Int] = [:]
 
     let scanInterval: TimeInterval = 60
 
@@ -143,7 +143,7 @@ final class BackgroundIngestCoordinator {
     internal static func filterIngestibleSources(
         _ sources: [SourceSummary],
         store: WikiStoreModel
-    ) -> [PageID] {
+    ) -> [SourceID] {
         sources.compactMap { source in
             if ingestionDecision(for: source, store: store) == .enqueue {
                 return source.id
@@ -168,7 +168,7 @@ final class BackgroundIngestCoordinator {
         var backoffSkippedCount = 0
         var bytelessSkippedCount = 0
         var nonIngestibleSkippedCount = 0
-        var sourceIDsToEnqueue: [PageID] = []
+        var sourceIDsToEnqueue: [SourceID] = []
         
         for source in sources {
             guard !Task.isCancelled else { break }

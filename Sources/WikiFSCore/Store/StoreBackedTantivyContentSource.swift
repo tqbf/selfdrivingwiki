@@ -46,10 +46,11 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
                 // indexed). A missing HEAD (no extracted markdown yet) is NOT
                 // a delete — index the source with an empty body so its title
                 // is searchable; the version will re-index when markdown lands.
+                let sourceID = SourceID(rawValue: ulid)
                 let sources = try store.listSources()
-                guard let source = sources.first(where: { $0.id == id }) else { return nil }
+                guard let source = sources.first(where: { $0.id == sourceID }) else { return nil }
                 let body: String
-                if let head = try store.processedMarkdownHead(sourceID: id) {
+                if let head = try store.processedMarkdownHead(sourceID: sourceID) {
                     body = head.content
                 } else {
                     body = ""

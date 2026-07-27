@@ -646,6 +646,17 @@ struct EditorTabTests {
         #expect(model.tabs[0].selection == .page(a.id))
     }
 
+    @Test func sourceSelectionRestoresCorrectTab() throws {
+        let (model, store) = try tempModel()
+        let source = try store.addSource(filename: "source.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+
+        model.openTab(.source(source.id))
+
+        #expect(model.activeTab?.selection == .source(source.id))
+        #expect(model.selection == .source(source.id))
+    }
+
     // MARK: - Rename updates tab titles
 
     @Test func renameUpdatesTabTitles() throws {
@@ -845,6 +856,21 @@ struct EditorTabTests {
         // A stays active — background opens don't switch focus.
         #expect(model.activeTabID == model.tabs.first?.id)
         #expect(model.tabs.first?.selection == .page(a.id))
+    }
+
+    @Test func sourceBackgroundOpenPreservesActiveTab() throws {
+        let (model, store) = try tempModel()
+        let page = try store.createPage(title: "Active")
+        let source = try store.addSource(filename: "background.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+        model.openTab(.page(page.id))
+        let activeID = model.activeTabID
+
+        model.openTabInBackground(.source(source.id))
+
+        #expect(model.activeTabID == activeID)
+        #expect(model.selection == .page(page.id))
+        #expect(model.tabs.contains { $0.selection == .source(source.id) })
     }
 
     @Test func batchOpenSkipsDuplicateTabs() throws {

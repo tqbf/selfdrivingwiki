@@ -239,7 +239,7 @@ struct SystemPromptTests {
         // Pre-existing page + ingested file are intact.
         let page = try store.getPage(id: PageID(rawValue: "01PRESERVEDPAGE0000000000"))
         #expect(page.title == "Kept")
-        let file = try store.getSource(id: PageID(rawValue: "01PRESERVEDFILE0000000000"))
+        let file = try store.getSource(id: SourceID(rawValue: "01PRESERVEDFILE0000000000"))
         #expect(file.filename == "keep.txt")
         #expect(try store.sourceContent(id: file.id) == Data("keep".utf8))
 

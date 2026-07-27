@@ -100,7 +100,7 @@ public struct WikiLinkIndex: Sendable, Equatable {
     /// Sibling-image maps: `sourceID → [originalPath → sibling sourceID]`.
     /// Both consumers consult these to rewrite relative image `src` attributes
     /// inside a source's own markdown.
-    public let siblingImages: [PageID: [String: PageID]]
+    public let siblingImages: [SourceID: [String: SourceID]]
 
     // MARK: - Derived
 
@@ -123,7 +123,7 @@ public struct WikiLinkIndex: Sendable, Equatable {
         sourceLowerNameVariants: Set<String>,
         sourceByLooseKey: [String: String],
         chatByLooseKey: [String: String],
-        siblingImages: [PageID: [String: PageID]]
+        siblingImages: [SourceID: [String: SourceID]]
     ) {
         self.pages = pages
         self.sources = sources
@@ -144,7 +144,7 @@ public struct WikiLinkIndex: Sendable, Equatable {
         pages: [PageEntry],
         sources: [SourceEntry],
         chats: [ChatEntry],
-        siblingImages: [PageID: [String: PageID]]
+        siblingImages: [SourceID: [String: SourceID]]
     ) -> WikiLinkIndex {
         // Lowercased source name variants (displayName, filename, ext-stripped).
         // Mirrors resolveSourceByName's fallback so a [[source:Paper]] link also

@@ -84,9 +84,9 @@ struct Phase6PinningPureTests {
     // MARK: - AC.2 — canonicalize preserves @vN
 
     private func resolvers(pages: [String: String] = [:], sources: [String: String] = [:])
-        -> (resolvePage: (String) throws -> PageID?, resolveSource: (String) throws -> PageID?) {
+        -> (resolvePage: (String) throws -> PageID?, resolveSource: (String) throws -> SourceID?) {
         let rp: (String) throws -> PageID? = { pages[$0].map { PageID(rawValue: $0) } }
-        let rs: (String) throws -> PageID? = { sources[$0].map { PageID(rawValue: $0) } }
+        let rs: (String) throws -> SourceID? = { sources[$0].map { SourceID(rawValue: $0) } }
         return (rp, rs)
     }
 
@@ -129,12 +129,12 @@ struct Phase6PinningPureTests {
 
     // MARK: - AC.5 — linkify emits &pin= for quote links only
 
-    @Test func linkifyPinnedQuoteEmitsPin() {
-        let sourceID = PageID(rawValue: paperID)
+    @Test func sourceIDAndPinnedVersionRemainDistinct() {
+        let sourceID = SourceID(rawValue: paperID)
         let body = #"[[source:\#(paperID)@v3#"a quote"|Paper]]"#
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .source && id == sourceID ? "Paper" : nil },
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
             pinnedExtractionID: { src, ord in src == sourceID && ord == 3 ? PageID(rawValue: pinID) : nil })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(out.contains("&pin=\(pinID)"))
@@ -142,11 +142,11 @@ struct Phase6PinningPureTests {
 
     @Test func linkifyPinnedNoQuoteOmitsPin() {
         // A pinned link WITHOUT a fragment opens HEAD — no &pin=.
-        let sourceID = PageID(rawValue: paperID)
+        let sourceID = SourceID(rawValue: paperID)
         let body = "[[source:\(paperID)@v3|Paper]]"
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .source && id == sourceID ? "Paper" : nil },
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
             pinnedExtractionID: { _, _ in PageID(rawValue: pinID) })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(!out.contains("&pin="))
@@ -154,11 +154,11 @@ struct Phase6PinningPureTests {
 
     @Test func linkifyPinnedQuoteOutOfRangeOmitsPin() {
         // When pinnedExtractionID returns nil (ordinal out of range), no &pin=.
-        let sourceID = PageID(rawValue: paperID)
+        let sourceID = SourceID(rawValue: paperID)
         let body = #"[[source:\#(paperID)@v9#"q"|Paper]]"#
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .source && id == sourceID ? "Paper" : nil },
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
             pinnedExtractionID: { _, _ in nil })
         #expect(!out.contains("&pin="))
     }

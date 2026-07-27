@@ -121,7 +121,7 @@ struct MarkdownHTMLRendererTests {
         // swift-markdown parses it as InlineHTML, and the renderer must pass it
         // through verbatim — otherwise the embed is silently dropped. This test
         // guards against someone removing visitInlineHTML/visitHTMLBlock.
-        let id = PageID(rawValue: "01HTESTRENDER0000000000001")
+        let id = SourceID(rawValue: "01HTESTRENDER0000000000001")
         let prepared = WikiLinkMarkdown.linkified(
             "Here is ![[source:img.png]] inline.",
             isResolved: { _, _ in true },
@@ -144,7 +144,7 @@ struct MarkdownHTMLRendererTests {
     /// previous raw-`<div>` emit: paragraph surrounds, a blank line inside
     /// the diagram, the embed inside a list item, and the embed mid-paragraph.
     @Test func mermaidEmbedSurvivesMarkdownRendererInAllContexts() {
-        let id = PageID(rawValue: "01HTESTMERMAID0000000000001")
+        let id = SourceID(rawValue: "01HTESTMERMAID0000000000001")
         let cases: [(String, String, String)] = [
             ("paragraph-surround",
              "intro.\n\n![[source:diagram.mmd]]\n\noutro.",
@@ -201,7 +201,7 @@ struct MarkdownHTMLRendererTests {
     /// emit: we pick a fence length strictly longer than any run in the
     /// diagram body (CommonMark §4.5).
     @Test func mermaidEmbedWithBackticksInSourceUsesLongerFence() {
-        let id = PageID(rawValue: "01HTESTMERMAID0000000000002")
+        let id = SourceID(rawValue: "01HTESTMERMAID0000000000002")
         let diagram = "graph TD\n    A[\"has ``` triple backticks\"] --> B"
         let prepared = WikiLinkMarkdown.linkified(
             "![[source:diagram.mmd]]",

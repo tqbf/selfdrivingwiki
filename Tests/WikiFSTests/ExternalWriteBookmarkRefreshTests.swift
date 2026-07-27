@@ -35,8 +35,7 @@ struct ExternalWriteBookmarkRefreshTests {
         // store, bypassing the model's local createFolder() mutator (which calls
         // reloadBookmarkNodes() itself).
         _ = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder,
-            label: "Test Folder", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Test Folder"))
 
         // The model's bookmarkNodes is still stale — the store write doesn't
         // touch the model's memo.
@@ -64,18 +63,16 @@ struct ExternalWriteBookmarkRefreshTests {
 
         // Agent creates a folder + page ref directly through the store.
         let folder = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder,
-            label: "Research", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Research"))
         _ = try store.createBookmarkNode(
-            parentID: folder.id, position: 0, kind: .pageRef,
-            label: nil, targetID: pageID)
+            parentID: folder.id, position: 0, content: .page(pageID))
 
         model.reloadFromStore()
 
         #expect(model.bookmarkNodes.count == 2)
         let refs = model.bookmarkNodes.filter { $0.kind == .pageRef }
         #expect(refs.count == 1)
-        #expect(refs[0].targetID == pageID)
+        #expect(refs[0].content == .page(pageID))
         #expect(refs[0].parentID == folder.id)
     }
 
@@ -84,9 +81,8 @@ struct ExternalWriteBookmarkRefreshTests {
 
         // Agent creates a folder, then renames it — all through the store.
         let node = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder,
-            label: "Old Name", targetID: nil)
-        try store.updateBookmarkNode(id: node.id, label: "New Name")
+            parentID: nil, position: 0, content: .folder(label: "Old Name"))
+        try store.renameBookmarkFolder(id: node.id, to: "New Name")
 
         model.reloadFromStore()
 
@@ -99,8 +95,7 @@ struct ExternalWriteBookmarkRefreshTests {
 
         // Seed the model with a folder via the store, then reload.
         _ = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder,
-            label: "Doomed", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Doomed"))
         model.reloadFromStore()
         #expect(model.bookmarkNodes.count == 1)
 
@@ -116,14 +111,11 @@ struct ExternalWriteBookmarkRefreshTests {
 
         // Create two folders + a page ref under the first folder.
         let folderA = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder,
-            label: "Folder A", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Folder A"))
         let folderB = try store.createBookmarkNode(
-            parentID: nil, position: 1, kind: .folder,
-            label: "Folder B", targetID: nil)
+            parentID: nil, position: 1, content: .folder(label: "Folder B"))
         _ = try store.createBookmarkNode(
-            parentID: folderA.id, position: 0, kind: .folder,
-            label: "Child", targetID: nil)
+            parentID: folderA.id, position: 0, content: .folder(label: "Child"))
 
         model.reloadFromStore()
         #expect(model.bookmarkNodes.count == 3)

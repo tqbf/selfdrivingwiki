@@ -23,11 +23,11 @@ public struct BookmarkTreeItem: Identifiable, Hashable, Sendable {
     /// The `WikiSelection` to open when the user double-clicks or uses "Open".
     /// Returns the target page/source for refs; nil for folders.
     public var openSelection: WikiSelection? {
-        switch node.kind {
-        case .pageRef: return node.targetID.map { WikiSelection.page($0) }
-        case .sourceRef: return node.targetID.map { WikiSelection.source($0) }
-        case .chatRef: return node.targetID.map { WikiSelection.chat($0) }
+        switch node.content {
         case .folder: return nil
+        case .page(let id): return .page(id)
+        case .source(let id): return .source(id)
+        case .chat(let id): return .chat(id)
         }
     }
 
@@ -57,12 +57,12 @@ public func buildBookmarkTree(nodes: [BookmarkNode]) -> [BookmarkTreeItem] {
     }
 
     func buildItem(from node: BookmarkNode) -> BookmarkTreeItem {
-        switch node.kind {
+        switch node.content {
         case .folder:
             // Always expandable — empty array when no children.
             let children = buildChildren(of: node.id)
             return BookmarkTreeItem(id: node.id, node: node, children: children)
-        case .pageRef, .sourceRef, .chatRef:
+        case .page, .source, .chat:
             // Leaf — no disclosure triangle.
             return BookmarkTreeItem(id: node.id, node: node, children: nil)
         }

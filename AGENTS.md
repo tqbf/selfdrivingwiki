@@ -1,3 +1,5 @@
+Last verified: 2026-07-27
+
 * **All Swift code must compile via `swift build` / `swift test` from the
   command line (SwiftPM only) — never rely on Xcode-only tooling or APIs.**
   In practice this means: no macros or APIs that require an Xcode project
@@ -29,6 +31,15 @@ PROGRESS.md" and trust it's up to speed with this codebase.
   macOS app, with modern professional macOS idioms. Keep things simple.
 
 ## Modeling rules
+
+* **Page and source IDs are separate namespaces.** Use `PageID` for rows in
+  `pages` and `SourceID` for rows in `sources`; construct either from raw text
+  only at persistence or external-format boundaries. Source content-version
+  IDs, source Markdown-version IDs, and chat IDs remain `PageID` until their
+  own namespace migrations. Mixed targets use tagged enums such as
+  `BookmarkNode.Content`. The raw ULID strings and existing JSON, SQLite,
+  wiki-link, File Provider, CLI, and staging formats are compatibility
+  contracts; see `plans/page-source-id-separation.md`.
 
 * **Avoid stringly-typed variables.** A bare `String` (or `String?`) that
   actually means "a chat id" / "a queue item id" / "a provider name" makes two

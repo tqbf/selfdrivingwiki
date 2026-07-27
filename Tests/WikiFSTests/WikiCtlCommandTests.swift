@@ -406,7 +406,7 @@ struct WikiCtlCommandTests {
     @Test func parsesFileCatByID() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--id", "01ABC"], env: noEnv)
-        #expect(invocation.command == .source(.cat(.id(PageID(rawValue: "01ABC")), markdown: false)))
+        #expect(invocation.command == .source(.cat(.id(SourceID(rawValue: "01ABC")), markdown: false)))
     }
 
     @Test func parsesFileCatByName() throws {
@@ -418,13 +418,13 @@ struct WikiCtlCommandTests {
     @Test func parsesFileExportByID() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z"], env: noEnv)
-        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: nil, markdown: false)))
+        #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: nil, markdown: false)))
     }
 
     @Test func parsesFileExportWithOut() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z", "--out", "/tmp/out.pdf"], env: noEnv)
-        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: "/tmp/out.pdf", markdown: false)))
+        #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: "/tmp/out.pdf", markdown: false)))
     }
 
     @Test func fileRequiresSubcommand() {
@@ -537,7 +537,7 @@ struct WikiCtlCommandTests {
     @Test func fileCatWithUnknownIDFails() throws {
         let store = try tempStore()
         #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.id(PageID(rawValue: "01NOPE")), markdown: false), in: store, cwd: "/tmp")
+            try SourceCommand.run(.cat(.id(SourceID(rawValue: "01NOPE")), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
@@ -587,7 +587,7 @@ struct WikiCtlCommandTests {
         let store = try tempStore()
         #expect(throws: SourceCommand.Failure.self) {
             try SourceCommand.run(
-                .export(.id(PageID(rawValue: "01NOPE")), out: nil, markdown: false), in: store, cwd: "/tmp")
+                .export(.id(SourceID(rawValue: "01NOPE")), out: nil, markdown: false), in: store, cwd: "/tmp")
         }
     }
 
@@ -620,7 +620,7 @@ struct WikiCtlCommandTests {
     @Test func parsesFileCatWithMarkdownFlag() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--id", "01ABC", "--markdown"], env: noEnv)
-        #expect(invocation.command == .source(.cat(.id(PageID(rawValue: "01ABC")), markdown: true)))
+        #expect(invocation.command == .source(.cat(.id(SourceID(rawValue: "01ABC")), markdown: true)))
     }
 
     @Test func parsesFileCatByNameWithMarkdownFlag() throws {
@@ -632,7 +632,7 @@ struct WikiCtlCommandTests {
     @Test func parsesFileExportWithMarkdownFlag() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z", "--markdown"], env: noEnv)
-        #expect(invocation.command == .source(.export(.id(PageID(rawValue: "01Z")), out: nil, markdown: true)))
+        #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: nil, markdown: true)))
     }
 
     @Test func catMarkdownReturnsExtractedMarkdown() throws {
@@ -746,13 +746,13 @@ struct WikiCtlCommandTests {
     @Test func parsesEditMarkdownWithContent() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body"], env: noEnv)
-        #expect(invocation.command == .source(.editMarkdown(.id(PageID(rawValue: "01ABC")), content: .inline("new body"))))
+        #expect(invocation.command == .source(.editMarkdown(.id(SourceID(rawValue: "01ABC")), content: .inline("new body"))))
     }
 
     @Test func parsesEditMarkdownWithFile() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md"], env: noEnv)
-        #expect(invocation.command == .source(.editMarkdown(.id(PageID(rawValue: "01ABC")), content: .file("edit.md"))))
+        #expect(invocation.command == .source(.editMarkdown(.id(SourceID(rawValue: "01ABC")), content: .file("edit.md"))))
     }
 
     @Test func parsesEditMarkdownByName() throws {
@@ -998,7 +998,7 @@ struct WikiCtlCommandTests {
     /// AC.8 (wikictl) — `source set-active` nominates an existing markdown
     /// version as the active HEAD (repoints the `source-derived` ref), commits,
     /// and `processedMarkdownHead` follows it.
-    @Test func sourceSetActiveRoundTrip() throws {
+    @Test func sourceIDInputAndOutputRemainRawStrings() throws {
         let store = try tempStore()
         let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         let first = try store.recordMarkdownExtraction(
@@ -1077,7 +1077,7 @@ struct WikiCtlCommandTests {
     @Test func parsesSourceRefresh() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "refresh", "--id", "01ABC"], env: noEnv)
-        #expect(invocation.command == .source(.refresh(.id(PageID(rawValue: "01ABC")))))
+        #expect(invocation.command == .source(.refresh(.id(SourceID(rawValue: "01ABC")))))
     }
 
     // MARK: - source refresh (Phase 3b)

@@ -22,9 +22,9 @@ public enum OperationRequest: Sendable {
     public let ext: String         // lowercased, e.g. "md", "pdf"
     public let displayPath: String  // mount-relative, e.g. "sources/by-id/<ulid>.md"
     public let name: String         // source.effectiveName — drives the staged leaf stem
-    public let sourceID: PageID     // the source's page id (a ULID) — disambiguator
+    public let sourceID: SourceID   // the source entity id (a ULID) — disambiguator
 
-    public init(bytes: Data, ext: String, displayPath: String, name: String, sourceID: PageID) {
+    public init(bytes: Data, ext: String, displayPath: String, name: String, sourceID: SourceID) {
       self.bytes = bytes
       self.ext = ext
       self.displayPath = displayPath

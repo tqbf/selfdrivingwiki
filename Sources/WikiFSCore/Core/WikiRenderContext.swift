@@ -45,9 +45,9 @@ public struct WikiRenderContext: Sendable {
     /// Lowercased source name variants (displayName, filename, ext-stripped) —
     /// drives legacy/forward `[[source:Name]]` existence.
     public let sourceNames: Set<String>
-    /// `PageID` → current display name (or filename fallback), for canonical
+    /// `SourceID` → current display name (or filename fallback), for canonical
     /// `[[source:ULID|…]]` display-at-render.
-    public let sourceIDToName: [PageID: String]
+    public let sourceIDToName: [SourceID: String]
     /// Lowercased chat titles — drives legacy/forward `[[chat:Name]]` existence.
     public let chatTitles: Set<String>
     /// `PageID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
@@ -73,7 +73,7 @@ public struct WikiRenderContext: Sendable {
     // `sourceID` → ULID-asc `[smvID]` (chronological; index 0 = v1). Built once
     // so `linkified` can resolve an `@vN` ordinal per occurrence without
     // per-link SQL.
-    public let sourceDerivedChain: [PageID: [PageID]]
+    public let sourceDerivedChain: [SourceID: [PageID]]
 
     // MARK: - Phase 4 sibling-image resolver maps
     //
@@ -82,7 +82,7 @@ public struct WikiRenderContext: Sendable {
     // only the rendered source's own map (nil for pages — no sibling images);
     // that selection-specific pick stays in the reader, NOT here, because it
     // depends on *which* document is being rendered.
-    public let siblingMaps: [PageID: [String: PageID]]
+    public let siblingMaps: [SourceID: [String: SourceID]]
 
     /// The `wiki-blob://` scheme string, captured on the main actor (the static
     /// property is main-actor-isolated; the detached task can't read it). Exposed
@@ -97,13 +97,13 @@ public struct WikiRenderContext: Sendable {
         pageTitles: Set<String>,
         pageIDToName: [PageID: String],
         sourceNames: Set<String>,
-        sourceIDToName: [PageID: String],
+        sourceIDToName: [SourceID: String],
         chatTitles: Set<String>,
         chatIDToName: [PageID: String],
         uniqueLooseKeys: Set<String>,
         embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo],
-        sourceDerivedChain: [PageID: [PageID]],
-        siblingMaps: [PageID: [String: PageID]],
+        sourceDerivedChain: [SourceID: [PageID]],
+        siblingMaps: [SourceID: [String: SourceID]],
         blobScheme: String
     ) {
         self.pageTitles = pageTitles
@@ -128,6 +128,7 @@ public struct WikiRenderContext: Sendable {
     /// render task — the derived closures never touch the store.
     @MainActor
     public static func build(from store: WikiStoreModel) -> WikiRenderContext {
+        let siblingMaps = store.siblingImageResolvers()
         // Build the shared link index from the model's already-fetched rows.
         // Centralizes source name-variant / loose-key / sibling-image
         // computation so this and Projection.makeLinkMaps agree on normalization
@@ -141,21 +142,21 @@ public struct WikiRenderContext: Sendable {
                     mime: $0.mimeType, displayName: $0.displayName) },
             chats: store.chats.map {
                 WikiLinkIndex.ChatEntry(id: $0.id.rawValue, title: $0.title) },
-            siblingImages: store.siblingImageResolvers())
+            siblingImages: siblingMaps)
 
         // --- Existence sets + id→name dicts (derived from the shared index) ---
         let pageTitles = Set(index.pages.map { $0.title.lowercased() })
-        let pageIDToName = Dictionary(
+        let pageIDToName: [PageID: String] = Dictionary(
             uniqueKeysWithValues:
                 index.pages.map { (PageID(rawValue: $0.id), $0.title) })
 
         let sourceNames = index.sourceLowerNameVariants
-        let sourceIDToName = Dictionary(
+        let sourceIDToName: [SourceID: String] = Dictionary(
             uniqueKeysWithValues:
-                index.sources.map { (PageID(rawValue: $0.id), $0.humanName) })
+                index.sources.map { (SourceID(rawValue: $0.id), $0.humanName) })
 
         let chatTitles = Set(index.chats.map { $0.title.lowercased() })
-        let chatIDToName = Dictionary(
+        let chatIDToName: [PageID: String] = Dictionary(
             uniqueKeysWithValues:
                 index.chats.map { (PageID(rawValue: $0.id), $0.title) })
 
@@ -211,8 +212,6 @@ public struct WikiRenderContext: Sendable {
 
         // --- Phase 6 chain + Phase 4 sibling maps (WRC-specific) ---
         let sourceDerivedChain = store.sourceDerivedChains()
-        let siblingMaps = index.siblingImages
-
         return WikiRenderContext(
             pageTitles: pageTitles,
             pageIDToName: pageIDToName,
@@ -238,11 +237,12 @@ public struct WikiRenderContext: Sendable {
     public var isResolved: (String, ParsedLink.LinkType) -> Bool {
         { name, kind in
             if WikiLinkParser.isCanonicalULID(name) {
-                let id = PageID(rawValue: name)
+                let pageID = PageID(rawValue: name)
+                let sourceID = SourceID(rawValue: name)
                 switch kind {
-                case .source: return sourceIDToName[id] != nil
-                case .chat:   return chatIDToName[id] != nil
-                case .page:   return pageIDToName[id] != nil
+                case .source: return sourceIDToName[sourceID] != nil
+                case .chat:   return chatIDToName[pageID] != nil
+                case .page:   return pageIDToName[pageID] != nil
                 }
             }
             switch kind {
@@ -265,12 +265,12 @@ public struct WikiRenderContext: Sendable {
     /// `[[source:ULID|Stale Title]]` resolves ULID → the CURRENT display name
     /// here, so a rename self-heals visually without touching bytes. Returns
     /// `nil` when the id isn't known (the renderer keeps the alias).
-    public var displayName: (PageID, ParsedLink.LinkType) -> String? {
+    public var displayName: (String, ParsedLink.LinkType) -> String? {
         { id, kind in
             switch kind {
-            case .source: return sourceIDToName[id]
-            case .chat:   return chatIDToName[id]
-            case .page:   return pageIDToName[id]
+            case .source: return sourceIDToName[SourceID(rawValue: id)]
+            case .chat:   return chatIDToName[PageID(rawValue: id)]
+            case .page:   return pageIDToName[PageID(rawValue: id)]
             }
         }
     }
@@ -278,7 +278,7 @@ public struct WikiRenderContext: Sendable {
     /// `(sourceID, ordinal) -> PageID?`: Phase 6 `@vN` pin resolution. Resolves a
     /// 1-based ordinal into the source's ULID-asc chain. Out-of-range → `nil`
     /// (the link opens HEAD).
-    public var pinnedExtractionID: (PageID, Int) -> PageID? {
+    public var pinnedExtractionID: (SourceID, Int) -> PageID? {
         { sourceID, ordinal in
             guard let chain = sourceDerivedChain[sourceID],
                   ordinal >= 1 else { return nil }

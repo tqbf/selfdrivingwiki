@@ -43,7 +43,7 @@ import WikiFSTypes
     /// fields the `canExtract` seam reads (`mimeType`, `ext`).
     private func source(filename: String, mime: String?, ext: String) -> SourceSummary {
         SourceSummary(
-            id: PageID(rawValue: "01J00000000000000000000FX"),
+            id: SourceID(rawValue: "01J00000000000000000000FX"),
             filename: filename,
             ext: ext,
             mimeType: mime,
@@ -88,7 +88,7 @@ import WikiFSTypes
     private func stubHead() -> SourceMarkdownVersion {
         SourceMarkdownVersion(
             id: PageID(rawValue: "01J00000000000000000000HD"),
-            sourceID: PageID(rawValue: "01J00000000000000000000FX"),
+            sourceID: SourceID(rawValue: "01J00000000000000000000FX"),
             parentID: nil,
             content: "# Extracted markdown placeholder",
             origin: .extraction,
@@ -184,7 +184,7 @@ import WikiFSTypes
     @Test("canExtract handles an empty SourceSummary (no fields crash)")
     func canExtractHandlesEmptyShape() {
         let minimal = SourceSummary(
-            id: PageID(rawValue: "01J00000000000000000000EM"),
+            id: SourceID(rawValue: "01J00000000000000000000EM"),
             filename: "x",
             ext: "",
             mimeType: nil,

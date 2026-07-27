@@ -149,7 +149,7 @@ struct EnumeratorDeletionTests {
         // the top-level bookmarks container.
         let page = try s.store.createPage(title: "Target Page")
         let ref = try s.store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .pageRef, label: nil, targetID: page.id)
+            parentID: nil, position: 0, content: .page(page.id))
         let enumerator = WikiFSEnumerator(container: Projection.Identity.bookmarks,
                                           projection: s.projection)
 
@@ -198,9 +198,9 @@ struct EnumeratorDeletionTests {
         let page = try s.store.createPage(title: "Child Target")
         // A root folder containing one page-ref child.
         let folder = try s.store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder, label: "Folder", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Folder"))
         _ = try s.store.createBookmarkNode(
-            parentID: folder.id, position: 0, kind: .pageRef, label: nil, targetID: page.id)
+            parentID: folder.id, position: 0, content: .page(page.id))
         let enumerator = WikiFSEnumerator(container: Projection.Identity.bookmarks,
                                           projection: s.projection)
 

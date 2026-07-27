@@ -147,21 +147,11 @@ struct BookmarksContainerView: View {
     /// Resolves the display title for a bookmark node: folder label, or for
     /// refs, the title/name of the target page/source/chat.
     static func resolveTitle(for node: BookmarkNode, in store: WikiStoreModel) -> String {
-        switch node.kind {
-        case .folder:
-            return node.label ?? ""
-        case .pageRef:
-            return node.targetID.flatMap { id in
-                store.summaries.first { $0.id == id }?.title
-            } ?? ""
-        case .sourceRef:
-            return node.targetID.flatMap { id in
-                store.sources.first { $0.id == id }?.effectiveName
-            } ?? ""
-        case .chatRef:
-            return node.targetID.flatMap { id in
-                store.chats.first { $0.id == id }?.title
-            } ?? ""
+        switch node.content {
+        case .folder(let label): return label
+        case .page(let id): return store.summaries.first { $0.id == id }?.title ?? ""
+        case .source(let id): return store.sources.first { $0.id == id }?.effectiveName ?? ""
+        case .chat(let id): return store.chats.first { $0.id == id }?.title ?? ""
         }
     }
 

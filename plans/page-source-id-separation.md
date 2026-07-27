@@ -38,6 +38,24 @@ Primary touch points include:
 
 Do not change SQL column types, schema versions, table layouts, indexes, or foreign keys. Do not regenerate ULIDs or rewrite stored IDs. Do not change canonical links such as `[[source:<ULID>|Name]]`, File Provider item strings, staged filenames, CLI text, or agent-facing raw IDs. Do not add implicit `PageID` to `SourceID` conversion or cross-type equality.
 
+## Documentation contract markers
+
+Identifier boundary: `PageID` identifies pages. `SourceID` identifies source entities. A typed API must use the identifier for its entity.
+
+No-migration decision: This refactor does not change the SQLite schema version or stored identifier text. Store code binds `rawValue` to the existing `TEXT` columns.
+
+Raw-string boundaries: SQL bindings, primitive JSON fields, CLI arguments and output, File Provider identifiers and paths, staged filenames, agent manifests, and canonical wiki links remain raw strings at their external boundaries.
+
+Deferred identifier work: `ChatID`, `SourceVersionID`, and `SourceMarkdownVersionID` remain deferred. Chat IDs and source version IDs must not become `SourceID` in this change.
+
+## Implementation record
+
+Phase 1 characterization found that a top-level legacy `PageID` encodes as a primitive JSON string. A queue payload with a source value uses `{"sourceIDs":["LEGACY-SOURCE-ID"]}` after JSON normalization. `SourceID` must retain this encoding.
+
+The implementation keeps page, source, chat, and version namespaces distinct. `BookmarkNode.Content` carries a tagged page, source, chat, or folder value. The store maps that value to the existing `kind`, `label`, and `target_id` columns.
+
+The active test sources record the identifier characterization contract. The recorded command evidence is `swift test --filter DocumentationContractTests`, which passed with one test. The final SwiftPM build, complete test suite, lint, and diff checks remain release gates for this branch.
+
 ## Implementation plan
 
 ### Phase 1: Characterize the wire format and add `SourceID`
@@ -209,3 +227,18 @@ Use `DebugLog` for diagnostics. Do not add `print` or bare `try?`. Write scratch
 If a compile or design problem blocks work for more than 10 minutes, commit the current work with a `// STUCK: <description>` comment, push, notify the operator, and stop.
 
 Push the feature branch and open a pull request. Do not merge it. After opening the pull request, run `polytoken-notify 'PR #N opened for PageID and SourceID separation, CI running'`. If blocked, run `polytoken-notify 'STUCK on PageID and SourceID separation: <description>'`.
+
+## Final verification evidence
+
+- `make prompts` passed.
+- `swift build --build-tests` passed.
+- The focused acceptance run passed 458 tests in 25 suites.
+- The real-API positive and negative compiler fixtures and source API
+  signature manifest passed 4 tests in 2 suites.
+- `swift test` passed 2,505 tests in 193 suites.
+- `make lint` reported 0 violations in 378 files and no new bare `try?`.
+- `git diff --check` passed.
+- The final review found no critical or high issues. It found no schema or raw
+  format drift, invalid bookmark reconstruction, missing mutation emissions,
+  source-version or chat-ID conversion, or remaining source entity typed as
+  `PageID`.

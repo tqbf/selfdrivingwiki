@@ -175,9 +175,15 @@ struct CLITantivyLegResolverTests {
             case chat
         }
 
+        enum SearchOutcomeID: Sendable, Equatable {
+            case page(PageID)
+            case source(SourceID)
+            case chat(PageID)
+        }
+
         struct SearchOutcome: Sendable {
             let kind: SearchKind
-            let id: PageID?
+            let id: SearchOutcomeID?
         }
 
         let (pageContainer, pageFM) = try makeTempContainer()
@@ -249,7 +255,7 @@ struct CLITantivyLegResolverTests {
                         store: pageStore,
                         query: "ownership",
                         limit: 5)
-                    return SearchOutcome(kind: .page, id: leg?.first?.id)
+                    return SearchOutcome(kind: .page, id: leg?.first.map(SearchOutcomeID.page))
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveSourceLeg(
@@ -264,7 +270,7 @@ struct CLITantivyLegResolverTests {
                         store: sourceStore,
                         query: "Concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .source, id: leg?.first?.id)
+                    return SearchOutcome(kind: .source, id: leg?.first.map(SearchOutcomeID.source))
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveChatLeg(
@@ -279,7 +285,7 @@ struct CLITantivyLegResolverTests {
                         store: chatStore,
                         query: "concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .chat, id: leg?.first?.id)
+                    return SearchOutcome(kind: .chat, id: leg?.first.map(SearchOutcomeID.chat))
                 }
             }
 
@@ -297,15 +303,15 @@ struct CLITantivyLegResolverTests {
         #expect(pageHits.count == 3)
         #expect(sourceHits.count == 3)
         #expect(chatHits.count == 3)
-        #expect(pageHits.allSatisfy { $0.id == page.id }, "pageHits: \(pageHits)")
-        #expect(sourceHits.allSatisfy { $0.id == source.id }, "sourceHits: \(sourceHits)")
-        #expect(chatHits.allSatisfy { $0.id == chat.id }, "chatHits: \(chatHits)")
+        #expect(pageHits.allSatisfy { $0.id == .page(page.id) }, "pageHits: \(pageHits)")
+        #expect(sourceHits.allSatisfy { $0.id == .source(source.id) }, "sourceHits: \(sourceHits)")
+        #expect(chatHits.allSatisfy { $0.id == .chat(chat.id) }, "chatHits: \(chatHits)")
     }
 
     @Test func sameWikiConcurrentDistinctRequestsDoNotShareWrongTask() async throws {
         struct SearchOutcome: Sendable {
             let label: String
-            let ids: [PageID]?
+            let ids: [String]?
         }
 
         let (container, fm) = try makeTempContainer()
@@ -328,20 +334,20 @@ struct CLITantivyLegResolverTests {
         let outcomes = await CLITantivyLegResolver.withTestSearchExecutor({ key in
             guard key.wikiID == wikiID, key.containerPath == containerPath else { return nil }
             await recorder.record(key)
-            let ids: [PageID]
+            let ids: [String]
             switch (key.query, key.kind, key.limit) {
             case ("cobalt borrowingkey", .page, 2):
-                ids = [pageRust.id, pageAsync.id]
+                ids = [pageRust.id.rawValue, pageAsync.id.rawValue]
             case ("cobalt borrowingkey", .page, 1):
-                ids = [pageRust.id]
+                ids = [pageRust.id.rawValue]
             case ("amber", .page, 1):
-                ids = [pageOwnership.id]
+                ids = [pageOwnership.id.rawValue]
             case ("zircon", .source, 1):
-                ids = [rustSource.id]
+                ids = [rustSource.id.rawValue]
             case ("amber", .source, 1):
-                ids = [ownershipSource.id]
+                ids = [ownershipSource.id.rawValue]
             case ("terraformalpha", .chat, 1):
-                ids = [terraformChat.id]
+                ids = [terraformChat.id.rawValue]
             default:
                 return []
             }
@@ -358,37 +364,37 @@ struct CLITantivyLegResolverTests {
                     let leg = await CLITantivyLegResolver.resolvePageLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "cobalt borrowingkey", limit: 2)
-                    return SearchOutcome(label: "page-rust-2", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "page-rust-2", ids: leg?.map(\.id.rawValue))
                 }
                 group.addTask {
                     let leg = await CLITantivyLegResolver.resolvePageLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "cobalt borrowingkey", limit: 1)
-                    return SearchOutcome(label: "page-rust-1", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "page-rust-1", ids: leg?.map(\.id.rawValue))
                 }
                 group.addTask {
                     let leg = await CLITantivyLegResolver.resolvePageLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "amber", limit: 1)
-                    return SearchOutcome(label: "page-ownership-1", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "page-ownership-1", ids: leg?.map(\.id.rawValue))
                 }
                 group.addTask {
                     let leg = await CLITantivyLegResolver.resolveSourceLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "zircon", limit: 1)
-                    return SearchOutcome(label: "source-rust-1", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "source-rust-1", ids: leg?.map(\.id.rawValue))
                 }
                 group.addTask {
                     let leg = await CLITantivyLegResolver.resolveSourceLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "amber", limit: 1)
-                    return SearchOutcome(label: "source-ownership-1", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "source-ownership-1", ids: leg?.map(\.id.rawValue))
                 }
                 group.addTask {
                     let leg = await CLITantivyLegResolver.resolveChatLeg(
                         wikiID: wikiID, containerDirectory: container, store: store,
                         query: "terraformalpha", limit: 1)
-                    return SearchOutcome(label: "chat-terraforming-1", ids: leg?.map(\.id))
+                    return SearchOutcome(label: "chat-terraforming-1", ids: leg?.map(\.id.rawValue))
                 }
 
                 var collected: [SearchOutcome] = []
@@ -407,12 +413,12 @@ struct CLITantivyLegResolverTests {
         #expect(keys.allSatisfy { $0.wikiID == wikiID && $0.containerPath == containerPath })
         #expect(Set(keys).count == 6)
         #expect(outcomes.count == 6)
-        #expect(outcome(named: "page-rust-2")?.ids == [pageRust.id, pageAsync.id])
-        #expect(outcome(named: "page-rust-1")?.ids == [pageRust.id])
-        #expect(outcome(named: "page-ownership-1")?.ids == [pageOwnership.id])
-        #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id])
-        #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id])
-        #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id])
+        #expect(outcome(named: "page-rust-2")?.ids == [pageRust.id.rawValue, pageAsync.id.rawValue])
+        #expect(outcome(named: "page-rust-1")?.ids == [pageRust.id.rawValue])
+        #expect(outcome(named: "page-ownership-1")?.ids == [pageOwnership.id.rawValue])
+        #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id.rawValue])
+        #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id.rawValue])
+        #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id.rawValue])
     }
 
     // MARK: - No-BM25-leg behavior when no Tantivy service can be built

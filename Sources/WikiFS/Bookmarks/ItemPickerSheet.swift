@@ -13,11 +13,11 @@ enum ItemPickerKind: String {
 struct ItemPickerSheet: View {
     /// All items, pre-snapshotted by the caller (no live store observation).
     let allItems: [PickerItem]
-    let onConfirm: ([PageID]) -> Void
+    let onConfirm: ([PickerItem.ID]) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""
-    @State private var selectedIDs: Set<PageID> = []
+    @State private var selectedIDs: Set<PickerItem.ID> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -148,7 +148,12 @@ struct ItemPickerSheet: View {
 
 /// A flat item used by the picker — just an id + label + kind.
 struct PickerItem: Identifiable, Hashable {
-    let id: PageID
+    enum ID: Hashable {
+        case page(PageID)
+        case source(SourceID)
+    }
+
+    let id: ID
     let title: String
     let isPage: Bool
 }

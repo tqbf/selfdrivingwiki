@@ -16,7 +16,7 @@ struct Phase6PinningModelTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, PageID, PageID) {
+    private func makeModel() throws -> (WikiStoreModel, SourceID, PageID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
@@ -54,7 +54,7 @@ struct Phase6PinningModelTests {
 
     @Test func consumeReturnsNilForMismatchedSelection() throws {
         let (model, sourceID, pinID) = try makeModel()
-        let otherID = PageID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
+        let otherID = SourceID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
         _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
 
         // Mismatched selection → nil, state preserved.

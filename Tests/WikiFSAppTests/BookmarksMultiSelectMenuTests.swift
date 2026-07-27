@@ -43,8 +43,7 @@ struct BookmarksMultiSelectMenuTests {
     }
 
     private func folder(_ id: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: nil, position: 0, kind: .folder,
-                     label: "Folder \(id)", targetID: nil)
+        BookmarkNode(id: id, parentID: nil, position: 0, content: .folder(label: "Folder \(id)"))
     }
 
     /// Calls `menuFor` on the VC and returns the non-separator item titles.
@@ -243,7 +242,7 @@ struct BookmarksMultiSelectMenuTests {
         #expect(openedSelections.count == 2)
         if openedSelections.count == 2 {
             #expect(openedSelections.contains(.page(PageID(rawValue: "target"))))
-            #expect(openedSelections.contains(.source(PageID(rawValue: "target"))))
+            #expect(openedSelections.contains(.source(SourceID(rawValue: "target"))))
         }
     }
 

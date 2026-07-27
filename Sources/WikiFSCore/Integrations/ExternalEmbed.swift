@@ -15,7 +15,7 @@ import Foundation
 /// See `plans/graph-model-and-versioning.md` §7 (byteless + `external_identity`
 /// → provider-shaped embed) and §4.2/§4.3 (byteless sources, PROV).
 public struct SourceEmbedDescriptor: Sendable, Equatable {
-    public let id: PageID
+    public let id: SourceID
     /// The active content version's MIME type. For provider embeds this is a
     /// *synthetic* mime (`video/youtube`, `audio/spotify`, …); for direct-remote
     /// media it is a real mime (`audio/mpeg`, `video/mp4`, …).
@@ -34,7 +34,7 @@ public struct SourceEmbedDescriptor: Sendable, Equatable {
     public let planURL: String?
 
     public init(
-        id: PageID,
+        id: SourceID,
         mimeType: String?,
         externalIdentity: String?,
         agentName: String?,

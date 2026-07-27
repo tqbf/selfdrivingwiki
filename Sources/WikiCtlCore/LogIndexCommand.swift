@@ -10,7 +10,7 @@ public enum LogIndexCommand {
     public enum Action: Equatable {
         /// Append one dated row to the chronological log. `source` (set only on an
         /// ingest) is the ingested-file id to additionally stamp as ingested.
-        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
+        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?)
         /// Replace the singleton wiki-index body wholesale (UPSERT, version + 1).
         /// When `workspace` is set (Phase 7), stage into the workspace instead of
         /// writing to main — the caller provides the current main body as the

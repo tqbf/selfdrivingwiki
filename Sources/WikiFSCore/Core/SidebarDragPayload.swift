@@ -34,7 +34,7 @@ public struct SidebarDragPayload: Codable, Sendable, Hashable {
         let pageID = PageID(rawValue: id)
         switch kind {
         case .page:   return .page(pageID)
-        case .source: return .source(pageID)
+        case .source: return .source(SourceID(rawValue: id))
         case .chat:   return .chat(pageID)
         }
     }

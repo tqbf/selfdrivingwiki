@@ -38,7 +38,7 @@ import WikiFSTypes
 
     // MARK: - Fixtures
 
-    private let sourceID = PageID(rawValue: "01J00000000000000000000FX")
+    private let sourceID = SourceID(rawValue: "01J00000000000000000000FX")
 
     private func source(filename: String, mime: String?, ext: String) -> SourceSummary {
         SourceSummary(

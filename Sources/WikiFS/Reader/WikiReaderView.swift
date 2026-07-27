@@ -104,11 +104,14 @@ struct WikiReaderView: View {
         let frag = WikiLinkMarkdown.fragment(from: url)
         // Phase 5: prefer the canonical `?id=<ULID>` when present; `title` is the
         // transition fallback for legacy/`title=`-only URLs.
-        let id = WikiLinkMarkdown.id(from: url)
         switch WikiLinkMarkdown.resolvedKind(from: url) {
-        case .page:   return .page(title: title, id: id, fragment: frag)
-        case .source: return .source(title: title, id: id, fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
-        case .chat:   return .chat(title: title, id: id, fragment: frag)
+        case .page:
+            return .page(title: title, id: WikiLinkMarkdown.id(from: url), fragment: frag)
+        case .source:
+            return .source(title: title, id: WikiLinkMarkdown.sourceID(from: url),
+                           fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
+        case .chat:
+            return .chat(title: title, id: WikiLinkMarkdown.id(from: url), fragment: frag)
         case nil:     return .inert
         }
     }
@@ -327,7 +330,7 @@ enum WikiLinkRoute: Equatable, Sendable {
     /// the canonical ULID when present; nil for legacy `?title=`-only links.
     /// `pin` is the pinned-extraction smv id when the URL carried `&pin=` (Phase 6:
     /// a pinned quote link); nil otherwise (opens HEAD).
-    case source(title: String, id: PageID?, fragment: String?, pin: PageID?)
+    case source(title: String, id: SourceID?, fragment: String?, pin: PageID?)
     /// Resolved chat link — navigate to a persisted chat. `id` is the
     /// canonical ULID when the URL carried `?id=`; nil for legacy `?title=`-only
     /// links, which resolve by `title` as the transition fallback. `fragment`
@@ -1051,7 +1054,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let context: WikiRenderContext? = store.map { WikiRenderContext.build(from: $0) }
             // The rendered source's own sibling map (nil for pages — no sibling
             // images). Selection-specific, so it stays here, not in the context.
-            var renderedSourceMap: [String: PageID]? = nil
+            var renderedSourceMap: [String: SourceID]? = nil
             if case .source(let sourceID) = currentSelection {
                 renderedSourceMap = context?.siblingMaps[sourceID]
             }
@@ -1077,8 +1080,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // ChatWebView layer, not here.
                 let isResolved: (String, ParsedLink.LinkType) -> Bool
                 let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
-                let displayName: (PageID, ParsedLink.LinkType) -> String?
-                let pinnedExtractionID: ((PageID, Int) -> PageID?)?
+                let displayName: (String, ParsedLink.LinkType) -> String?
+                let pinnedExtractionID: ((SourceID, Int) -> PageID?)?
                 if let context {
                     isResolved = context.isResolved
                     embedInfo = context.embedInfo
@@ -1391,19 +1394,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
             // 2. Resolve id. Canonical ULID embeds carry their id directly;
             //    name-based page embeds resolve here on the main actor.
-            let resolvedID: PageID?
+            let resolvedTarget: TransclusionEmbedder.TargetID?
             if !idStr.isEmpty {
-                resolvedID = PageID(rawValue: idStr)
+                resolvedTarget = kind == .source
+                    ? .source(SourceID(rawValue: idStr))
+                    : .page(PageID(rawValue: idStr))
             } else if kind == .page, !targetStr.isEmpty,
                       let decoded = targetStr.removingPercentEncoding,
                       let id = store?.pageID(forTitle: decoded) {
-                resolvedID = id
+                resolvedTarget = .page(id)
             } else {
-                resolvedID = nil
+                resolvedTarget = nil
             }
 
             // 3. Missing target → render the "not found" body inline (no fetch).
-            guard let id = resolvedID, let store else {
+            guard let target = resolvedTarget, let store else {
                 let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"
                          + "<span class=\"sdw-embed-placeholder\">"
                          + (kind == .page ? "Page not found" : "Source not found")
@@ -1426,16 +1431,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if let pool = store.readPool {
                     raw = try await pool.asyncRead { roStore in
                         try TransclusionEmbedder.renderEmbedBody(
-                            store: roStore, id: id, kind: kind, context: context)
+                            store: roStore, target: target, context: context)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {
                     // Main-actor fallback (in-memory tests; rare in prod).
                     raw = try TransclusionEmbedder.renderEmbedBody(
-                        store: grdb, id: id, kind: kind, context: context)
+                        store: grdb, target: target, context: context)
                 } else {
                     raw = TransclusionEmbedder.emptySentinel
                 }
-                DebugLog.reader("embed-fetch ok kind=\(kindStr) id=\(id.rawValue) "
+                DebugLog.reader("embed-fetch ok kind=\(kindStr) id=\(target.rawValue) "
                               + "name=\(nameStr) ms=\(Self.elapsedMs(since: loadStart))")
                 let html: String
                 if TransclusionEmbedder.isEmpty(raw) {
@@ -1443,13 +1448,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // markdown) — render the muted placeholder + open
                     // link. NO extraction is triggered.
                     html = TransclusionEmbedder.placeholderBodyHTML(
-                        kind: kind, id: id, name: nameStr)
+                        kind: kind, id: target.rawValue, name: nameStr)
                 } else {
                     html = raw
                 }
                 emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
             } catch {
-                DebugLog.reader("embed-fetch failed kind=\(kindStr) id=\(id.rawValue) "
+                DebugLog.reader("embed-fetch failed kind=\(kindStr) id=\(target.rawValue) "
                               + "error=\(error)")
                 let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"
                          + "<span class=\"sdw-embed-placeholder\">Failed to load.</span></div>"

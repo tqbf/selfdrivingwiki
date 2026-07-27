@@ -19,8 +19,7 @@ import Foundation
 
     @Test func rootFolderRendersWithLabel() {
         let nodes = [
-            BookmarkNode(id: "f1", parentID: nil, position: 0, kind: .folder,
-                         label: "Research", targetID: nil),
+            BookmarkNode(id: "f1", parentID: nil, position: 0, content: .folder(label: "Research")),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         #expect(tree.contains("📁 Research"))
@@ -28,10 +27,8 @@ import Foundation
 
     @Test func nestedFoldersRenderIndented() {
         let nodes = [
-            BookmarkNode(id: "root", parentID: nil, position: 0, kind: .folder,
-                         label: "Root", targetID: nil),
-            BookmarkNode(id: "child", parentID: "root", position: 0, kind: .folder,
-                         label: "Child", targetID: nil),
+            BookmarkNode(id: "root", parentID: nil, position: 0, content: .folder(label: "Root")),
+            BookmarkNode(id: "child", parentID: "root", position: 0, content: .folder(label: "Child")),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         let lines = tree.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -44,8 +41,7 @@ import Foundation
 
     @Test func pageRefRendersWithTargetID() {
         let nodes = [
-            BookmarkNode(id: "p1", parentID: nil, position: 0, kind: .pageRef,
-                         label: nil, targetID: PageID(rawValue: "01PAGE")),
+            BookmarkNode(id: "p1", parentID: nil, position: 0, content: .page(PageID(rawValue: "01PAGE"))),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         #expect(tree.contains("📄"))
@@ -54,8 +50,7 @@ import Foundation
 
     @Test func sourceRefRendersWithTargetID() {
         let nodes = [
-            BookmarkNode(id: "s1", parentID: nil, position: 0, kind: .sourceRef,
-                         label: nil, targetID: PageID(rawValue: "01SRC")),
+            BookmarkNode(id: "s1", parentID: nil, position: 0, content: .source(SourceID(rawValue: "01SRC"))),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         #expect(tree.contains("source:01SRC"))
@@ -63,8 +58,7 @@ import Foundation
 
     @Test func chatRefRendersWithTargetID() {
         let nodes = [
-            BookmarkNode(id: "c1", parentID: nil, position: 0, kind: .chatRef,
-                         label: nil, targetID: PageID(rawValue: "01CHAT")),
+            BookmarkNode(id: "c1", parentID: nil, position: 0, content: .chat(PageID(rawValue: "01CHAT"))),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         #expect(tree.contains("chat:01CHAT"))
@@ -72,14 +66,10 @@ import Foundation
 
     @Test func mixedTreeRendersInOrder() {
         let nodes = [
-            BookmarkNode(id: "f1", parentID: nil, position: 0, kind: .folder,
-                         label: "Research", targetID: nil),
-            BookmarkNode(id: "p1", parentID: "f1", position: 1, kind: .pageRef,
-                         label: nil, targetID: PageID(rawValue: "01PAGE")),
-            BookmarkNode(id: "p2", parentID: "f1", position: 0, kind: .pageRef,
-                         label: nil, targetID: PageID(rawValue: "02PAGE")),
-            BookmarkNode(id: "f2", parentID: nil, position: 1, kind: .folder,
-                         label: "Notes", targetID: nil),
+            BookmarkNode(id: "f1", parentID: nil, position: 0, content: .folder(label: "Research")),
+            BookmarkNode(id: "p1", parentID: "f1", position: 1, content: .page(PageID(rawValue: "01PAGE"))),
+            BookmarkNode(id: "p2", parentID: "f1", position: 0, content: .page(PageID(rawValue: "02PAGE"))),
+            BookmarkNode(id: "f2", parentID: nil, position: 1, content: .folder(label: "Notes")),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         let lines = tree.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -95,8 +85,7 @@ import Foundation
 
     @Test func bookmarkSectionIncludedInStateFile() {
         let nodes = [
-            BookmarkNode(id: "f1", parentID: nil, position: 0, kind: .folder,
-                         label: "Research", targetID: nil),
+            BookmarkNode(id: "f1", parentID: nil, position: 0, content: .folder(label: "Research")),
         ]
         let snapshot = WikiStateSnapshot.make(
             allTitles: ["Page A"], indexBody: "", logLines: [],

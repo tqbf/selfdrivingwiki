@@ -23,7 +23,7 @@ struct QueueTranscriptionTests {
     }
 
     private func makePayload(sourceID: String = "TESTSRC001") -> QueueItemPayload {
-        QueueItemPayload(sourceIDs: [PageID(rawValue: sourceID)])
+        QueueItemPayload(sourceIDs: [SourceID(rawValue: sourceID)])
     }
 
     // MARK: - Enqueue returns immediately
@@ -95,7 +95,7 @@ struct QueueTranscriptionTests {
 
     // MARK: - Worker calls provider in order (resolve → fetch → persist)
 
-    @Test func testTranscriptionWorkerCallsProviderInOrder() async throws {
+    @Test func sourceIDReachesTranscriptionProvider() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let provider = FakeTranscriptionProvider(
@@ -359,7 +359,7 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     }
 
     func resolveExtraction(
-        wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
         lock.withLock { state in
             state.callLog.append("resolve(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
@@ -381,7 +381,7 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     }
 
     func persistExtraction(
-        wikiID: WikiID, sourceID: PageID,
+        wikiID: WikiID, sourceID: SourceID,
         markdown: String, backend: ExtractionBackend,
         modelVersion: String?, technique: String?
     ) async throws {

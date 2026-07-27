@@ -126,15 +126,15 @@ struct ContentView: View {
         .sheet(item: $omniboxBookmarkContext) { ctx in
             BookmarkTargetPickerSheet(
                 store: store,
-                kind: ctx.kind,
-                ids: ctx.ids,
+                targets: ctx.targets,
                 onConfirm: { parentID in
-                    for id in ctx.ids {
-                        switch ctx.kind {
-                        case .pages: store.addPageRef(parentID: parentID, pageID: id)
-                        case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
-                        case .chats: store.addChatRef(parentID: parentID, chatID: id)
-                        }
+                    switch ctx.targets {
+                    case .pages(let ids):
+                        for id in ids { store.addPageRef(parentID: parentID, pageID: id) }
+                    case .sources(let ids):
+                        for id in ids { store.addSourceRef(parentID: parentID, sourceID: id) }
+                    case .chats(let ids):
+                        for id in ids { store.addChatRef(parentID: parentID, chatID: id) }
                     }
                 }
             )
@@ -336,7 +336,7 @@ struct ContentView: View {
         .swipeNavigation(store: store)
     }
 
-    private func runIngest(sourceID: PageID) {
+    private func runIngest(sourceID: SourceID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         Task {
             store.flushPendingSaves()

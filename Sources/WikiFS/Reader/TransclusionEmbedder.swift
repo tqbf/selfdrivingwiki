@@ -24,6 +24,21 @@ import WikiFSTypes
 /// (`TestStoreFactory.inMemory()`, #658).
 enum TransclusionEmbedder {
 
+    /// The identity carried by a lazy transclusion fetch. The raw HTML attribute
+    /// is decoded at the reader boundary into the namespace selected by the
+    /// link kind, so a source cannot reach a page store API by accident.
+    enum TargetID: Sendable {
+        case page(PageID)
+        case source(SourceID)
+
+        var rawValue: String {
+            switch self {
+            case .page(let id): id.rawValue
+            case .source(let id): id.rawValue
+            }
+        }
+    }
+
     /// Render one embed body to an HTML fragment. Fetches the raw body via
     /// method-atomic store reads (`getPage` / `sourceEmbedBody`), runs the
     /// shared `ReaderMarkdown.prepared` + `MarkdownHTMLRenderer.render`
@@ -36,19 +51,16 @@ enum TransclusionEmbedder {
     /// (`sdw-embed-empty` / `sdw-embed-cycle`) instead of injecting.
     static func renderEmbedBody(
         store: GRDBWikiStore,
-        id: PageID,
-        kind: ParsedLink.LinkType,
+        target: TargetID,
         context: WikiRenderContext
     ) throws -> String {
         let raw: String?
-        switch kind {
-        case .page:
+        switch target {
+        case .page(let id):
             let page = try store.getPage(id: id)
             raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
-        case .source:
+        case .source(let id):
             raw = try sourceEmbedBody(store: store, id: id)
-        case .chat:
-            raw = nil
         }
         guard let raw, !raw.isEmpty else { return emptySentinel }
         let prepared = ReaderMarkdown.prepared(
@@ -68,7 +80,7 @@ enum TransclusionEmbedder {
     /// Mirrors `WikiStoreModel.processedMarkdownHead(for:)`'s native-text
     /// fallback but **never writes** (no v1 seeding from verbatim bytes — that
     /// is a write and belongs on the main actor, not the read path).
-    static func sourceEmbedBody(store: GRDBWikiStore, id: PageID) throws -> String? {
+    static func sourceEmbedBody(store: GRDBWikiStore, id: SourceID) throws -> String? {
         // 1. Preferred: extracted markdown HEAD (already in the DB).
         if let head = try store.processedMarkdownHead(sourceID: id) {
             return head.content
@@ -117,13 +129,13 @@ enum TransclusionEmbedder {
     /// target but the source has no extractable body yet (binary, no head
     /// markdown). Includes an in-app open link so the user can navigate to
     /// the source's detail view. NO extraction is triggered (Plan v2 §7.2).
-    static func placeholderBodyHTML(kind: ParsedLink.LinkType, id: PageID, name: String) -> String {
+    static func placeholderBodyHTML(kind: ParsedLink.LinkType, id: String, name: String) -> String {
         let escaped = name
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
-        let encodedID = id.rawValue.addingPercentEncoding(
-            withAllowedCharacters: CharacterSet.urlQueryAllowed) ?? id.rawValue
+        let encodedID = id.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.urlQueryAllowed) ?? id
         let encodedName = name.addingPercentEncoding(
             withAllowedCharacters: CharacterSet.urlQueryAllowed) ?? name
         let url = "\(WikiLinkMarkdown.scheme)://\(WikiLinkMarkdown.sourceHost)?id=\(encodedID)&title=\(encodedName)"

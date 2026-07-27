@@ -9,7 +9,7 @@ import Testing
 struct ExternalEmbedTests {
 
     private func descriptor(
-        id: PageID = PageID(rawValue: "01HEMBEDTEST0000000000001"),
+        id: SourceID = SourceID(rawValue: "01HEMBEDTEST0000000000001"),
         mimeType: String? = nil, externalIdentity: String? = nil,
         agentName: String? = nil, planURL: String? = nil
     ) -> SourceEmbedDescriptor {

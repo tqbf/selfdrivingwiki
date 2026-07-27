@@ -29,7 +29,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     /// (absent a `source-derived` ref; see the default-active rule).
     public let id: PageID
     /// The source this version belongs to.
-    public let sourceID: PageID
+    public let sourceID: SourceID
     /// Previous version's id; nil for v1 (the lineage root).
     public let parentID: PageID?
     /// Full markdown text of this version — ALWAYS the fully-resolved body. For
@@ -61,7 +61,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
 
     public init(
         id: PageID,
-        sourceID: PageID,
+        sourceID: SourceID,
         parentID: PageID?,
         content: String,
         origin: SourceMarkdownOrigin,

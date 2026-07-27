@@ -295,7 +295,7 @@ import Testing
         // agentName is an Optional<String> on SourceEmbedDescriptor, so provider
         // is nil for any of {nil, "", "unknown"}.
         let podcastDescriptor = SourceEmbedDescriptor(
-            id: PageID(rawValue: "01JTESTDESC00000000"),
+            id: SourceID(rawValue: "01JTESTDESC00000000"),
             mimeType: "text/markdown",
             externalIdentity: nil,
             agentName: "apple-podcast",
@@ -303,7 +303,7 @@ import Testing
         #expect(podcastDescriptor.provider == .applePodcast)
 
         let nilAgent = SourceEmbedDescriptor(
-            id: PageID(rawValue: "01JTESTDESC00000001"),
+            id: SourceID(rawValue: "01JTESTDESC00000001"),
             mimeType: "audio/mpeg",
             externalIdentity: "https://example.com/x.mp3",
             agentName: nil,
@@ -311,7 +311,7 @@ import Testing
         #expect(nilAgent.provider == nil)
 
         let emptyAgent = SourceEmbedDescriptor(
-            id: PageID(rawValue: "01JTESTDESC00000002"),
+            id: SourceID(rawValue: "01JTESTDESC00000002"),
             mimeType: "audio/mpeg",
             externalIdentity: "https://example.com/y.mp3",
             agentName: "",

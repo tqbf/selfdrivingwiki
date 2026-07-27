@@ -65,7 +65,7 @@ struct ProjectionTests {
         let createdAt = Date(timeIntervalSince1970: 1728000000)
 
         let source = SourceSummary(
-            id: PageID(rawValue: sourceID),
+            id: SourceID(rawValue: sourceID),
             filename: "report.pdf",
             ext: "pdf",
             mimeType: "application/pdf",
@@ -77,7 +77,7 @@ struct ProjectionTests {
 
         let head = SourceMarkdownVersion(
             id: PageID(rawValue: headID),
-            sourceID: PageID(rawValue: sourceID),
+            sourceID: SourceID(rawValue: sourceID),
             parentID: nil,
             content: "# Processed Report\n\nThis is the extracted markdown.",
             origin: .extraction,
@@ -130,7 +130,7 @@ struct ProjectionTests {
         let createdAt = Date(timeIntervalSince1970: 1728000000)
 
         let source = SourceSummary(
-            id: PageID(rawValue: sourceID),
+            id: SourceID(rawValue: sourceID),
             filename: "Trip Report.pdf",
             ext: "pdf",
             mimeType: "application/pdf",
@@ -142,7 +142,7 @@ struct ProjectionTests {
 
         let head = SourceMarkdownVersion(
             id: PageID(rawValue: headID),
-            sourceID: PageID(rawValue: sourceID),
+            sourceID: SourceID(rawValue: sourceID),
             parentID: nil,
             content: "Extracted content from Trip Report.",
             origin: .extraction,
@@ -155,7 +155,7 @@ struct ProjectionTests {
 
         // by-name uses FilenameEscaping.byNameSourceFilename(filename:ext:sourceID:)
         let expectedName = FilenameEscaping.byNameSourceFilename(
-            filename: source.filename, ext: "md", sourceID: PageID(rawValue: sourceID))
+            filename: source.filename, ext: "md", sourceID: SourceID(rawValue: sourceID))
         #expect(node.name == expectedName)
         // parent is sourcesByName
         #expect(node.parent == Projection.Identity.sourcesByName)
