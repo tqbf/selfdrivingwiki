@@ -8,7 +8,7 @@
 Sources/WikiFSCore/Sources/SourceSummary.swift	public let id: SourceID
 Sources/WikiFSCore/Sources/SourceSummary.swift	id: SourceID,
 Sources/WikiFSCore/Sources/SourceVersioning.swift	public let sourceID: SourceID
-Sources/WikiFSCore/Sources/SourceVersioning.swift	public init(id: String, sourceID: SourceID, parentID: String?
+Sources/WikiFSCore/Sources/SourceVersioning.swift	public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?
 Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let sourceID: SourceID
 Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	        sourceID: SourceID,
 Sources/WikiFSCore/Integrations/ExternalEmbed.swift	public let id: SourceID
@@ -63,7 +63,7 @@ Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func setActiveMarkdown(sourc
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func storeSourceChunks(id: SourceID, chunks: [Data]) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: PageID) throws
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func contentVersionHistory(sourceID: SourceID) throws -> [SourceVersion]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceLinkPin(from pageID: PageID, to sourceID: SourceID,
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceLinkingPages(to sourceID: SourceID) throws -> [PageID]

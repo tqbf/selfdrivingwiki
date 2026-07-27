@@ -1767,7 +1767,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     activityID = id
                 }
 
-                var sourceVersionID: String?
+                var sourceVersionID: SourceVersionID?
                 if let svID = try String.fetchOne(
                     db,
                     sql: """
@@ -1778,13 +1778,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     """,
                     arguments: [row.fileID]
                 ) {
-                    sourceVersionID = svID
+                    sourceVersionID = SourceVersionID(rawValue: svID)
                 } else if let svID = try String.fetchOne(
                     db,
                     sql: "SELECT id FROM source_versions WHERE source_id = ? ORDER BY id DESC LIMIT 1;",
                     arguments: [row.fileID]
                 ) {
-                    sourceVersionID = svID
+                    sourceVersionID = SourceVersionID(rawValue: svID)
                 }
 
                 try db.execute(sql: """
@@ -1792,7 +1792,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                    SET blob_hash = ?, activity_id = ?, source_version_id = ?,
                        mime_type = 'text/markdown', content = ''
                  WHERE id = ?;
-                """, arguments: [hash, activityID, sourceVersionID, row.id])
+                """, arguments: [hash, activityID, sourceVersionID?.rawValue, row.id])
             }
         return .commit
         }
@@ -3315,12 +3315,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
 
             // 3. v1 version (parent_id NULL, the content blob).
-            let versionID = ULID.generate()
+            let versionID = SourceVersionID(rawValue: ULID.generate())
             try db.execute(sql: """
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                          mime_type, original_path, activity_id, external_identity, fetched_at)
             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?);
-            """, arguments: [versionID, sourceID, contentHash, mime,
+            """, arguments: [versionID.rawValue, sourceID, contentHash, mime,
                             originalPath, resolvedActivityID,
                             provenance?.externalIdentity, nowTS])
 
@@ -3328,7 +3328,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
             VALUES ('source-content', ?, ?, 1, ?);
-            """, arguments: [sourceID, versionID, nowTS])
+            """, arguments: [sourceID, versionID.rawValue, nowTS])
 
             // Name-only FTS index entry (the body is indexed once processed
             // markdown is appended). Best-effort; inline (pure SQL).
@@ -3430,19 +3430,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             provenance.plan, provenance.externalRef, nowTS, nowTS])
 
             // 2. v1 content version (blob_hash NULL, external_identity set).
-            let versionID = ULID.generate()
+            let versionID = SourceVersionID(rawValue: ULID.generate())
             try db.execute(sql: """
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                          mime_type, activity_id, external_identity, fetched_at)
             VALUES (?, ?, NULL, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, sourceID, mime, activityID,
+            """, arguments: [versionID.rawValue, sourceID, mime, activityID,
                             provenance.externalIdentity, nowTS])
 
             // 3. Active ref (generation 1).
             try db.execute(sql: """
             INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
             VALUES ('source-content', ?, ?, 1, ?);
-            """, arguments: [sourceID, versionID, nowTS])
+            """, arguments: [sourceID, versionID.rawValue, nowTS])
 
             // Name-only FTS entry (the transcript is indexed when
             // appendProcessedMarkdown runs). Best-effort; inline.
@@ -3743,13 +3743,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             provenance?.plan, provenance?.externalRef, nowTS, nowTS])
 
             // 3. New version (parent = current active).
-            let versionID = ULID.generate()
+            let versionID = SourceVersionID(rawValue: ULID.generate())
             let resolvedMime = mimeType ?? parent?.mimeType
             try db.execute(sql: """
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                          mime_type, activity_id, external_identity, fetched_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-            """, arguments: [versionID, sourceID.rawValue, parent?.id,
+            """, arguments: [versionID.rawValue, sourceID.rawValue, parent?.id.rawValue,
                             contentHash, resolvedMime, activityID,
                             provenance?.externalIdentity, nowTS])
 
@@ -3762,7 +3762,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 version_id = excluded.version_id,
                 generation = excluded.generation,
                 updated_at = excluded.updated_at;
-            """, arguments: [sourceID.rawValue, versionID, Int64(nextGeneration), nowTS])
+            """, arguments: [sourceID.rawValue, versionID.rawValue, Int64(nextGeneration), nowTS])
 
             // 5. Refresh the denormalized sources mirror (byte_size, content_hash,
             //    mime_type — keep addSource dedup consistent with the new blob).
@@ -3997,12 +3997,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             // 2. v1 version bound to the shared activity + original_path +
             //    external_identity = the resolved source URL.
-            let versionID = ULID.generate()
+            let versionID = SourceVersionID(rawValue: ULID.generate())
             try db.execute(sql: """
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                          mime_type, original_path, activity_id, external_identity, fetched_at)
             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?);
-            """, arguments: [versionID, sourceID, contentHash, mime,
+            """, arguments: [versionID.rawValue, sourceID, contentHash, mime,
                             originalPath, activityID,
                             sourceURL.absoluteString, nowTS])
 
@@ -4010,7 +4010,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
             VALUES ('source-content', ?, ?, 1, ?);
-            """, arguments: [sourceID, versionID, nowTS])
+            """, arguments: [sourceID, versionID.rawValue, nowTS])
 
             // Name-only FTS entry. Best-effort; inline.
             self.upsertSourceSearch(sourceID: id, body: "", on: db)
@@ -4252,7 +4252,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             VALUES (?, ?, ?, 'revert', ?, ?, ?, ?, ?, ?);
             """, arguments: [id.rawValue, sourceID.rawValue, parentID?.rawValue,
                             revertNote, nowTS,
-                            targetVersion.activityID, targetVersion.sourceVersionID,
+                            targetVersion.activityID, targetVersion.sourceVersionID?.rawValue,
                             targetBlobHash, targetVersion.mimeType])
             try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id.rawValue, now: nowTS, on: db)
 
@@ -4280,7 +4280,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func recordMarkdownExtraction(
         sourceID: SourceID, content: String, backend: ExtractionBackend,
-        sourceVersionID: String? = nil, note: String? = nil, modelVersion: String? = nil
+        sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
         let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
@@ -4314,7 +4314,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                activity_id, source_version_id, blob_hash, mime_type, technique)
             VALUES (?, ?, ?, 'extraction', ?, ?, ?, ?, ?, 'text/markdown', ?);
             """, arguments: [id.rawValue, sourceID.rawValue, parentID?.rawValue,
-                            note, nowTS, activityID, resolvedSourceVersionID,
+                            note, nowTS, activityID, resolvedSourceVersionID?.rawValue,
                             blobHash, backend.rawValue])
 
             // Re-embed/index only when this row is now the active head (default-
@@ -6982,9 +6982,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let externalIdentity: String? = row["external_identity"]
         let fetchedAt: Double = row["fetched_at"]
         return SourceVersion(
-            id: id,
+            id: SourceVersionID(rawValue: id),
             sourceID: SourceID(rawValue: sourceIDStr),
-            parentID: parentID,
+            parentID: parentID.map(SourceVersionID.init(rawValue:)),
             blobHash: blobHash,
             mimeType: mimeType,
             activityID: activityID,
@@ -7043,7 +7043,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             note: note,
             createdAt: Date(timeIntervalSince1970: createdAt),
             activityID: activityID,
-            sourceVersionID: sourceVersionID,
+            sourceVersionID: sourceVersionID.map(SourceVersionID.init(rawValue:)),
             blobHash: blobHash,
             mimeType: mimeType.isEmpty ? MimeType.markdown : mimeType,
             technique: technique
@@ -7183,7 +7183,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let fetchedAt: Double = (row[7] as Double?) ?? 0
         let runTitle: String? = row[8]
         return SourceOrigin(
-            versionID: versionID,
+            versionID: SourceVersionID(rawValue: versionID),
             agentName: agentName ?? "unknown",
             agentKind: agentKind ?? "software",
             activityKind: activityKind ?? "import",
@@ -7686,7 +7686,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Roll the source-content ref back to `versionID`, refreshing the
     /// denormalized `sources` mirror (byte_size, mime_type, content_hash).
     /// Ported from the former `SQLiteWikiStore.rollbackSourceContent`.
-    public func rollbackSourceContent(sourceID: SourceID, to versionID: PageID) throws {
+    public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -7694,7 +7694,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    private func rollbackSourceContentBody(db: Database, sourceID: SourceID, versionID: PageID) throws {
+    private func rollbackSourceContentBody(db: Database, sourceID: SourceID, versionID: SourceVersionID) throws {
         // Use inSavepoint (not inTransaction) — this method is called from inside
         // mutate()'s inSavepoint, so inSavepoint nests as a SAVEPOINT instead
         // of failing with "cannot start a transaction within a transaction".
@@ -7707,7 +7707,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 """,
                 arguments: [versionID.rawValue, sourceID.rawValue]
             ) else {
-                throw WikiStoreError.notFound(versionID)
+                throw WikiStoreError.sourceVersionNotFound(versionID)
             }
             let blobHash: String? = target["blob_hash"]
             let mime: String? = target["mime_type"]
@@ -7986,9 +7986,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             )
             return rows.map { row in
                 SourceVersion(
-                    id: row["id"],
+                    id: SourceVersionID(rawValue: row["id"]),
                     sourceID: SourceID(rawValue: row["source_id"]),
-                    parentID: row["parent_id"],
+                    parentID: (row["parent_id"] as String?).map(SourceVersionID.init(rawValue:)),
                     blobHash: row["blob_hash"],
                     mimeType: row["mime_type"],
                     activityID: row["activity_id"],

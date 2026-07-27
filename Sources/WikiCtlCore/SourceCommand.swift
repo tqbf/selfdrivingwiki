@@ -17,10 +17,12 @@ public enum SourceCommand {
     public struct Result: Equatable {
         public var payload: Payload
         public var didCommit: Bool
+        public var stderrOutput: String?
 
-        public init(payload: Payload, didCommit: Bool) {
+        public init(payload: Payload, didCommit: Bool, stderrOutput: String? = nil) {
             self.payload = payload
             self.didCommit = didCommit
+            self.stderrOutput = stderrOutput
         }
 
         public enum Payload: Equatable {

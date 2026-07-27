@@ -100,6 +100,9 @@ func run() async -> Int32 {
             wikiID: descriptor.id,
             containerDirectory: resolver.containerDirectory)
 
+        if let stderrOutput = result.stderrOutput, !stderrOutput.isEmpty {
+            FileHandle.standardError.write(Data(stderrOutput.utf8))
+        }
         switch result.payload {
         case .text(let output):
             if !output.isEmpty { print(output) }
@@ -162,7 +165,11 @@ func execute(
             containerDirectory: containerDirectory,
             store: store)
         let r = try PageCommand.run(action, in: store, bm25Leg: leg)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+        return SourceCommand.Result(
+            payload: .text(r.output),
+            didCommit: r.didCommit,
+            stderrOutput: r.stderrOutput
+        )
     case .logAppend(let kind, let title, let note, let source):
         let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)

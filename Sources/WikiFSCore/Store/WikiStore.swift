@@ -9,6 +9,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case notFound(PageID)
     case chatNotFound(ChatID)
     case sourceNotFound(SourceID)
+    case sourceVersionNotFound(SourceVersionID)
     case invalidBookmarkRow(id: String, reason: String)
     case unexpected(String)
     /// Thrown by `addSource` when the incoming bytes are byte-identical to an
@@ -24,6 +25,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .notFound(let id): return "Page not found: \(id.rawValue)"
         case .chatNotFound(let id): return "Page not found: \(id.rawValue)"
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
+        case .sourceVersionNotFound(let id): return "Source version not found: \(id.rawValue)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
@@ -398,7 +400,7 @@ public protocol WikiStore: Sendable {
     @discardableResult
     func recordMarkdownExtraction(
         sourceID: SourceID, content: String, backend: ExtractionBackend,
-        sourceVersionID: String?, note: String?, modelVersion: String?
+        sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
     ) throws -> SourceMarkdownVersion
 
     /// Nominate an existing processed-markdown row as the active HEAD for a

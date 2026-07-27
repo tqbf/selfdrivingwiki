@@ -237,6 +237,7 @@ struct WikiCtlCommandTests {
         let result = try PageCommand.run(.get(.title("Doc"), json: false), in: store)
         #expect(result.output == "the body")
         #expect(!result.didCommit)
+        #expect(result.stderrOutput?.hasPrefix("head_version_id: ") == true)
     }
 
     @Test func getByMissingTitleThrows() throws {

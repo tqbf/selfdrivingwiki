@@ -27,7 +27,7 @@ extension SourceOrigin {
     /// `PageOrigin.savedAt`).
     var provenanceEntry: ProvenanceEntry {
         ProvenanceEntry(
-            versionID: versionID,
+            versionID: versionID.rawValue,
             agentName: agentName,
             agentKind: agentKind,
             activityKind: activityKind,

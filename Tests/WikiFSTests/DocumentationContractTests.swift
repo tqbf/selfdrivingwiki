@@ -19,6 +19,15 @@ struct DocumentationContractTests {
         "Do not introduce a separate `ChatMessageID` in this work; retain `ChatMessage.id: PageID` and document it as deferred.",
         "A non-empty chat API signature manifest passes and the final audit finds no persisted chat entity API still typed as `PageID` or an untagged internal `String`.",
     ]
+    private static let sourceVersionPlanPath = "plans/source-version-id-separation.md"
+    private static let sourceVersionProgressHeading = "## 2026-07-27 — SourceVersionID separation (#955)"
+    private static let requiredSourceVersionPlanMarkers = [
+        "Identifier boundary:",
+        "No-migration decision:",
+        "Raw-string boundaries:",
+        "Ref polymorphism:",
+        "Deferred markdown-version namespace:",
+    ]
 
     @Test func pageSourceIDPlanIsIndexedAndComplete() throws {
         let root = try #require(Self.locateRepositoryRoot())
@@ -61,6 +70,28 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.chatProgressHeading))
         for marker in Self.requiredChatPlanMarkers {
             #expect(plan.contains(marker), "missing chat documentation marker: \(marker)")
+        }
+    }
+
+    @Test func sourceVersionIDSeparationContractIsDocumented() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let plan = try String(
+            contentsOf: root.appendingPathComponent(Self.sourceVersionPlanPath),
+            encoding: .utf8
+        )
+        let index = try String(
+            contentsOf: root.appendingPathComponent("PLAN.md"),
+            encoding: .utf8
+        )
+        let progress = try String(
+            contentsOf: root.appendingPathComponent("PROGRESS.md"),
+            encoding: .utf8
+        )
+
+        #expect(index.contains("[`\(Self.sourceVersionPlanPath)`](\(Self.sourceVersionPlanPath))"))
+        #expect(progress.contains(Self.sourceVersionProgressHeading))
+        for marker in Self.requiredSourceVersionPlanMarkers {
+            #expect(plan.contains(marker), "missing source-version documentation marker: \(marker)")
         }
     }
 
