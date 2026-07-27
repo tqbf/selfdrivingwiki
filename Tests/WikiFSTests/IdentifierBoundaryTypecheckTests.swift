@@ -229,4 +229,40 @@ struct IdentifierBoundaryTypecheckTests {
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }
+
+    @Test func sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI() throws {
+        let result = try runTypecheck("source-version-id-to-processed-markdown-version-api.swift")
+        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at processedMarkdownVersion(id:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func sourceVersionIDIsRejectedBySetActiveMarkdownAPI() throws {
+        let result = try runTypecheck("source-version-id-to-set-active-markdown-api.swift")
+        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at setActiveMarkdown(sourceID:to:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func sourceVersionIDIsRejectedByPageAPI() throws {
+        let result = try runTypecheck("source-version-id-to-page-api.swift")
+        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a PageID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func sourceVersionIDIsRejectedByChatAPI() throws {
+        let result = try runTypecheck("source-version-id-to-chat-api.swift")
+        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a ChatID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'ChatID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
 }

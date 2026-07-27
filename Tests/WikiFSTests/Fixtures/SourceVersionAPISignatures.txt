@@ -1,14 +1,30 @@
 # Source content-version API signature manifest
 #
-# Format: <repository-relative Swift path><TAB><required source fragment>
-Sources/WikiFSCore/Sources/SourceVersioning.swift	public let id: SourceVersionID
-Sources/WikiFSCore/Sources/SourceVersioning.swift	public let parentID: SourceVersionID?
-Sources/WikiFSCore/Sources/SourceVersioning.swift	public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?
-Sources/WikiFSCore/Sources/SourceMaterializer.swift	public let versionID: SourceVersionID
-Sources/WikiFSCore/Sources/SourceMaterializer.swift	versionID: SourceVersionID,
-Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let sourceVersionID: SourceVersionID?
-Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	sourceVersionID: SourceVersionID? = nil,
-Sources/WikiFSCore/Store/WikiStore.swift	case sourceVersionNotFound(SourceVersionID)
-Sources/WikiFSCore/Store/WikiStore.swift	sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil
+# Format: <entry-key><TAB><kind><TAB><repository-relative Swift path><TAB><required source fragment>
+# kinds:
+# - typed: fragment itself must mention `SourceVersionID`
+# - surface: reviewed routing/implementation seam that does not itself spell the type
+source-version.id	typed	Sources/WikiFSCore/Sources/SourceVersioning.swift	public let id: SourceVersionID
+source-version.parent-id	typed	Sources/WikiFSCore/Sources/SourceVersioning.swift	public let parentID: SourceVersionID?
+source-version.init	typed	Sources/WikiFSCore/Sources/SourceVersioning.swift	public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?
+source-origin.version-id	typed	Sources/WikiFSCore/Sources/SourceMaterializer.swift	public let versionID: SourceVersionID
+source-origin.init	typed	Sources/WikiFSCore/Sources/SourceMaterializer.swift	versionID: SourceVersionID,
+source-markdown-version.source-version-id	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let sourceVersionID: SourceVersionID?
+source-markdown-version.init	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	sourceVersionID: SourceVersionID? = nil,
+wiki-store.error	typed	Sources/WikiFSCore/Store/WikiStore.swift	case sourceVersionNotFound(SourceVersionID)
+wiki-store.active-content-version	surface	Sources/WikiFSCore/Store/WikiStore.swift	func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+wiki-store.append-content-version	surface	Sources/WikiFSCore/Store/WikiStore.swift	) throws -> SourceVersion
+wiki-store.record-markdown-extraction	typed	Sources/WikiFSCore/Store/WikiStore.swift	sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
+grdb.source-origin.routes-through-origin-from	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	return Self.originFrom(row: row)
+grdb.source-edit-history.routes-through-origin-from	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	return rows.map { Self.originFrom(row: $0) }
+grdb.private-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func activeContentVersion(sourceID: SourceID, on db: Database) throws -> SourceVersion?
+grdb.public-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+grdb.read-source-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private static func readSourceVersion(from row: Row) throws -> SourceVersion
+grdb.read-source-version.decode-id	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	id: SourceVersionID(rawValue: id),
+grdb.origin-from	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	versionID: SourceVersionID(rawValue: versionID),
+grdb.public-append-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceVersion {
+grdb.public-append-content-version.writer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let versionID = SourceVersionID(rawValue: ULID.generate())
+grdb.record-markdown-extraction	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil
+grdb.public-rollback-source-content	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws
+grdb.private-rollback-source-content-body	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func rollbackSourceContentBody(db: Database, sourceID: SourceID, versionID: SourceVersionID) throws
+grdb.public-content-version-history	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func contentVersionHistory(sourceID: SourceID) throws -> [SourceVersion]
