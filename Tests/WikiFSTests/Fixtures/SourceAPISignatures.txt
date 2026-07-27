@@ -93,7 +93,10 @@ Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceIDToName: [Sour
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceDerivedChain: [SourceID: [PageID]]
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public let siblingMaps: [SourceID: [String: SourceID]]
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public var pinnedExtractionID: (SourceID, Int) -> PageID?
+Sources/WikiFSCore/Core/FilenameEscaping.swift	public static func byIDSourceFilename(sourceID: SourceID, ext: String) -> String
+Sources/WikiFSCore/Core/FilenameEscaping.swift	public static func byNameSourceFilename(filename: String, ext: String, sourceID: SourceID) -> String
 Sources/WikiFSCore/Core/BookmarkNode.swift	case source(SourceID)
+Sources/WikiFSCore/Sources/AgentStaging.swift	public static func shellSafeLeaf(name: String, sourceID: SourceID, ext: String) -> String {
 Sources/WikiFSLinks/WikiLinkMarkdown.swift	        public let id: SourceID
 Sources/WikiFSLinks/WikiLinkMarkdown.swift	        public init(id: SourceID, mimeType: String?, target: EmbedTarget? = nil)
 Sources/WikiFSLinks/WikiLinkIndex.swift	    public let siblingImages: [SourceID: [String: SourceID]]

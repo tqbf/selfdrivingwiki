@@ -5858,9 +5858,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { node in
             self.localEvent(.bookmark, id: node.id, change: .created)
         }) { db in
-            if case .folder(let label) = content, label.isEmpty {
-                throw WikiStoreError.invalidBookmarkRow(id: "<new bookmark>", reason: "folder requires a non-empty label")
-            }
+            _ = try BookmarkNode.content(
+                bookmarkID: "<new bookmark>",
+                kindRawValue: content.kind.rawValue,
+                label: content.label,
+                targetRawValue: content.targetRawValue
+            )
             let id = ULID.generate()
             let now = Date().timeIntervalSince1970
 
