@@ -33,14 +33,24 @@ import SQLite3
         #expect(sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK)
     }
 
-    private func expectInvalidBookmarkRow(_ operation: () throws -> Void) {
+    private func expectInvalidBookmarkRow(
+        id expectedID: String? = nil,
+        reason expectedReason: String? = nil,
+        _ operation: () throws -> Void
+    ) {
         do {
             try operation()
             Issue.record("expected invalid bookmark row")
         } catch let error as WikiStoreError {
-            guard case .invalidBookmarkRow = error else {
+            guard case let .invalidBookmarkRow(id, reason) = error else {
                 Issue.record("unexpected error: \(error)")
                 return
+            }
+            if let expectedID {
+                #expect(id == expectedID)
+            }
+            if let expectedReason {
+                #expect(reason == expectedReason)
             }
         } catch {
             Issue.record("unexpected error: \(error)")
@@ -102,6 +112,51 @@ import SQLite3
         let store = try GRDBWikiStore(databaseURL: url)
         try insertBookmarkRow(at: url, id: "bad-\(name)", kind: kind, label: label, targetID: targetID)
         expectInvalidBookmarkRow { _ = try store.listBookmarkNodes() }
+    }
+
+    @Test(arguments: [
+        ("page_ref", "page reference requires a non-empty target_id"),
+        ("source_ref", "source reference requires a non-empty target_id"),
+        ("chat_ref", "chat reference requires a non-empty target_id"),
+    ]) func emptyReferenceTargetsInPersistedRowsAreRejected(
+        _ kind: String,
+        _ expectedReason: String
+    ) throws {
+        let url = tempDatabaseURL()
+        let store = try GRDBWikiStore(databaseURL: url)
+        let id = "bad-\(kind)-empty-target"
+        try insertBookmarkRow(at: url, id: id, kind: kind, label: nil, targetID: "")
+        expectInvalidBookmarkRow(id: id, reason: expectedReason) {
+            _ = try store.listBookmarkNodes()
+        }
+    }
+
+    @Test(arguments: [
+        (BookmarkNodeKind.pageRef, "page reference requires a non-empty target_id"),
+        (BookmarkNodeKind.sourceRef, "source reference requires a non-empty target_id"),
+        (BookmarkNodeKind.chatRef, "chat reference requires a non-empty target_id"),
+    ]) func emptyReferenceTargetsAreRejectedBeforeWrite(
+        _ kind: BookmarkNodeKind,
+        _ expectedReason: String
+    ) throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let content: BookmarkNode.Content
+        switch kind {
+        case .pageRef:
+            content = .page(PageID(rawValue: ""))
+        case .sourceRef:
+            content = .source(SourceID(rawValue: ""))
+        case .chatRef:
+            content = .chat(PageID(rawValue: ""))
+        case .folder:
+            Issue.record("folder is not a reference bookmark kind")
+            return
+        }
+
+        expectInvalidBookmarkRow(id: "<new bookmark>", reason: expectedReason) {
+            _ = try store.createBookmarkNode(parentID: nil, position: 0, content: content)
+        }
+        #expect(try store.listBookmarkNodes().isEmpty)
     }
 
     // MARK: - Schema migration (AC.1)

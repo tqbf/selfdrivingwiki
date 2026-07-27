@@ -113,27 +113,47 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
             guard label == nil else {
                 throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "page reference has label")
             }
-            guard let targetRawValue else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "page reference requires target_id")
-            }
+            let targetRawValue = try requiredTargetRawValue(
+                bookmarkID: bookmarkID,
+                targetRawValue: targetRawValue,
+                referenceName: "page reference"
+            )
             return .page(PageID(rawValue: targetRawValue))
         case .sourceRef:
             guard label == nil else {
                 throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "source reference has label")
             }
-            guard let targetRawValue else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "source reference requires target_id")
-            }
+            let targetRawValue = try requiredTargetRawValue(
+                bookmarkID: bookmarkID,
+                targetRawValue: targetRawValue,
+                referenceName: "source reference"
+            )
             return .source(SourceID(rawValue: targetRawValue))
         case .chatRef:
             guard label == nil else {
                 throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "chat reference has label")
             }
-            guard let targetRawValue else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "chat reference requires target_id")
-            }
+            let targetRawValue = try requiredTargetRawValue(
+                bookmarkID: bookmarkID,
+                targetRawValue: targetRawValue,
+                referenceName: "chat reference"
+            )
             return .chat(PageID(rawValue: targetRawValue))
         }
+    }
+
+    private static func requiredTargetRawValue(
+        bookmarkID: String,
+        targetRawValue: String?,
+        referenceName: String
+    ) throws -> String {
+        guard let targetRawValue else {
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "\(referenceName) requires target_id")
+        }
+        guard targetRawValue.isEmpty == false else {
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "\(referenceName) requires a non-empty target_id")
+        }
+        return targetRawValue
     }
 
     /// Builds a slash-delimited display path for a folder by walking its
