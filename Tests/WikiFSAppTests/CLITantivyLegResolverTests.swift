@@ -21,27 +21,15 @@ import Testing
 ///
 @Suite
 struct CLITantivyLegResolverTests {
-    actor ConcurrentSearchGate {
-        private let expectedCount: Int
-        private var arrivals = 0
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+    actor SearchRequestRecorder {
+        private var keys: [CLITantivyLegResolver.SearchRequestKey] = []
 
-        init(expectedCount: Int) {
-            self.expectedCount = expectedCount
+        func record(_ key: CLITantivyLegResolver.SearchRequestKey) {
+            keys.append(key)
         }
 
-        func arriveAndWait() async {
-            arrivals += 1
-            if arrivals == expectedCount {
-                let continuations = waiters
-                waiters.removeAll()
-                continuations.forEach { $0.resume() }
-                return
-            }
-
-            await withCheckedContinuation { continuation in
-                waiters.append(continuation)
-            }
+        func recordedKeys() -> [CLITantivyLegResolver.SearchRequestKey] {
+            keys
         }
     }
 
@@ -326,151 +314,105 @@ struct CLITantivyLegResolverTests {
         let store = try tempStore(in: container, wikiID: wikiID)
 
         let pageRust = try store.createPage(title: "Rust Ownership")
-        try store.updatePage(
-            id: pageRust.id,
-            title: "Rust Ownership",
-            body: "cobalt cobalt cobalt borrowingkey lifetimes")
         let pageOwnership = try store.createPage(title: "Ownership Guide")
-        try store.updatePage(
-            id: pageOwnership.id,
-            title: "Ownership Guide",
-            body: "amber amber borrowing")
         let pageAsync = try store.createPage(title: "Async Rust")
-        try store.updatePage(
-            id: pageAsync.id,
-            title: "Async Rust",
-            body: "cobalt asyncsignal await")
-
         _ = try store.addSource(filename: "zircon-rust.pdf", data: Data("%PDF-rust".utf8))
         _ = try store.addSource(filename: "amber-ownership.pdf", data: Data("%PDF-ownership".utf8))
         let sources = try store.listSources()
         let rustSource = try #require(sources.first { $0.filename == "zircon-rust.pdf" })
         let ownershipSource = try #require(sources.first { $0.filename == "amber-ownership.pdf" })
-        _ = try store.appendProcessedMarkdown(
-            sourceID: rustSource.id,
-            content: "zircon indexing coverage for Tantivy.",
-            origin: .extraction,
-            note: nil,
-            technique: nil)
-        _ = try store.appendProcessedMarkdown(
-            sourceID: ownershipSource.id,
-            content: "amber notes for borrow checking.",
-            origin: .extraction,
-            note: nil,
-            technique: nil)
-
-        let rustChat = try store.createChat(kind: .edit, title: "Rust Search")
-        _ = try store.appendChatMessages(chatID: rustChat.id, events: [
-            .assistantText("Rust search discussed cobaltchat async indexing and ranking."),
-        ])
         let terraformChat = try store.createChat(kind: .edit, title: "Terraforming")
-        _ = try store.appendChatMessages(chatID: terraformChat.id, events: [
-            .assistantText("Terraforming needs terraformalpha greenhouse heat and atmosphere retention."),
-        ])
 
-        let warmPageLeg = await CLITantivyLegResolver.resolvePageLeg(
-            wikiID: wikiID,
-            containerDirectory: container,
-            store: store,
-            query: "cobalt borrowingkey",
-            limit: 3)
-        let warmSourceLeg = await CLITantivyLegResolver.resolveSourceLeg(
-            wikiID: wikiID,
-            containerDirectory: container,
-            store: store,
-            query: "zircon",
-            limit: 1)
-        let warmChatLeg = await CLITantivyLegResolver.resolveChatLeg(
-            wikiID: wikiID,
-            containerDirectory: container,
-            store: store,
-            query: "terraformalpha",
-            limit: 1)
-        #expect(warmPageLeg?.first?.id == pageRust.id)
-        #expect(warmSourceLeg?.first?.id == rustSource.id)
-        #expect(warmChatLeg?.first?.id == terraformChat.id)
-
-        let gate = ConcurrentSearchGate(expectedCount: 6)
+        let recorder = SearchRequestRecorder()
         let containerPath = container.standardizedFileURL.path
-        await CLITantivyLegResolver.installTestSearchHook { key in
-            guard key.wikiID == wikiID, key.containerPath == containerPath else { return }
-            await gate.arriveAndWait()
-        }
+        let outcomes = await CLITantivyLegResolver.withTestSearchExecutor({ key in
+            guard key.wikiID == wikiID, key.containerPath == containerPath else { return nil }
+            await recorder.record(key)
+            let ids: [PageID]
+            switch (key.query, key.kind, key.limit) {
+            case ("cobalt borrowingkey", .page, 2):
+                ids = [pageRust.id, pageAsync.id]
+            case ("cobalt borrowingkey", .page, 1):
+                ids = [pageRust.id]
+            case ("amber", .page, 1):
+                ids = [pageOwnership.id]
+            case ("zircon", .source, 1):
+                ids = [rustSource.id]
+            case ("amber", .source, 1):
+                ids = [ownershipSource.id]
+            case ("terraformalpha", .chat, 1):
+                ids = [terraformChat.id]
+            default:
+                return []
+            }
+            return ids.enumerated().map { offset, id in
+                TantivyShadowSearchResult(
+                    documentID: key.kind.documentID(for: id.rawValue),
+                    kind: key.kind,
+                    title: "sentinel-\(offset)",
+                    score: Float(ids.count - offset))
+            }
+        }, operation: {
+            await withTaskGroup(of: SearchOutcome.self, returning: [SearchOutcome].self) { group in
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "cobalt borrowingkey", limit: 2)
+                    return SearchOutcome(label: "page-rust-2", ids: leg?.map(\.id))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "cobalt borrowingkey", limit: 1)
+                    return SearchOutcome(label: "page-rust-1", ids: leg?.map(\.id))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "amber", limit: 1)
+                    return SearchOutcome(label: "page-ownership-1", ids: leg?.map(\.id))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "zircon", limit: 1)
+                    return SearchOutcome(label: "source-rust-1", ids: leg?.map(\.id))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "amber", limit: 1)
+                    return SearchOutcome(label: "source-ownership-1", ids: leg?.map(\.id))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveChatLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "terraformalpha", limit: 1)
+                    return SearchOutcome(label: "chat-terraforming-1", ids: leg?.map(\.id))
+                }
 
-        let outcomes = await withTaskGroup(of: SearchOutcome.self, returning: [SearchOutcome].self) { group in
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolvePageLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "cobalt borrowingkey",
-                    limit: 2)
-                return SearchOutcome(label: "page-rust-2", ids: leg?.map(\.id))
+                var collected: [SearchOutcome] = []
+                for await outcome in group {
+                    collected.append(outcome)
+                }
+                return collected
             }
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolvePageLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "cobalt borrowingkey",
-                    limit: 1)
-                return SearchOutcome(label: "page-rust-1", ids: leg?.map(\.id))
-            }
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolvePageLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "amber",
-                    limit: 1)
-                return SearchOutcome(label: "page-ownership-1", ids: leg?.map(\.id))
-            }
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolveSourceLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "zircon",
-                    limit: 1)
-                return SearchOutcome(label: "source-rust-1", ids: leg?.map(\.id))
-            }
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolveSourceLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "amber",
-                    limit: 1)
-                return SearchOutcome(label: "source-ownership-1", ids: leg?.map(\.id))
-            }
-            group.addTask {
-                let leg = await CLITantivyLegResolver.resolveChatLeg(
-                    wikiID: wikiID,
-                    containerDirectory: container,
-                    store: store,
-                    query: "terraformalpha",
-                    limit: 1)
-                return SearchOutcome(label: "chat-terraforming-1", ids: leg?.map(\.id))
-            }
-
-            var collected: [SearchOutcome] = []
-            for await outcome in group {
-                collected.append(outcome)
-            }
-            return collected
-        }
-        await CLITantivyLegResolver.resetTestSearchHook()
+        })
 
         func outcome(named label: String) -> SearchOutcome? {
             outcomes.first { $0.label == label }
         }
+        let keys = await recorder.recordedKeys()
+        #expect(keys.count == 6)
+        #expect(keys.allSatisfy { $0.wikiID == wikiID && $0.containerPath == containerPath })
+        #expect(Set(keys).count == 6)
         #expect(outcomes.count == 6)
-        #expect(outcome(named: "page-rust-2")?.ids == [pageRust.id, pageAsync.id], "page-rust-2: \(String(describing: outcome(named: "page-rust-2")?.ids))")
-        #expect(outcome(named: "page-rust-1")?.ids == [pageRust.id], "page-rust-1: \(String(describing: outcome(named: "page-rust-1")?.ids))")
-        #expect(outcome(named: "page-ownership-1")?.ids == [pageOwnership.id], "page-ownership-1: \(String(describing: outcome(named: "page-ownership-1")?.ids))")
-        #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id], "source-rust-1: \(String(describing: outcome(named: "source-rust-1")?.ids))")
-        #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id], "source-ownership-1: \(String(describing: outcome(named: "source-ownership-1")?.ids))")
-        #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id], "chat-terraforming-1: \(String(describing: outcome(named: "chat-terraforming-1")?.ids))")
+        #expect(outcome(named: "page-rust-2")?.ids == [pageRust.id, pageAsync.id])
+        #expect(outcome(named: "page-rust-1")?.ids == [pageRust.id])
+        #expect(outcome(named: "page-ownership-1")?.ids == [pageOwnership.id])
+        #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id])
+        #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id])
+        #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id])
     }
 
     // MARK: - No-BM25-leg behavior when no Tantivy service can be built

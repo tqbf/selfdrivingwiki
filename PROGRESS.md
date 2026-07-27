@@ -101,6 +101,40 @@ Additional debugging/late-suite validation that informed the final fixes:
   Tantivy service lifetime issue. A live sample of the final stalled helper was
   captured at `tmp/test-logs/swift-test-run2c-sample.txt`.
 
+**Deterministic full-request-key follow-up after `4dc32dab`.**
+
+The initial six-request regression used six real `TantivySearchService` instances
+against one writable index, so full-suite load could produce rotating empty hits
+that did not prove or disprove request-key discrimination. The follow-up restores
+`SearchRetryPolicy.maximumAttempts` from the unjustified 20-attempt escalation to
+5 and adds a DEBUG-only async executor inside newly created in-flight tasks. The
+test scopes the executor to its unique wiki/container, records all six full
+request keys, and returns request-specific sentinel hits; unrelated concurrent
+tests fall through to production Tantivy. `withTestSearchExecutor` resets the
+injection after both success and thrown failure. The separate nine-search
+`concurrentResolversReturnExpectedResults` test remains the real-index async
+concurrency smoke test.
+
+Verification:
+
+- `swift test --filter CLITantivyLegResolverTests` — passed twice after final
+  scoping: 8 tests in 1 suite; test time 0.877 s and 0.867 s.
+- `swift build --build-tests` — passed; build time 8.57 s, real 9.49 s.
+- `tmp/test-logs/issue-925-deterministic-seam-full-run1.log` — completed rather
+  than stalled, but failed with 15 CLI resolver issues because the first DEBUG
+  executor revision intercepted unrelated parallel resolver tests. This exposed
+  and led to the unique-wiki/container fallthrough fix; it is not acceptance.
+- `tmp/test-logs/issue-925-deterministic-seam-full-run2.log` — timed out after
+  700 s. The deterministic regression passed after 5.294 s (log line 7352), and
+  no CLI resolver failure was recorded. The log then stopped in the unrelated
+  hosted AppKit tail after `AddressBarLayoutHostedTests` passed, with autocomplete
+  and quote-highlight hosted work still active. The command-owned orphaned
+  `swiftpm-testing-helper` PID 1384 was sent SIGTERM after ownership was confirmed.
+  This run is explicitly **not** full-suite acceptance.
+- Scoped blocking-pattern audit and `git diff --check` passed. Repository-wide
+  `git diff --check` still reports only the unrelated pre-existing trailing
+  whitespace in `AGENTS.md:19`.
+
 **Final post-fix acceptance.**
 
 - `swift-test-run1-accept5-20260727-1727.log` — `3956 tests in 332 suites passed after 18.463 seconds`; `/usr/bin/time -p`: `real 23.10`, `user 22.97`, `sys 9.77`.

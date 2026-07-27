@@ -34,7 +34,7 @@ import WikiFSCore
 /// build via `TantivyShadowSync.start()`), the Tantivy leg is populated.
 public enum CLITantivyLegResolver {
     private enum SearchRetryPolicy {
-        static let maximumAttempts = 20
+        static let maximumAttempts = 5
     }
 
     struct SearchRequestKey: Hashable, Sendable {
@@ -76,6 +76,10 @@ public enum CLITantivyLegResolver {
 
             let token = UUID()
             let task: Task<[TantivyShadowSearchResult], Never> = Task {
+                if let testResults = await CLITantivyLegResolver.runTestSearchExecutor(key) {
+                    return testResults
+                }
+
                 guard let service = CLITantivyLegResolver.makeService(
                     wikiID: wikiID,
                     containerDirectory: containerDirectory,
@@ -119,7 +123,27 @@ public enum CLITantivyLegResolver {
         }
     }
 
+    private actor TestSearchExecutorBox {
+        typealias Executor = @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
+
+        private var executor: Executor?
+
+        func install(_ executor: @escaping Executor) {
+            self.executor = executor
+        }
+
+        func reset() {
+            executor = nil
+        }
+
+        func run(_ key: SearchRequestKey) async -> [TantivyShadowSearchResult]? {
+            guard let executor else { return nil }
+            return await executor(key)
+        }
+    }
+
     private static let testSearchHookBox = TestSearchHookBox()
+    private static let testSearchExecutorBox = TestSearchExecutorBox()
 
     static func installTestSearchHook(
         _ hook: @escaping @Sendable (SearchRequestKey) async -> Void
@@ -131,11 +155,45 @@ public enum CLITantivyLegResolver {
         await testSearchHookBox.reset()
     }
 
+    static func installTestSearchExecutor(
+        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
+    ) async {
+        await testSearchExecutorBox.install(executor)
+    }
+
+    static func resetTestSearchExecutor() async {
+        await testSearchExecutorBox.reset()
+    }
+
+    static func withTestSearchExecutor<Result: Sendable>(
+        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?,
+        operation: () async throws -> Result
+    ) async rethrows -> Result {
+        await installTestSearchExecutor(executor)
+        do {
+            let result = try await operation()
+            await resetTestSearchExecutor()
+            return result
+        } catch {
+            await resetTestSearchExecutor()
+            throw error
+        }
+    }
+
     private static func runTestSearchHook(_ key: SearchRequestKey) async {
         await testSearchHookBox.run(key)
     }
+
+    private static func runTestSearchExecutor(
+        _ key: SearchRequestKey
+    ) async -> [TantivyShadowSearchResult]? {
+        await testSearchExecutorBox.run(key)
+    }
     #else
     private static func runTestSearchHook(_ key: SearchRequestKey) async {}
+    private static func runTestSearchExecutor(
+        _ key: SearchRequestKey
+    ) async -> [TantivyShadowSearchResult]? { nil }
     #endif
 
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
