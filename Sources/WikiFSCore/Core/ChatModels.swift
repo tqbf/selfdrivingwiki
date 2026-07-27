@@ -16,7 +16,7 @@ public enum ChatKind: String, Equatable, Sendable, CaseIterable {
 /// (`ChatMessage`), fetched on demand like source content. All chats are
 /// write-capable (`.edit`); the read-only Ask mode has been removed.
 public struct ChatSummary: Identifiable, Hashable, Sendable {
-    public var id: PageID
+    public var id: ChatID
     public var kind: ChatKind
     /// Display title, auto-derived from the first user message (elided). The
     /// resolution name for a future `[[chat:…]]` link.
@@ -53,7 +53,7 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     public var modelId: String?
 
     public init(
-        id: PageID, kind: ChatKind, title: String,
+        id: ChatID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
         summary: String? = nil, summaryAt: Date? = nil,
         acpSessionId: AcpSessionID? = nil,
@@ -157,8 +157,10 @@ public enum ChatMessageSummaryKind: String, Sendable, Codable, CaseIterable {
 /// (`chat_messages.text`) so future phases (FTS, `#"quote"` anchors) never
 /// parse JSON.
 public struct ChatMessage: Identifiable, Equatable, Sendable {
+    /// Deferred namespace: message identity remains `PageID` in this issue.
+    /// Only the parent persisted-chat identity moves to `ChatID`.
     public var id: PageID
-    public var chatID: PageID
+    public var chatID: ChatID
     /// Dense, 0-based per-chat ordering. Assigned by the store on append.
     public var seq: Int
     public var event: AgentEvent
@@ -180,7 +182,7 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
     public var isDraft: Bool
 
     public init(
-        id: PageID, chatID: PageID, seq: Int, event: AgentEvent, createdAt: Date,
+        id: PageID, chatID: ChatID, seq: Int, event: AgentEvent, createdAt: Date,
         summary: String? = nil,
         summaryKind: ChatMessageSummaryKind? = nil,
         summaryAt: Date? = nil,

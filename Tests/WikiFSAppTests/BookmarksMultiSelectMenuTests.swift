@@ -320,7 +320,7 @@ struct BookmarksMultiSelectMenuTests {
 
         _ = vc.perform(item.action, with: item)
 
-        #expect(revealed == .chat(PageID(rawValue: "chat-1")))
+        #expect(revealed == .chat(ChatID(rawValue: "chat-1")))
     }
 }
 #endif

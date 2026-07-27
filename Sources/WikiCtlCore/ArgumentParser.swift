@@ -535,7 +535,7 @@ public enum ArgumentParser {
             switch kind {
             case .pageRef: content = .page(PageID(rawValue: targetID))
             case .sourceRef: content = .source(SourceID(rawValue: targetID))
-            case .chatRef: content = .chat(PageID(rawValue: targetID))
+            case .chatRef: content = .chat(ChatID(rawValue: targetID))
             case .folder:
                 throw Failure.usage("bookmark add-ref: folder is not a reference")
             }
@@ -691,7 +691,7 @@ public enum ArgumentParser {
         func requireChatSelector() throws -> ChatCommand.Selector {
             switch (values["--id"], values["--title"]) {
             case (let id?, nil):
-                return .id(PageID(rawValue: id))
+                return .id(ChatID(rawValue: id))
             case (nil, let title?):
                 return .title(title)
             case (.some, .some):

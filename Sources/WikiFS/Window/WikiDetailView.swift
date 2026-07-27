@@ -219,7 +219,7 @@ struct WikiDetailView: View {
     /// coordinator is absent (daemon down) we render an unavailable state
     /// rather than the composer — there is no local chat fallback.
     @ViewBuilder
-    private func chatSurface(chatID: PageID?) -> some View {
+    private func chatSurface(chatID: ChatID?) -> some View {
         if let chatDaemon {
             ChatDetailView(
                 chatID: chatID,

@@ -111,7 +111,10 @@ struct WikiReaderView: View {
             return .source(title: title, id: WikiLinkMarkdown.sourceID(from: url),
                            fragment: frag, pin: WikiLinkMarkdown.pin(from: url))
         case .chat:
-            return .chat(title: title, id: WikiLinkMarkdown.id(from: url), fragment: frag)
+            return .chat(
+                title: title,
+                id: WikiLinkMarkdown.id(from: url).map { ChatID(rawValue: $0.rawValue) },
+                fragment: frag)
         case nil:     return .inert
         }
     }
@@ -336,7 +339,7 @@ enum WikiLinkRoute: Equatable, Sendable {
     /// links, which resolve by `title` as the transition fallback. `fragment`
     /// carries a `#"quote"` passage (issue #281): the destination `ChatDetailView`
     /// resolves it to a message and highlights the passage.
-    case chat(title: String, id: PageID?, fragment: String?)
+    case chat(title: String, id: ChatID?, fragment: String?)
     /// Unresolved (`wiki://missing`) or un-classifiable — inert.
     case inert
 }

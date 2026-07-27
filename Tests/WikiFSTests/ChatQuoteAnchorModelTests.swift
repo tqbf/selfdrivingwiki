@@ -15,7 +15,7 @@ struct ChatQuoteAnchorModelTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, PageID) {
+    private func makeModel() throws -> (WikiStoreModel, ChatID) {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let chat = try store.createChat(kind: .edit, title: "Debugging the FP bug")
@@ -56,7 +56,7 @@ struct ChatQuoteAnchorModelTests {
     @Test func consumeReturnsNilForMismatchedSelection() throws {
         let (model, chatID) = try makeModel()
         _ = model.selectChat(byID: chatID, anchor: #""the fix""#)
-        let otherID = PageID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
+        let otherID = ChatID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
 
         // A non-chat (or different chat) selection doesn't consume.
         #expect(model.consumePendingScrollAnchor(for: .chat(otherID)) == nil)

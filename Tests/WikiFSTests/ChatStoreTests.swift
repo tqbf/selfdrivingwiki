@@ -120,7 +120,7 @@ import SQLite3
 
     @Test func appendToUnknownChatThrowsNotFound() throws {
         let store = try tempStore()
-        let unknownID = PageID(rawValue: "01UNKNOWNCHAT00000000000A")
+        let unknownID = ChatID(rawValue: "01UNKNOWNCHAT00000000000A")
         #expect(throws: WikiStoreError.self) {
             try store.appendChatMessages(chatID: unknownID, events: [.userText("hi")])
         }
@@ -151,7 +151,7 @@ import SQLite3
 
     @Test func renameUnknownChatThrowsNotFound() throws {
         let store = try tempStore()
-        let unknownID = PageID(rawValue: "01UNKNOWNCHAT00000000000B")
+        let unknownID = ChatID(rawValue: "01UNKNOWNCHAT00000000000B")
         #expect(throws: WikiStoreError.self) {
             try store.renameChat(id: unknownID, to: "New Title")
         }
@@ -172,7 +172,7 @@ import SQLite3
 
     @Test func deleteUnknownChatDoesNotThrow() throws {
         let store = try tempStore()
-        let unknownID = PageID(rawValue: "01UNKNOWNCHAT00000000000C")
+        let unknownID = ChatID(rawValue: "01UNKNOWNCHAT00000000000C")
         #expect(throws: Never.self) {
             try store.deleteChat(id: unknownID)
         }
@@ -416,7 +416,7 @@ import SQLite3
         #expect(hasModelCol == "1")
 
         // The pre-existing row reads back nil for both — no backfill.
-        let existing = try store.getChat(id: PageID(rawValue: "existing-chat"))
+        let existing = try store.getChat(id: ChatID(rawValue: "existing-chat"))
         #expect(existing.modelProviderId == nil)
         #expect(existing.modelId == nil)
     }

@@ -14,7 +14,7 @@ import Foundation
     )
 
     private let chat = ChatSummary(
-        id: PageID(rawValue: "01CHAT"),
+        id: ChatID(rawValue: "01CHAT"),
         kind: .edit,
         title: "Mars Discussion",
         createdAt: Date(timeIntervalSince1970: 2000),
@@ -77,7 +77,7 @@ import Foundation
 
     @Test func chatSubtitleSingularMessage() {
         let single = ChatSummary(
-            id: PageID(rawValue: "01CHAT2"),
+            id: ChatID(rawValue: "01CHAT2"),
             kind: .edit, title: "Test",
             createdAt: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 0),

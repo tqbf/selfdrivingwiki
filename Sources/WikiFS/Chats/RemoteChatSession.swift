@@ -51,10 +51,10 @@ public final class RemoteChatSession {
     /// Derived from `runState` so the `ChatDetailView` source-of-truth rule
     /// (`activeChatID == chatID`) flips a chat live precisely when the daemon
     /// is running it.
-    /// `PageID?`, not `String?` — so `ChatDetailView`'s liveness rule compares
+    /// `ChatID?`, not `String?` — so `ChatDetailView`'s liveness rule compares
     /// two chat ids rather than two strings, and the draft (which has no
-    /// `PageID`) can never satisfy it.
-    public var activeChatID: PageID? { runState.isLive ? chatID.pageID : nil }
+    /// `ChatID`) can never satisfy it.
+    public var activeChatID: ChatID? { runState.isLive ? chatID.chatID : nil }
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
     public var runStartedAt: Date?
@@ -111,7 +111,7 @@ public final class RemoteChatSession {
     /// (`WikiStoreModel.updateChatModelOverride`). Never read/written for a
     /// `.chat(_)` session; no clearing needed, since starting the chat
     /// discards this whole draft `RemoteChatSession` (a fresh one is created
-    /// for the new `PageID`, per `chatID`'s `let`-ness).
+    /// for the new `ChatID`, per `chatID`'s `let`-ness).
     public var pendingModelOverride: (providerId: String, modelId: String?)?
 
     // MARK: - Private: streaming-row bookkeeping
@@ -174,8 +174,8 @@ public final class RemoteChatSession {
     /// `DaemonQueueEventSink`).
     func ingest(_ envelope: QueueEventEnvelope) {
         // Envelopes carry the typed chat-id; compare against the session's
-        // `PageID` (the draft has none and is never a wire target).
-        guard envelope.chatID == chatID.pageID else { return }
+        // `ChatID` (the draft has none and is never a wire target).
+        guard envelope.chatID == chatID.chatID else { return }
         switch envelope.kind {
         case .chatEvent:
             if let event = envelope.chatAgentEvent {

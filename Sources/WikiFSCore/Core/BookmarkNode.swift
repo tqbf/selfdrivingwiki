@@ -27,7 +27,7 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         case folder(label: String)
         case page(PageID)
         case source(SourceID)
-        case chat(PageID)
+        case chat(ChatID)
 
         public var kind: BookmarkNodeKind {
             switch self {
@@ -46,8 +46,9 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         public var targetRawValue: String? {
             switch self {
             case .folder: nil
-            case .page(let id), .chat(let id): id.rawValue
+            case .page(let id): id.rawValue
             case .source(let id): id.rawValue
+            case .chat(let id): id.rawValue
             }
         }
     }
@@ -138,7 +139,7 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
                 targetRawValue: targetRawValue,
                 referenceName: "chat reference"
             )
-            return .chat(PageID(rawValue: targetRawValue))
+            return .chat(ChatID(rawValue: targetRawValue))
         }
     }
 

@@ -105,7 +105,7 @@ import Foundation
     @Test func addChatRefCommits() throws {
         let store = try tempStore()
         let result = try BookmarkCommand.run(
-            .addRef(parentID: nil, content: .chat(PageID(rawValue: "01CHAT"))),
+            .addRef(parentID: nil, content: .chat(ChatID(rawValue: "01CHAT"))),
             in: store
         )
         #expect(result.didCommit == true)

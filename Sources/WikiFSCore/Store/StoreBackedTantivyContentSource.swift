@@ -28,6 +28,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
 
     public func snapshot(ulid: String, kind: TantivyDocumentKind) async throws -> TantivyContentSnapshot? {
         let id = PageID(rawValue: ulid)
+        let chatID = ChatID(rawValue: ulid)
         do {
             switch kind {
             case .page:
@@ -65,8 +66,8 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
                 )
             case .chat:
                 let chats = try store.listChats()
-                guard let chat = chats.first(where: { $0.id == id }) else { return nil }
-                let body = chatBody(chatID: id)
+                guard let chat = chats.first(where: { $0.id == chatID }) else { return nil }
+                let body = chatBody(chatID: chatID)
                 return TantivyContentSnapshot(
                     ulid: ulid,
                     kind: .chat,
@@ -165,7 +166,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
     /// Concatenate the plain text of every chat message (user/assistant/tool
     /// events) into one searchable body. `AgentEvent.plainText` already
     /// produces a human-readable rendering per event kind.
-    private func chatBody(chatID: PageID) -> String {
+    private func chatBody(chatID: ChatID) -> String {
         let messages: [ChatMessage]
         do {
             messages = try store.chatMessages(chatID: chatID)

@@ -337,7 +337,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func stopChat(chatID: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            await daemon.stopChat(chatID: PageID(rawValue: chatID))
+            await daemon.stopChat(chatID: ChatID(rawValue: chatID))
             sendableReply.reply()
         }
     }
@@ -345,7 +345,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            let data = await daemon.chatSessionStateData(chatID: PageID(rawValue: chatID))
+            let data = await daemon.chatSessionStateData(chatID: ChatID(rawValue: chatID))
             sendableReply.reply(data)
         }
     }

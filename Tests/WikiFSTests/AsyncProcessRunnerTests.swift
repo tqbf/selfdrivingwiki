@@ -201,7 +201,7 @@ struct AsyncProcessRunnerTests {
                 """
                 ready="$1"
                 hold="$2"
-                /usr/bin/python3 -c 'import os, sys, time; os.setsid(); fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644); os.write(fd, str(os.getpid()).encode()); os.close(fd); time.sleep(60)' "$ready" &
+                /usr/bin/perl -MPOSIX=setsid -e 'setsid() or die "setsid: $!"; open my $fh, ">", $ARGV[0] or die "open: $!"; print {$fh} $$; close $fh or die "close: $!"; exec "sleep", "60" or die "exec: $!";' "$ready" &
                 trap '' TERM
                 while [ ! -f "$hold" ]; do sleep 0.05; done
                 """,

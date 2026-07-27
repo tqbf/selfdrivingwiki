@@ -50,8 +50,8 @@ public struct WikiRenderContext: Sendable {
     public let sourceIDToName: [SourceID: String]
     /// Lowercased chat titles — drives legacy/forward `[[chat:Name]]` existence.
     public let chatTitles: Set<String>
-    /// `PageID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
-    public let chatIDToName: [PageID: String]
+    /// `ChatID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
+    public let chatIDToName: [ChatID: String]
     /// Loose-match keys (extension + trailing "(…)" stripped) that are UNIQUE
     /// across sources — the lenient tier mirroring `resolveSourceByName` pass 3,
     /// so ghost styling agrees with navigation.
@@ -99,7 +99,7 @@ public struct WikiRenderContext: Sendable {
         sourceNames: Set<String>,
         sourceIDToName: [SourceID: String],
         chatTitles: Set<String>,
-        chatIDToName: [PageID: String],
+        chatIDToName: [ChatID: String],
         uniqueLooseKeys: Set<String>,
         embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo],
         sourceDerivedChain: [SourceID: [PageID]],
@@ -156,9 +156,9 @@ public struct WikiRenderContext: Sendable {
                 index.sources.map { (SourceID(rawValue: $0.id), $0.humanName) })
 
         let chatTitles = Set(index.chats.map { $0.title.lowercased() })
-        let chatIDToName: [PageID: String] = Dictionary(
+        let chatIDToName: [ChatID: String] = Dictionary(
             uniqueKeysWithValues:
-                index.chats.map { (PageID(rawValue: $0.id), $0.title) })
+                index.chats.map { (ChatID(rawValue: $0.id), $0.title) })
 
         let uniqueLooseKeys = index.uniqueSourceLooseKeys
 
@@ -239,9 +239,10 @@ public struct WikiRenderContext: Sendable {
             if WikiLinkParser.isCanonicalULID(name) {
                 let pageID = PageID(rawValue: name)
                 let sourceID = SourceID(rawValue: name)
+                let chatID = ChatID(rawValue: name)
                 switch kind {
                 case .source: return sourceIDToName[sourceID] != nil
-                case .chat:   return chatIDToName[pageID] != nil
+                case .chat:   return chatIDToName[chatID] != nil
                 case .page:   return pageIDToName[pageID] != nil
                 }
             }
@@ -269,7 +270,7 @@ public struct WikiRenderContext: Sendable {
         { id, kind in
             switch kind {
             case .source: return sourceIDToName[SourceID(rawValue: id)]
-            case .chat:   return chatIDToName[PageID(rawValue: id)]
+            case .chat:   return chatIDToName[ChatID(rawValue: id)]
             case .page:   return pageIDToName[PageID(rawValue: id)]
             }
         }

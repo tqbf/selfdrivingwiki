@@ -48,12 +48,12 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Session registry (guarded by `queue`)
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid.chat")
-    private var sessions: [PageID: ChatSession] = [:]
-    private var statePollTasks: [PageID: Task<Void, Never>] = [:]
+    private var sessions: [ChatID: ChatSession] = [:]
+    private var statePollTasks: [ChatID: Task<Void, Never>] = [:]
 
     private struct ChatSession {
         let wikiID: WikiID
-        let chatID: PageID
+        let chatID: ChatID
         let launcher: AgentLauncher
     }
 
@@ -96,7 +96,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     /// Get an existing launcher for a chat, or create a new one.
-    private func getOrCreateLauncher(chatID: PageID, wikiID: WikiID) async -> AgentLauncher {
+    private func getOrCreateLauncher(chatID: ChatID, wikiID: WikiID) async -> AgentLauncher {
         if let existing = queue.sync(execute: { sessions[chatID]?.launcher }) {
             return existing
         }
@@ -118,7 +118,7 @@ final class DaemonChatHost: @unchecked Sendable {
     func startChat(
         wikiID: WikiID, firstMessage: String,
         providerId: String? = nil, modelId: String? = nil
-    ) async throws -> PageID {
+    ) async throws -> ChatID {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -204,7 +204,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Continue a chat with a new user turn. Reads the history + `acpSessionId`
     /// from the store, builds the adaptive preamble, and starts a fresh
     /// interactive session writing to the SAME chat row.
-    func continueChat(wikiID: WikiID, chatID: PageID, message: String) async throws {
+    func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
@@ -305,7 +305,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Send a message to an active chat. If the session died between turns
     /// (RC1), re-route to the continueChat path which re-spawns.
-    func sendChatMessage(chatID: PageID, message: String) async throws {
+    func sendChatMessage(chatID: ChatID, message: String) async throws {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
             throw DaemonChatError.noSession(chatID.rawValue)
@@ -334,7 +334,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Stop the active turn and end the session. The launcher is retained in
     /// the registry (D1: no idle eviction for Phase C).
-    func stopChat(chatID: PageID) async {
+    func stopChat(chatID: ChatID) async {
         let session = queue.sync { sessions[chatID] }
         guard let session else { return }
         DebugLog.agent("DaemonChatHost.stopChat: stopping chat \(chatID.rawValue)")
@@ -348,7 +348,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Return the live state of a chat for client rehydration. If the daemon
     /// still has the launcher, reads from it; otherwise throws (the client
     /// falls back to reading from its local store).
-    func chatSessionState(chatID: PageID) async throws -> ChatSessionState {
+    func chatSessionState(chatID: ChatID) async throws -> ChatSessionState {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
             throw DaemonChatError.noSession(chatID.rawValue)
@@ -381,7 +381,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Resolve a pending permission
 
     /// Forward a permission resolution to the launcher's backend.
-    func resolvePermission(chatID: PageID, optionId: String, approve: Bool) async {
+    func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
         let session = queue.sync { sessions[chatID] }
         guard let session else { return }
         DebugLog.agent("DaemonChatHost.resolvePermission: chat=\(chatID.rawValue) option=\(optionId) approve=\(approve)")
@@ -394,7 +394,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chatID`, without restarting it. Forwards to the launcher's generic
     /// `setConfigOption(configId:value:)`, which calls the ACP backend's
     /// `session/set_config_option`. Throws if no live session is held.
-    func setChatConfigOption(chatID: PageID, option: String, value: String) async throws {
+    func setChatConfigOption(chatID: ChatID, option: String, value: String) async throws {
         let session = queue.sync { sessions[chatID] }
         guard let session else {
             throw DaemonChatError.noSession(chatID.rawValue)
@@ -408,7 +408,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Test accessors
 
     /// Whether the host currently holds a live session for `chatID`.
-    func hasLiveSession(_ chatID: PageID) -> Bool {
+    func hasLiveSession(_ chatID: ChatID) -> Bool {
         queue.sync { sessions[chatID] != nil }
     }
 
@@ -421,7 +421,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Set `onAgentEvent` on the launcher so every streamed event is pushed
     /// to the client. Called after `startInteractiveQuery` (which clears it
     /// via `resetRunArtifacts`).
-    private func wireEventStream(chatID: PageID, launcher: AgentLauncher) async {
+    private func wireEventStream(chatID: ChatID, launcher: AgentLauncher) async {
         await MainActor.run {
             let push = self.pushEvent
             launcher.onAgentEvent = { event in
@@ -439,7 +439,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Start a 150ms poll that pushes `ChatStateUpdate` envelopes when the
     /// launcher's run flags change. Mirrors the existing `pendingPollTask`
     /// pattern in AgentLauncher.
-    private func startStatePoll(for chatID: PageID, launcher: AgentLauncher) {
+    private func startStatePoll(for chatID: ChatID, launcher: AgentLauncher) {
         // Cancel any existing poll for this chat.
         queue.sync { statePollTasks[chatID]?.cancel() }
 
@@ -475,7 +475,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     @MainActor
-    private func pushStateUpdate(chatID: PageID, launcher: AgentLauncher) {
+    private func pushStateUpdate(chatID: ChatID, launcher: AgentLauncher) {
         let usageData = launcher.runTotalUsage.flatMap { usage in
             DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
         }
@@ -505,7 +505,7 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Private: store sink handlers
 
     private func handleAcpSessionId(
-        chatID: PageID, sessionId: AcpSessionID?, wikiID: WikiID
+        chatID: ChatID, sessionId: AcpSessionID?, wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
         do {
@@ -519,7 +519,7 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     private func handleTranscript(
-        chatID: PageID, events: [AgentEvent], wikiID: WikiID
+        chatID: ChatID, events: [AgentEvent], wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
         do {
@@ -542,7 +542,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chats.summary` (issue #411) — the sole writer of that column now that
     /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
-        chatID: PageID, wikiID: WikiID, launcher: AgentLauncher
+        chatID: ChatID, wikiID: WikiID, launcher: AgentLauncher
     ) {
         guard let store = storeResolver(wikiID) else { return }
 
@@ -599,7 +599,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Runs off-main for the ACP session(s); marshals each write to the store.
     @MainActor
     private static func runModelSummarization(
-        chatID: PageID, pending: [ChatMessage], config: AgentProvidersConfig,
+        chatID: ChatID, pending: [ChatMessage], config: AgentProvidersConfig,
         containerDir: URL, credentialStore: any ACPCredentialStore,
         store: GRDBWikiStore, chatSummaryMessageID: PageID?
     ) async {

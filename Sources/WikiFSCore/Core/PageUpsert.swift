@@ -67,7 +67,9 @@ public enum PageUpsert {
         let canonicalBody = (try WikiLinkRewriter.canonicalize(
             in: body, resolvePage: store.resolveTitleToID,
             resolveSource: store.resolveSourceByName,
-            resolveChat: store.resolveChatByTitle)) ?? body
+            resolveChat: { title in
+                try store.resolveChatByTitle(title)
+            })) ?? body
         let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody,
                                      expectedHeadVersionID: expectedHeadVersionID, author: author)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.

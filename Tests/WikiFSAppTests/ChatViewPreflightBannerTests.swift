@@ -55,7 +55,7 @@ import WikiFSCore
     /// the active session. Banner still surfaces (a stale state the user
     /// lands on when a rolled-back tab couldn't be retargeted).
     @Test func bannerShown_whenPreflightErrorSet_onPersistedNonLiveChat() {
-        let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
+        let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         #expect(ChatDetailView.shouldShowPreflightBanner(
             preflightError: "An ingestion is in progress.",
             chatID: id,
@@ -66,7 +66,7 @@ import WikiFSCore
     /// be nil in practice; the predicate guards against rendering a stale
     /// banner alongside a live streaming session.
     @Test func bannerHidden_whenPreflightErrorSet_onLiveChat() {
-        let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
+        let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         #expect(!ChatDetailView.shouldShowPreflightBanner(
             preflightError: "stale error",
             chatID: id,
@@ -95,7 +95,7 @@ import WikiFSCore
     }
 
     @Test func bannerMessage_isNil_whenLiveChat() {
-        let id = PageID(rawValue: "01J" + String(repeating: "A", count: 22))
+        let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         #expect(ChatDetailView.preflightBannerMessage(
             preflightError: "stale error",
             chatID: id,

@@ -1,5 +1,73 @@
 # Progress log
 
+## 2026-07-27 — ChatID namespace separation (#954)
+
+**Scope.** This branch introduces a public `ChatID` namespace for persisted
+chat entities and migrates internal chat APIs away from chat-valued `PageID`.
+The raw ULID text, SQLite schema, JSON/XPC payloads, File Provider outputs,
+wiki links, provenance strings, paths, and CLI behavior must stay unchanged.
+
+**What landed.**
+- Added `Sources/WikiFSTypes/ChatID.swift` as the public persisted-chat
+  namespace. It matches the legacy raw `String` storage and primitive-string
+  Codable shape previously carried by chat-valued `PageID`.
+- Converted persisted chat identity surfaces to `ChatID`, including
+  `ChatSummary.id`, `ChatMessage.chatID`, `WikiSelection.chat`,
+  `BookmarkNode.Content.chat`, `TranscriptID.chat`, `ChatSessionKey.chat`,
+  chat store protocols, GRDB row decoding/binding, daemon request/reply
+  payloads, app coordinator/session routing, File Provider chat lookups, CLI
+  chat selectors, and chat wiki-link canonicalization.
+- Preserved the deferred message namespace exactly as planned:
+  `ChatMessage.id` stays `PageID`, and summary/update APIs that target a chat
+  message still use `messageID: PageID`.
+- Preserved compatibility boundaries exactly: SQLite table layout and stored
+  ULID text did not change; XPC/daemon JSON keys stayed the same; File Provider
+  item identifiers and `chats/` projection paths stayed raw-string-compatible;
+  `[[chat:<ULID>|...]]`, provenance `chat:<ULID>`, CLI syntax/output, and
+  agent-facing raw IDs stayed unchanged.
+- Added enforcement suites:
+  `ChatIDTests`, `ChatXPCRequestCompatibilityTests`,
+  `ChatAPISignatureManifestTests`, and extended
+  `IdentifierBoundaryTypecheckTests` with page/source/chat pairwise rejection
+  fixtures.
+
+**Implementation review.**
+- Review pass 1 found three concrete follow-ups and they were fixed on-branch:
+  `DaemonQueueEventSink` still used an IUO continuation init pattern
+  (`make lint` failure), `WikiLinkRewriter` / GRDB's locked chat-title resolver
+  still carried chat IDs as `PageID`, and the downstream fuzz/canonicalizer
+  fixtures still reused page resolvers for chat links.
+- Review pass 2 re-ran the verification gates after those fixes. No further
+  findings remained.
+
+**Final `PageID` / raw-string audit.**
+- Retained message identity by design:
+  `ChatMessage.id: PageID`, `MessageSummarizer.chatSummaryMessageID(in:)`,
+  `chatSummaryMessageID` plumbing in `AgentOperationRunner` and
+  `DaemonChatHost`, and `messageID: PageID` parameters on chat-summary update
+  paths.
+- Raw compatibility boundaries by design:
+  `WikiDaemonProtocol` string chat arguments, `wikid/main.swift` string XPC
+  entry points, `wikictl/main.swift` daemon chat subcommand args, raw
+  `AgentLauncher.activeChatID` / run-folder helpers / `WIKI_AUTHOR` plumbing,
+  and `PageAuthor.chat(String)`.
+- Legacy characterization fixtures by design:
+  `PageIDLegacyCodableCharacterizationTests` still models pre-refactor chat
+  payloads with `PageID`.
+- No remaining persisted-chat entity API was left typed as `PageID`, and no
+  untagged internal `String` remained except the documented raw boundaries
+  above.
+
+**Verification.**
+- `make prompts` — passed.
+- Focused chat boundary suite:
+  `swift test --filter 'IdentifierBoundaryTypecheckTests|ChatAPISignatureManifestTests|ChatXPCRequestCompatibilityTests'`
+  — 12 tests in 3 suites passed.
+- `swift build --build-tests` — passed on the final tree.
+- `swift test` — 2,524 tests in 196 suites passed on the final tree.
+- `make lint` — 0 violations in 379 files; no new bare `try?`.
+- `git diff --check` — clean.
+
 ## 2026-07-27 — PageID and SourceID type separation
 
 **Scope.** This branch separates page and source entity identifiers in Swift.

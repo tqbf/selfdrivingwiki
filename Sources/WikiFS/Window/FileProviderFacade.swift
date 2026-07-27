@@ -409,7 +409,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// Reveal a chat transcript file in Finder via its `chat-by-name` leaf
     /// identifier. Mirrors `revealPageInFinder`. Best-effort: silently no-ops if
     /// the domain isn't active or the daemon can't resolve the item.
-    func revealChatInFinder(id: PageID, wikiID: WikiID? = nil) async {
+    func revealChatInFinder(id: ChatID, wikiID: WikiID? = nil) async {
         guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -443,7 +443,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// (the same resolution `revealChatInFinder` uses) and hands it to
     /// `NSWorkspace`. Pass `appURL` to launch a specific app instead of the
     /// default handler. Mirrors `openPage`.
-    func openChat(id: PageID, with appURL: URL? = nil, wikiID: WikiID? = nil) async {
+    func openChat(id: ChatID, with appURL: URL? = nil, wikiID: WikiID? = nil) async {
         guard let url = await resolveChatByNameURL(id: id, wikiID: wikiID) else {
             DebugLog.agent("openChat: FAILED resolving URL for id=\(id.rawValue) wikiID=\(wikiID?.rawValue ?? "nil(active=\(activeWikiID?.rawValue ?? "nil"))")")
             status = "Couldn’t resolve chat for open."
@@ -554,7 +554,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// daemon can't resolve the item.
     ///
     /// See `resolveSourceByNameURL` for the `wikiID` parameter's role (issue #672).
-    func resolveChatByNameURL(id: PageID, wikiID: WikiID? = nil) async -> URL? {
+    func resolveChatByNameURL(id: ChatID, wikiID: WikiID? = nil) async -> URL? {
         let resolvedWikiID = wikiID ?? activeWikiID
         guard let wiki = resolvedWikiID else {
             DebugLog.fileprovider("resolveChatByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")

@@ -14,46 +14,46 @@ struct RemoteChatSessionTests {
     // MARK: - chatEvent ingestion
 
     @Test @MainActor func chatEventAppendsNewEvent() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let envelope = QueueEventEnvelope.chatEvent(
-            chatID: PageID(rawValue: "chat-1"), event: .assistantText("hello"))
+            chatID: ChatID(rawValue: "chat-1"), event: .assistantText("hello"))
         session.ingest(envelope)
         #expect(session.events.count == 1)
         #expect(session.events[0] == .assistantText("hello"))
     }
 
     @Test @MainActor func chatEventReplacesDeltaContinuation() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         // First event: partial assistant text
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .assistantText("Hello")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("Hello")))
         #expect(session.events.count == 1)
 
         // Delta continuation: text starts with the previous text → replace
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .assistantText("Hello world")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("Hello world")))
         #expect(session.events.count == 1) // not appended
         #expect(session.events[0] == .assistantText("Hello world"))
     }
 
     @Test @MainActor func chatEventAppendsDifferentEvent() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .userText("question")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .assistantText("answer")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .userText("question")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("answer")))
         #expect(session.events.count == 2)
         #expect(session.events[0] == .userText("question"))
         #expect(session.events[1] == .assistantText("answer"))
     }
 
     @Test @MainActor func chatEventIgnoresWrongChatID() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-2"), event: .assistantText("other")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-2"), event: .assistantText("other")))
         #expect(session.events.isEmpty)
     }
 
     @Test @MainActor func chatEventHandlesToolUseAndResult() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .toolUse(
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .toolUse(
             name: "wikictl", inputSummary: "page list")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .toolResult(
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .toolResult(
             isError: false, summary: "pages...")))
         #expect(session.events.count == 2)
     }
@@ -61,7 +61,7 @@ struct RemoteChatSessionTests {
     // MARK: - chatState ingestion
 
     @Test @MainActor func chatStateUpdatesRunFlags() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let update = ChatStateUpdate(
             isRunning: true,
             isGenerating: true,
@@ -73,7 +73,7 @@ struct RemoteChatSessionTests {
             debugFolderURL: nil,
             runKindRaw: "queryChat",
             runStartedAt: Date(timeIntervalSince1970: 1000))
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: update))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: update))
 
         #expect(session.isRunning == true)
         #expect(session.isGenerating == true)
@@ -83,7 +83,7 @@ struct RemoteChatSessionTests {
     }
 
     @Test @MainActor func chatStateUpdatesPreflightError() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let update = ChatStateUpdate(
             isRunning: false,
             isGenerating: false,
@@ -95,12 +95,12 @@ struct RemoteChatSessionTests {
             debugFolderURL: nil,
             runKindRaw: nil,
             runStartedAt: nil)
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: update))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: update))
         #expect(session.preflightError == "claude not found")
     }
 
     @Test @MainActor func chatStateUpdatesThinkingOption() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let option = ThinkingEffortOption(
             configId: "thought_level",
             currentValue: "high",
@@ -118,7 +118,7 @@ struct RemoteChatSessionTests {
             debugFolderURL: nil,
             runKindRaw: nil,
             runStartedAt: nil)
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: update))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: update))
 
         #expect(session.thinkingOption?.currentValue == "high")
         #expect(session.availableThinkingOptions.count == 2)
@@ -126,7 +126,7 @@ struct RemoteChatSessionTests {
     }
 
     @Test @MainActor func chatStateUpdatesUsage() throws {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let usage = SessionUsage(
             inputTokens: 1000, outputTokens: 500,
             totalTokens: 1500,
@@ -145,7 +145,7 @@ struct RemoteChatSessionTests {
             debugFolderURL: nil,
             runKindRaw: nil,
             runStartedAt: nil)
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: update))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: update))
 
         #expect(session.runTotalUsage?.inputTokens == 1000)
         #expect(session.runTotalUsage?.outputTokens == 500)
@@ -154,9 +154,9 @@ struct RemoteChatSessionTests {
     // MARK: - Hydration from ChatSessionState
 
     @Test @MainActor func hydrateFromStateSetsAllFields() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-1"),
+            chatID: ChatID(rawValue: "chat-1"),
             events: [.userText("hi"), .assistantText("hello")],
             isRunning: true,
             isGenerating: false,
@@ -179,9 +179,9 @@ struct RemoteChatSessionTests {
     // MARK: - Phase C4 follow-up: state envelope fields (stderr, lastActivityAt, currentProcessID)
 
     @Test @MainActor func hydrateFromStateSetsStderrLastActivityAndPID() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-1"),
+            chatID: ChatID(rawValue: "chat-1"),
             events: [],
             isRunning: true,
             isGenerating: false,
@@ -204,9 +204,9 @@ struct RemoteChatSessionTests {
     }
 
     @Test @MainActor func hydrateFromStateNilFieldsDefaultGracefully() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-1"),
+            chatID: ChatID(rawValue: "chat-1"),
             events: [],
             isRunning: false,
             isGenerating: false,
@@ -226,7 +226,7 @@ struct RemoteChatSessionTests {
     }
 
     @Test @MainActor func chatStateUpdateCarriesStderrLastActivityAndPID() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let update = ChatStateUpdate(
             isRunning: true,
             isGenerating: false,
@@ -241,7 +241,7 @@ struct RemoteChatSessionTests {
             stderr: "stderr line",
             lastActivityAt: Date(timeIntervalSince1970: 9000),
             currentProcessID: 999)
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: update))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: update))
 
         #expect(session.stderr == "stderr line")
         #expect(session.lastActivityAt?.timeIntervalSince1970 == 9000)
@@ -251,7 +251,7 @@ struct RemoteChatSessionTests {
     @Test @MainActor func stateEnvelopeFieldsRoundTrip() throws {
         // Verify the new fields survive JSON encode/decode.
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-rt"),
+            chatID: ChatID(rawValue: "chat-rt"),
             events: [],
             isRunning: true,
             isGenerating: false,
@@ -278,10 +278,10 @@ struct RemoteChatSessionTests {
     // MARK: - Reset
 
     @Test @MainActor func resetClearsAllState() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .assistantText("test")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("test")))
         // Set isRunning via a state update
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-1"), update: ChatStateUpdate(
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-1"), update: ChatStateUpdate(
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: "error", thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
@@ -298,9 +298,9 @@ struct RemoteChatSessionTests {
     // MARK: - chatPendingPermission ingestion
 
     @Test @MainActor func chatPendingPermissionSetsPendingList() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-1")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
         let envelope = QueueEventEnvelope.chatPendingPermission(
-            chatID: PageID(rawValue: "chat-1"),
+            chatID: ChatID(rawValue: "chat-1"),
             permission: PendingPermission(
                 toolCallId: ToolCallID(rawValue: "tc-1"),
                 title: "Edit file",
@@ -317,13 +317,13 @@ struct RemoteChatSessionTests {
 
     @Test @MainActor func chatEventEnvelopeRoundTrip() throws {
         let event = AgentEvent.assistantText("test content")
-        let envelope = QueueEventEnvelope.chatEvent(chatID: PageID(rawValue: "chat-1"), event: event)
+        let envelope = QueueEventEnvelope.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: event)
 
         let data = try JSONEncoder().encode(envelope)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
 
         #expect(decoded.kind == .chatEvent)
-        #expect(decoded.chatID == PageID(rawValue: "chat-1"))
+        #expect(decoded.chatID == ChatID(rawValue: "chat-1"))
         #expect(decoded.chatAgentEvent == .assistantText("test content"))
         #expect(decoded.isChatEnvelope)
     }
@@ -339,13 +339,13 @@ struct RemoteChatSessionTests {
             debugFolderURL: nil,
             runKindRaw: "queryChat",
             runStartedAt: Date(timeIntervalSince1970: 1234))
-        let envelope = QueueEventEnvelope.chatState(chatID: PageID(rawValue: "chat-2"), update: update)
+        let envelope = QueueEventEnvelope.chatState(chatID: ChatID(rawValue: "chat-2"), update: update)
 
         let data = try JSONEncoder().encode(envelope)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
 
         #expect(decoded.kind == .chatState)
-        #expect(decoded.chatID == PageID(rawValue: "chat-2"))
+        #expect(decoded.chatID == ChatID(rawValue: "chat-2"))
         #expect(decoded.chatStateUpdate?.isRunning == true)
         #expect(decoded.chatStateUpdate?.isAwaitingGenerationSlot == true)
         #expect(decoded.chatStateUpdate?.preflightError == "test error")
@@ -354,13 +354,13 @@ struct RemoteChatSessionTests {
 
     @Test @MainActor func chatAcpSessionIdEnvelopeRoundTrip() throws {
         let envelope = QueueEventEnvelope.chatAcpSessionId(
-            chatID: PageID(rawValue: "chat-3"), sessionId: AcpSessionID(rawValue: "session-xyz"))
+            chatID: ChatID(rawValue: "chat-3"), sessionId: AcpSessionID(rawValue: "session-xyz"))
 
         let data = try JSONEncoder().encode(envelope)
         let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
 
         #expect(decoded.kind == .chatAcpSessionId)
-        #expect(decoded.chatID == PageID(rawValue: "chat-3"))
+        #expect(decoded.chatID == ChatID(rawValue: "chat-3"))
         #expect(decoded.acpSessionId == AcpSessionID(rawValue: "session-xyz"))
     }
 
@@ -386,23 +386,23 @@ struct RemoteChatSessionTests {
         // Hydrating with isRunning=true marks this mirror as the live session
         // (activeChatID == chatID) so ChatDetailView's source-of-truth rule
         // renders the streaming path.
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-live")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-live")))
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-live"), events: [],
+            chatID: ChatID(rawValue: "chat-live"), events: [],
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         session.hydrate(from: state)
-        #expect(session.activeChatID == PageID(rawValue: "chat-live"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-live"))
         #expect(session.isInteractiveSession == true)
     }
 
     @Test @MainActor func activeChatIDNilWhenHydratedIdle() {
         // An idle persisted chat is NOT live — activeChatID clears so the view
         // renders the persisted rows instead of an empty live stream.
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-idle")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-idle")))
         let state = ChatSessionState(
-            chatID: PageID(rawValue: "chat-idle"), events: [.userText("old")],
+            chatID: ChatID(rawValue: "chat-idle"), events: [.userText("old")],
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
@@ -414,14 +414,14 @@ struct RemoteChatSessionTests {
     @Test @MainActor func chatStateEnvelopeFlipsActiveChatIDWithRunFlag() {
         // A chatState envelope with isGenerating=true flips the mirror live;
         // a later one with both flags false flips it back to persisted.
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-flip")))
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-flip"), update: ChatStateUpdate(
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-flip")))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-flip"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(session.activeChatID == PageID(rawValue: "chat-flip"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-flip"))
 
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-flip"), update: ChatStateUpdate(
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-flip"), update: ChatStateUpdate(
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
@@ -431,7 +431,7 @@ struct RemoteChatSessionTests {
     // MARK: - Phase C4: mid-session thinking + reset
 
     @Test @MainActor func setThinkingEffortOptimisticallyFlipsCurrentValue() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-think")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-think")))
         session.thinkingOption = ThinkingEffortOption(
             configId: "thought_level", currentValue: "low",
             choices: [
@@ -443,20 +443,20 @@ struct RemoteChatSessionTests {
     }
 
     @Test @MainActor func setThinkingEffortNoOpWhenNoOptionAdvertised() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-think")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-think")))
         // thinkingOption is nil by default (agent advertises no thought_level).
         session.setThinkingEffort("high")
         #expect(session.thinkingOption == nil)
     }
 
     @Test @MainActor func startNewChatClearsStateAndActiveChatID() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-reset")))
-        session.ingest(.chatEvent(chatID: PageID(rawValue: "chat-reset"), event: .assistantText("hi")))
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-reset"), update: ChatStateUpdate(
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-reset")))
+        session.ingest(.chatEvent(chatID: ChatID(rawValue: "chat-reset"), event: .assistantText("hi")))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-reset"), update: ChatStateUpdate(
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(session.activeChatID == PageID(rawValue: "chat-reset"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-reset"))
         #expect(session.events.count == 1)
 
         session.startNewChat()
@@ -470,18 +470,18 @@ struct RemoteChatSessionTests {
         // new mirror passed `ChatDetailView.isLiveChat` with an empty `events`
         // array — the view then rendered that empty live stream instead of the
         // chat's persisted rows.
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-fresh")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-fresh")))
         #expect(session.activeChatID == nil)
         #expect(session.isInteractiveSession == false)
     }
 
     @Test @MainActor func markNotLiveRelinquishesLivenessClaim() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-evicted")))
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-evicted"), update: ChatStateUpdate(
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-evicted")))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-evicted"), update: ChatStateUpdate(
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(session.activeChatID == PageID(rawValue: "chat-evicted"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-evicted"))
 
         session.markNotLive()
         #expect(session.activeChatID == nil)
@@ -495,7 +495,7 @@ struct RemoteChatSessionTests {
     // MARK: - ChatRunState FSM integration
 
     @Test @MainActor func runState_reflectsFullLifecycle() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-life")))
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-life")))
 
         func state(_ running: Bool, _ generating: Bool, _ awaiting: Bool) -> ChatStateUpdate {
             ChatStateUpdate(
@@ -506,10 +506,10 @@ struct RemoteChatSessionTests {
         }
 
         // idle → queued → warm → answering → idle
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-life"), update: state(false, false, false)))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-life"), update: state(false, false, false)))
         #expect(session.runState == .idle)
 
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-life"), update: state(false, false, true)))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-life"), update: state(false, false, true)))
         #expect(session.runState == .queued)
         // Shim reads at the queued step. A queued turn means the daemon HAS a
         // session for this chat, so it is live (the mirror's transcript is the
@@ -521,24 +521,24 @@ struct RemoteChatSessionTests {
         #expect(session.isGenerating == false)
         #expect(session.isRunning == true)
         #expect(session.isInteractiveSession == true)
-        #expect(session.activeChatID == PageID(rawValue: "chat-life"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-life"))
 
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-life"), update: state(true, false, false)))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-life"), update: state(true, false, false)))
         #expect(session.runState == .warm)
-        #expect(session.activeChatID == PageID(rawValue: "chat-life"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-life"))
 
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-life"), update: state(true, true, false)))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-life"), update: state(true, true, false)))
         #expect(session.runState == .answering)
-        #expect(session.activeChatID == PageID(rawValue: "chat-life"))
+        #expect(session.activeChatID == ChatID(rawValue: "chat-life"))
 
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-life"), update: state(false, false, false)))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-life"), update: state(false, false, false)))
         #expect(session.runState == .idle)
         #expect(session.activeChatID == nil)
     }
 
     @Test @MainActor func markNotLive_resetsRunStateToIdle() {
-        let session = RemoteChatSession(chatID: .chat(PageID(rawValue: "chat-evict")))
-        session.ingest(.chatState(chatID: PageID(rawValue: "chat-evict"), update: ChatStateUpdate(
+        let session = RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-evict")))
+        session.ingest(.chatState(chatID: ChatID(rawValue: "chat-evict"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))

@@ -286,7 +286,7 @@ struct AddressBarView: View {
     private enum BookmarkTarget {
         case page(PageID)
         case source(SourceID)
-        case chat(PageID)
+        case chat(ChatID)
     }
 
     /// The current selection, when it's something that can be bookmarked (a page,

@@ -114,7 +114,7 @@ struct ReadOnlyStoreTests {
         #expect(listed.isEmpty)
 
         // getChat: throws notFound instead of "no such column".
-        let chatID = PageID(rawValue: "01TEST0000000000000000000A")
+        let chatID = ChatID(rawValue: "01TEST0000000000000000000A")
         #expect(throws: WikiStoreError.self) {
             _ = try reader.getChat(id: chatID)
         }

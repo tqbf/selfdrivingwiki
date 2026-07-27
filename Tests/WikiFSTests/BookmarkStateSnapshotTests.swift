@@ -58,7 +58,7 @@ import Foundation
 
     @Test func chatRefRendersWithTargetID() {
         let nodes = [
-            BookmarkNode(id: "c1", parentID: nil, position: 0, content: .chat(PageID(rawValue: "01CHAT"))),
+            BookmarkNode(id: "c1", parentID: nil, position: 0, content: .chat(ChatID(rawValue: "01CHAT"))),
         ]
         let tree = WikiStateSnapshot.renderBookmarkTree(nodes)
         #expect(tree.contains("chat:01CHAT"))

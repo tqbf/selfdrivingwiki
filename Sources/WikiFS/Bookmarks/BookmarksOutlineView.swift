@@ -454,7 +454,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             case .source:
                 store.addSourceRef(parentID: parentID, sourceID: SourceID(rawValue: payload.id), position: position)
             case .chat:
-                store.addChatRef(parentID: parentID, chatID: PageID(rawValue: payload.id), position: position)
+                store.addChatRef(parentID: parentID, chatID: ChatID(rawValue: payload.id), position: position)
             }
             DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID ?? "root") position=\(position)")
             position += 1

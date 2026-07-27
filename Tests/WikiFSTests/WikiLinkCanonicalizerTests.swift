@@ -154,7 +154,7 @@ struct WikiLinkCanonicalizerTests {
         // Chat resolver gets the same try-resolve-whole treatment via the
         // injected `resolveChat` closure (which defaults to nil elsewhere).
         let name = "Standup | 2026-01-01"
-        let rc: (String) throws -> PageID? = { _ in PageID(rawValue: "01JCHATCHATCHATCHATCHATCHAT") }
+        let rc: (String) throws -> ChatID? = { _ in ChatID(rawValue: "01JCHATCHATCHATCHATCHATCHAT") }
         let rp: (String) throws -> PageID? = { _ in nil }
         let rs: (String) throws -> SourceID? = { _ in nil }
         let out = try WikiLinkRewriter.canonicalize(

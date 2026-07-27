@@ -16,8 +16,8 @@ import WikiFSTypes
 /// decision function behind it.
 struct ChatWebViewTranscriptIDTests {
 
-    private let chatA = TranscriptID.chat(PageID(rawValue: "chat-a"))
-    private let chatB = TranscriptID.chat(PageID(rawValue: "chat-b"))
+    private let chatA = TranscriptID.chat(ChatID(rawValue: "chat-a"))
+    private let chatB = TranscriptID.chat(ChatID(rawValue: "chat-b"))
 
     // MARK: - Transcript identity
 
@@ -55,7 +55,7 @@ struct ChatWebViewTranscriptIDTests {
         let shared = "01JQ0000000000000000000000"
         #expect(ChatWebView.Coordinator.needsFullReload(
             transcriptID: .queueItem(QueueItemID(rawValue: shared)),
-            renderedTranscriptID: .chat(PageID(rawValue: shared)),
+            renderedTranscriptID: .chat(ChatID(rawValue: shared)),
             showsInternals: false, renderedShowsInternals: false,
             eventCount: 5, renderedCount: 5))
     }

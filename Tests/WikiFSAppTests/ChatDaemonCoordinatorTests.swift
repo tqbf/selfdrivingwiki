@@ -16,10 +16,10 @@ struct ChatDaemonCoordinatorTests {
 
     @Test func sessionForChatID_isGetOrCreate_sameInstance() {
         let coord = makeCoordinator()
-        let a = coord.session(for: PageID(rawValue: "chat-1"))
-        let b = coord.session(for: PageID(rawValue: "chat-1"))
+        let a = coord.session(for: ChatID(rawValue: "chat-1"))
+        let b = coord.session(for: ChatID(rawValue: "chat-1"))
         #expect(a === b)
-        #expect(a.chatID == .chat(PageID(rawValue: "chat-1")))
+        #expect(a.chatID == .chat(ChatID(rawValue: "chat-1")))
     }
 
     @Test func sessionForNil_returnsSharedDraftSession() {
@@ -32,9 +32,9 @@ struct ChatDaemonCoordinatorTests {
 
     @Test func discard_removesCachedSession() {
         let coord = makeCoordinator()
-        let first = coord.session(for: PageID(rawValue: "chat-1"))
-        coord.discard(chatID: PageID(rawValue: "chat-1"))
-        let second = coord.session(for: PageID(rawValue: "chat-1"))
+        let first = coord.session(for: ChatID(rawValue: "chat-1"))
+        coord.discard(chatID: ChatID(rawValue: "chat-1"))
+        let second = coord.session(for: ChatID(rawValue: "chat-1"))
         // After discard, a fresh session is created.
         #expect(first !== second)
     }
@@ -50,8 +50,8 @@ struct ChatDaemonCoordinatorTests {
 
     @Test func ingestForTesting_deliversChatEventToOpenSession() {
         let coord = makeCoordinator()
-        let session = coord.session(for: PageID(rawValue: "chat-1"))
-        coord.ingestForTesting(.chatEvent(chatID: PageID(rawValue: "chat-1"), event: .assistantText("hello")))
+        let session = coord.session(for: ChatID(rawValue: "chat-1"))
+        coord.ingestForTesting(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("hello")))
         #expect(session.events == [.assistantText("hello")])
     }
 
@@ -59,33 +59,33 @@ struct ChatDaemonCoordinatorTests {
         // An envelope for a chat with no open session is consumed by the
         // running-set tracker but does NOT materialize a session.
         let coord = makeCoordinator()
-        coord.ingestForTesting(.chatEvent(chatID: PageID(rawValue: "chat-orphan"), event: .assistantText("x")))
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-orphan")) == false)
+        coord.ingestForTesting(.chatEvent(chatID: ChatID(rawValue: "chat-orphan"), event: .assistantText("x")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-orphan")) == false)
     }
 
     // MARK: - Running-set aggregate (sidebar liveness)
 
     @Test func isChatGenerating_trueWhileAnswering() {
         let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-run")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-run")))
         #expect(coord.anyChatGenerating)
     }
 
     @Test func isChatGenerating_falseAfterSessionEnds() {
         let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(!coord.isChatGenerating(PageID(rawValue: "chat-run")))
+        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-run")))
         #expect(!coord.anyChatGenerating)
     }
 
@@ -94,7 +94,7 @@ struct ChatDaemonCoordinatorTests {
         let before = coord.runningStateToken
 
         // Start → token bumps.
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
@@ -102,14 +102,14 @@ struct ChatDaemonCoordinatorTests {
         #expect(afterStart == before + 1)
 
         // Duplicate running envelope (no change) → token does NOT bump.
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
         #expect(coord.runningStateToken == afterStart)
 
         // Stop → token bumps again.
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-run"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
@@ -119,13 +119,13 @@ struct ChatDaemonCoordinatorTests {
     @Test func isChatGenerating_reflectsOpenSessionGeneratingFlag() {
         // An open session that reports generating via hydrate also counts.
         let coord = makeCoordinator()
-        let session = coord.session(for: PageID(rawValue: "chat-open"))
+        let session = coord.session(for: ChatID(rawValue: "chat-open"))
         session.hydrate(from: ChatSessionState(
-            chatID: PageID(rawValue: "chat-open"), events: [],
+            chatID: ChatID(rawValue: "chat-open"), events: [],
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil))
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-open")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-open")))
     }
 
     @Test func isChatGenerating_falseForWarmIdleInteractiveSession() {
@@ -141,41 +141,41 @@ struct ChatDaemonCoordinatorTests {
         // `isGenerating` alone (the flag `AgentLauncher` documents as the one
         // "every UI spinner / Stop affordance keys off").
         let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-warm"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-warm"), update: ChatStateUpdate(
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-warm")), "badge on while answering")
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-warm")), "badge on while answering")
 
         // Turn ends; the process stays warm for the next message.
-        coord.ingestForTesting(.chatState(chatID: PageID(rawValue: "chat-warm"), update: ChatStateUpdate(
+        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-warm"), update: ChatStateUpdate(
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(!coord.isChatGenerating(PageID(rawValue: "chat-warm")), "badge must clear when the turn ends")
+        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-warm")), "badge must clear when the turn ends")
         #expect(!coord.anyChatGenerating)
     }
 
     @Test func isChatGenerating_falseForOpenSessionThatIsMerelyAlive() {
         // Same contract via the hydrate path rather than the envelope path.
         let coord = makeCoordinator()
-        let session = coord.session(for: PageID(rawValue: "chat-warm-hydrate"))
+        let session = coord.session(for: ChatID(rawValue: "chat-warm-hydrate"))
         session.hydrate(from: ChatSessionState(
-            chatID: PageID(rawValue: "chat-warm-hydrate"), events: [],
+            chatID: ChatID(rawValue: "chat-warm-hydrate"), events: [],
             isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil))
-        #expect(!coord.isChatGenerating(PageID(rawValue: "chat-warm-hydrate")))
+        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-warm-hydrate")))
     }
 
     // MARK: - Commands (forwarded to the daemon client stub)
 
     @Test func startChat_forwardsRequestAndReturnsChatID() async throws {
         let stub = StubChatDaemonCommands()
-        stub.nextStartChatID = PageID(rawValue: "01NEW")
+        stub.nextStartChatID = ChatID(rawValue: "01NEW")
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
         let id = try await coord.startChat(wikiID: WikiID(rawValue: "wiki-1"), firstMessage: "hi")
-        #expect(id == PageID(rawValue: "01NEW"))
+        #expect(id == ChatID(rawValue: "01NEW"))
         let req = try #require(stub.startChatCalls.first)
         #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
         #expect(req.firstMessage == "hi")
@@ -184,19 +184,19 @@ struct ChatDaemonCoordinatorTests {
     @Test func continueChat_forwardsTypedRequest() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        try await coord.continueChat(wikiID: WikiID(rawValue: "wiki-1"), chatID: PageID(rawValue: "chat-1"), message: "more")
+        try await coord.continueChat(wikiID: WikiID(rawValue: "wiki-1"), chatID: ChatID(rawValue: "chat-1"), message: "more")
         let req = try #require(stub.continueChatCalls.first)
         #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
-        #expect(req.chatID == PageID(rawValue: "chat-1"))
+        #expect(req.chatID == ChatID(rawValue: "chat-1"))
         #expect(req.message == "more")
     }
 
     @Test func sendMessage_forwardsChatIDAndMessage() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        try await coord.sendMessage(chatID: PageID(rawValue: "chat-1"), message: "follow up")
+        try await coord.sendMessage(chatID: ChatID(rawValue: "chat-1"), message: "follow up")
         #expect(stub.sendCalls.count == 1)
-        #expect(stub.sendCalls.first?.0 == PageID(rawValue: "chat-1"))
+        #expect(stub.sendCalls.first?.0 == ChatID(rawValue: "chat-1"))
         #expect(stub.sendCalls.first?.1 == "follow up")
     }
 
@@ -204,16 +204,16 @@ struct ChatDaemonCoordinatorTests {
         let stub = StubChatDaemonCommands(shouldThrow: true)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
         // Best-effort: a throwing stop is swallowed (logged), not rethrown.
-        await coord.stop(chatID: PageID(rawValue: "chat-1"))
-        #expect(stub.stopCalls == [PageID(rawValue: "chat-1")])
+        await coord.stop(chatID: ChatID(rawValue: "chat-1"))
+        #expect(stub.stopCalls == [ChatID(rawValue: "chat-1")])
     }
 
     @Test func resolvePermission_forwardsApproveAndOptionId() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.resolvePermission(chatID: PageID(rawValue: "chat-1"), optionId: "allow_once", approve: true)
+        await coord.resolvePermission(chatID: ChatID(rawValue: "chat-1"), optionId: "allow_once", approve: true)
         let req = try #require(stub.resolveCalls.first)
-        #expect(req.chatID == PageID(rawValue: "chat-1"))
+        #expect(req.chatID == ChatID(rawValue: "chat-1"))
         #expect(req.optionId == "allow_once")
         #expect(req.approve)
     }
@@ -223,9 +223,9 @@ struct ChatDaemonCoordinatorTests {
     @Test func setThinkingEffort_forwardsConfigOptionRequest() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.setThinkingEffort(chatID: PageID(rawValue: "chat-1"), value: "high")
+        await coord.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
         let req = try #require(stub.configOptionCalls.first)
-        #expect(req.chatID == PageID(rawValue: "chat-1"))
+        #expect(req.chatID == ChatID(rawValue: "chat-1"))
         #expect(req.option == "thought_level")
         #expect(req.value == "high")
     }
@@ -234,7 +234,7 @@ struct ChatDaemonCoordinatorTests {
         // A throwing client must not crash; the optimistic flip stays.
         let stub = StubChatDaemonCommands(shouldThrow: true)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.setThinkingEffort(chatID: PageID(rawValue: "chat-1"), value: "high")
+        await coord.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
         #expect(stub.configOptionCalls.count == 1)
     }
 
@@ -244,7 +244,7 @@ struct ChatDaemonCoordinatorTests {
         // setThinkingEffort routes through the daemon.
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let session = coord.session(for: PageID(rawValue: "chat-wired"))
+        let session = coord.session(for: ChatID(rawValue: "chat-wired"))
         session.thinkingOption = ThinkingEffortOption(
             configId: "thought_level", currentValue: "low",
             choices: [ThinkingEffortOption.Choice(value: "low", label: "Low"),
@@ -257,7 +257,7 @@ struct ChatDaemonCoordinatorTests {
         }
         #expect(session.thinkingOption?.currentValue == "high")
         let req = try #require(stub.configOptionCalls.first)
-        #expect(req.chatID == PageID(rawValue: "chat-wired"))
+        #expect(req.chatID == ChatID(rawValue: "chat-wired"))
         #expect(req.option == "thought_level")
         #expect(req.value == "high")
     }
@@ -274,16 +274,16 @@ struct ChatDaemonCoordinatorTests {
     @Test func rehydrate_hydratesOpenSessionFromStubState() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
-            chatID: PageID(rawValue: "chat-1"), events: [.userText("seed")],
+            chatID: ChatID(rawValue: "chat-1"), events: [.userText("seed")],
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-1"))
-        let session = coord.session(for: PageID(rawValue: "chat-1"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        let session = coord.session(for: ChatID(rawValue: "chat-1"))
         #expect(session.events == [.userText("seed")])
         #expect(session.isRunning)
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-1")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
     @Test func rehydrate_swallowsClientFailure() async {
@@ -291,9 +291,9 @@ struct ChatDaemonCoordinatorTests {
         // not crash; the session keeps its prior state.
         let stub = StubChatDaemonCommands(shouldThrow: true)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-1"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-1"))
         // No assertion crash; session simply remains default-empty.
-        #expect(coord.session(for: PageID(rawValue: "chat-1")).events.isEmpty)
+        #expect(coord.session(for: ChatID(rawValue: "chat-1")).events.isEmpty)
     }
 
     @Test func rehydrateFailure_clearsLivenessSoPersistedRowsRender() async {
@@ -304,11 +304,11 @@ struct ChatDaemonCoordinatorTests {
         // persisted transcript showed "Ask a question to start a chat.".
         let stub = StubChatDaemonCommands(shouldThrow: true)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-evicted"))
-        let session = coord.session(for: PageID(rawValue: "chat-evicted"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
+        let session = coord.session(for: ChatID(rawValue: "chat-evicted"))
         #expect(session.activeChatID == nil)
         #expect(session.isInteractiveSession == false)
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-evicted")) == false)
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-evicted")) == false)
     }
 
     @Test func freshSessionDoesNotClaimLivenessBeforeHydration() async {
@@ -316,7 +316,7 @@ struct ChatDaemonCoordinatorTests {
         // source-of-truth rule: `activeChatID` is daemon-derived, so it stays
         // nil until `hydrate`/`applyStateUpdate` sets it.
         let coord = makeCoordinator()
-        #expect(coord.session(for: PageID(rawValue: "chat-new")).activeChatID == nil)
+        #expect(coord.session(for: ChatID(rawValue: "chat-new")).activeChatID == nil)
         #expect(coord.session(for: nil).activeChatID == nil)
     }
 
@@ -325,14 +325,14 @@ struct ChatDaemonCoordinatorTests {
         // must render persisted rows, not the launcher's in-memory events.
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
-            chatID: PageID(rawValue: "chat-idle"), events: [],
+            chatID: ChatID(rawValue: "chat-idle"), events: [],
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-idle"))
-        #expect(coord.session(for: PageID(rawValue: "chat-idle")).activeChatID == nil)
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-idle")) == false)
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-idle"))
+        #expect(coord.session(for: ChatID(rawValue: "chat-idle")).activeChatID == nil)
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-idle")) == false)
     }
 
     // MARK: - runningStateToken (rehydrate path)
@@ -340,27 +340,27 @@ struct ChatDaemonCoordinatorTests {
     @Test func rehydrateGenerating_bumpsRunningStateToken() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
-            chatID: PageID(rawValue: "chat-run"), events: [],
+            chatID: ChatID(rawValue: "chat-run"), events: [],
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
         let before = coord.runningStateToken
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-run"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-run"))
         #expect(coord.runningStateToken == before + 1)
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-run")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-run")))
     }
 
     @Test func rehydrateIdle_doesNotBumpTokenWhenAlreadyIdle() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
-            chatID: PageID(rawValue: "chat-idle"), events: [],
+            chatID: ChatID(rawValue: "chat-idle"), events: [],
             isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
         let before = coord.runningStateToken
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-idle"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-idle"))
         // Was idle, stays idle → no change → no bump.
         #expect(coord.runningStateToken == before)
     }
@@ -371,22 +371,22 @@ struct ChatDaemonCoordinatorTests {
         // claim must bump the token so the sidebar drops "responding…".
         let stub = StubChatDaemonCommands()
         stub.sessionState = ChatSessionState(
-            chatID: PageID(rawValue: "chat-evicted"), events: [],
+            chatID: ChatID(rawValue: "chat-evicted"), events: [],
             isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
             preflightError: nil, thinkingOption: nil, usageData: nil,
             logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-evicted"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
         let afterRunning = coord.runningStateToken
-        #expect(coord.isChatGenerating(PageID(rawValue: "chat-evicted")))
+        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-evicted")))
 
         // Now the daemon evicts the session — rehydrate throws.
         stub.shouldThrow = true
-        await coord.rehydrate(chatID: PageID(rawValue: "chat-evicted"))
+        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
         #expect(coord.runningStateToken == afterRunning + 1)
         // Both liveness sources clear: generatingChatIDs via setChatGenerating, and
         // the session's isGenerating via markNotLive (which now clears the flags).
-        #expect(!coord.isChatGenerating(PageID(rawValue: "chat-evicted")))
+        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-evicted")))
     }
 
     // MARK: - Helpers
@@ -404,13 +404,13 @@ struct ChatDaemonCoordinatorTests {
 final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var startChatCalls: [ChatStartRequest] = []
     var continueChatCalls: [ChatContinueRequest] = []
-    var sendCalls: [(PageID, String)] = []
-    var stopCalls: [PageID] = []
+    var sendCalls: [(ChatID, String)] = []
+    var stopCalls: [ChatID] = []
     var resolveCalls: [ChatPermissionResolveRequest] = []
-    var sessionStateRequests: [PageID] = []
+    var sessionStateRequests: [ChatID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
 
-    var nextStartChatID: PageID = PageID(rawValue: "stub-chat-id")
+    var nextStartChatID: ChatID = ChatID(rawValue: "stub-chat-id")
     var sessionState: ChatSessionState?
     var shouldThrow: Bool
 
@@ -418,7 +418,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         self.shouldThrow = shouldThrow
     }
 
-    func startChat(_ request: ChatStartRequest) async throws -> PageID {
+    func startChat(_ request: ChatStartRequest) async throws -> ChatID {
         startChatCalls.append(request)
         if shouldThrow { throw StubError.throwing }
         return nextStartChatID
@@ -429,17 +429,17 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         if shouldThrow { throw StubError.throwing }
     }
 
-    func sendChatMessage(chatID: PageID, message: String) async throws {
+    func sendChatMessage(chatID: ChatID, message: String) async throws {
         sendCalls.append((chatID, message))
         if shouldThrow { throw StubError.throwing }
     }
 
-    func stopChat(_ chatID: PageID) async throws {
+    func stopChat(_ chatID: ChatID) async throws {
         stopCalls.append(chatID)
         if shouldThrow { throw StubError.throwing }
     }
 
-    func chatSessionState(_ chatID: PageID) async throws -> ChatSessionState {
+    func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState {
         sessionStateRequests.append(chatID)
         if shouldThrow { throw StubError.throwing }
         return sessionState ?? ChatSessionState(
