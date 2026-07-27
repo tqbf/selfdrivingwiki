@@ -55,12 +55,6 @@ struct ContentView: View {
 
     var body: some View {
         baseContent
-        // #878: daemon status banner (red disconnected) at the very top of
-        // the content area. The positive "reconnected" signal surfaces as a
-        // menu-bar hint popover, not here.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            DaemonStatusBanner()
-        }
         .sheet(item: $pendingAddURL) { pending in
             AddFromURLSheet(store: store, initialURL: pending.url)
         }
