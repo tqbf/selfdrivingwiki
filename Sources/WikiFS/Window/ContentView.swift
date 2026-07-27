@@ -51,6 +51,7 @@ struct ContentView: View {
     /// toolbar's "Find on Page…" menu item (`AddressBarView`) and the active
     /// detail view's Cmd+F drive the same `FindBarView` overlay (issue #157).
     @State private var findModel = FindModel()
+    @State private var rightInspector = WindowRightInspectorController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -88,6 +89,12 @@ struct ContentView: View {
         // (§3.5). The view, not the binding, is the right place for this.
         .onChange(of: store.selection) { _, newValue in
             store.handleSelectionChange(to: newValue)
+            switch newValue {
+            case .page, .source, .chat:
+                break
+            case .none, .newChat, .changeLog, .bookmark:
+                rightInspector.updateAvailability(false)
+            }
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list
@@ -136,6 +143,7 @@ struct ContentView: View {
         // (`AddressBarView`, in a `ToolbarItem`) and the detail views' Cmd+F both
         // reach the same `FindModel` instance (#157).
         .environment(findModel)
+        .environment(rightInspector)
     }
 
     /// NavigationSplitView + drop / overlay / toolbar. Split out of `body` so the
@@ -279,6 +287,16 @@ struct ContentView: View {
                                detailWidth: detailWidth,
                                sidebarVisible: columnVisibility != .detailOnly,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
+            }
+            ToolbarItem(placement: .automatic) {
+                if rightInspector.isAvailable {
+                    Button {
+                        rightInspector.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                    }
+                    .help(rightInspector.isPresented ? "Hide Inspector" : "Show Inspector")
+                }
             }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`

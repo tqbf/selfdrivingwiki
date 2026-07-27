@@ -24,7 +24,6 @@ struct PageDetailView: View {
     @State private var lastKnownActiveTabID: UUID? = nil
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
     @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
     @AppStorage("pageOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
@@ -39,6 +38,7 @@ struct PageDetailView: View {
     // via environment) so the address bar's "Find on Page…" menu item can drive
     // the same find bar that Cmd+F toggles here (issue #157).
     @Environment(FindModel.self) private var findModel
+    @Environment(WindowRightInspectorController.self) private var rightInspector
     @State private var findVersion = 0
 
     /// The app-wide queue activity tracker — used to reflect an in-flight lint
@@ -107,6 +107,7 @@ struct PageDetailView: View {
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
             lastKnownActiveTabID = store.activeTabID
+            rightInspector.updateAvailability(true)
             // Seed edit mode from the active tab on first mount. `.onChange(of:
             // store.activeTabID)` below only fires on *subsequent* tab switches,
             // so without this a freshly-created "start in editor" tab would
@@ -127,6 +128,7 @@ struct PageDetailView: View {
             if store.activeTabID == lastKnownActiveTabID {
                 isEditing = false
             }
+            rightInspector.updateAvailability(true)
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
@@ -212,13 +214,6 @@ struct PageDetailView: View {
                 // expands/collapses — keeps "Show in List" and friends
                 // in a fixed position).
                 Spacer()
-                Button {
-                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped (editing)")
-                    isOutlineExpanded.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("Toggle Inspector")
             } else {
                 Button("Edit",
                        systemImage: "pencil") {
@@ -268,13 +263,6 @@ struct PageDetailView: View {
                 // toggle at the trailing edge (see the matching comment
                 // in the editing branch above).
                 Spacer()
-                Button {
-                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped")
-                    isOutlineExpanded.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("Toggle Inspector")
             }
             }
             .frame(maxWidth: .infinity)
@@ -345,7 +333,7 @@ struct PageDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            if isOutlineExpanded {
+            if rightInspector.isPresented {
                 DetailInspectorView(
                     inspectorTab: $inspectorTab,
                     outlineWidth: $outlineWidth,
@@ -714,4 +702,3 @@ struct PageOutlineView: View {
         return result
     }
 }
-

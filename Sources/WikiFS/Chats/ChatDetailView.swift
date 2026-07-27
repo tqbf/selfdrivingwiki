@@ -33,6 +33,7 @@ struct ChatDetailView: View {
     /// The per-active-wiki session (store + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
+    @Environment(WindowRightInspectorController.self) private var rightInspector
 
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
@@ -41,11 +42,8 @@ struct ChatDetailView: View {
     /// context for the next message (issue #385).
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
-    /// Outline starts collapsed on every new chat view instance — not a
-    /// persisted global toggle (was @AppStorage). Each time you switch to a
-    /// chat tab the outline is closed by default; the user can expand it
-    /// within that view's lifetime.
-    @State private var chatOutlineExpanded = false
+    @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
@@ -169,6 +167,8 @@ struct ChatDetailView: View {
         isLiveChat && remoteSession.runState.isAnswering
     }
 
+    private var chatInspectorAvailable: Bool { !chatOutlineEntries.isEmpty }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
@@ -244,6 +244,12 @@ struct ChatDetailView: View {
                     store.draftChatMessage = question
                 }
             }
+        }
+        .onAppear {
+            rightInspector.updateAvailability(chatInspectorAvailable)
+        }
+        .onChange(of: chatInspectorAvailable) { _, available in
+            rightInspector.updateAvailability(available)
         }
         // D2: when the live session ends (activeChatID clears), re-read from the
         // store so the view flips source WITHOUT a visible change (the final
@@ -407,26 +413,6 @@ struct ChatDetailView: View {
         }
     }
 
-    // MARK: - Content + outline
-
-    /// Wraps `content` with the optional right-side chat outline. Placed BELOW
-    /// the header so the title pane spans full width and the outline sits beside
-    /// the transcript (matching the page detail's content+outline layout).
-    @ViewBuilder
-    private func withChatOutline<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        HStack(spacing: 0) {
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if chatOutlineExpanded {
-                ChatOutlineView(entries: chatOutlineEntries) { turnIndex in
-                    outlineScroll = ChatScrollRequest(
-                        version: (outlineScroll?.version ?? 0) + 1,
-                        turnIndex: turnIndex)
-                }
-            }
-        }
-    }
-
     // MARK: - Unified chat surface (live + persisted)
 
     /// One transcript + one composer for both the live (streaming) and persisted
@@ -441,7 +427,7 @@ struct ChatDetailView: View {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
             }
-            withChatOutline {
+            HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     // Pre-spawn failure banner (#613): surfaces a previously
                     // captured `remoteSession.preflightError` so a rolled-back chat
@@ -502,6 +488,24 @@ struct ChatDetailView: View {
                         .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.top, ChatMetrics.sectionSpacing)
                         .padding(.bottom, ChatMetrics.contentInset)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if rightInspector.isPresented, chatInspectorAvailable {
+                    DetailInspectorView(
+                        inspectorTab: $inspectorTab,
+                        outlineWidth: $outlineWidth,
+                        showsOutlineTab: true,
+                        showsHistoryTab: false,
+                        origin: nil,
+                        history: []
+                    ) {
+                        ChatInspectorOutlineView(entries: chatOutlineEntries) { turnIndex in
+                            outlineScroll = ChatScrollRequest(
+                                version: (outlineScroll?.version ?? 0) + 1,
+                                turnIndex: turnIndex)
+                        }
+                    }
                 }
             }
         }
@@ -830,18 +834,7 @@ struct ChatDetailView: View {
                 .help("Reveal this chat file in Finder")
             }
             revealDebugFolderButton
-            // Pin action buttons at the leading edge and the outline
-            // toggle at the trailing edge (Spacer reaches the view's right
-            // edge because this row is outside the readableContentWidth
-            // frame — Bug 1 fix).
             Spacer(minLength: 0)
-            Button {
-                DebugLog.tabs("ChatDetailView: Toggle Outline tapped")
-                chatOutlineExpanded.toggle()
-            } label: {
-                Image(systemName: "sidebar.right")
-            }
-            .help("Toggle Outline")
         }
     }
 
