@@ -90,7 +90,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
 
     func resolveExtraction(
         wikiID: WikiID,
-        sourceID: PageID,
+        sourceID: SourceID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
@@ -182,7 +182,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
 
     func persistExtraction(
         wikiID: WikiID,
-        sourceID: PageID,
+        sourceID: SourceID,
         markdown: String,
         backend: ExtractionBackend,
         modelVersion: String?,

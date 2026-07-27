@@ -25,7 +25,7 @@ public enum BookmarkCommand {
     public enum Action: Equatable {
         case list(json: Bool)
         case createFolder(parentID: String?, name: String)
-        case addRef(parentID: String?, kind: BookmarkNodeKind, targetID: PageID)
+        case addRef(parentID: String?, content: BookmarkNode.Content)
         case rename(id: String, to: String)
         case delete(id: String)
         case move(id: String, toParentID: String?, position: Int)
@@ -48,8 +48,8 @@ public enum BookmarkCommand {
             return try list(in: store, json: json)
         case .createFolder(let parentID, let name):
             return try createFolder(parentID: parentID, name: name, in: store)
-        case .addRef(let parentID, let kind, let targetID):
-            return try addRef(parentID: parentID, kind: kind, targetID: targetID, in: store)
+        case .addRef(let parentID, let content):
+            return try addRef(parentID: parentID, content: content, in: store)
         case .rename(let id, let newName):
             return try rename(id: id, to: newName, in: store)
         case .delete(let id):
@@ -68,7 +68,7 @@ public enum BookmarkCommand {
             let lines = nodes.map { node in
                 let parent = node.parentID ?? ""
                 let label = node.label ?? ""
-                let target = node.targetID?.rawValue ?? ""
+                let target = node.targetRawValue ?? ""
                 return "{\"id\":\"\(escape(node.id))\",\"parentID\":\"\(escape(parent))\",\"position\":\(node.position),\"kind\":\"\(node.kind.rawValue)\",\"label\":\"\(escape(label))\",\"targetID\":\"\(escape(target))\"}"
             }
             return Result(
@@ -78,7 +78,7 @@ public enum BookmarkCommand {
         }
         // TSV: id <tab> parentID <tab> position <tab> kind <tab> label <tab> targetID
         let lines = nodes.map { node in
-            "\(node.id)\t\(node.parentID ?? "")\t\(node.position)\t\(node.kind.rawValue)\t\(node.label ?? "")\t\(node.targetID?.rawValue ?? "")"
+            "\(node.id)\t\(node.parentID ?? "")\t\(node.position)\t\(node.kind.rawValue)\t\(node.label ?? "")\t\(node.targetRawValue ?? "")"
         }
         return Result(
             output: lines.joined(separator: "\n"),
@@ -98,7 +98,7 @@ public enum BookmarkCommand {
 
     private static func createFolder(parentID: String?, name: String, in store: WikiStore) throws -> Result {
         let node = try store.createBookmarkNode(
-            parentID: parentID, position: -1, kind: .folder, label: name, targetID: nil
+            parentID: parentID, position: -1, content: .folder(label: name)
         )
         return Result(output: "Created folder \"\(name)\" (id: \(node.id)).", didCommit: true)
     }
@@ -106,20 +106,21 @@ public enum BookmarkCommand {
     // MARK: - add-ref
 
     private static func addRef(
-        parentID: String?, kind: BookmarkNodeKind, targetID: PageID, in store: WikiStore
+        parentID: String?, content: BookmarkNode.Content, in store: WikiStore
     ) throws -> Result {
-        let node = try store.createBookmarkNode(
-            parentID: parentID, position: -1, kind: kind, label: nil, targetID: targetID
-        )
+        guard content.kind != .folder else {
+            throw Failure.message("folder is not a reference")
+        }
+        let node = try store.createBookmarkNode(parentID: parentID, position: -1, content: content)
         let kindLabel: String
-        switch kind {
+        switch content.kind {
         case .pageRef: kindLabel = "page"
         case .sourceRef: kindLabel = "source"
         case .chatRef: kindLabel = "chat"
         case .folder: kindLabel = "folder"
         }
         return Result(
-            output: "Added \(kindLabel) ref (\(targetID.rawValue)) to bookmarks (id: \(node.id)).",
+            output: "Added \(kindLabel) ref (\(content.targetRawValue ?? "")) to bookmarks (id: \(node.id)).",
             didCommit: true
         )
     }
@@ -127,7 +128,7 @@ public enum BookmarkCommand {
     // MARK: - rename
 
     private static func rename(id: String, to newName: String, in store: WikiStore) throws -> Result {
-        try store.updateBookmarkNode(id: id, label: newName)
+        try store.renameBookmarkFolder(id: id, to: newName)
         return Result(output: "Renamed bookmark node \(id) to \"\(newName)\".", didCommit: true)
     }
 

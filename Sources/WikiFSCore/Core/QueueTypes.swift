@@ -74,7 +74,7 @@ public enum QueueRunState: String, Codable, Sendable {
 public struct QueueItemPayload: Codable, Sendable {
     /// The source IDs this item operates on. For extraction, the sources to
     /// extract; for ingestion, the extracted-markdown sources to ingest.
-    public var sourceIDs: [PageID]
+    public var sourceIDs: [SourceID]
 
     /// Ingest-stage → provider ID routing (Phase 5 refinement). `nil` means
     /// the engine uses its default provider selection.
@@ -95,7 +95,7 @@ public struct QueueItemPayload: Codable, Sendable {
     public var acpSessionId: AcpSessionID?
 
     public init(
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         stageRouting: [String: String]? = nil,
         chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,

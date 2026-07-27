@@ -8,6 +8,7 @@ import WikiFSCore
 /// source bytes are never modified.
 struct SourceDetailView: View {
     @Environment(QueueActivityTracker.self) private var tracker
+    @Environment(WindowRightInspectorController.self) private var rightInspector
     let file: SourceSummary
     let hasBeenIngested: Bool
     let isIngesting: Bool
@@ -31,7 +32,7 @@ struct SourceDetailView: View {
     /// last-activate-wins, so passing the session's explicit `wikiID` here is
     /// required to reach the correct FP extension (issue #672).
     let wikiID: WikiID
-    let runIngest: (PageID) -> Void
+    let runIngest: (SourceID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
     /// against each other) and to mirror this file's id into `extractingSourceIDs`
@@ -47,7 +48,6 @@ struct SourceDetailView: View {
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("isSourceOutlineExpanded") private var isOutlineExpanded = false
     @AppStorage("sourceInspectorTab") private var inspectorTab: InspectorTab = .outline
     @AppStorage("sourceOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
@@ -182,6 +182,14 @@ struct SourceDetailView: View {
     }
 
     private var hasMarkdown: Bool { headVersion != nil }
+
+    private var showsSourceOutlineTab: Bool {
+        isOutlineApplicable && currentMarkdownContent != nil
+    }
+
+    private var sourceInspectorAvailable: Bool {
+        showsSourceOutlineTab || !editHistory.isEmpty || origin != nil
+    }
 
     /// `true` for byteless Apple Podcasts embed sources (issue #799 PR4).
     /// Detects via the loaded `origin`'s provider — the byteless-source
@@ -540,6 +548,8 @@ struct SourceDetailView: View {
             isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
+            normalizeSourceInspectorTab()
+            updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
             // Navigating between ingested files REUSES this view instance (same
@@ -570,6 +580,8 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
+            normalizeSourceInspectorTab()
+            updateRightSidebarRegistration()
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
@@ -591,7 +603,18 @@ struct SourceDetailView: View {
                 pinnedExtraction = nil
             }
         }
-        .onChange(of: store.selection) { flushEditIfDirty(); isEditing = false }
+        .onChange(of: store.selection) {
+            flushEditIfDirty()
+            isEditing = false
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: sourceInspectorAvailable) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: showsSourceOutlineTab) { _, showsOutline in
+            if !showsOutline, inspectorTab == .outline { inspectorTab = .history }
+            updateRightSidebarRegistration()
+        }
         // #842 PR2 C6: refresh the transcript head when the store's source list
         // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
         // a `ResourceChangeEvent(.source, .updated)` → the model's bus
@@ -606,6 +629,7 @@ struct SourceDetailView: View {
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
             }
+            updateRightSidebarRegistration()
         }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
@@ -613,6 +637,7 @@ struct SourceDetailView: View {
         .onChange(of: currentMarkdownContent) { _, newContent in
             findModel.content = newContent
             findModel.search()
+            updateRightSidebarRegistration()
         }
         .onChange(of: findModel.isShowing) { _, showing in
             if showing {
@@ -646,6 +671,7 @@ struct SourceDetailView: View {
             editBuffer = content
             isEditing = true
             shouldRestoreEditing = false
+            updateRightSidebarRegistration()
         }
         .onChange(of: isEditing) { _, newValue in
             if let id = store.activeTabID {
@@ -653,6 +679,7 @@ struct SourceDetailView: View {
             }
             if newValue { isHeaderExpanded = true } // reveal Save/Cancel
             if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
+            updateRightSidebarRegistration()
         }
     }
 
@@ -791,21 +818,7 @@ struct SourceDetailView: View {
                     }
                     .keyboardShortcut(.escape, modifiers: [])
 
-                    if isOutlineApplicable {
-                        // Pin save/cancel at the leading edge and the
-                        // outline toggle at the trailing edge so the row's
-                        // layout is independent of the parent's proposed
-                        // width (which changes when the outline pane or
-                        // the header expands/collapses).
-                        Spacer()
-                        Button {
-                            DebugLog.tabs("SourceDetailView: Toggle Outline tapped (editing)")
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
-                        }
-                        .help("Toggle Outline")
-                    }
+                    Spacer()
                 }
             } else {
                 // Row 1 — primary source actions: the extraction chip leads
@@ -972,19 +985,7 @@ struct SourceDetailView: View {
                         }
                         .help("Reveal this source file in Finder")
                     }
-                    if isOutlineApplicable {
-                        // Pin action buttons at the leading edge and the
-                        // outline toggle at the trailing edge (see the
-                        // matching comment in the editing branch above).
-                        Spacer()
-                        Button {
-                            DebugLog.tabs("SourceDetailView: Toggle Outline tapped")
-                            isOutlineExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
-                        }
-                        .help("Toggle Outline")
-                    }
+                    Spacer()
                 }
             }
         }
@@ -1126,24 +1127,42 @@ struct SourceDetailView: View {
     /// above, but no longer receive their click. Issue #656.
     @ViewBuilder
     private var contentAndOutline: some View {
-        HStack(spacing: 0) {
-            contentArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // `isOutlineApplicable` excludes pure Mermaid sources (`.mmd` /
-            // `text/mermaid`) — the outline parses markdown headings, which a
-            // diagram source has none of. Without this guard the pane leaks
-            // open from a previous markdown source via the global
-            // `@AppStorage("isSourceOutlineExpanded")` flag (issue #642).
-            if isOutlineExpanded, isOutlineApplicable, let markdown = currentMarkdownContent {
-                DetailInspectorView(
-                    inspectorTab: $inspectorTab,
-                    outlineWidth: $outlineWidth,
-                    origin: origin?.provenanceEntry,
-                    history: editHistory.map(\.provenanceEntry),
-                    store: store) {
-                    outlineView(markdown: markdown)
+        contentArea
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func normalizeSourceInspectorTab() {
+        if !showsSourceOutlineTab, inspectorTab == .outline {
+            inspectorTab = .history
+        }
+    }
+
+    private func updateRightSidebarRegistration() {
+        guard sourceInspectorAvailable else {
+            rightInspector.updateRegistration(nil)
+            return
+        }
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                showsOutlineTab: showsSourceOutlineTab,
+                showsHistoryTab: true,
+                origin: origin?.provenanceEntry,
+                history: editHistory.map(\.provenanceEntry),
+                store: store,
+                onCompareVersions: nil,
+                outline: {
+                    AnyView(sourceSidebarOutlineView())
                 }
-            }
+            )
+        )
+    }
+
+    @ViewBuilder
+    private func sourceSidebarOutlineView() -> some View {
+        if let markdown = currentMarkdownContent, showsSourceOutlineTab {
+            outlineView(markdown: markdown)
         }
     }
 
@@ -2009,7 +2028,7 @@ struct SourceDetailView: View {
 /// Keys the PDF-only anchor consume task so it re-fires on repeat quote clicks
 /// to the same un-extracted PDF (same file, bumped anchor version).
 private struct PDFTaskKey: Hashable {
-    let sourceID: PageID
+    let sourceID: SourceID
     let anchorVersion: Int
 }
 

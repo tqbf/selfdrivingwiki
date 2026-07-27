@@ -60,7 +60,11 @@ struct ChatQuoteAnchorModelTests {
 
         // A non-chat (or different chat) selection doesn't consume.
         #expect(model.consumePendingScrollAnchor(for: .chat(otherID)) == nil)
-        #expect(model.consumePendingScrollAnchor(for: .source(otherID)) == nil)
+        #expect(
+            model.consumePendingScrollAnchor(
+                for: .source(SourceID(rawValue: otherID.rawValue))
+            ) == nil
+        )
         // The chat's anchor survives.
         #expect(model.pendingScrollAnchor?.selection == .chat(chatID))
     }

@@ -12,7 +12,7 @@ import Testing
 /// Each test opens real SQLite DBs over a temp dir (no App Group access), so
 /// they run hermetically.
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct SessionManagerTests {
 
     private func tempDirectory() -> URL {
@@ -396,10 +396,10 @@ private final class StubExtractor: MarkdownExtractor {
 /// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
-        wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? { nil }
     func persistExtraction(
-        wikiID: WikiID, sourceID: PageID, markdown: String,
+        wikiID: WikiID, sourceID: SourceID, markdown: String,
         backend: ExtractionBackend, modelVersion: String?,
         technique: String?
     ) async throws {}

@@ -135,7 +135,7 @@ struct ProcessedMarkdownTests {
         #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         // Pre-existing file is intact.
         let content = try store.sourceContent(
-            id: PageID(rawValue: "01J00000000000000000000000"))
+            id: SourceID(rawValue: "01J00000000000000000000000"))
         #expect(content == Data("hello".utf8))
     }
 

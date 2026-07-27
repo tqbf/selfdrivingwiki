@@ -12,15 +12,15 @@ public enum RankFusion {
     /// Dedupes by `id`; ties break by best single-list rank, then by first-seen
     /// order. Returns one representative object per id (identical across lists for
     /// a given id). Truncate the result with `.prefix(limit)` at the call site.
-    public static func rrf<T>(
+    public static func rrf<T, ID: Hashable>(
         _ lists: [[T]],
-        id keyPath: KeyPath<T, PageID>,
+        id keyPath: KeyPath<T, ID>,
         k: Int = 60
     ) -> [T] {
-        var score: [PageID: Double] = [:]
-        var bestRank: [PageID: Int] = [:]
-        var repr: [PageID: T] = [:]
-        var firstSeen: [PageID: Int] = [:]
+        var score: [ID: Double] = [:]
+        var bestRank: [ID: Int] = [:]
+        var repr: [ID: T] = [:]
+        var firstSeen: [ID: Int] = [:]
         var order = 0
         for list in lists {
             for (index, item) in list.enumerated() {

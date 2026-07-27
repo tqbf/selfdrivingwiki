@@ -535,7 +535,7 @@ public enum AgentOperationRunner {
         wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
-        ingestingSourceIDs: Set<PageID> = [],
+        ingestingSourceIDs: Set<SourceID> = [],
         workspaceID: String? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
@@ -672,8 +672,11 @@ public enum AgentOperationRunner {
         containerDir: URL, credentialStore: any ACPCredentialStore,
         store: WikiStoreModel, chatSummaryMessageID: PageID?
     ) async {
+        let loginShellPath = await PathPreflight.loginShellPATH()
         guard let profile = MessageSummarizer.resolveProfile(
-            config: config, credentialStore: credentialStore) else {
+            config: config,
+            credentialStore: credentialStore,
+            searchPath: loginShellPath) else {
             DebugLog.agent("AgentOperationRunner.runModelSummarization: profile resolution failed — skipping \(pending.count) messages")
             return
         }

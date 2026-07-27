@@ -48,7 +48,10 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         }
 
         let provider = resolveSelectedProvider()
-        let message = AgentLauncher.readinessMessage(for: provider)
+        let loginShellPath = await PathPreflight.loginShellPATH()
+        let message = AgentLauncher.readinessMessage(
+            for: provider,
+            searchPath: loginShellPath)
         if message != nil {
             DebugLog.ingest("DaemonQueueIngestionProvider.readiness: NOT READY provider=\(provider.id) label=\(provider.label)")
         }
@@ -59,7 +62,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     func runIngestion(
         wikiID: WikiID,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,

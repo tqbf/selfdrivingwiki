@@ -75,7 +75,7 @@ struct QueueActivityTrackerReconcileTests {
 
     // MARK: - Queue-kind awareness: shared source ID across two items
 
-    @Test func reconcileClearsOnlyTheFinishedQueueWhenSourceIDShared() {
+    @Test func sourceIDSetsReconcileAfterRestart() {
         let tracker = QueueActivityTracker()
         // Same source ID, different queue kinds — extract then ingest the
         // same file. Both spinners are on; only extraction finished.
@@ -181,7 +181,7 @@ struct QueueActivityTrackerReconcileTests {
         QueueItem(
             id: QueueItemID(rawValue: id), queue: queue, wikiID: wikiID,
             payload: QueueItemPayload(
-                sourceIDs: sourceIDs.map { PageID(rawValue: $0) },
+                sourceIDs: sourceIDs.map { SourceID(rawValue: $0) },
                 lintPageIDs: lintPageIDs),
             state: .running, orderingKey: 1000, attempt: 0, createdAt: 0)
     }

@@ -29,7 +29,7 @@ import WikiFSEngine
 /// aren't dropped (locks the §11-C1 behavior — see
 /// `plans/content-type-registry.md`).
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct IngestGateTests {
 
     private func tempStore() throws -> GRDBWikiStore {

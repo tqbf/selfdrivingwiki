@@ -12,9 +12,17 @@ import WebKit
 /// JS that emits the right text but doesn't actually produce a `<mark>`). If
 /// these fail, the highlight JS itself is broken; if they pass, the bug is in
 /// the trigger path (the pending-anchor consume that decides to run it).
-@Suite(.timeLimit(.minutes(5)), .serialized)
+@Suite(.serialized)
 @MainActor
 struct QuoteHighlightWebViewTests {
+    private static var retainedWindow: NSWindow?
+
+    private static func releaseWindow(_ window: NSWindow) {
+        window.orderOut(nil)
+        if retainedWindow === window {
+            retainedWindow = nil
+        }
+    }
 
     /// A WKWebView in a `swift test` CLI has no host app, so JS evaluation never
     /// fires. Creating `NSApplication.shared` gives WebKit the run loop / app
@@ -31,13 +39,39 @@ struct QuoteHighlightWebViewTests {
     private final class NavigationWaiter: NSObject, WKNavigationDelegate {
         private var continuation: CheckedContinuation<Void, Error>?
 
-        func wait(for webView: WKWebView, html: String) async throws {
+        func wait(for webView: WKWebView, html: String, timeout: Duration = .seconds(15)) async throws {
+            final class Once: @unchecked Sendable {
+                private var fired = false
+                private let lock = NSLock()
+
+                func fire(_ body: () -> Void) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard !fired else { return }
+                    fired = true
+                    body()
+                }
+            }
+
             // Ensure the host app exists before driving WebKit.
             _ = QuoteHighlightWebViewTests.app
+            let once = Once()
             webView.navigationDelegate = self
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 self.continuation = cont
                 webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
+                Task {
+                    try? await Task.sleep(for: timeout)
+                    once.fire {
+                        self.resume(with: NSError(
+                            domain: "QuoteHighlightWebViewTests.NavigationWaiter",
+                            code: 1,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "WKWebView navigation timed out after \(timeout)"
+                            ]))
+                    }
+                }
             }
         }
 
@@ -51,6 +85,26 @@ struct QuoteHighlightWebViewTests {
             if let error { continuation.resume(throwing: error) }
             else { continuation.resume() }
         }
+    }
+
+    @MainActor
+    private func makeHostedWebView() async -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, webView: WKWebView) {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.contentView = NSView(frame: window.frame)
+        window.contentView?.addSubview(webView)
+        webView.frame = window.contentView?.bounds ?? webView.frame
+        webView.autoresizingMask = [.width, .height]
+        Self.retainedWindow?.orderOut(nil)
+        Self.retainedWindow = window
+        window.orderFront(nil)
+        return (lease, window, webView)
     }
 
     /// Run `js` (no expected return value) and await completion.
@@ -88,7 +142,8 @@ struct QuoteHighlightWebViewTests {
     // MARK: - Tests
 
     @Test func debugHighlightState() async throws {
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
         await run(webView, WikiReaderRep.highlightJS(quote: "clear improvement"))
@@ -109,7 +164,8 @@ struct QuoteHighlightWebViewTests {
     }
 
     @Test func highlightWrapsExactQuoteInMark() async throws {
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<h2 id=\"results\">Results</h2><p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -122,7 +178,8 @@ struct QuoteHighlightWebViewTests {
     @Test func highlightMatchesAcrossCollapsedWhitespace() async throws {
         // The source has extra internal whitespace / a newline; the quote is
         // single-spaced. The index-map fallback must still wrap the match.
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The  data show a clear\nimprovement here.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -137,7 +194,8 @@ struct QuoteHighlightWebViewTests {
         // documentHTML, then the same highlight JS the reader runs.
         let markdown = "# Study\n\nThe results show a 30% improvement in latency."
         let body = MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(markdown) { _, _ in true })
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
         await run(webView, WikiReaderRep.highlightJS(quote: "30% improvement"))
@@ -150,7 +208,8 @@ struct QuoteHighlightWebViewTests {
         // A quote that spans a <strong> boundary lives in TWO text nodes — the
         // common case for real source prose with inline formatting. The
         // highlight must still find + mark it (across both segments) and scroll.
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p><strong>AI is an amplifier.</strong> It magnifies the strengths of organizations.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -173,7 +232,8 @@ struct QuoteHighlightWebViewTests {
         As Nathen Harvey said in the 2025 DORA report: “ [AI is an amplifier.](https://services.google.com/fh/files/misc/2025_state_of_ai_assisted_software_development.pdf) It magnifies the strengths of high-performing organizations and the dysfunctions of struggling ones.” AI will not solve for a lack of discipline.
         """
         let body = MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(markdown) { _, _ in true })
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
         let quote = "AI is an amplifier. It magnifies the strengths of high-performing organizations and the dysfunctions of struggling ones."
@@ -190,7 +250,8 @@ struct QuoteHighlightWebViewTests {
         // "vo-" / "litional") into the MIDDLE of the sentence, so the full quote
         // never appears contiguously. The fallback must still highlight the
         // longest contiguous run that IS present and scroll to it.
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = """
         <p>More recently, the vo-</p>\
         <p>For reprints write to: Irving Kirsch, Ph.D., Department of Psychology, U-20.</p>\
@@ -210,7 +271,8 @@ struct QuoteHighlightWebViewTests {
     @Test func noFallbackHighlightForShortUnmatchedQuote() async throws {
         // A short quote (<4 words) that isn't present must NOT trigger a noisy
         // partial highlight — the fallback floor is 4 words.
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma delta epsilon</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -221,7 +283,8 @@ struct QuoteHighlightWebViewTests {
 
     @Test func reHighlightClearsThePreviousMark() async throws {
         // A second highlight must remove the first mark, not stack them.
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma delta</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -239,7 +302,8 @@ struct QuoteHighlightWebViewTests {
     /// `WikiReaderRep.apply(.quote, in:)` is what the Coordinator runs once the
     /// page has painted. Confirms the seam the pending-anchor consume drives.
     @Test func applyQuoteRunsHighlightJS() async throws {
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -254,7 +318,8 @@ struct QuoteHighlightWebViewTests {
     /// `pageLoaded` — exactly the lifecycle that runs in `didFinish`. If this
     /// fails, the trigger (not the JS) is where the source highlight breaks.
     @Test func coordinatorAppliesQuoteHighlightOnceLoaded() async throws {
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -274,7 +339,8 @@ struct QuoteHighlightWebViewTests {
     /// it (the version gate holds), so it doesn't re-run highlight on every
     /// `updateNSView`.
     @Test func coordinatorDoesNotReapplySameVersion() async throws {
-        let webView = WKWebView()
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -355,10 +421,14 @@ struct QuoteHighlightWebViewTests {
         store.selectSource(byDisplayName: "paper", anchor: "\"clear improvement\"")
 
         let view = WikiReaderView(markdown: markdown, currentSelection: store.selection, store: store)
+        let lease = await HostedAppKitTestGate.shared.acquire()
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
 
         let webView = try await waitForWebView(in: window)
         let mark = await waitForMark(in: webView, tries: 40)

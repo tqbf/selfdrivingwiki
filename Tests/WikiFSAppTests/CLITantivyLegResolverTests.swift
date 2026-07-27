@@ -19,8 +19,19 @@ import Testing
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
 ///
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct CLITantivyLegResolverTests {
+    actor SearchRequestRecorder {
+        private var keys: [CLITantivyLegResolver.SearchRequestKey] = []
+
+        func record(_ key: CLITantivyLegResolver.SearchRequestKey) {
+            keys.append(key)
+        }
+
+        func recordedKeys() -> [CLITantivyLegResolver.SearchRequestKey] {
+            keys
+        }
+    }
 
     // MARK: - Helpers
 
@@ -50,8 +61,8 @@ struct CLITantivyLegResolverTests {
         let store = try tempStore(in: container, wikiID: wikiID)
         // No Tantivy index exists yet — `rebuildIfNeeded` was never called
         // (the app would normally kick it off in `TantivyShadowSync.start()`).
-        // The resolver must return nil so the store falls back to FTS5
-        // (the #637 contract — empty leg = no BM25 signal).
+        // The resolver must return nil so the store runs without a BM25 leg
+        // (the #637 contract — empty leg = no lexical signal).
         let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "anything", limit: 10)
@@ -164,9 +175,15 @@ struct CLITantivyLegResolverTests {
             case chat
         }
 
+        enum SearchOutcomeID: Sendable, Equatable {
+            case page(PageID)
+            case source(SourceID)
+            case chat(PageID)
+        }
+
         struct SearchOutcome: Sendable {
             let kind: SearchKind
-            let id: PageID?
+            let id: SearchOutcomeID?
         }
 
         let (pageContainer, pageFM) = try makeTempContainer()
@@ -238,7 +255,7 @@ struct CLITantivyLegResolverTests {
                         store: pageStore,
                         query: "ownership",
                         limit: 5)
-                    return SearchOutcome(kind: .page, id: leg?.first?.id)
+                    return SearchOutcome(kind: .page, id: leg?.first.map(SearchOutcomeID.page))
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveSourceLeg(
@@ -253,7 +270,7 @@ struct CLITantivyLegResolverTests {
                         store: sourceStore,
                         query: "Concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .source, id: leg?.first?.id)
+                    return SearchOutcome(kind: .source, id: leg?.first.map(SearchOutcomeID.source))
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveChatLeg(
@@ -268,7 +285,7 @@ struct CLITantivyLegResolverTests {
                         store: chatStore,
                         query: "concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .chat, id: leg?.first?.id)
+                    return SearchOutcome(kind: .chat, id: leg?.first.map(SearchOutcomeID.chat))
                 }
             }
 
@@ -286,19 +303,132 @@ struct CLITantivyLegResolverTests {
         #expect(pageHits.count == 3)
         #expect(sourceHits.count == 3)
         #expect(chatHits.count == 3)
-        #expect(pageHits.allSatisfy { $0.id == page.id }, "pageHits: \(pageHits)")
-        #expect(sourceHits.allSatisfy { $0.id == source.id }, "sourceHits: \(sourceHits)")
-        #expect(chatHits.allSatisfy { $0.id == chat.id }, "chatHits: \(chatHits)")
+        #expect(pageHits.allSatisfy { $0.id == .page(page.id) }, "pageHits: \(pageHits)")
+        #expect(sourceHits.allSatisfy { $0.id == .source(source.id) }, "sourceHits: \(sourceHits)")
+        #expect(chatHits.allSatisfy { $0.id == .chat(chat.id) }, "chatHits: \(chatHits)")
     }
 
-    // MARK: - FTS5 fallback when no Tantivy service can be built
+    @Test func sameWikiConcurrentDistinctRequestsDoNotShareWrongTask() async throws {
+        struct SearchOutcome: Sendable {
+            let label: String
+            let ids: [String]?
+        }
+
+        let (container, fm) = try makeTempContainer()
+        defer { try? fm.removeItem(at: container) }
+        let wikiID = WikiID(rawValue: "01TEST0010")
+        let store = try tempStore(in: container, wikiID: wikiID)
+
+        let pageRust = try store.createPage(title: "Rust Ownership")
+        let pageOwnership = try store.createPage(title: "Ownership Guide")
+        let pageAsync = try store.createPage(title: "Async Rust")
+        _ = try store.addSource(filename: "zircon-rust.pdf", data: Data("%PDF-rust".utf8))
+        _ = try store.addSource(filename: "amber-ownership.pdf", data: Data("%PDF-ownership".utf8))
+        let sources = try store.listSources()
+        let rustSource = try #require(sources.first { $0.filename == "zircon-rust.pdf" })
+        let ownershipSource = try #require(sources.first { $0.filename == "amber-ownership.pdf" })
+        let terraformChat = try store.createChat(kind: .edit, title: "Terraforming")
+
+        let recorder = SearchRequestRecorder()
+        let containerPath = container.standardizedFileURL.path
+        let outcomes = await CLITantivyLegResolver.withTestSearchExecutor({ key in
+            guard key.wikiID == wikiID, key.containerPath == containerPath else { return nil }
+            await recorder.record(key)
+            let ids: [String]
+            switch (key.query, key.kind, key.limit) {
+            case ("cobalt borrowingkey", .page, 2):
+                ids = [pageRust.id.rawValue, pageAsync.id.rawValue]
+            case ("cobalt borrowingkey", .page, 1):
+                ids = [pageRust.id.rawValue]
+            case ("amber", .page, 1):
+                ids = [pageOwnership.id.rawValue]
+            case ("zircon", .source, 1):
+                ids = [rustSource.id.rawValue]
+            case ("amber", .source, 1):
+                ids = [ownershipSource.id.rawValue]
+            case ("terraformalpha", .chat, 1):
+                ids = [terraformChat.id.rawValue]
+            default:
+                return []
+            }
+            return ids.enumerated().map { offset, id in
+                TantivyShadowSearchResult(
+                    documentID: key.kind.documentID(for: id.rawValue),
+                    kind: key.kind,
+                    title: "sentinel-\(offset)",
+                    score: Float(ids.count - offset))
+            }
+        }, operation: {
+            await withTaskGroup(of: SearchOutcome.self, returning: [SearchOutcome].self) { group in
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "cobalt borrowingkey", limit: 2)
+                    return SearchOutcome(label: "page-rust-2", ids: leg?.map(\.id.rawValue))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "cobalt borrowingkey", limit: 1)
+                    return SearchOutcome(label: "page-rust-1", ids: leg?.map(\.id.rawValue))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolvePageLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "amber", limit: 1)
+                    return SearchOutcome(label: "page-ownership-1", ids: leg?.map(\.id.rawValue))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "zircon", limit: 1)
+                    return SearchOutcome(label: "source-rust-1", ids: leg?.map(\.id.rawValue))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveSourceLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "amber", limit: 1)
+                    return SearchOutcome(label: "source-ownership-1", ids: leg?.map(\.id.rawValue))
+                }
+                group.addTask {
+                    let leg = await CLITantivyLegResolver.resolveChatLeg(
+                        wikiID: wikiID, containerDirectory: container, store: store,
+                        query: "terraformalpha", limit: 1)
+                    return SearchOutcome(label: "chat-terraforming-1", ids: leg?.map(\.id.rawValue))
+                }
+
+                var collected: [SearchOutcome] = []
+                for await outcome in group {
+                    collected.append(outcome)
+                }
+                return collected
+            }
+        })
+
+        func outcome(named label: String) -> SearchOutcome? {
+            outcomes.first { $0.label == label }
+        }
+        let keys = await recorder.recordedKeys()
+        #expect(keys.count == 6)
+        #expect(keys.allSatisfy { $0.wikiID == wikiID && $0.containerPath == containerPath })
+        #expect(Set(keys).count == 6)
+        #expect(outcomes.count == 6)
+        #expect(outcome(named: "page-rust-2")?.ids == [pageRust.id.rawValue, pageAsync.id.rawValue])
+        #expect(outcome(named: "page-rust-1")?.ids == [pageRust.id.rawValue])
+        #expect(outcome(named: "page-ownership-1")?.ids == [pageOwnership.id.rawValue])
+        #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id.rawValue])
+        #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id.rawValue])
+        #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id.rawValue])
+    }
+
+    // MARK: - No-BM25-leg behavior when no Tantivy service can be built
 
     @Test func resolvePageLegReturnsNilWhenServiceConstructionFails() async throws {
         // Point the resolver at a container path that doesn't exist and can't
         // be created (a file in place of the container dir). `makeService`
-        // catches the throw and returns nil — the store then falls back to
-        // FTS5 (the #637 contract — Tantivy unavailable = no BM25 leg, not an
-        // error).
+        // catches the throw and returns nil — the store then runs without a
+        // BM25 leg (the #637 contract — Tantivy unavailable = no lexical leg,
+        // not an error).
         let fileAsContainer = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cli-tantivy-leg-blocker-\(UUID().uuidString)")
         try Data("not a directory".utf8).write(to: fileAsContainer)

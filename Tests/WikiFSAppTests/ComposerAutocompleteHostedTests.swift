@@ -23,6 +23,14 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ComposerAutocompleteHostedTests {
+    private static var retainedWindow: NSWindow?
+
+    private static func releaseWindow(_ window: NSWindow) {
+        window.orderOut(nil)
+        if retainedWindow === window {
+            retainedWindow = nil
+        }
+    }
 
     // MARK: - Hosted composer builder
 
@@ -161,6 +169,8 @@ struct ComposerAutocompleteHostedTests {
 
         let window = makeWindow()
         window.contentView?.addSubview(scrollView)
+        Self.retainedWindow?.orderOut(nil)
+        Self.retainedWindow = window
 
         return (window, textView, coordinator)
     }
@@ -175,6 +185,8 @@ struct ComposerAutocompleteHostedTests {
     // MARK: - AC #5: debounce + cancel (reviewer correction #3 — now deterministic via #661)
 
     @Test func debouncedQueryCancelsStaleInFlightPartial() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // Drive the coordinator's schedule with two partials in quick
         // succession. The first must be cancelled before its fetch runs; only
         // the second partial's fetch fires. This was previously flaky under
@@ -198,8 +210,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         // First keystroke: schedule #1 is captured in the manual scheduler.
         type("[[page:Er", into: textView, coordinator: coordinator)
@@ -222,6 +235,8 @@ struct ComposerAutocompleteHostedTests {
     }
 
     @Test func onlyLatestPartialTriggersAFetchWhenTypingRapidly() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // Stronger version of the cancel test: type three partials in rapid
         // succession (faster than the debounce — captured, not run). Only the
         // LAST one should trigger a fetch — the debounce cancels the first two.
@@ -237,8 +252,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         // Type three keystrokes inside the debounce window. No `await` between
         // them. Each schedule arrives inside the prior's debounce window.
@@ -261,6 +277,8 @@ struct ComposerAutocompleteHostedTests {
     // MARK: - Happy path: trigger detected → fetch → result applied
 
     @Test func openTriggerFiresFetchAndAppliesResults() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -279,8 +297,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 1)
@@ -297,6 +316,8 @@ struct ComposerAutocompleteHostedTests {
     // MARK: - No trigger → no fetch
 
     @Test func noOpenTriggerDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -309,8 +330,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         // Plain text — no `[[` trigger. Nothing is scheduled.
         type("Just a regular message", into: textView, coordinator: coordinator)
@@ -323,6 +345,8 @@ struct ComposerAutocompleteHostedTests {
     }
 
     @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -335,8 +359,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erickson]]", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 0, "no schedule should be created for a closed link")
@@ -350,6 +375,8 @@ struct ComposerAutocompleteHostedTests {
     // MARK: - Reviewer correction #4: newline/paste guards
 
     @Test func newlineInTriggerDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -362,8 +389,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         // Multi-line text with a `[[` on one line and content on the next.
         type("[[page:Erl\nmore stuff", into: textView, coordinator: coordinator)
@@ -376,6 +404,8 @@ struct ComposerAutocompleteHostedTests {
     }
 
     @Test func overlongPartialDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -388,8 +418,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         // Paste: `[[page:` + maxPartialSpan+1 chars → over the cap.
         let long = String(repeating: "a", count: WikiLinkPrefixScanner.maxPartialSpan + 1)
@@ -405,6 +436,8 @@ struct ComposerAutocompleteHostedTests {
     // MARK: - Schedule-not-fired → no fetch (proves work is captured, not run eagerly)
 
     @Test func scheduleWithoutFireDoesNotRunFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // The ManualScheduler captures work without running it. So scheduling
         // without firing must NOT call fetch — this is the load-bearing
         // property that makes issue #661's fix deterministic: no real
@@ -421,8 +454,9 @@ struct ComposerAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, autocomplete: hooks, measuredHeight: heightBinding, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 1)

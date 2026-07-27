@@ -111,7 +111,7 @@ import Foundation
     ) -> SourceMarkdownVersion {
         SourceMarkdownVersion(
             id: PageID(rawValue: "01SMV"),
-            sourceID: PageID(rawValue: "01SRC"),
+            sourceID: SourceID(rawValue: "01SRC"),
             parentID: nil,
             content: "# Extracted Content\n\nSome text.",
             origin: origin,

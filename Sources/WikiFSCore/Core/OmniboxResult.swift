@@ -70,10 +70,10 @@ public enum OmniboxResult: Identifiable, Hashable, Sendable {
         case .chat(let c): return .chat(c.id)
         case .bookmark(let node, _):
             // Bookmarks navigate to their target, not the bookmark node itself.
-            switch node.kind {
-            case .pageRef: return node.targetID.map { .page($0) } ?? .newChat
-            case .sourceRef: return node.targetID.map { .source($0) } ?? .newChat
-            case .chatRef: return node.targetID.map { .chat($0) } ?? .newChat
+            switch node.content {
+            case .page(let id): return .page(id)
+            case .source(let id): return .source(id)
+            case .chat(let id): return .chat(id)
             case .folder: return .newChat // Folders aren't navigable
             }
         case .ask: return .newChat

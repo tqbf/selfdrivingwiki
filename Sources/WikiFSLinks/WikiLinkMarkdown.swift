@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 
 /// Pure, view-free transform that rewrites Obsidian-style `[[wiki-links]]` in a
 /// Markdown body into ordinary Markdown links pointing at a private `wiki://`
@@ -38,11 +39,13 @@ public enum WikiLinkMarkdown {
     /// element for the target's `kind`; otherwise it falls back to the byteful
     /// blob dispatch (Phase 4a), then to a cite link.
     public struct SourceEmbedInfo: Sendable, Equatable {
-        public let id: PageID
+        /// Source entity identity. Rendering crosses to raw text only when it
+        /// constructs a `wiki-blob` or wiki-link representation.
+        public let id: SourceID
         public let mimeType: String?
         public let target: EmbedTarget?
 
-        public init(id: PageID, mimeType: String?, target: EmbedTarget? = nil) {
+        public init(id: SourceID, mimeType: String?, target: EmbedTarget? = nil) {
             self.id = id
             self.mimeType = mimeType
             self.target = target
@@ -93,8 +96,8 @@ public enum WikiLinkMarkdown {
         _ body: String,
         isResolved: (String, ParsedLink.LinkType) -> Bool = { _, _ in true },
         embedInfo: ((String) -> SourceEmbedInfo?)? = nil,
-        displayName: (PageID, ParsedLink.LinkType) -> String? = { _, _ in nil },
-        pinnedExtractionID: ((PageID, Int) -> PageID?)? = nil
+        displayName: (String, ParsedLink.LinkType) -> String? = { _, _ in nil },
+        pinnedExtractionID: ((SourceID, Int) -> PageID?)? = nil
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -183,7 +186,8 @@ public enum WikiLinkMarkdown {
             // fall back to the stored alias). Non-canonical links keep the
             // name-resolution path below.
             if WikiLinkParser.isCanonicalULID(bareTarget) {
-                let id = PageID(rawValue: bareTarget)
+                let pageID = PageID(rawValue: bareTarget)
+                let sourceID = SourceID(rawValue: bareTarget)
 
                 // Embed dispatch (Plan v2): page embeds + non-media source
                 // transclusions emit a collapsed `<details>`; media sources
@@ -196,14 +200,14 @@ public enum WikiLinkMarkdown {
                 if isEmbedPrefix {
                     let hasPagePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.page.linkPrefix)
                     let hasSourcePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.source.linkPrefix)
-                    let pageName = hasSourcePrefix ? nil : displayName(id, .page)
-                    let sourceName = hasPagePrefix ? nil : displayName(id, .source)
+                    let pageName = hasSourcePrefix ? nil : displayName(pageID.rawValue, .page)
+                    let sourceName = hasPagePrefix ? nil : displayName(sourceID.rawValue, .source)
                     let aliasDisplay: String? = fixed.alias.flatMap { collapseWhitespace($0) }.flatMap { $0.isEmpty ? nil : $0 }
 
                     if let pageName {
                         let display = aliasDisplay ?? pageName
                         out += transclusionEmbedHTML(display: display, kind: .page,
-                                                     id: id, target: nil,
+                                                     id: pageID.rawValue, target: nil,
                                                      fragment: fragment, name: pageName)
                         continue
                     }
@@ -218,7 +222,7 @@ public enum WikiLinkMarkdown {
                        isNonMediaSource(mimeType: info.mimeType, target: info.target) {
                         let display = aliasDisplay ?? sourceName ?? bareTarget
                         out += transclusionEmbedHTML(display: display, kind: .source,
-                                                     id: id, target: nil,
+                                                     id: sourceID.rawValue, target: nil,
                                                      fragment: fragment, name: display)
                         continue
                     }
@@ -228,7 +232,7 @@ public enum WikiLinkMarkdown {
                     continue
                 }
 
-                let currentName = displayName(id, kind)
+                let currentName = displayName(bareTarget, kind)
                 let resolved = currentName != nil || isResolved(bareTarget, kind)
                 let display: String
                 if let currentName {
@@ -245,10 +249,10 @@ public enum WikiLinkMarkdown {
                 // highlighter finds it. A pinned link WITHOUT a fragment opens
                 // HEAD (the chosen scope): no `&pin=`. Embeds are excluded above.
                 let pinID: PageID? = (kind == .source && pin != nil && fragment != nil)
-                    ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(id, $0) }
+                    ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(sourceID, $0) }
                     : nil
                 out += markdownLink(display: display, target: display, kind: kind,
-                                    resolved: resolved, fragment: fragment, id: id,
+                                    resolved: resolved, fragment: fragment, id: bareTarget,
                                     pinID: pinID)
                 continue
             }
@@ -362,7 +366,7 @@ public enum WikiLinkMarkdown {
                         }
                         if isNonMediaSource(mimeType: info.mimeType, target: info.target) {
                             out += transclusionEmbedHTML(display: display, kind: .source,
-                                                         id: info.id, target: nil,
+                                                         id: info.id.rawValue, target: nil,
                                                          fragment: linkFragment, name: linkTarget)
                             continue
                         }
@@ -387,7 +391,7 @@ public enum WikiLinkMarkdown {
                         }
                         if isNonMediaSource(mimeType: info.mimeType, target: info.target) {
                             out += transclusionEmbedHTML(display: display, kind: .source,
-                                                         id: info.id, target: nil,
+                                                         id: info.id.rawValue, target: nil,
                                                          fragment: linkFragment, name: linkTarget)
                             continue
                         }
@@ -438,6 +442,19 @@ public enum WikiLinkMarkdown {
               !idString.isEmpty
         else { return nil }
         return PageID(rawValue: idString)
+    }
+
+    /// The canonical source `id` query item from a `wiki://source?...` URL.
+    /// The URL itself stays raw text; this parser is the source navigation
+    /// boundary that restores its source-entity namespace.
+    public static func sourceID(from url: URL) -> SourceID? {
+        guard url.scheme == scheme,
+              url.host == sourceHost,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let idString = components.queryItems?.first(where: { $0.name == "id" })?.value,
+              !idString.isEmpty
+        else { return nil }
+        return SourceID(rawValue: idString)
     }
 
     /// The pinned extraction smv id (`pin=<ULID>`) from a `wiki://…` URL, or nil
@@ -495,7 +512,7 @@ public enum WikiLinkMarkdown {
                                      kind: ParsedLink.LinkType,
                                      resolved: Bool,
                                      fragment: String? = nil,
-                                     id: PageID? = nil,
+                                     id: String? = nil,
                                      pinID: PageID? = nil) -> String {
         let host: String
         if resolved {
@@ -518,8 +535,8 @@ public enum WikiLinkMarkdown {
         // destination source view loads the pinned extraction.
         var url: String
         if let id {
-            let encodedID = id.rawValue.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
-                ?? id.rawValue
+            let encodedID = id.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
+                ?? id
             url = "\(scheme)://\(host)?id=\(encodedID)&title=\(encodedTitle)"
             if let pinID {
                 let encodedPin = pinID.rawValue.addingPercentEncoding(withAllowedCharacters: titleQueryAllowed)
@@ -546,7 +563,7 @@ public enum WikiLinkMarkdown {
     /// NEVER reaches the blob branch (which would emit a broken
     /// `<video src="wiki-blob://…">` against empty bytes). The `wiki-blob://` URL
     /// is served by `BlobSchemeHandler` (Phase 4a).
-    private static func embedHTML(display: String, id: PageID, mimeType: String?, target: EmbedTarget?) -> String? {
+    private static func embedHTML(display: String, id: SourceID, mimeType: String?, target: EmbedTarget?) -> String? {
         // 1. Byteless external media or inline diagram: provider iframe,
         // direct-remote native tag, or a fenced ```mermaid code block.
         if let target {
@@ -711,13 +728,13 @@ public enum WikiLinkMarkdown {
     public static func transclusionEmbedHTML(
         display: String,
         kind: ParsedLink.LinkType,
-        id: PageID?,
+        id: String?,
         target: String?,
         fragment: String?,
         name: String
     ) -> String {
         let kindAttr = kind == .page ? pageEmbedKind : kind.rawValue
-        let idAttr = id?.rawValue ?? ""
+        let idAttr = id ?? ""
         let targetAttr = target?.addingPercentEncoding(withAllowedCharacters: targetAllowed) ?? ""
         let fragAttr = fragment?.addingPercentEncoding(withAllowedCharacters: fragmentAllowed) ?? ""
         let node = "embed-\(UUID().uuidString)"

@@ -51,6 +51,7 @@ struct ContentView: View {
     /// toolbar's "Find on Page…" menu item (`AddressBarView`) and the active
     /// detail view's Cmd+F drive the same `FindBarView` overlay (issue #157).
     @State private var findModel = FindModel()
+    @State private var rightInspector = WindowRightInspectorController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -86,8 +87,14 @@ struct ContentView: View {
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
         // (§3.5). The view, not the binding, is the right place for this.
-        .onChange(of: store.selection) { _, newValue in
+        .onChange(of: store.selection, initial: false) { _, newValue in
             store.handleSelectionChange(to: newValue)
+            switch newValue {
+            case .page, .source, .chat:
+                break
+            case .none, .newChat, .changeLog, .bookmark:
+                rightInspector.updateRegistration(nil)
+            }
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list
@@ -119,15 +126,15 @@ struct ContentView: View {
         .sheet(item: $omniboxBookmarkContext) { ctx in
             BookmarkTargetPickerSheet(
                 store: store,
-                kind: ctx.kind,
-                ids: ctx.ids,
+                targets: ctx.targets,
                 onConfirm: { parentID in
-                    for id in ctx.ids {
-                        switch ctx.kind {
-                        case .pages: store.addPageRef(parentID: parentID, pageID: id)
-                        case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
-                        case .chats: store.addChatRef(parentID: parentID, chatID: id)
-                        }
+                    switch ctx.targets {
+                    case .pages(let ids):
+                        for id in ids { store.addPageRef(parentID: parentID, pageID: id) }
+                    case .sources(let ids):
+                        for id in ids { store.addSourceRef(parentID: parentID, sourceID: id) }
+                    case .chats(let ids):
+                        for id in ids { store.addChatRef(parentID: parentID, chatID: id) }
                     }
                 }
             )
@@ -136,6 +143,7 @@ struct ContentView: View {
         // (`AddressBarView`, in a `ToolbarItem`) and the detail views' Cmd+F both
         // reach the same `FindModel` instance (#157).
         .environment(findModel)
+        .environment(rightInspector)
     }
 
     /// NavigationSplitView + drop / overlay / toolbar. Split out of `body` so the
@@ -245,9 +253,16 @@ struct ContentView: View {
                     .frame(width: 340)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+
+            if rightInspector.isPresented, let registration = rightInspector.registration {
+                Divider()
+                RightSidebarHostView(registration: registration)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
         .animation(.easeInOut(duration: 0.18), value: store.isChangeLogSidebarVisible)
+        .animation(.easeInOut(duration: 0.18), value: rightInspector.isPresented)
         // Measure the detail column's width — the span the toolbar covers — and
         // feed it to the omnibox. Measuring here is reliable in every state the
         // field's own leading edge is not: this view never lands in toolbar
@@ -280,6 +295,16 @@ struct ContentView: View {
                                sidebarVisible: columnVisibility != .detailOnly,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
+            ToolbarItem(placement: .automatic) {
+                if rightInspector.isAvailable {
+                    Button {
+                        rightInspector.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                    }
+                    .help(rightInspector.isPresented ? "Hide Inspector" : "Show Inspector")
+                }
+            }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
         // alone only empties the *text* — the toolbar still reserves ~160pt for the
@@ -311,7 +336,7 @@ struct ContentView: View {
         .swipeNavigation(store: store)
     }
 
-    private func runIngest(sourceID: PageID) {
+    private func runIngest(sourceID: SourceID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         Task {
             store.flushPendingSaves()
@@ -391,6 +416,25 @@ struct ContentView: View {
         }
     }
 
+}
+
+private struct RightSidebarHostView: View {
+    let registration: RightSidebarRegistration
+
+    var body: some View {
+        DetailInspectorView(
+            inspectorTab: registration.inspectorTab,
+            outlineWidth: registration.outlineWidth,
+            showsOutlineTab: registration.showsOutlineTab,
+            showsHistoryTab: registration.showsHistoryTab,
+            origin: registration.origin,
+            history: registration.history,
+            store: registration.store,
+            onCompareVersions: registration.onCompareVersions
+        ) {
+            registration.outline()
+        }
+    }
 }
 
 /// The "Add from URL" sheet's presentation payload: the URL to pre-fill the

@@ -35,7 +35,7 @@ struct CompositeWorkerFactoryTests {
 
         let item = QueueItem(
             id: QueueItemID(rawValue: "123"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
@@ -54,7 +54,7 @@ struct CompositeWorkerFactoryTests {
 
         let item = QueueItem(
             id: QueueItemID(rawValue: "456"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src2")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
@@ -73,7 +73,7 @@ struct CompositeWorkerFactoryTests {
 
         let item = QueueItem(
             id: QueueItemID(rawValue: "tr1"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src2")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src2")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
@@ -90,7 +90,7 @@ struct CompositeWorkerFactoryTests {
 
         let item = QueueItem(
             id: QueueItemID(rawValue: "789"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src3")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src3")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0)
 
@@ -104,7 +104,7 @@ struct CompositeWorkerFactoryTests {
 // A fake ingestion provider that records what it was called with.
 actor FakeIngestionProvider: QueueIngestionProvider {
     var calledWikiID: String?
-    var calledSourceIDs: [PageID] = []
+    var calledSourceIDs: [SourceID] = []
     var progressLines: [String] = []
     var shouldThrow = false
     var calledLintWikiID: String?
@@ -122,7 +122,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
 
     func runIngestion(
         wikiID: WikiID,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
@@ -174,7 +174,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     }
 
     func getCalledWikiID() -> String? { calledWikiID }
-    func getCalledSourceIDs() -> [PageID] { calledSourceIDs }
+    func getCalledSourceIDs() -> [SourceID] { calledSourceIDs }
     func getCalledLintWikiID() -> String? { calledLintWikiID }
     func getCalledLintPageIDs() -> [PageID] { calledLintPageIDs }
 }
@@ -183,7 +183,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
 struct QueueIngestionWorkerTests {
 
     @Test("Worker calls provider with correct parameters")
-    func workerCallsProvider() async throws {
+    func sourceIDsReachIngestionProvider() async throws {
         let provider = FakeIngestionProvider()
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
@@ -192,20 +192,20 @@ struct QueueIngestionWorkerTests {
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: QueueItemID(rawValue: "test1"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
 
         try await worker.execute(QueueItem(
             id: QueueItemID(rawValue: "test1"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
 
         let wikiID = await provider.getCalledWikiID()
         let sourceIDs = await provider.getCalledSourceIDs()
         #expect(wikiID == "wiki1")
-        #expect(sourceIDs == [PageID(rawValue: "src1")])
+        #expect(sourceIDs == [SourceID(rawValue: "src1")])
     }
 
     @Test("Worker with empty source IDs throws")
@@ -237,7 +237,7 @@ struct QueueIngestionWorkerTests {
         await #expect(throws: QueueIngestionError.self) {
             try await worker.execute(QueueItem(
                 id: QueueItemID(rawValue: "test3"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+                payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
         }
@@ -256,7 +256,7 @@ struct QueueIngestionWorkerTests {
         do {
             try await worker.execute(QueueItem(
                 id: QueueItemID(rawValue: "test-ready"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+                payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
                 state: .queued, orderingKey: 1000, attempt: 0,
                 createdAt: 0))
             Issue.record("Expected notReady error was not thrown")
@@ -287,7 +287,7 @@ struct QueueIngestionWorkerTests {
 
         try await worker.execute(QueueItem(
             id: QueueItemID(rawValue: "test-ready-ok"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0,
             createdAt: 0))
 
@@ -304,7 +304,7 @@ struct QueueActivityTrackerIngestionTests {
     private func makeItem(
         id: String = "test-item-id",
         queue: QueueKind,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
@@ -318,14 +318,14 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker tracks ingestion source IDs on started")
     func ingestionStartedAddsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.start(events: AsyncStream { _ in })
 
         // Simulate the events the engine would emit.
         tracker.attachForTesting(events: AsyncStream { _ in })
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.ingestingSourceIDs == Set([PageID(rawValue: "src1")]))
+        #expect(tracker.ingestingSourceIDs == Set([SourceID(rawValue: "src1")]))
         #expect(tracker.isIngesting == true)
     }
 
@@ -333,11 +333,11 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker clears ingestion source IDs on completed")
     func ingestionCompletedClearsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        let item = makeItem(queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1"), SourceID(rawValue: "src2")])
         tracker.handleForTesting(.started(item))
-        #expect(tracker.ingestingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
+        #expect(tracker.ingestingSourceIDs == Set([SourceID(rawValue: "src1"), SourceID(rawValue: "src2")]))
 
-        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1"), SourceID(rawValue: "src2")])
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.ingestingSourceIDs.isEmpty)
         #expect(tracker.isIngesting == false)
@@ -347,19 +347,19 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker does not conflate extraction and ingestion")
     func noConflation() async {
         let tracker = QueueActivityTracker()
-        let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
-        let ingestionItem = makeItem(id: "ing1", queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src1")])
+        let ingestionItem = makeItem(id: "ing1", queue: .ingestion, sourceIDs: [SourceID(rawValue: "src2")])
 
         tracker.handleForTesting(.started(extractionItem))
         tracker.handleForTesting(.started(ingestionItem))
 
-        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
-        #expect(tracker.ingestingSourceIDs == Set([PageID(rawValue: "src2")]))
+        #expect(tracker.extractingSourceIDs == Set([SourceID(rawValue: "src1")]))
+        #expect(tracker.ingestingSourceIDs == Set([SourceID(rawValue: "src2")]))
 
         // Complete extraction → only extraction clears
         tracker.handleForTesting(.completed(extractionItem))
         #expect(tracker.extractingSourceIDs.isEmpty)
-        #expect(tracker.ingestingSourceIDs == Set([PageID(rawValue: "src2")]))
+        #expect(tracker.ingestingSourceIDs == Set([SourceID(rawValue: "src2")]))
 
         // Complete ingestion → both clear
         tracker.handleForTesting(.completed(ingestionItem))
@@ -372,15 +372,15 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker tracks transcription source IDs on started")
     func transcriptionStartedAddsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1"), PageID(rawValue: "src2")])
+        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src1"), SourceID(rawValue: "src2")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
         tracker.handleForTesting(.started(item))
 
-        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
-        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == true)
-        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src2")) == true)
-        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "other")) == false)
+        #expect(tracker.extractingSourceIDs == Set([SourceID(rawValue: "src1"), SourceID(rawValue: "src2")]))
+        #expect(tracker.isTranscribing(sourceID: SourceID(rawValue: "src1")) == true)
+        #expect(tracker.isTranscribing(sourceID: SourceID(rawValue: "src2")) == true)
+        #expect(tracker.isTranscribing(sourceID: SourceID(rawValue: "other")) == false)
         #expect(tracker.isTranscribingAny == true)
     }
 
@@ -388,16 +388,16 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker clears transcription source IDs on completed")
     func transcriptionCompletedClearsSourceIDs() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(id: "tr1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
         tracker.handleForTesting(.started(item))
-        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")))
+        #expect(tracker.isTranscribing(sourceID: SourceID(rawValue: "src1")))
 
-        let completed = makeItem(id: item.id.rawValue, queue: .extraction, sourceIDs: [PageID(rawValue: "src1")], state: .completed)
+        let completed = makeItem(id: item.id.rawValue, queue: .extraction, sourceIDs: [SourceID(rawValue: "src1")], state: .completed)
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.extractingSourceIDs.isEmpty)
-        #expect(tracker.isTranscribing(sourceID: PageID(rawValue: "src1")) == false)
+        #expect(tracker.isTranscribing(sourceID: SourceID(rawValue: "src1")) == false)
         #expect(tracker.isTranscribingAny == false)
     }
 
@@ -405,8 +405,8 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker tracks merged extraction+transcription source IDs")
     func noTranscriptionConflation() async {
         let tracker = QueueActivityTracker()
-        let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
-        let transcriptionItem = makeItem(id: "tr1", queue: .extraction, sourceIDs: [PageID(rawValue: "src2")])
+        let extractionItem = makeItem(id: "ext1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src1")])
+        let transcriptionItem = makeItem(id: "tr1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src2")])
         tracker.start(events: AsyncStream { _ in })
         tracker.attachForTesting(events: AsyncStream { _ in })
 
@@ -414,11 +414,11 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(transcriptionItem))
 
         // Both items are .extraction — both sources appear in extractingSourceIDs
-        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1"), PageID(rawValue: "src2")]))
+        #expect(tracker.extractingSourceIDs == Set([SourceID(rawValue: "src1"), SourceID(rawValue: "src2")]))
 
         // Complete the second extraction item → only src2 clears
         tracker.handleForTesting(.completed(transcriptionItem))
-        #expect(tracker.extractingSourceIDs == Set([PageID(rawValue: "src1")]))
+        #expect(tracker.extractingSourceIDs == Set([SourceID(rawValue: "src1")]))
 
         // Complete the first extraction item → both clear
         tracker.handleForTesting(.completed(extractionItem))
@@ -451,7 +451,7 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker surfaces pending permission via pendingPermission(for:) (#608)")
     func pendingPermissionSurfaced() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.handleForTesting(.started(item))
 
         // Before any pending permission event: nil — the row should not render.
@@ -473,7 +473,7 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker replaces prior pending permission when a new one arrives (#608)")
     func pendingPermissionReplaces() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.handleForTesting(.started(item))
 
         let firstPerm = makePermission(toolCallId: "tc-1", toolName: "Edit file")
@@ -496,7 +496,7 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker clears pending permission on terminal state (#608)")
     func pendingPermissionClearedOnTerminal() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
         #expect(tracker.pendingPermission(for: item.id) != nil)
@@ -505,7 +505,7 @@ struct QueueActivityTrackerIngestionTests {
         // completed row. The launcher's `finish()` emits `nil` first, but a
         // terminal state arriving first (cancelled mid-prompt, hard process
         // death) needs this safety net too.
-        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
+        let completed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
         tracker.handleForTesting(.completed(completed))
         #expect(tracker.pendingPermission(for: item.id) == nil)
 
@@ -513,7 +513,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
         #expect(tracker.pendingPermission(for: item.id) != nil)
-        let failed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .failed)
+        let failed = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")], state: .failed)
         tracker.handleForTesting(.failed(failed, error: "boom"))
         #expect(tracker.pendingPermission(for: item.id) == nil)
 
@@ -521,7 +521,7 @@ struct QueueActivityTrackerIngestionTests {
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.pendingPermission(item.id, makePermission()))
         #expect(tracker.pendingPermission(for: item.id) != nil)
-        let cancelled = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")], state: .cancelled)
+        let cancelled = makeItem(id: item.id.rawValue, queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")], state: .cancelled)
         tracker.handleForTesting(.cancelled(cancelled))
         #expect(tracker.pendingPermission(for: item.id) == nil)
     }
@@ -530,8 +530,8 @@ struct QueueActivityTrackerIngestionTests {
     @Test("Tracker isolates pending permissions per item (#608)")
     func pendingPermissionPerItemIsolation() async {
         let tracker = QueueActivityTracker()
-        let itemA = makeItem(id: "ing-a", queue: .ingestion, sourceIDs: [PageID(rawValue: "src1")])
-        let itemB = makeItem(id: "ing-b", queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        let itemA = makeItem(id: "ing-a", queue: .ingestion, sourceIDs: [SourceID(rawValue: "src1")])
+        let itemB = makeItem(id: "ing-b", queue: .ingestion, sourceIDs: [SourceID(rawValue: "src2")])
         tracker.handleForTesting(.started(itemA))
         tracker.handleForTesting(.started(itemB))
 
@@ -545,7 +545,7 @@ struct QueueActivityTrackerIngestionTests {
         // Completing item A should NOT clear item B's state — but more
         // importantly, completing item B (without ever surfacing a permission
         // for it) should leave item A's pending permission intact.
-        let completedB = makeItem(id: itemB.id.rawValue, queue: .ingestion, sourceIDs: [PageID(rawValue: "src2")])
+        let completedB = makeItem(id: itemB.id.rawValue, queue: .ingestion, sourceIDs: [SourceID(rawValue: "src2")])
         tracker.handleForTesting(.completed(completedB))
         #expect(tracker.pendingPermission(for: itemA.id) == permA)
         #expect(tracker.pendingPermission(for: itemB.id) == nil)
@@ -585,7 +585,7 @@ struct QueueEngineHasActiveWorkTests {
         _ = try store.enqueue(QueueItemRequest(
             queue: .ingestion,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")])))
 
         let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki1"))
         #expect(hasWork == true)
@@ -597,7 +597,7 @@ struct QueueEngineHasActiveWorkTests {
         _ = try store.enqueue(QueueItemRequest(
             queue: .ingestion,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")])))
 
         let factory = StubWorkerFactory()
         let engine = QueueEngine(store: store, workerFactory: factory)
@@ -687,12 +687,12 @@ struct LintIngestionDispatchTests {
             emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
         let worker = try await factory.worker(for: QueueItem(
             id: QueueItemID(rawValue: "ing1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "s1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
         try await worker.execute(QueueItem(
             id: QueueItemID(rawValue: "ing1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "s1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "s1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
         let wikiID = await provider.getCalledWikiID()
@@ -708,7 +708,7 @@ struct QueueActivityTrackerTranscriptTests {
     private func makeItem(
         id: String = "test-item-id",
         queue: QueueKind,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         lintPageIDs: [PageID]? = nil,
         state: QueueItemState = .running
     ) -> QueueItem {
@@ -770,7 +770,7 @@ struct QueueActivityTrackerTranscriptTests {
     @Test("Progress accumulated per-item")
     func progressAccumulatedPerItem() async {
         let tracker = QueueActivityTracker()
-        let item = makeItem(id: "prog-1", queue: .extraction, sourceIDs: [PageID(rawValue: "src1")])
+        let item = makeItem(id: "prog-1", queue: .extraction, sourceIDs: [SourceID(rawValue: "src1")])
 
         tracker.handleForTesting(.started(item))
         tracker.handleForTesting(.progress(QueueItemID(rawValue: "prog-1"), line: "line 1"))
@@ -790,7 +790,7 @@ struct QueueActivityTrackerRunPathsTests {
     private func makeItem(
         id: String = "paths-item",
         queue: QueueKind = .ingestion,
-        sourceIDs: [PageID] = [PageID(rawValue: "src1")],
+        sourceIDs: [SourceID] = [SourceID(rawValue: "src1")],
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
@@ -952,7 +952,7 @@ struct QueueActivityTrackerRehydrateTests {
             let store = try QueueStore(databaseURL: db)
             let item = try store.enqueue(QueueItemRequest(
                 queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
-                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")])))
+                payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")])))
             itemID = item.id
             try store.markRunning(id: itemID, providerID: ProviderID(rawValue: "p1"))
             try store.markCompleted(id: itemID)
@@ -1160,7 +1160,7 @@ struct QueueActivityTrackerLintItemIDTests {
 
     private func makeTranscriptionItem(
         id: String,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         state: QueueItemState = .running
     ) -> QueueItem {
         QueueItem(
@@ -1174,8 +1174,8 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Transcription item resolves to the correct item ID")
     func transcriptionItemResolvesItemID() {
         let tracker = QueueActivityTracker()
-        let srcA = PageID(rawValue: "srcA")
-        let srcB = PageID(rawValue: "srcB")
+        let srcA = SourceID(rawValue: "srcA")
+        let srcB = SourceID(rawValue: "srcB")
         let item = makeTranscriptionItem(id: "tr-1", sourceIDs: [srcA, srcB])
 
         tracker.handleForTesting(.started(item))
@@ -1188,7 +1188,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Nil when no transcription is running for the source")
     func nilWhenNoTranscriptionRunning() {
         let tracker = QueueActivityTracker()
-        let src = PageID(rawValue: "lonely")
+        let src = SourceID(rawValue: "lonely")
 
         #expect(tracker.transcriptionItemID(for: src) == nil)
     }
@@ -1197,7 +1197,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Transcription item ID resolves via extraction items (merged)")
     func transcriptionItemIDResolvesExtractionItems() {
         let tracker = QueueActivityTracker()
-        let src = PageID(rawValue: "src1")
+        let src = SourceID(rawValue: "src1")
         let extractionItem = QueueItem(
             id: QueueItemID(rawValue: "ext-1"), queue: .extraction, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [src]),
@@ -1215,7 +1215,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Transcription item mapping cleared after completion")
     func transcriptionMappingClearedOnCompletion() {
         let tracker = QueueActivityTracker()
-        let src = PageID(rawValue: "done-src")
+        let src = SourceID(rawValue: "done-src")
         let item = makeTranscriptionItem(id: "tr-done", sourceIDs: [src])
 
         tracker.handleForTesting(.started(item))
@@ -1231,7 +1231,7 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Transcription item mapping cleared after cancellation")
     func transcriptionMappingClearedOnCancellation() {
         let tracker = QueueActivityTracker()
-        let src = PageID(rawValue: "cancel-src")
+        let src = SourceID(rawValue: "cancel-src")
         let item = makeTranscriptionItem(id: "tr-cancel", sourceIDs: [src])
 
         tracker.handleForTesting(.started(item))
@@ -1247,8 +1247,8 @@ struct QueueActivityTrackerLintItemIDTests {
     @Test("Transcription resolves correctly alongside extraction items (merged)")
     func transcriptionItemIDNoCrossKindConflation() {
         let tracker = QueueActivityTracker()
-        let src1 = PageID(rawValue: "src1")
-        let src2 = PageID(rawValue: "src2")
+        let src1 = SourceID(rawValue: "src1")
+        let src2 = SourceID(rawValue: "src2")
         let extractionItem = QueueItem(
             id: QueueItemID(rawValue: "ext-1"), queue: .extraction, wikiID: WikiID(rawValue: "w1"),
             payload: QueueItemPayload(sourceIDs: [src1]),

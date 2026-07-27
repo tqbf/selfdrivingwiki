@@ -67,11 +67,12 @@ struct WikiReaderRoutingTests {
         #expect(route == .page(title: "Home", id: PageID(rawValue: ulid), fragment: nil))
     }
 
-    @Test func canonicalSourceLinkCarriesId() {
+    @Test func sourceULIDRouteOpensSource() {
         let ulid = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
         let url = URL(string: "wiki://source?id=\(ulid)&title=Paper#Section")!
         let route = WikiReaderView.linkRoute(for: url)
-        #expect(route == .source(title: "Paper", id: PageID(rawValue: ulid), fragment: "Section", pin: nil))
+        #expect(route == .source(title: "Paper", id: SourceID(rawValue: ulid), fragment: "Section", pin: nil))
+        #expect(WikiLinkMarkdown.sourceID(from: url) == SourceID(rawValue: ulid))
     }
 
     // MARK: - Phase 6 `@vN` pin routing (AC.5)
@@ -83,7 +84,7 @@ struct WikiReaderRoutingTests {
         let pinID = "01JYYYYYYYYYYYYYYYYYYYYYYY"
         let url = URL(string: "wiki://source?id=\(sourceID)&title=Paper&pin=\(pinID)#%22a%20quote%22")!
         let route = WikiReaderView.linkRoute(for: url)
-        #expect(route == .source(title: "Paper", id: PageID(rawValue: sourceID),
+        #expect(route == .source(title: "Paper", id: SourceID(rawValue: sourceID),
                                 fragment: "\"a quote\"", pin: PageID(rawValue: pinID)))
     }
 

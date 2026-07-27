@@ -575,7 +575,7 @@ struct Projection {
             .filter { $0.role == .cite }
         var references: [OKFSourceReference] = []
         references.reserveCapacity(links.count)
-        var seenSourceIDs = Set<PageID>()
+        var seenSourceIDs = Set<SourceID>()
         for link in links where seenSourceIDs.insert(link.sourceID).inserted {
             guard let source = DebugLog.trying("getSource", operation: { try store.getSource(id: link.sourceID) }) else {
                 continue
@@ -704,7 +704,7 @@ struct Projection {
             // verbatim source prefixes, but checked first for clarity).
             if let ulid = Identity.sourceMarkdownULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: PageID(rawValue: ulid)) }),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
@@ -720,10 +720,10 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: PageID(rawValue: ulid)) }) else { return nil }
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix) {
                     let contentData = projection.rewrittenVerbatimSourceContent(
-                        id: PageID(rawValue: ulid), mimeType: file.mimeType,
+                        id: SourceID(rawValue: ulid), mimeType: file.mimeType,
                         maps: projection.cachedLinkMaps())
                     return Self.sourceNode(for: id, file: file, contentData: contentData)
                 }
@@ -734,7 +734,7 @@ struct Projection {
         contentForLeaf: { projection, id in
             if let ulid = Identity.sourceMarkdownULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: PageID(rawValue: ulid)) }),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
@@ -748,11 +748,11 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: PageID(rawValue: ulid)) }),
-                      let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: PageID(rawValue: ulid)) }) else { return nil }
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
                    let rewritten = projection.rewrittenVerbatimSourceContent(
-                       id: PageID(rawValue: ulid), mimeType: file.mimeType,
+                       id: SourceID(rawValue: ulid), mimeType: file.mimeType,
                        maps: projection.cachedLinkMaps()) {
                     return rewritten
                 }
@@ -1054,12 +1054,11 @@ struct Projection {
         let id = Self.bookmarkID(for: node)
         let parent = Self.bookmarkParent(for: node)
         let version = Data(changeToken().utf8)
-        switch node.kind {
-        case .folder:
-            return .folder(id: id, parent: parent, name: node.label ?? "Untitled")
-        case .pageRef:
-            if let targetID = node.targetID,
-               let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) {
+        switch node.content {
+        case .folder(let label):
+            return .folder(id: id, parent: parent, name: label)
+        case .page(let targetID):
+            if let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) {
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 let body = rewriteLinks(pageContent(for: page, in: store),
                                         maps: maps, baseDir: baseDir)
@@ -1072,9 +1071,8 @@ struct Projection {
             return .file(id: id, parent: parent, name: "Stale Reference.md",
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
-        case .sourceRef:
-            if let targetID = node.targetID,
-               let source = DebugLog.trying("getSource", operation: { try store.getSource(id: targetID) }) {
+        case .source(let targetID):
+            if let source = DebugLog.trying("getSource", operation: { try store.getSource(id: targetID) }) {
                 let humanName = source.displayName ?? source.filename
                 return .file(id: id, parent: parent,
                              name: Self.sanitizeFilename(humanName),
@@ -1087,9 +1085,8 @@ struct Projection {
             return .file(id: id, parent: parent, name: "Stale Reference.txt",
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
-        case .chatRef:
-            if let targetID = node.targetID,
-               let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) {
+        case .chat(let targetID):
+            if let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) {
                 let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
@@ -1143,26 +1140,21 @@ struct Projection {
               let store = openReadStore(),
               let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
               let node = nodes.first(where: { $0.id == ulid }) else { return nil }
-        switch node.kind {
+        switch node.content {
         case .folder:
             return nil
-        case .pageRef:
-            guard let targetID = node.targetID,
-                  let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) else {
+        case .page(let targetID):
+            guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
             return rewriteLinks(pageContent(for: page, in: store),
                                 maps: cachedLinkMaps(),
                                 baseDir: bookmarkBaseDir(for: node, in: nodes))
-        case .sourceRef:
-            guard let targetID = node.targetID else {
-                return Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
-            }
+        case .source(let targetID):
             return DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: targetID) })
                 ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
-        case .chatRef:
-            guard let targetID = node.targetID,
-                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) else {
+        case .chat(let targetID):
+            guard let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             }
             let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
@@ -1350,7 +1342,7 @@ struct Projection {
         let sourceByID:   [String: RelativeLinkRewriter.Target]
         let chatByTitle:  [String: RelativeLinkRewriter.Target]
         let chatByID:     [String: RelativeLinkRewriter.Target]
-        let siblingImages: [PageID: [String: PageID]]   // sourceID -> [originalPath -> sibling sourceID]
+        let siblingImages: [SourceID: [String: SourceID]]   // sourceID -> [originalPath -> sibling sourceID]
 
         /// Loose-key fallback maps for sources and chats. When an exact name
         /// lookup fails (e.g. an agent cited "Self-Driving Wiki User Guide" but
@@ -1380,7 +1372,7 @@ struct Projection {
         /// The image-src resolver for ONE source's own markdown, or an
         /// always-nil resolver if it has no image siblings (the common case —
         /// most sources never call this at all, gated by the caller).
-        func imageResolver(forSource sourceID: PageID, baseDir: [String]) -> SourceImageRewriter.Resolver {
+        func imageResolver(forSource sourceID: SourceID, baseDir: [String]) -> SourceImageRewriter.Resolver {
             let siblingMap = siblingImages[sourceID] ?? [:]
             return SourceImageRewriter.Resolver(baseDir: baseDir, resolve: { originalPath in
                 guard let siblingID = siblingMap[originalPath] else { return nil }
@@ -1463,8 +1455,8 @@ struct Projection {
             let hasSibling = heads[entry.id] != nil
                 && (entry.mime.map { !MimeType.isText($0) } ?? false)
             let file = hasSibling
-                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: PageID(rawValue: entry.id))
-                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: PageID(rawValue: entry.id))
+                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: SourceID(rawValue: entry.id))
+                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: SourceID(rawValue: entry.id))
             let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: entry.humanName)
             sourceByName[entry.humanName] = target
             sourceByID[entry.id.uppercased()] = target
@@ -1519,7 +1511,7 @@ struct Projection {
     /// majority). Byte-identity: both the size path and content path MUST
     /// call this with the same inputs and use the SAME returned Data.
     private func rewrittenVerbatimSourceContent(
-        id: PageID, mimeType: String?, maps: LinkMaps
+        id: SourceID, mimeType: String?, maps: LinkMaps
     ) -> Data? {
         guard MimeType.isText(mimeType),
               let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
@@ -1661,13 +1653,13 @@ struct Projection {
         return files.flatMap { row in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
-                id: PageID(rawValue: row.id), filename: row.filename, ext: row.ext,
+                id: SourceID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version,
                 displayName: row.displayName)
             let verbatimContentData = byName
                 ? maps.map { rewrittenVerbatimSourceContent(
-                    id: PageID(rawValue: row.id), mimeType: row.mime, maps: $0) }
+                    id: SourceID(rawValue: row.id), mimeType: row.mime, maps: $0) }
                   .flatMap { $0 }
                 : nil
             let verbatimNode = Self.sourceNode(for: id, file: summary, contentData: verbatimContentData)

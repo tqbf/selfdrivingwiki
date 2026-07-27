@@ -11,9 +11,24 @@ import Testing
 /// dark window, lets async work settle, then writes PNGs so the redesigned diff
 /// and chrome can be eyeballed (the "acceptance test is a screenshot" this
 /// layout rework needs). A light structural assertion keeps them honest.
-@Suite(.timeLimit(.minutes(5)))
+///
+/// Opt-in only: these hosted snapshot renders can trigger macOS UI approval
+/// prompts in some local environments, so the default `swift test` path skips
+/// them unless the operator explicitly asks for this manual suite.
+@Suite(
+    "ManualSplitDiffSnapshotTests",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["WIKIFS_UI_DIFF_SNAPSHOTS"] == nil,
+        "Set WIKIFS_UI_DIFF_SNAPSHOTS=1 to run the manual diff snapshot UI suite.")
+)
 @MainActor
 struct SplitDiffSnapshotTests {
+    private static let snapshotsDirectory: URL = {
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent("tmp/test-snapshots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
 
     /// Render an SwiftUI view hosted at `size` (dark appearance) to a PNG.
     private func snapshot<V: View>(_ view: V, size: CGSize, to name: String,
@@ -31,7 +46,7 @@ struct SplitDiffSnapshotTests {
         let window = NSWindow(contentViewController: hosting)
         window.appearance = NSAppearance(named: .darkAqua)
         window.setContentSize(size)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.orderOut(nil) }
 
         for _ in 0..<settle { try await Task.sleep(for: .milliseconds(30)) }
@@ -40,7 +55,7 @@ struct SplitDiffSnapshotTests {
         let rep = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
         content.cacheDisplay(in: content.bounds, to: rep)
         let png = try #require(rep.representation(using: .png, properties: [:]))
-        let out = URL(fileURLWithPath: "/tmp/\(name).png")
+        let out = Self.snapshotsDirectory.appendingPathComponent("\(name).png", isDirectory: false)
         try png.write(to: out)
         print("SNAPSHOT_WRITTEN \(out.path) \(rep.pixelsWide)x\(rep.pixelsHigh) \(png.count)B")
         // Scale-independent: `bitmapImageRepForCachingDisplay` bakes in the
@@ -54,6 +69,8 @@ struct SplitDiffSnapshotTests {
     // MARK: - SplitDiffView in isolation
 
     @Test func renderDiffPaneToPNG() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let left = SampleDiff.left, right = SampleDiff.right
         let view = SplitDiffView(leftLabel: "Legacy", rightLabel: "Unknown",
                                  left: left, right: right)
@@ -64,6 +81,8 @@ struct SplitDiffSnapshotTests {
     // MARK: - Full ExtractionCompareSheet (chrome + HSplitView context + nominate)
 
     @Test func renderFullSheetBothModesAndNominate() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let store = try makeTwoBackendStore()
         let sourceID = store.sources.first { $0.filename.hasSuffix(".pdf") }!.id
 
@@ -101,7 +120,7 @@ struct SplitDiffSnapshotTests {
     /// A store with one PDF source carrying two extraction alternatives
     /// (anthropic + gemini), mirroring `ProcessedMarkdownTests`' setup.
     private func makeTwoBackendStore() throws -> WikiStoreModel {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = Self.snapshotsDirectory
             .appendingPathComponent("wikifs-diff-snap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))

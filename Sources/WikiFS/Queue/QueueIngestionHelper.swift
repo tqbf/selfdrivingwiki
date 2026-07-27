@@ -35,7 +35,7 @@ import WikiFSEngine
 /// multiple times on the same source won't create duplicate queue entries.
 @MainActor
 func enqueueIngestion(
-    sourceIDs: [PageID],
+    sourceIDs: [SourceID],
     store: WikiStoreModel,
     wikiID: WikiID,
     queueEngine: any QueueEngineClient
@@ -61,7 +61,7 @@ func enqueueIngestion(
         return
     }
 
-    var ingestionSourceIDs: [PageID] = []
+    var ingestionSourceIDs: [SourceID] = []
 
     for sourceID in newSourceIDs {
         guard let source = store.sources.first(where: { $0.id == sourceID }) else {

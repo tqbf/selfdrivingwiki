@@ -489,7 +489,7 @@ struct WikiLinkMarkdownTests {
     // MARK: - Embed rendering `![[source:…]]` (Phase 4a, AC.4)
 
     @Test func embedImageRendersAsImgTag() {
-        let id = PageID(rawValue: "01HTESTIMG0000000000000001")
+        let id = SourceID(rawValue: "01HTESTIMG0000000000000001")
         let out = WikiLinkMarkdown.linkified(
             "![[source:img.png]]",
             isResolved: { _, _ in true },
@@ -502,7 +502,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedVideoRendersAsVideoTag() {
-        let id = PageID(rawValue: "01HTESTVID00000000000000002")
+        let id = SourceID(rawValue: "01HTESTVID00000000000000002")
         let out = WikiLinkMarkdown.linkified(
             "![[source:clip.mp4]]",
             isResolved: { _, _ in true },
@@ -514,7 +514,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedAudioRendersAsAudioTag() {
-        let id = PageID(rawValue: "01HTESTAUD00000000000000003")
+        let id = SourceID(rawValue: "01HTESTAUD00000000000000003")
         let out = WikiLinkMarkdown.linkified(
             "![[source:song.mp3]]",
             isResolved: { _, _ in true },
@@ -526,7 +526,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedPdfRendersAsIframe() {
-        let id = PageID(rawValue: "01HTESTPDF00000000000000004")
+        let id = SourceID(rawValue: "01HTESTPDF00000000000000004")
         let out = WikiLinkMarkdown.linkified(
             "![[source:doc.pdf]]",
             isResolved: { _, _ in true },
@@ -556,7 +556,7 @@ struct WikiLinkMarkdownTests {
         // Plan v2: a resolved source whose MIME is non-media (text/plain)
         // renders a collapsed `<details>` transclusion (lazy fetch on expand),
         // not a cite link.
-        let id = PageID(rawValue: "01HTESTTXT00000000000000005")
+        let id = SourceID(rawValue: "01HTESTTXT00000000000000005")
         let out = WikiLinkMarkdown.linkified(
             "![[source:notes.txt]]",
             isResolved: { _, _ in true },
@@ -586,7 +586,7 @@ struct WikiLinkMarkdownTests {
     // MARK: - Byteless external-embed targets (Phase 4b, AC.1/AC.2/AC.4)
 
     @Test func embedProviderIframeTargetRendersIframe() {
-        let id = PageID(rawValue: "01HTESTYT0000000000000000A")
+        let id = SourceID(rawValue: "01HTESTYT0000000000000000A")
         let target = EmbedTarget(kind: .iframe, url: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ")
         let out = WikiLinkMarkdown.linkified(
             "![[source:video]]",
@@ -607,7 +607,7 @@ struct WikiLinkMarkdownTests {
     @Test func embedNonYouTubeIframeKeepsLazyLoading() {
         // Non-goal guard (issue #206): Vimeo/Spotify/etc. iframes render unchanged —
         // still lazy-loaded, no YouTube-specific attributes.
-        let id = PageID(rawValue: "01HTESTVIMEO00000000000000")
+        let id = SourceID(rawValue: "01HTESTVIMEO00000000000000")
         let target = EmbedTarget(kind: .iframe, url: "https://player.vimeo.com/video/76979871")
         let out = WikiLinkMarkdown.linkified(
             "![[source:video]]",
@@ -620,7 +620,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedDirectRemoteAudioTargetRendersNativeAudio() {
-        let id = PageID(rawValue: "01HTESTMP3000000000000000B")
+        let id = SourceID(rawValue: "01HTESTMP3000000000000000B")
         let target = EmbedTarget(kind: .audio, url: "https://radio.example.com/live.mp3")
         let out = WikiLinkMarkdown.linkified(
             "![[source:stream]]",
@@ -635,7 +635,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedDirectRemoteVideoTargetRendersNativeVideo() {
-        let id = PageID(rawValue: "01HTESTMP4000000000000000C")
+        let id = SourceID(rawValue: "01HTESTMP4000000000000000C")
         let target = EmbedTarget(kind: .video, url: "https://example.com/clip.mp4")
         let out = WikiLinkMarkdown.linkified(
             "![[source:clip]]",
@@ -654,7 +654,7 @@ struct WikiLinkMarkdownTests {
         // become a transclusion either — it falls back to a cite link so the
         // user can navigate to the source page. (A non-media transclusion
         // would render an empty body.)
-        let id = PageID(rawValue: "01HTESTSYN000000000000000D")
+        let id = SourceID(rawValue: "01HTESTSYN000000000000000D")
         let out = WikiLinkMarkdown.linkified(
             "![[source:video]]",
             isResolved: { _, _ in true },
@@ -668,7 +668,7 @@ struct WikiLinkMarkdownTests {
 
     @Test func embedBytefulStillUsesBlobDispatch() {
         // AC.4 regression: a byteful source (target nil) still emits wiki-blob://.
-        let id = PageID(rawValue: "01HTESTBYT000000000000000E")
+        let id = SourceID(rawValue: "01HTESTBYT000000000000000E")
         let out = WikiLinkMarkdown.linkified(
             "![[source:pic.png]]",
             isResolved: { _, _ in true },
@@ -691,7 +691,7 @@ struct WikiLinkMarkdownTests {
     }
 
     @Test func embedInSentenceDoesNotConsumePrecedingText() {
-        let id = PageID(rawValue: "01HTESTIMG00000000000000006")
+        let id = SourceID(rawValue: "01HTESTIMG00000000000000006")
         let out = WikiLinkMarkdown.linkified(
             "Here is ![[source:img.png]] inline.",
             isResolved: { _, _ in true },

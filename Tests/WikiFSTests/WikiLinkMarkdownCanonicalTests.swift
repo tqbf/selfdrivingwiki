@@ -8,7 +8,7 @@ import Testing
 struct WikiLinkMarkdownCanonicalTests {
 
     private let pageID = PageID(rawValue: "01HXXXXXXXXXXXXXXXXXXXXXXX")
-    private let sourceID = PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZZ")
+    private let sourceID = SourceID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZZ")
 
     // MARK: - AC.5 — display-at-render self-heals a stale alias
 
@@ -16,7 +16,7 @@ struct WikiLinkMarkdownCanonicalTests {
         let body = "[[page:\(pageID.rawValue)|Old Title]]"
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .page && id == pageID ? "New Title" : nil })
+            displayName: { id, kind in kind == .page && id == pageID.rawValue ? "New Title" : nil })
         #expect(out.contains("New Title"))
         #expect(!out.contains("Old Title"))
     }
@@ -25,7 +25,7 @@ struct WikiLinkMarkdownCanonicalTests {
         let body = "[[source:\(sourceID.rawValue)|Old Paper]]"
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .source && id == sourceID ? "New Paper" : nil })
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "New Paper" : nil })
         #expect(out.contains("New Paper"))
         #expect(!out.contains("Old Paper"))
     }
@@ -54,7 +54,7 @@ struct WikiLinkMarkdownCanonicalTests {
         let body = "[[page:\(pageID.rawValue)|Title]]"
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .page && id == pageID ? "Title" : nil })
+            displayName: { id, kind in kind == .page && id == pageID.rawValue ? "Title" : nil })
         // The URL carries both id= and title=.
         #expect(out.contains("wiki://page?id=\(pageID.rawValue)&title="))
         // id(from:) recovers the ULID.
@@ -67,7 +67,7 @@ struct WikiLinkMarkdownCanonicalTests {
         let body = "[[source:\(sourceID.rawValue)|Paper]]"
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
-            displayName: { id, kind in kind == .source && id == sourceID ? "Paper" : nil })
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil })
         #expect(out.contains("wiki://source?id=\(sourceID.rawValue)&title="))
     }
 

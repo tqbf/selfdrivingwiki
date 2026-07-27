@@ -1,0 +1,70 @@
+import Foundation
+import Testing
+
+/// Keeps the reviewed source-entity API boundary explicit. This is deliberately
+/// a narrow manifest rather than a proximity search for `PageID`: source files
+/// legitimately also contain page sides of links, chat IDs, and version IDs.
+struct SourceAPISignatureManifestTests {
+
+    private struct Entry {
+        let path: String
+        let signature: String
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func manifestEntries() throws -> [Entry] {
+        let manifestURL = repositoryRoot()
+            .appendingPathComponent("Tests/WikiFSTests/Fixtures/SourceAPISignatures.txt")
+        let manifest = try String(contentsOf: manifestURL, encoding: .utf8)
+
+        return try manifest
+            .split(whereSeparator: \.isNewline)
+            .filter { $0.starts(with: "#") == false && $0.isEmpty == false }
+            .map { line in
+                let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2,
+                      parts[0].isEmpty == false,
+                      parts[1].isEmpty == false
+                else {
+                    throw ManifestError.malformedLine(String(line))
+                }
+                return Entry(path: String(parts[0]), signature: String(parts[1]))
+            }
+    }
+
+    private enum ManifestError: Error, CustomStringConvertible {
+        case malformedLine(String)
+
+        var description: String {
+            switch self {
+            case .malformedLine(let line):
+                "malformed source API signature manifest line: \(line)"
+            }
+        }
+    }
+
+    @Test func allSourceEntitySignaturesUseSourceID() throws {
+        let root = repositoryRoot()
+        let entries = try manifestEntries()
+        #expect(entries.isEmpty == false, "source API signature manifest must not be empty")
+
+        for entry in entries {
+            #expect(
+                entry.signature.contains("SourceID"),
+                "manifest entry must assert a SourceID namespace: \(entry.path)"
+            )
+            let sourceURL = root.appendingPathComponent(entry.path)
+            let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            #expect(
+                source.contains(entry.signature),
+                "missing SourceID API signature in \(entry.path): \(entry.signature)"
+            )
+        }
+    }
+}

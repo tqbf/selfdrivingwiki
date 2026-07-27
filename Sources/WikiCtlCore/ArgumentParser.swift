@@ -39,7 +39,7 @@ public enum ArgumentParser {
         /// Phase B: append one dated log row. Carries its values directly (no
         /// deferred I/O) — the note is optional. `source` is the ingested-file
         /// id to stamp as ingested (only meaningful with `--kind ingest`).
-        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: PageID?)
+        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?)
         /// Phase B: rewrite the singleton wiki-index body. The body source is
         /// `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String, workspace: String? = nil)
@@ -310,7 +310,7 @@ public enum ArgumentParser {
         guard let title = options.value("--title") else {
             throw Failure.usage("log append: --title is required")
         }
-        let source = options.value("--source").map { PageID(rawValue: $0) }
+        let source = options.value("--source").map { SourceID(rawValue: $0) }
         return .logAppend(kind: kind, title: title, note: options.value("--note"), source: source)
     }
 
@@ -531,7 +531,15 @@ public enum ArgumentParser {
                 throw Failure.usage("bookmark add-ref: --target <id> is required")
             }
             let parentID = options.value("--parent")
-            return .bookmark(.addRef(parentID: parentID, kind: kind, targetID: PageID(rawValue: targetID)))
+            let content: BookmarkNode.Content
+            switch kind {
+            case .pageRef: content = .page(PageID(rawValue: targetID))
+            case .sourceRef: content = .source(SourceID(rawValue: targetID))
+            case .chatRef: content = .chat(PageID(rawValue: targetID))
+            case .folder:
+                throw Failure.usage("bookmark add-ref: folder is not a reference")
+            }
+            return .bookmark(.addRef(parentID: parentID, content: content))
 
         case "rename":
             guard let id = options.value("--id"), !id.isEmpty else {
@@ -697,7 +705,7 @@ public enum ArgumentParser {
         func requireSourceSelector() throws -> SourceCommand.Selector {
             switch (values["--id"], values["--name"]) {
             case (let id?, nil):
-                return .id(PageID(rawValue: id))
+                return .id(SourceID(rawValue: id))
             case (nil, let name?):
                 return .name(name)
             case (.some, .some):

@@ -92,6 +92,17 @@ public actor QueueEngine {
         self.workerFactory = workerFactory
     }
 
+    deinit {
+        for task in runningTasks.values {
+            task.cancel()
+        }
+        for waiters in completionWaiters.values {
+            for waiter in waiters {
+                waiter.resume(returning: .failure(CancellationError()))
+            }
+        }
+    }
+
     // MARK: - Start (rehydration + initial dispatch)
 
     /// Rehydrate in-memory state from the store: crash-recover running items,

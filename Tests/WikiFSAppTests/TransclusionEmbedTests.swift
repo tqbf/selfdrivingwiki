@@ -71,7 +71,7 @@ struct TransclusionEmbedTests {
             "![[\(ulid)]]",
             isResolved: { _, _ in true },
             displayName: { id, kind in
-                (id.rawValue == ulid && kind == .page) ? "Live Title" : nil
+                (id == ulid && kind == .page) ? "Live Title" : nil
             })
         #expect(out.contains("data-sdw-embed-kind=\"page\""))
         #expect(out.contains("data-sdw-embed-id=\"\(ulid)\""))
@@ -79,7 +79,7 @@ struct TransclusionEmbedTests {
     }
 
     @Test func nonMediaSourceEmbedEmitsDetails() {
-        let id = PageID(rawValue: "01HTESTTXT00000000000000005")
+        let id = SourceID(rawValue: "01HTESTTXT00000000000000005")
         let out = WikiLinkMarkdown.linkified(
             "![[source:notes.txt]]",
             isResolved: { _, _ in true },
@@ -93,7 +93,7 @@ struct TransclusionEmbedTests {
     }
 
     @Test func mediaSourceEmbedStillInline() {
-        let id = PageID(rawValue: "01HTESTIMG0000000000000001")
+        let id = SourceID(rawValue: "01HTESTIMG0000000000000001")
         let out = WikiLinkMarkdown.linkified(
             "![[source:pic.png]]",
             isResolved: { _, _ in true },
@@ -107,7 +107,7 @@ struct TransclusionEmbedTests {
 
     @Test func pdfSourceEmbedFollowsPolicy() {
         // Plan v2 §9: PDF is media — stays inline `<iframe>`.
-        let id = PageID(rawValue: "01HTESTPDF0000000000000004")
+        let id = SourceID(rawValue: "01HTESTPDF0000000000000004")
         let out = WikiLinkMarkdown.linkified(
             "![[source:doc.pdf]]",
             isResolved: { _, _ in true },
@@ -120,7 +120,7 @@ struct TransclusionEmbedTests {
     }
 
     @Test func mermaidSourceEmbedStillFenced() {
-        let id = PageID(rawValue: "01HTESTMMD0000000000000007")
+        let id = SourceID(rawValue: "01HTESTMMD0000000000000007")
         let diagram = "graph TD\nA-->B"
         let target = EmbedTarget(kind: .diagram, url: id.rawValue, content: diagram)
         let out = WikiLinkMarkdown.linkified(
@@ -136,7 +136,7 @@ struct TransclusionEmbedTests {
 
     @Test func bareNameFallsBackToSource() {
         // `![[Foo]]` where no page "Foo" exists but a source does → source.
-        let id = PageID(rawValue: "01HTESTSRC000000000000000F")
+        let id = SourceID(rawValue: "01HTESTSRC000000000000000F")
         let out = WikiLinkMarkdown.linkified(
             "![[Foo]]",
             isResolved: { name, kind in
@@ -152,7 +152,7 @@ struct TransclusionEmbedTests {
 
     @Test func pageWinsOnCollision() {
         // Both page and source "Foo" resolve → page transclusion.
-        let id = PageID(rawValue: "01HTESTPG0000000000000000B")
+        let id = SourceID(rawValue: "01HTESTPG0000000000000000B")
         let out = WikiLinkMarkdown.linkified(
             "![[Foo]]",
             isResolved: { _, _ in true },   // both namespaces resolve
@@ -165,7 +165,7 @@ struct TransclusionEmbedTests {
 
     @Test func explicitPagePrefixNeverSource() {
         // `![[page:Foo]]` with a source also named "Foo" → still page (no probe).
-        let srcID = PageID(rawValue: "01HTESTPG0000000000000000C")
+        let srcID = SourceID(rawValue: "01HTESTPG0000000000000000C")
         let out = WikiLinkMarkdown.linkified(
             "![[page:Foo]]",
             isResolved: { _, _ in true },
@@ -176,8 +176,8 @@ struct TransclusionEmbedTests {
         #expect(out.contains("data-sdw-embed-target=\"Foo\""))
     }
 
-    @Test func explicitSourcePrefixAlwaysSource() {
-        let id = PageID(rawValue: "01HTESTPG0000000000000000D")
+    @Test func sourceEmbedResolvesBySourceID() {
+        let id = SourceID(rawValue: "01HTESTPG0000000000000000D")
         let out = WikiLinkMarkdown.linkified(
             "![[source:Foo]]",
             isResolved: { _, _ in true },
@@ -246,7 +246,7 @@ struct TransclusionEmbedTests {
         let pageIDToName = Dictionary(uniqueKeysWithValues:
             pages.map { (PageID(rawValue: $0.id), $0.title) })
         let sourceIDToName = Dictionary(uniqueKeysWithValues:
-            sources.map { (PageID(rawValue: $0.id), $0.name) })
+            sources.map { (SourceID(rawValue: $0.id), $0.name) })
         return WikiRenderContext(
             pageTitles: Set(pages.map { $0.title.lowercased() }),
             pageIDToName: pageIDToName,
@@ -268,7 +268,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [(page.id.rawValue, "Inner")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, id: page.id, kind: .page, context: context)
+            store: store, target: .page(page.id), context: context)
         #expect(html.contains("Hello"))
         #expect(html.contains("<strong>world</strong>"))
         #expect(!TransclusionEmbedder.isEmpty(html))
@@ -288,7 +288,7 @@ struct TransclusionEmbedTests {
             pages: [(inner.id.rawValue, "Inner"), (outer.id.rawValue, "Outer")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, id: outer.id, kind: .page, context: context)
+            store: store, target: .page(outer.id), context: context)
         #expect(html.contains("sdw-transclusion"))
         #expect(html.contains("data-sdw-embed-kind=\"page\""))
         // Collapsed-by-default: NO `open` attribute on the nested details.
@@ -304,7 +304,7 @@ struct TransclusionEmbedTests {
         // it (house rule). The Coordinator catches and renders "Failed to load".
         #expect(throws: Error.self) {
             _ = try TransclusionEmbedder.renderEmbedBody(
-                store: store, id: ghostID, kind: .page, context: context)
+                store: store, target: .page(ghostID), context: context)
         }
     }
 
@@ -317,7 +317,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "doc.pdf")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, id: src.id, kind: .source, context: context)
+            store: store, target: .source(src.id), context: context)
         #expect(html.contains("Extracted"))
         #expect(html.contains("The body."))
     }
@@ -330,7 +330,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "notes.txt")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, id: src.id, kind: .source, context: context)
+            store: store, target: .source(src.id), context: context)
         #expect(html.contains("Plain text body."))
     }
 
@@ -347,7 +347,7 @@ struct TransclusionEmbedTests {
         #expect(body == nil)
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, id: src.id, kind: .source, context: context)
+            store: store, target: .source(src.id), context: context)
         #expect(TransclusionEmbedder.isEmpty(html))
     }
 

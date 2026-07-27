@@ -61,10 +61,10 @@ struct PagesContainerView: View {
         .sheet(item: $addToBookmarksContext) { ctx in
             BookmarkTargetPickerSheet(
                 store: store,
-                kind: ctx.kind,
-                ids: ctx.ids,
+                targets: ctx.targets,
                 onConfirm: { parentID in
-                    for id in ctx.ids {
+                    guard case .pages(let ids) = ctx.targets else { return }
+                    for id in ids {
                         store.addPageRef(parentID: parentID, pageID: id)
                     }
                 }
@@ -199,7 +199,7 @@ struct PagesContainerView: View {
                 session.updateDescriptor(d)
             },
             onAddToBookmarks: { ids in
-                addToBookmarksContext = BookmarkTargetPickerContext(kind: .pages, ids: ids)
+                addToBookmarksContext = BookmarkTargetPickerContext(targets: .pages(ids))
             })
     }
 

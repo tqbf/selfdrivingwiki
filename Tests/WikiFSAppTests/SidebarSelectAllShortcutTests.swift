@@ -14,7 +14,7 @@ import Testing
 /// hierarchy for every key-down, not just to the first responder — so the table
 /// must confirm it actually owns focus before consuming Cmd+A.
 @MainActor
-@Suite struct SidebarSelectAllShortcutTests {
+struct SidebarSelectAllShortcutTests {
 
     // MARK: - Helpers
 
@@ -33,12 +33,14 @@ import Testing
             keyCode: 0)
     }
 
-    private func makeWindow() -> NSWindow {
-        NSWindow(
+    private func makeWindow() async -> (HostedAppKitTestGate.Lease, NSWindow) {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false)
+        return (lease, window)
     }
 
     // MARK: - Pure gating predicate (no window/visibility dependency)
@@ -71,9 +73,10 @@ import Testing
 
     // MARK: - Integration: the reported bug (issue #154)
 
-    @Test func pagesTableDoesNotStealCmdAFromOmniboxField() throws {
+    @Test func pagesTableDoesNotStealCmdAFromOmniboxField() async throws {
         let event = try #require(cmdAEvent())
-        let window = makeWindow()
+        let (lease, window) = await makeWindow()
+        defer { window.orderOut(nil); lease.release() }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)
         let omnibox = NSTextField(string: "omnibox text")
@@ -90,9 +93,10 @@ import Testing
         #expect(table.performKeyEquivalent(with: event) == false)
     }
 
-    @Test func sourcesTableDoesNotStealCmdAFromOmniboxField() throws {
+    @Test func sourcesTableDoesNotStealCmdAFromOmniboxField() async throws {
         let event = try #require(cmdAEvent())
-        let window = makeWindow()
+        let (lease, window) = await makeWindow()
+        defer { window.orderOut(nil); lease.release() }
         let table = SourcesNSTableView()
         window.contentView?.addSubview(table)
         let omnibox = NSTextField(string: "omnibox text")
@@ -107,12 +111,13 @@ import Testing
 
     // MARK: - Only Cmd+A is intercepted
 
-    @Test func pagesTableDoesNotInterceptOtherCommandKeys() throws {
+    @Test func pagesTableDoesNotInterceptOtherCommandKeys() async throws {
         let event = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
             windowNumber: 0, context: nil, characters: "b",
             charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11))
-        let window = makeWindow()
+        let (lease, window) = await makeWindow()
+        defer { window.orderOut(nil); lease.release() }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)
         // Anything that isn't Cmd+A defers to super regardless of focus.

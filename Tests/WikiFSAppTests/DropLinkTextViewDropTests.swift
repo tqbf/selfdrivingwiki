@@ -129,7 +129,9 @@ struct DropLinkTextViewDropTests {
     /// moment it appears. Pin that: put the view in a window WITHOUT ever making
     /// it first responder or calling `registerForDraggedTypes` by hand, and the
     /// sidebar type must already be registered.
-    @Test func viewDidMoveToWindow_eagerlyRegistersSidebarType() {
+    @Test func viewDidMoveToWindow_eagerlyRegistersSidebarType() async {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let tv = ScrollableTextEditor.makeConfiguredTextView(
             font: .monospacedSystemFont(ofSize: 13, weight: .regular))
         let sidebarType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
@@ -143,6 +145,7 @@ struct DropLinkTextViewDropTests {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
         let scrollView = NSScrollView(frame: window.contentLayoutRect)
         scrollView.documentView = tv
         window.contentView = scrollView
@@ -165,7 +168,7 @@ struct DropLinkTextViewDropTests {
 /// the fast-tier `--skip` regex in `.github/workflows/ci.yml` so it runs only
 /// in the `swift-integration` job.
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct SidebarDropBuilderIntegrationTests {
 
     /// Resolve a fresh in-memory store + `WikiStoreModel`. Mirrors

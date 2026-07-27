@@ -1848,7 +1848,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             guard hasPages else { return .commit }
 
             let hasSources = try Self.tableExists("sources", in: db)
-            let resolveSource: (String) throws -> PageID? = hasSources
+            let resolveSource: (String) throws -> SourceID? = hasSources
                 ? { [self] in try self.resolveSourceByNameLocked($0, in: db) }
                 : { _ in nil }
 
@@ -2168,7 +2168,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `SQLiteWikiStore.resolveSourceByName` (3-pass: exact → extension-stripped
     /// → loose-key unique). Safe to call from inside a `mutate`/transaction
     /// closure — never re-enters `dbWriter`.
-    private func resolveSourceByNameLocked(_ displayName: String, in db: Database) throws -> PageID? {
+    private func resolveSourceByNameLocked(_ displayName: String, in db: Database) throws -> SourceID? {
         // Pass 1: exact (display_name or filename) match, newest first.
         if let id = try String.fetchOne(
             db,
@@ -2180,12 +2180,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """,
             arguments: [displayName, displayName]
         ) {
-            return PageID(rawValue: id)
+            return SourceID(rawValue: id)
         }
         // Pass 2 + 3: scan all sources — extension-stripped match (immediate)
         // and loose-key collection (unique-only at the end).
         let queryLooseKey = WikiNameRules.looseMatchKey(displayName)
-        var looseMatches: [PageID] = []
+        var looseMatches: [SourceID] = []
         let rows = try Row.fetchAll(
             db,
             sql: "SELECT id, COALESCE(display_name, filename) AS name FROM sources ORDER BY updated_at DESC;"
@@ -2194,10 +2194,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let id: String = row["id"]
             let name: String = row["name"]
             if (name as NSString).deletingPathExtension.caseInsensitiveCompare(displayName) == .orderedSame {
-                return PageID(rawValue: id)
+                return SourceID(rawValue: id)
             }
             if !queryLooseKey.isEmpty, WikiNameRules.looseMatchKey(name) == queryLooseKey {
-                looseMatches.append(PageID(rawValue: id))
+                looseMatches.append(SourceID(rawValue: id))
             }
         }
         // Pass 3: lenient, unique-only.
@@ -2208,14 +2208,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// (name, fragment) reading of the raw target — longest name first — via
     /// `WikiLinkResolver`, so names containing `#` resolve whole. Ported from
     /// `SQLiteWikiStore.resolveLinkTarget`, but takes a `Database` and a
-    /// resolver closure `(String, Database) throws -> PageID?` (the `*Locked`
+    /// resolver closure `(String, Database) throws -> ID?` (the `*Locked`
     /// variants) so it can run inside the write transaction without re-entering
     /// `dbWriter`.
-    private func resolveLinkTarget(
+    private func resolveLinkTarget<ID>(
         _ link: ParsedLink,
-        using resolve: (String, Database) throws -> PageID?,
+        using resolve: (String, Database) throws -> ID?,
         in db: Database
-    ) throws -> PageID? {
+    ) throws -> ID? {
         let raw = link.fragment.map { "\(link.target)#\($0)" } ?? link.target
         for split in WikiLinkResolver.candidateSplits(of: raw) {
             if let id = try resolve(split.base, db) { return id }
@@ -2251,7 +2251,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The derived-markdown chain (`[smvID]`) for `sourceID`, ULID-asc =
     /// chronological (index 0 = v1). Locked variant of
     /// `SQLiteWikiStore.derivedVersionIDs` — runs against the given `db`.
-    private func derivedVersionIDsLocked(sourceID: PageID, in db: Database) throws -> [PageID] {
+    private func derivedVersionIDsLocked(sourceID: SourceID, in db: Database) throws -> [PageID] {
         let rows = try String.fetchAll(
             db,
             sql: "SELECT id FROM source_markdown_versions WHERE file_id = ? ORDER BY id ASC;",
@@ -2264,7 +2264,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `sourceID`, or `nil` when out of range. Locked variant of
     /// `SQLiteWikiStore.resolveVersionPin` — runs against the given `db`.
     private func resolveVersionPin(
-        _ pin: String, sourceID: PageID, in db: Database
+        _ pin: String, sourceID: SourceID, in db: Database
     ) throws -> PageID? {
         guard let ordinal = Int(pin), ordinal >= 1 else { return nil }
         let ids = try derivedVersionIDsLocked(sourceID: sourceID, in: db)
@@ -3134,7 +3134,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func resolveSourceByName(_ displayName: String) throws -> PageID? {
+    public func resolveSourceByName(_ displayName: String) throws -> SourceID? {
         try dbWriter.read { db in
             try self.resolveSourceByNameLocked(displayName, in: db)
         }
@@ -3173,9 +3173,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     VALUES (?, ?, ?);
                     """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText])
                 case .source:
-                    let resolved: PageID?
+                    let resolved: SourceID?
                     if let id = try self.canonicalLinkID(link, in: db) {
-                        resolved = id
+                        resolved = SourceID(rawValue: id.rawValue)
                     } else {
                         resolved = try self.resolveLinkTarget(
                             link, using: self.resolveSourceByNameLocked, in: db)
@@ -3264,7 +3264,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.duplicateContent(existing: existing)
             }
 
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceID(rawValue: ULID.generate())
             let now = Date()
             let nowTS = now.timeIntervalSince1970
             let sourceID = id.rawValue
@@ -3383,7 +3383,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 }
             }
 
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceID(rawValue: ULID.generate())
             let ext = (filename as NSString).pathExtension.lowercased()
             let utiMime: String? = {
                 #if canImport(UniformTypeIdentifiers)
@@ -3472,7 +3472,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func sourceContent(id: PageID) throws -> Data {
+    public func sourceContent(id: SourceID) throws -> Data {
         try dbWriter.read { db in
             // 1. Resolve the active content version (ref → version, else
             //    default-active MAX(id)). Mirrors `SQLiteWikiStore.sourceContent`.
@@ -3501,7 +3501,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
             guard let row else {
                 // No version rows at all → unknown source.
-                throw WikiStoreError.notFound(id)
+                throw WikiStoreError.sourceNotFound(id)
             }
 
             // 2. Byteless source (blob_hash IS NULL) → empty Data (never throws).
@@ -3525,7 +3525,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func deleteSource(id: PageID) throws {
+    public func deleteSource(id: SourceID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .deleted)
         }) { db in
@@ -3536,7 +3536,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func sourceOrigin(sourceID: PageID) throws -> SourceOrigin? {
+    public func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin? {
         try dbWriter.read { db in
             // Same `runTitle` subquery as `pageOrigin` (#745) — resolves the
             // chat title for `chat:<id>` agents; NULL for other agent kinds.
@@ -3587,7 +3587,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `pageEditHistory`). Ordered NEWEST-FIRST (the provenance panel renders
     /// newest at top). Read-only: routes through `dbWriter.read` so this is
     /// safe off-main. READ-ONLY → emits no `ResourceChangeEvent`.
-    public func sourceEditHistory(sourceID: PageID) throws -> [SourceOrigin] {
+    public func sourceEditHistory(sourceID: SourceID) throws -> [SourceOrigin] {
         try dbWriter.read { db in
             // Same `runTitle` subquery as `sourceOrigin` (#745).
             //
@@ -3620,7 +3620,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Decode an origin row. NULL activity/agent columns degrade gracefully.
 
 
-    public func renameSource(id: PageID, to newDisplayName: String) throws {
+    public func renameSource(id: SourceID, to newDisplayName: String) throws {
         let renamed: Bool = try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .updated)
         }) { db in
@@ -3648,7 +3648,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// Post-commit FTS upsert for `source_search` (opens its own write so it
     /// must be called AFTER `mutate` returns, never inside).
-    private func upsertSourceSearchPostCommit(sourceID: PageID, body: String) {
+    private func upsertSourceSearchPostCommit(sourceID: SourceID, body: String) {
         do {
             try dbWriter.write { db in
                 self.upsertSourceSearch(sourceID: sourceID, body: body, on: db)
@@ -3662,7 +3662,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// safe inside `mutate`. Mirrors `SQLiteWikiStore.getSource`.
 
 
-    public func setSourceDisplayName(id: PageID, displayName: String) throws {
+    public func setSourceDisplayName(id: SourceID, displayName: String) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .updated)
         }) { db in
@@ -3673,7 +3673,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func markSourceIngested(id: PageID) throws {
+    public func markSourceIngested(id: SourceID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .updated)
         }) { db in
@@ -3698,7 +3698,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: Processed markdown versions
 
     public func appendContentVersion(
-        sourceID: PageID, data: Data, mimeType: String? = nil,
+        sourceID: SourceID, data: Data, mimeType: String? = nil,
         provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
         try mutate(event: { _ in
@@ -3788,7 +3788,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion? {
+    public func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion? {
         try dbWriter.read { db in
             // 1. Prefer the source-derived ref.
             if let row = try Row.fetchOne(
@@ -3820,7 +3820,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func hasProcessedMarkdown(sourceID: PageID) throws -> Bool {
+    public func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool {
         try dbWriter.read { db in
             let count = try Int.fetchOne(
                 db,
@@ -3831,7 +3831,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion] {
+    public func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(
                 db,
@@ -3865,17 +3865,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func sourceDerivedChains() throws -> [PageID: [PageID]] {
+    public func sourceDerivedChains() throws -> [SourceID: [PageID]] {
         do {
             return try dbWriter.read { db in
                 let rows = try Row.fetchAll(db, sql: """
                 SELECT file_id, id FROM source_markdown_versions ORDER BY file_id ASC, id ASC;
                 """)
-                var chains: [PageID: [PageID]] = [:]
+                var chains: [SourceID: [PageID]] = [:]
                 for row in rows {
                     let sourceID: String = row["file_id"]
                     let smvID: String = row["id"]
-                    chains[PageID(rawValue: sourceID), default: []]
+                    chains[SourceID(rawValue: sourceID), default: []]
                         .append(PageID(rawValue: smvID))
                 }
                 return chains
@@ -3887,7 +3887,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func embedDescriptors() throws -> [PageID: SourceEmbedDescriptor] {
+    public func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor] {
         do {
             return try dbWriter.read { db in
                 let rows = try Row.fetchAll(db, sql: """
@@ -3906,14 +3906,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 LEFT JOIN agents a ON a.id = act.agent_id
                 WHERE sv.blob_hash IS NULL;
                 """)
-                var out: [PageID: SourceEmbedDescriptor] = [:]
+                var out: [SourceID: SourceEmbedDescriptor] = [:]
                 for row in rows {
                     let idStr: String = row["id"]
                     let mime: String? = row["mime_type"]
                     let externalIdentity: String? = row["external_identity"]
                     let agentName: String? = row["name"]
                     let planURL: String? = row["plan"]
-                    let id = PageID(rawValue: idStr)
+                    let id = SourceID(rawValue: idStr)
                     out[id] = SourceEmbedDescriptor(
                         id: id,
                         mimeType: mime,
@@ -3975,7 +3975,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
             let contentHash = portableSHA256( data)
                 .map { String(format: "%02x", $0) }.joined()
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceID(rawValue: ULID.generate())
             let now = Date()
             let nowTS = now.timeIntervalSince1970
             let sourceID = id.rawValue
@@ -4025,7 +4025,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func hasImageSiblings(sourceID: PageID) throws -> Bool {
+    public func hasImageSiblings(sourceID: SourceID) throws -> Bool {
         try dbWriter.read { db in
             guard let active = try self.activeContentVersion(sourceID: sourceID, on: db),
                   let activityID = active.activityID else { return false }
@@ -4042,7 +4042,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func siblingImageResolvers() throws -> [PageID: [String: PageID]] {
+    public func siblingImageResolvers() throws -> [SourceID: [String: SourceID]] {
         try dbWriter.read { db in
             // Step 1: active version's activity_id per source (ref → else MAX(id)).
             let activeRows = try Row.fetchAll(db, sql: """
@@ -4057,9 +4057,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             ), '') AS max_activity
             FROM sources s;
             """)
-            var sourceActivity: [(PageID, String)] = []
+            var sourceActivity: [(SourceID, String)] = []
             for row in activeRows {
-                let sid = PageID(rawValue: row["id"])
+                let sid = SourceID(rawValue: row["id"])
                 let refAct: String? = row["ref_activity"]
                 let maxAct: String = row["max_activity"]
                 if let refAct {
@@ -4077,19 +4077,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE sv.original_path IS NOT NULL AND sv.activity_id IS NOT NULL
             ORDER BY sv.id ASC;
             """)
-            var byActivity: [String: [(String, PageID)]] = [:]
+            var byActivity: [String: [(String, SourceID)]] = [:]
             for row in siblingRows {
                 let activity: String = row["activity_id"]
                 let path: String = row["original_path"]
-                let sid = PageID(rawValue: row["source_id"])
+                let sid = SourceID(rawValue: row["source_id"])
                 byActivity[activity, default: []].append((path, sid))
             }
 
             // Step 3: fold — for each source, its activity's path→siblingID map
             // (first-wins per path, already ordered by id ASC).
-            var result: [PageID: [String: PageID]] = [:]
+            var result: [SourceID: [String: SourceID]] = [:]
             for (sid, activity) in sourceActivity {
-                var map: [String: PageID] = [:]
+                var map: [String: SourceID] = [:]
                 for (path, siblingID) in byActivity[activity] ?? [] {
                     if map[path] == nil { map[path] = siblingID }
                 }
@@ -4100,7 +4100,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String] {
+    public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT smv.id, a.name
@@ -4120,7 +4120,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func processedMarkdownAlternatives(sourceID: PageID) throws -> [ExtractionAlternative] {
+    public func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative] {
         try dbWriter.read { db in
             // Resolve the active HEAD id (default-active rule).
             let headID: String?
@@ -4167,7 +4167,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func appendProcessedMarkdown(
-        sourceID: PageID, content: String,
+        sourceID: SourceID, content: String,
         origin: SourceMarkdownOrigin, note: String?,
         technique: String? = nil
     ) throws -> SourceMarkdownVersion {
@@ -4207,7 +4207,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `processedMarkdownHead` — it re-enters `dbWriter.read` and deadlocks).
 
 
-    public func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion {
+    public func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion {
         let result: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -4279,7 +4279,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func recordMarkdownExtraction(
-        sourceID: PageID, content: String, backend: ExtractionBackend,
+        sourceID: SourceID, content: String, backend: ExtractionBackend,
         sourceVersionID: String? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
         let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
@@ -4342,7 +4342,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws {
+    public func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -5726,7 +5726,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func storeSourceChunks(id: PageID, chunks: [Data]) throws {
+    public func storeSourceChunks(id: SourceID, chunks: [Data]) throws {
         try mutate(event: { _ in nil }) { db in
             try db.execute(sql: "DELETE FROM source_chunks WHERE source_id = ?;",
                            arguments: [id.rawValue])
@@ -5739,7 +5739,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func missingSourceEmbeddingWork() -> [(id: PageID, text: String)] {
+    public func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)] {
         do {
             return try dbWriter.read { db in
                 // Mirrors SQLiteWikiStore: text is the source's title + its
@@ -5756,7 +5756,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 ORDER BY s.id;
                 """)
                 return rows.map { row in
-                    let id = PageID(rawValue: row["id"])
+                    let id = SourceID(rawValue: row["id"])
                     let title: String = row["title"]
                     let body: String = row["body"]
                     return (id, body.isEmpty ? title : "\(title)\n\n\(body)")
@@ -5828,14 +5828,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             FROM bookmark_nodes
             ORDER BY parent_id IS NULL DESC, parent_id, position;
             """)
-            return rows.map { row in
-                BookmarkNode(
-                    id: row["id"],
+            return try rows.map { row in
+                let id: String = row["id"]
+                let kind: String = row["kind"]
+                let label: String? = row["label"]
+                let targetRawValue: String? = row["target_id"]
+                return BookmarkNode(
+                    id: id,
                     parentID: row["parent_id"],
                     position: row["position"],
-                    kind: BookmarkNodeKind(rawValue: row["kind"]) ?? .folder,
-                    label: row["label"],
-                    targetID: (row["target_id"] as String?).map { PageID(rawValue: $0) },
+                    content: try BookmarkNode.content(
+                        bookmarkID: id,
+                        kindRawValue: kind,
+                        label: label,
+                        targetRawValue: targetRawValue
+                    ),
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"])
                 )
@@ -5846,12 +5853,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func createBookmarkNode(
         parentID: String?, position: Int,
-        kind: BookmarkNodeKind, label: String?,
-        targetID: PageID?
+        content: BookmarkNode.Content
     ) throws -> BookmarkNode {
         try mutate(event: { node in
             self.localEvent(.bookmark, id: node.id, change: .created)
         }) { db in
+            _ = try BookmarkNode.content(
+                bookmarkID: "<new bookmark>",
+                kindRawValue: content.kind.rawValue,
+                label: content.label,
+                targetRawValue: content.targetRawValue
+            )
             let id = ULID.generate()
             let now = Date().timeIntervalSince1970
 
@@ -5866,8 +5878,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             INSERT INTO bookmark_nodes (id, parent_id, position, kind, label, target_id, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """, arguments: [
-                id, parentID as String?, position, kind.rawValue,
-                label as String?, targetID?.rawValue as String?, now, now
+                id, parentID as String?, position, content.kind.rawValue,
+                content.label as String?, content.targetRawValue as String?, now, now
             ])
 
             // Defense-in-depth: renumber siblings so positions stay contiguous.
@@ -5895,21 +5907,27 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             let stamp = Date(timeIntervalSince1970: now)
             return BookmarkNode(
-                id: id, parentID: parentID, position: position, kind: kind,
-                label: label, targetID: targetID, createdAt: stamp, updatedAt: stamp
+                id: id, parentID: parentID, position: position, content: content,
+                createdAt: stamp, updatedAt: stamp
             )
         }
     }
 
 
-    public func updateBookmarkNode(id: String, label: String?) throws {
+    public func renameBookmarkFolder(id: String, to label: String) throws {
         try mutate(event: { _ in
             self.localEvent(.bookmark, id: id, change: .updated)
         }) { db in
+            guard !label.isEmpty else {
+                throw WikiStoreError.invalidBookmarkRow(id: id, reason: "folder requires a non-empty label")
+            }
             let now = Date().timeIntervalSince1970
             try db.execute(sql: """
-            UPDATE bookmark_nodes SET label = ?, updated_at = ? WHERE id = ?;
-            """, arguments: [label as String?, now, id])
+            UPDATE bookmark_nodes SET label = ?, updated_at = ? WHERE id = ? AND kind = ?;
+            """, arguments: [label, now, id, BookmarkNodeKind.folder.rawValue])
+            guard db.changesCount == 1 else {
+                throw WikiStoreError.invalidBookmarkRow(id: id, reason: "only folders can be renamed")
+            }
         }
     }
 
@@ -6794,7 +6812,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let roleRaw: String = row["role"]
 
         return SourceSummary(
-            id: PageID(rawValue: id),
+            id: SourceID(rawValue: id),
             filename: filename,
             ext: ext,
             mimeType: mime,
@@ -6895,7 +6913,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The active content version for `sourceID`: prefer the `source-content`
     /// ref, else `MAX(id)` (the default-active rule, §4.3). `db:`-taking.
     /// Mirrors `SQLiteWikiStore.activeContentVersion`.
-    private func activeContentVersion(sourceID: PageID, on db: Database) throws -> SourceVersion? {
+    private func activeContentVersion(sourceID: SourceID, on db: Database) throws -> SourceVersion? {
         let cols = """
         id, source_id, parent_id, blob_hash, mime_type,
         activity_id, external_identity, fetched_at
@@ -6928,7 +6946,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Routes the read through `dbWriter.read` (the serial reader queue), which
     /// is reentrant-safe from within the private `db:`-taking helper. Mirrors
     /// `SQLiteWikiStore.activeContentVersion(sourceID:)` exactly.
-    public func activeContentVersion(sourceID: PageID) throws -> SourceVersion? {
+    public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion? {
         try dbWriter.read { db in
             try self.activeContentVersion(sourceID: sourceID, on: db)
         }
@@ -6940,7 +6958,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The `generation` of the `source-content` ref for `sourceID`, or nil.
     /// Mirrors `SQLiteWikiStore.refGeneration`.
-    private func refGeneration(sourceID: PageID, on db: Database) throws -> Int? {
+    private func refGeneration(sourceID: SourceID, on db: Database) throws -> Int? {
         try Int.fetchOne(
             db,
             sql: "SELECT generation FROM refs WHERE kind = 'source-content' AND owner_id = ?;",
@@ -6965,7 +6983,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let fetchedAt: Double = row["fetched_at"]
         return SourceVersion(
             id: id,
-            sourceID: PageID(rawValue: sourceIDStr),
+            sourceID: SourceID(rawValue: sourceIDStr),
             parentID: parentID,
             blobHash: blobHash,
             mimeType: mimeType,
@@ -7018,7 +7036,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let technique: String? = row["technique"]
         return SourceMarkdownVersion(
             id: PageID(rawValue: row["id"]),
-            sourceID: PageID(rawValue: row["file_id"]),
+            sourceID: SourceID(rawValue: row["file_id"]),
             parentID: parentID.map { PageID(rawValue: $0) },
             content: content,
             origin: SourceMarkdownOrigin(rawValue: originRaw) ?? .extraction,
@@ -7040,7 +7058,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// UPSERT the `source_search` FTS backing row (title + body). The FTS5
     /// triggers on `source_search` keep `sources_fts` fresh. Best-effort: a
     /// failure is logged, never thrown (mirrors SQLiteWikiStore's `try?` guard).
-    private func upsertSourceSearch(sourceID: PageID, body: String, on db: Database) {
+    private func upsertSourceSearch(sourceID: SourceID, body: String, on db: Database) {
         guard let title = DebugLog.trying("upsertSourceSearch", operation: {
             try String.fetchOne(
                 db,
@@ -7069,7 +7087,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `storeSourceChunks` (its own transaction). Gated on the embedder being
     /// loaded (the model must be available to embed). Mirrors
     /// `SQLiteWikiStore.reembedSource` minus the lock-holding.
-    private func reembedSource(sourceID: PageID, body: String) {
+    private func reembedSource(sourceID: SourceID, body: String) {
         guard let title = DebugLog.trying("reembedSource", operation: {
             try dbWriter.read { db in
                 try String.fetchOne(
@@ -7102,7 +7120,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The `version_id` of the `source-derived` ref for `sourceID`, or nil.
     /// Mirrors `SQLiteWikiStore.markdownDerivedRef`.
-    private func markdownDerivedRef(sourceID: PageID, on db: Database) throws -> String? {
+    private func markdownDerivedRef(sourceID: SourceID, on db: Database) throws -> String? {
         try String.fetchOne(
             db,
             sql: "SELECT version_id FROM refs WHERE kind = 'source-derived' AND owner_id = ?;",
@@ -7116,7 +7134,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The current `generation` of the `source-derived` ref, or nil.
     /// Mirrors `SQLiteWikiStore.markdownDerivedGeneration`.
-    private func markdownDerivedGeneration(sourceID: PageID, on db: Database) throws -> Int? {
+    private func markdownDerivedGeneration(sourceID: SourceID, on db: Database) throws -> Int? {
         try Int.fetchOne(
             db,
             sql: "SELECT generation FROM refs WHERE kind = 'source-derived' AND owner_id = ?;",
@@ -7133,7 +7151,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Mirrors `SQLiteWikiStore.upsertMarkdownDerivedRef`.
     /// CONTRACT: caller is inside `mutate`.
     private func upsertMarkdownDerivedRef(
-        sourceID: PageID, versionID: String, now: Double, on db: Database
+        sourceID: SourceID, versionID: String, now: Double, on db: Database
     ) throws {
         let prevGeneration = try markdownDerivedGeneration(sourceID: sourceID, on: db)
         let nextGeneration = (prevGeneration ?? 0) + 1
@@ -7180,7 +7198,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// Fetch one source summary by id on an open `db`. `db:`-taking so it is
     /// safe inside `mutate`. Mirrors `SQLiteWikiStore.getSource`.
-    private static func getSourceSummary(id: PageID, on db: Database) throws -> SourceSummary {
+    private static func getSourceSummary(id: SourceID, on db: Database) throws -> SourceSummary {
         guard let row = try Row.fetchOne(
             db,
             sql: """
@@ -7190,7 +7208,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """,
             arguments: [id.rawValue]
         ) else {
-            throw WikiStoreError.notFound(id)
+            throw WikiStoreError.sourceNotFound(id)
         }
         return try Self.readSourceSummary(from: row)
     }
@@ -7201,7 +7219,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// `db:`-taking HEAD read for use inside `mutate` (cannot call the public
     /// `processedMarkdownHead` — it re-enters `dbWriter.read` and deadlocks).
-    private func processedMarkdownHead(sourceID: PageID, on db: Database) throws -> SourceMarkdownVersion? {
+    private func processedMarkdownHead(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersion? {
         if let row = try Row.fetchOne(
             db,
             sql: """
@@ -7233,7 +7251,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// taking; emits FTS inline. The caller's post-commit re-embed runs on
     /// `result.content`.
     private func appendProcessedMarkdownInline(
-        sourceID: PageID, content: String,
+        sourceID: SourceID, content: String,
         origin: SourceMarkdownOrigin, note: String?, technique: String?,
         parentID: PageID?, db: Database
     ) throws -> SourceMarkdownVersion {
@@ -7668,7 +7686,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Roll the source-content ref back to `versionID`, refreshing the
     /// denormalized `sources` mirror (byte_size, mime_type, content_hash).
     /// Ported from the former `SQLiteWikiStore.rollbackSourceContent`.
-    public func rollbackSourceContent(sourceID: PageID, to versionID: PageID) throws {
+    public func rollbackSourceContent(sourceID: SourceID, to versionID: PageID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -7676,7 +7694,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    private func rollbackSourceContentBody(db: Database, sourceID: PageID, versionID: PageID) throws {
+    private func rollbackSourceContentBody(db: Database, sourceID: SourceID, versionID: PageID) throws {
         // Use inSavepoint (not inTransaction) — this method is called from inside
         // mutate()'s inSavepoint, so inSavepoint nests as a SAVEPOINT instead
         // of failing with "cannot start a transaction within a transaction".
@@ -7751,7 +7769,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The source summary for `id`. Ported from the former
     /// SQLiteWikiStore.getSource(id:).
-    public func getSource(id: PageID) throws -> SourceSummary {
+    public func getSource(id: SourceID) throws -> SourceSummary {
         try dbWriter.read { db in try Self.getSourceSummary(id: id, on: db) }
     }
 
@@ -7955,7 +7973,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The full content-version chain for a source, newest-first (parallel to
     /// `processedMarkdownHistory`). Empty when the source has no versions.
     /// Mirrors `SQLiteWikiStore.contentVersionHistory(sourceID:)`.
-    public func contentVersionHistory(sourceID: PageID) throws -> [SourceVersion] {
+    public func contentVersionHistory(sourceID: SourceID) throws -> [SourceVersion] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(
                 db,
@@ -7969,7 +7987,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             return rows.map { row in
                 SourceVersion(
                     id: row["id"],
-                    sourceID: PageID(rawValue: row["source_id"]),
+                    sourceID: SourceID(rawValue: row["source_id"]),
                     parentID: row["parent_id"],
                     blobHash: row["blob_hash"],
                     mimeType: row["mime_type"],
@@ -8104,7 +8122,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Collect IDs first (read), then seed each outside any write block so
         // `appendProcessedMarkdown`'s own `mutate` transaction + post-commit work
         // (re-embed, event emit) run cleanly.
-        let ids: [PageID]
+        let ids: [SourceID]
         do {
             ids = try dbWriter.read { db in
                 try String.fetchAll(
@@ -8115,7 +8133,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                       AND NOT EXISTS (SELECT 1 FROM source_markdown_versions smv
                                       WHERE smv.file_id = s.id);
                     """
-                ).map { PageID(rawValue: $0) }
+                ).map { SourceID(rawValue: $0) }
             }
         } catch {
             DebugLog.store("seedNativeMarkdownSources: id query failed — \(error)")
@@ -8145,7 +8163,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Read the `pinned_version_id` for a source-link edge `(from, to, role)`.
     /// Returns the resolved version id, or nil when the edge has no pin (NULL)
     /// or doesn't exist. Mirrors `SQLiteWikiStore.sourceLinkPin`.
-    public func sourceLinkPin(from pageID: PageID, to sourceID: PageID,
+    public func sourceLinkPin(from pageID: PageID, to sourceID: SourceID,
                               role: WikiLinkParser.LinkRole = .cite) throws -> PageID? {
         try dbWriter.read { db in
             let row = try Row.fetchOne(
@@ -8167,7 +8185,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// stable across renames). Used by `renameSource` to find candidate pages
     /// for link rewriting. One query, zero false positives. Mirrors
     /// `SQLiteWikiStore.sourceLinkingPages`.
-    public func sourceLinkingPages(to sourceID: PageID) throws -> [PageID] {
+    public func sourceLinkingPages(to sourceID: SourceID) throws -> [PageID] {
         try dbWriter.read { db in
             let rows = try String.fetchAll(
                 db,
@@ -8194,7 +8212,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 guard let role = PageSourceLinkRole(rawValue: row["role"]) else { return nil }
                 return PageSourceLink(
                     pageID: PageID(rawValue: row["from_page_id"]),
-                    sourceID: PageID(rawValue: row["to_source_id"]),
+                    sourceID: SourceID(rawValue: row["to_source_id"]),
                     linkText: row["link_text"],
                     role: role
                 )

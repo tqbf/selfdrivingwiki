@@ -9,10 +9,8 @@ import Foundation
 
     @Test func buildFlatTree() {
         let nodes = [
-            BookmarkNode(id: "b", parentID: nil, position: 1, kind: .folder, label: "B",
-                     targetID: nil),
-            BookmarkNode(id: "a", parentID: nil, position: 0, kind: .folder, label: "A",
-                     targetID: nil),
+            BookmarkNode(id: "b", parentID: nil, position: 1, content: .folder(label: "B")),
+            BookmarkNode(id: "a", parentID: nil, position: 0, content: .folder(label: "A")),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree.count == 2)
@@ -23,10 +21,8 @@ import Foundation
 
     @Test func buildNestedTree() {
         let nodes = [
-            BookmarkNode(id: "parent", parentID: nil, position: 0, kind: .folder, label: "P",
-                     targetID: nil),
-            BookmarkNode(id: "child", parentID: "parent", position: 0, kind: .folder, label: "C",
-                     targetID: nil),
+            BookmarkNode(id: "parent", parentID: nil, position: 0, content: .folder(label: "P")),
+            BookmarkNode(id: "child", parentID: "parent", position: 0, content: .folder(label: "C")),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree.count == 1)
@@ -37,8 +33,7 @@ import Foundation
 
     @Test func emptyFolderHasEmptyArrayChildren() {
         let nodes = [
-            BookmarkNode(id: "empty", parentID: nil, position: 0, kind: .folder, label: "E",
-                     targetID: nil),
+            BookmarkNode(id: "empty", parentID: nil, position: 0, content: .folder(label: "E")),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree.count == 1)
@@ -50,8 +45,7 @@ import Foundation
 
     @Test func pageRefIsLeaf() {
         let nodes = [
-            BookmarkNode(id: "ref", parentID: nil, position: 0, kind: .pageRef, label: nil,
-                     targetID: PageID(rawValue: "page1")),
+            BookmarkNode(id: "ref", parentID: nil, position: 0, content: .page(PageID(rawValue: "page1"))),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree.count == 1)
@@ -61,12 +55,9 @@ import Foundation
 
     @Test func folderWithChildrenRendersRecursively() {
         let nodes = [
-            BookmarkNode(id: "l1", parentID: nil, position: 0, kind: .folder, label: "L1",
-                     targetID: nil),
-            BookmarkNode(id: "l2", parentID: "l1", position: 0, kind: .folder, label: "L2",
-                     targetID: nil),
-            BookmarkNode(id: "l3", parentID: "l2", position: 0, kind: .folder, label: "L3",
-                     targetID: nil),
+            BookmarkNode(id: "l1", parentID: nil, position: 0, content: .folder(label: "L1")),
+            BookmarkNode(id: "l2", parentID: "l1", position: 0, content: .folder(label: "L2")),
+            BookmarkNode(id: "l3", parentID: "l2", position: 0, content: .folder(label: "L3")),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree[0].node.id == "l1")
@@ -78,8 +69,7 @@ import Foundation
 
     @Test func pageRefSelection() {
         let nodes = [
-            BookmarkNode(id: "ref", parentID: nil, position: 0, kind: .pageRef, label: nil,
-                     targetID: PageID(rawValue: "p1")),
+            BookmarkNode(id: "ref", parentID: nil, position: 0, content: .page(PageID(rawValue: "p1"))),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         // Selection is always .bookmark(nodeID) — does NOT open a tab.
@@ -90,18 +80,16 @@ import Foundation
 
     @Test func sourceRefSelection() {
         let nodes = [
-            BookmarkNode(id: "ref", parentID: nil, position: 0, kind: .sourceRef, label: nil,
-                     targetID: PageID(rawValue: "s1")),
+            BookmarkNode(id: "ref", parentID: nil, position: 0, content: .source(SourceID(rawValue: "s1"))),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree[0].selection == .bookmark("ref"))
-        #expect(tree[0].openSelection == .source(PageID(rawValue: "s1")))
+        #expect(tree[0].openSelection == .source(SourceID(rawValue: "s1")))
     }
 
     @Test func folderHasBookmarkSelection() {
         let nodes = [
-            BookmarkNode(id: "f", parentID: nil, position: 0, kind: .folder, label: "F",
-                     targetID: nil),
+            BookmarkNode(id: "f", parentID: nil, position: 0, content: .folder(label: "F")),
         ]
         let tree = buildBookmarkTree(nodes: nodes)
         #expect(tree[0].selection == .bookmark("f"))

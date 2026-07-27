@@ -47,13 +47,13 @@ enum WikiLinkMenuNSItems {
                 switch kind {
                 case .page:
                     guard let id = store.pageID(forTitle: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(kind: .pages, ids: [id])
+                    ctx = BookmarkTargetPickerContext(targets: .pages([id]))
                 case .source:
                     guard let id = store.sourceID(forDisplayName: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(kind: .sources, ids: [id])
+                    ctx = BookmarkTargetPickerContext(targets: .sources([id]))
                 case .chat:
                     guard let id = store.chatID(forTitle: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(kind: .chats, ids: [id])
+                    ctx = BookmarkTargetPickerContext(targets: .chats([id]))
                 case nil:
                     continue
                 }

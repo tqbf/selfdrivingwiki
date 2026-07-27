@@ -84,7 +84,7 @@ struct WikiNameSanitizationStoreTests {
         let url = dir.appendingPathComponent("WikiFS.sqlite")
 
         var pageID: PageID?
-        var sourceID: PageID?
+        var sourceID: SourceID?
         do {
             // Fresh v18 store with clean rows, released at scope end so the
             // raw connection below sees a closed database.

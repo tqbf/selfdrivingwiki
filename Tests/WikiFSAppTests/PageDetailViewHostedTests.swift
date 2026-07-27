@@ -47,10 +47,12 @@ struct PageDetailViewHostedTests {
     /// NSView subtree. WKWebView presence ⇒ the reader branch rendered; its
     /// absence ⇒ the editor branch rendered.
     private func hasWebViewAfterMount<V: View>(_ view: V, expectWebView: Bool) async throws -> Bool {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         _ = Self.app
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.orderOut(nil) }
 
         // Poll up to ~2s. The WKWebView mounts asynchronously after the first
@@ -160,8 +162,8 @@ private final class StubExtractor: MarkdownExtractor {
 }
 
 private struct StubExtractionProvider: QueueExtractionProvider {
-    func resolveExtraction(wikiID: WikiID, sourceID: PageID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
-    func persistExtraction(wikiID: WikiID, sourceID: PageID, markdown: String, backend: ExtractionBackend, modelVersion: String?, technique: String?) async throws {}
+    func resolveExtraction(wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
+    func persistExtraction(wikiID: WikiID, sourceID: SourceID, markdown: String, backend: ExtractionBackend, modelVersion: String?, technique: String?) async throws {}
 }
 
 private func makeTestQueueEngine() throws -> QueueEngine {

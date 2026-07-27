@@ -17,7 +17,7 @@ struct SourcesContainerView: View {
     let launcher: AgentLauncher
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
-    var ingestingSourceIDs: Set<PageID> = []
+    var ingestingSourceIDs: Set<SourceID> = []
 
     @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
@@ -28,7 +28,7 @@ struct SourcesContainerView: View {
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
     @State private var showBatchReingestConfirmation = false
-    @State private var pendingBatchIngestIDs: [PageID] = []
+    @State private var pendingBatchIngestIDs: [SourceID] = []
     @State private var pendingReingestNames: [String] = []
     /// Non-nil while the bookmark-target picker is open for a source selection.
     @State private var addToBookmarksContext: BookmarkTargetPickerContext?
@@ -102,10 +102,10 @@ struct SourcesContainerView: View {
         .sheet(item: $addToBookmarksContext) { ctx in
             BookmarkTargetPickerSheet(
                 store: store,
-                kind: ctx.kind,
-                ids: ctx.ids,
+                targets: ctx.targets,
                 onConfirm: { parentID in
-                    for id in ctx.ids {
+                    guard case .sources(let ids) = ctx.targets else { return }
+                    for id in ids {
                         store.addSourceRef(parentID: parentID, sourceID: id)
                     }
                 }
@@ -251,7 +251,7 @@ struct SourcesContainerView: View {
                 for id in ids { store.deleteSource(id) }
             },
             onAddToBookmarks: { ids in
-                addToBookmarksContext = BookmarkTargetPickerContext(kind: .sources, ids: ids)
+                addToBookmarksContext = BookmarkTargetPickerContext(targets: .sources(ids))
             })
     }
 

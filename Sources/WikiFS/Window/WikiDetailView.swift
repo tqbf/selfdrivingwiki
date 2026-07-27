@@ -16,7 +16,7 @@ struct WikiDetailView: View {
     @Environment(\.chatDaemonCoordinator) private var chatDaemon
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
-    let runIngest: (PageID) -> Void
+    let runIngest: (SourceID) -> Void
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
     let isZoteroConfigured: Bool

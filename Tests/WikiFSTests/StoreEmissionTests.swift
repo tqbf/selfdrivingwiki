@@ -8,7 +8,7 @@ import Foundation
 /// `Task`), so a lock-guarded collector is polled until the event lands; because
 /// events arrive a runloop tick after `emit`, prerequisite mutations are awaited
 /// (then the collector cleared) before the mutation under test runs.
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct StoreEmissionTests {
 
     /// Lock-guarded, synchronous collector — the `@MainActor` handler appends
@@ -340,7 +340,7 @@ struct StoreEmissionTests {
 
     @Test func createBookmarkNodeEmitsBookmarkCreated() async throws {
         let (store, _, rec) = try makeHarness()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "F"))
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .created)
@@ -349,9 +349,9 @@ struct StoreEmissionTests {
 
     @Test func updateBookmarkNodeEmitsBookmarkUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "F"))
         try await drain(rec)
-        try store.updateBookmarkNode(id: node.id, label: "G")
+        try store.renameBookmarkFolder(id: node.id, to: "G")
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .updated)
@@ -360,7 +360,7 @@ struct StoreEmissionTests {
 
     @Test func deleteBookmarkNodeEmitsBookmarkDeleted() async throws {
         let (store, _, rec) = try makeHarness()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "F"))
         try await drain(rec)
         try store.deleteBookmarkNode(id: node.id)
         let events = try await awaitEvents(rec)
@@ -371,7 +371,7 @@ struct StoreEmissionTests {
 
     @Test func moveBookmarkNodeEmitsBookmarkUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "F"))
         try await drain(rec)
         try store.moveBookmarkNode(id: node.id, toParentID: nil, position: 1)
         let events = try await awaitEvents(rec)

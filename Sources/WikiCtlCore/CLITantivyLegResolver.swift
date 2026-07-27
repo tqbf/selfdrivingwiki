@@ -37,6 +37,165 @@ public enum CLITantivyLegResolver {
         static let maximumAttempts = 5
     }
 
+    struct SearchRequestKey: Hashable, Sendable {
+        let wikiID: WikiID
+        let containerPath: String
+        let query: String
+        let kind: TantivyDocumentKind
+        let limit: Int
+    }
+
+    private struct InFlightSearch: Sendable {
+        let token: UUID
+        let task: Task<[TantivyShadowSearchResult], Never>
+    }
+
+    private actor SearchServicePool {
+        private var inFlightSearches: [SearchRequestKey: InFlightSearch] = [:]
+
+        func search(
+            wikiID: WikiID,
+            containerDirectory: URL,
+            store: WikiStore,
+            query: String,
+            kind: TantivyDocumentKind,
+            limit: Int
+        ) async -> [TantivyShadowSearchResult] {
+            let key = SearchRequestKey(
+                wikiID: wikiID,
+                containerPath: containerDirectory.standardizedFileURL.path,
+                query: query,
+                kind: kind,
+                limit: limit)
+
+            await runTestSearchHook(key)
+
+            if let existing = inFlightSearches[key] {
+                return await existing.task.value
+            }
+
+            let token = UUID()
+            let task: Task<[TantivyShadowSearchResult], Never> = Task {
+                if let testResults = await CLITantivyLegResolver.runTestSearchExecutor(key) {
+                    return testResults
+                }
+
+                guard let service = CLITantivyLegResolver.makeService(
+                    wikiID: wikiID,
+                    containerDirectory: containerDirectory,
+                    store: store)
+                else {
+                    return []
+                }
+
+                return await CLITantivyLegResolver.runSearch(
+                    svc: service,
+                    query: query,
+                    kind: kind,
+                    limit: limit)
+            }
+            inFlightSearches[key] = InFlightSearch(token: token, task: task)
+
+            let results = await task.value
+            if inFlightSearches[key]?.token == token {
+                inFlightSearches.removeValue(forKey: key)
+            }
+            return results
+        }
+    }
+
+    private static let searchServicePool = SearchServicePool()
+
+    #if DEBUG
+    private actor TestSearchHookBox {
+        private var hook: (@Sendable (SearchRequestKey) async -> Void)?
+
+        func install(_ hook: @escaping @Sendable (SearchRequestKey) async -> Void) {
+            self.hook = hook
+        }
+
+        func reset() {
+            hook = nil
+        }
+
+        func run(_ key: SearchRequestKey) async {
+            await hook?(key)
+        }
+    }
+
+    private actor TestSearchExecutorBox {
+        typealias Executor = @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
+
+        private var executor: Executor?
+
+        func install(_ executor: @escaping Executor) {
+            self.executor = executor
+        }
+
+        func reset() {
+            executor = nil
+        }
+
+        func run(_ key: SearchRequestKey) async -> [TantivyShadowSearchResult]? {
+            guard let executor else { return nil }
+            return await executor(key)
+        }
+    }
+
+    private static let testSearchHookBox = TestSearchHookBox()
+    private static let testSearchExecutorBox = TestSearchExecutorBox()
+
+    static func installTestSearchHook(
+        _ hook: @escaping @Sendable (SearchRequestKey) async -> Void
+    ) async {
+        await testSearchHookBox.install(hook)
+    }
+
+    static func resetTestSearchHook() async {
+        await testSearchHookBox.reset()
+    }
+
+    static func installTestSearchExecutor(
+        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
+    ) async {
+        await testSearchExecutorBox.install(executor)
+    }
+
+    static func resetTestSearchExecutor() async {
+        await testSearchExecutorBox.reset()
+    }
+
+    static func withTestSearchExecutor<Result: Sendable>(
+        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?,
+        operation: () async throws -> Result
+    ) async rethrows -> Result {
+        await installTestSearchExecutor(executor)
+        do {
+            let result = try await operation()
+            await resetTestSearchExecutor()
+            return result
+        } catch {
+            await resetTestSearchExecutor()
+            throw error
+        }
+    }
+
+    private static func runTestSearchHook(_ key: SearchRequestKey) async {
+        await testSearchHookBox.run(key)
+    }
+
+    private static func runTestSearchExecutor(
+        _ key: SearchRequestKey
+    ) async -> [TantivyShadowSearchResult]? {
+        await testSearchExecutorBox.run(key)
+    }
+    #else
+    private static func runTestSearchHook(_ key: SearchRequestKey) async {}
+    private static func runTestSearchExecutor(
+        _ key: SearchRequestKey
+    ) async -> [TantivyShadowSearchResult]? { nil }
+    #endif
+
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
     /// when the index is unavailable/empty — post-#634 that means no BM25
     /// leg (FTS5 was dropped in #634; the cosine leg still answers when
@@ -48,10 +207,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [WikiPageSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .page, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .page,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [WikiPageSummary]
         do {
@@ -60,7 +222,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listPages(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
     }
 
     /// Resolve a Tantivy BM25 leg for `wikictl source search`. Same contract
@@ -72,10 +234,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [SourceSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .source, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .source,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [SourceSummary]
         do {
@@ -84,7 +249,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listSources(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: SourceID.init(rawValue:))
     }
 
     /// Resolve a Tantivy BM25 leg for `wikictl chat search`. Same contract as
@@ -96,10 +261,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [ChatSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .chat, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .chat,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [ChatSummary]
         do {
@@ -108,7 +276,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listChats(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
     }
 
     // MARK: - Internal
@@ -179,11 +347,12 @@ public enum CLITantivyLegResolver {
     /// an error.
     private static func resolveHits<T: Identifiable & Sendable>(
         _ hits: [TantivyShadowSearchResult],
-        catalog: [T]
-    ) -> [T]? where T.ID == PageID {
+        catalog: [T],
+        idFromRawValue: (String) -> T.ID
+    ) -> [T]? {
         let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let resolved = hits.compactMap { hit -> T? in
-            let id = PageID(rawValue: hit.ulid)
+            let id = idFromRawValue(hit.ulid)
             return byID[id]
         }
         return resolved.isEmpty ? nil : resolved

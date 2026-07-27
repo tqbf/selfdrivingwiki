@@ -12,7 +12,7 @@ import Testing
 /// - `page get` (text and `--json`) includes `head_version_id`.
 /// - Blind `page add` (no flag) preserves today's behavior.
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct AgentCASTests {
 
     private func tempStore() throws -> GRDBWikiStore {

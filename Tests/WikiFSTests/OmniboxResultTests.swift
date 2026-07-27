@@ -22,6 +22,17 @@ import Foundation
         messageCount: 3
     )
 
+    private let source = SourceSummary(
+        id: SourceID(rawValue: "01SOURCE"),
+        filename: "paper.pdf",
+        ext: "pdf",
+        mimeType: "application/pdf",
+        byteSize: 42,
+        createdAt: Date(timeIntervalSince1970: 500),
+        updatedAt: Date(timeIntervalSince1970: 1000),
+        version: 1
+    )
+
     // MARK: - Identifiable
 
     @Test func pageResultIDHasPagePrefix() {
@@ -83,6 +94,10 @@ import Foundation
 
     @Test func pageSelectionIsPageCase() {
         #expect(OmniboxResult.page(page).selection == .page(PageID(rawValue: "01PAGE")))
+    }
+
+    @Test func sourceResultOpensSourceSelection() {
+        #expect(OmniboxResult.source(source).selection == .source(SourceID(rawValue: "01SOURCE")))
     }
 
     @Test func askSelectionIsNewChat() {

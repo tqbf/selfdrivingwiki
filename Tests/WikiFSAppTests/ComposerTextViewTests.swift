@@ -6,7 +6,7 @@ import Testing
 @testable import WikiFSEngine
 
 @MainActor
-@Suite struct ComposerTextViewTests {
+struct ComposerTextViewTests {
 
     // MARK: - clampedHeight matrix
 
@@ -80,7 +80,8 @@ import Testing
         text: Binding<String>,
         isEditable: Bool,
         measuredHeight: Binding<CGFloat>
-    ) -> (window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
+    ) async -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
+        let lease = await HostedAppKitTestGate.shared.acquire()
         let parent = ComposerTextView(
             text: text,
             isEditable: isEditable,
@@ -100,7 +101,7 @@ import Testing
         let window = makeWindow()
         window.contentView?.addSubview(scrollView)
 
-        return (window, textView, coordinator)
+        return (lease, window, textView, coordinator)
     }
 
     @Test func largePasteClampsToSixLineMaximum() async {
@@ -109,8 +110,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (lease, window, textView, coordinator) = await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil); lease.release() }
 
         let pasted = Array(repeating: "Line of pasted markdown text.", count: 150).joined(separator: "\n")
         textView.string = pasted
@@ -125,14 +127,15 @@ import Testing
         #expect(heightBinding.wrappedValue == expectedMax)
     }
 
-    @Test func editPropagatesToBoundText() {
+    @Test func editPropagatesToBoundText() async {
         var text = "initial"
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (lease, window, textView, coordinator) = await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil); lease.release() }
 
         textView.string = "edited by the user"
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
@@ -146,8 +149,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (lease, window, textView, coordinator) = await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil); lease.release() }
         textView.postsFrameChangedNotifications = true
         coordinator.observeFrameChanges(for: textView)
 
@@ -170,14 +174,15 @@ import Testing
         #expect(heightBinding.wrappedValue == expectedMax)
     }
 
-    @Test func isEditableTogglesTextViewEditability() {
+    @Test func isEditableTogglesTextViewEditability() async {
         var text = "hello"
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, _) = makeHostedComposer(
+        let (lease, window, textView, _) = await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil); lease.release() }
         #expect(textView.isEditable == true)
         #expect(textView.isSelectable == true)
 

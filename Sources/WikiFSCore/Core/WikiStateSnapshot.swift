@@ -170,19 +170,19 @@ public struct WikiStateSnapshot: Equatable, Sendable {
         let indent = String(repeating: "  ", count: depth)
         let icon: String
         let label: String
-        switch child.kind {
+        switch child.content {
         case .folder:
           icon = "📁"
           label = child.label ?? "(unnamed folder)"
-        case .pageRef:
+        case .page(let id):
           icon = "📄"
-          label = "\(ResourceKind.page.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
-        case .sourceRef:
+          label = "\(ResourceKind.page.linkPrefix ?? "")\(id.rawValue)"
+        case .source(let id):
           icon = "📎"
-          label = "\(ResourceKind.source.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
-        case .chatRef:
+          label = "\(ResourceKind.source.linkPrefix ?? "")\(id.rawValue)"
+        case .chat(let id):
           icon = "💬"
-          label = "\(ResourceKind.chat.linkPrefix ?? "")\(child.targetID?.rawValue ?? "?")"
+          label = "\(ResourceKind.chat.linkPrefix ?? "")\(id.rawValue)"
         }
         lines.append("\(indent)- \(icon) \(label)")
         if child.kind == .folder {

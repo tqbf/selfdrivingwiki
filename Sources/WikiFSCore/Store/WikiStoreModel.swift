@@ -182,7 +182,7 @@ public final class WikiStoreModel {
     /// by an agent Ingest run. The source of truth is the append-only log; agents
     /// can choose their log title, so matching accepts the filename, id, by-id
     /// projection leaf, or path in either the log title or note.
-    private var sourceIngestedStatus: [PageID: Bool] = [:]
+    private var sourceIngestedStatus: [SourceID: Bool] = [:]
 
     // MARK: - Bookmark nodes (v16 — Bookmarks sidebar tree)
 
@@ -310,11 +310,13 @@ public final class WikiStoreModel {
     /// store + bus the model wraps, but construction happens post-init so this is
     /// set rather than a constructor param — same lifecycle as `readPool`).
     /// `nil` when Tantivy construction failed (the session never breaks over a
-    /// derived index) — search silently falls back to FTS5 in that case.
+    /// derived index) — search then runs without a BM25 leg (cosine-only when
+    /// semantic search is available).
     #if os(macOS)
     @ObservationIgnored public var tantivySearch: TantivySearchService?
     #else
-    // Linux: Tantivy is unavailable — the search path uses nil bm25Leg (FTS5 fallback).
+    // Linux: Tantivy is unavailable — the search path uses `nil` `bm25Leg`
+    // (no lexical BM25 leg on this branch).
     @ObservationIgnored public var tantivySearch: Any?
     #endif
     /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
@@ -590,7 +592,7 @@ public final class WikiStoreModel {
     /// type from the loaded `sources` list (which mirrors `store.listSources()`)
     /// rather than calling the store directly, since `getSource(id:)` is concrete
     /// on `GRDBWikiStore`, not on the `WikiStore` protocol.
-    @MainActor public func sourceContentAndMIME(id: PageID) -> (data: Data, mimeType: String?)? {
+    @MainActor public func sourceContentAndMIME(id: SourceID) -> (data: Data, mimeType: String?)? {
         guard let summary = sources.first(where: { $0.id == id }) else { return nil }
         let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) }) ?? Data()
         return (data, summary.mimeType)
@@ -623,7 +625,7 @@ public final class WikiStoreModel {
     /// submenu, via `WikiLinkMenuNSItems`).
     ///
     /// #925: this used to bridge the actor-isolated Tantivy query back to a
-    /// synchronous main-actor call with a `DispatchSemaphore`. That parked the
+    /// synchronous main-actor call with a blocking semaphore. That parked the
     /// main thread *and* a cooperative-pool thread on every right-click, which
     /// is one of the four starvation sites the issue tracks; the awaited leg
     /// below is the whole fix. Callers that need a menu item synchronously must
@@ -636,7 +638,9 @@ public final class WikiStoreModel {
     /// NLEmbedding/MLX are loaded).
     public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) async -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
-        let leg = await resolveTantivyLeg(query: query, kind: .page, limit: limit, catalog: summaries)
+        let leg = await resolveTantivyLeg(
+            query: query, kind: .page, limit: limit, catalog: summaries,
+            id: PageID.init(rawValue:))
         do {
             return try store.searchSimilar(query: query, limit: limit, bm25Leg: leg)
         } catch {
@@ -723,20 +727,11 @@ public final class WikiStoreModel {
     /// Resolves the display title for a bookmark node: folder label, or for
     /// refs, the title/name of the target page/source/chat (#240 / #288).
     private func resolveBookmarkTitle(_ node: BookmarkNode) -> String {
-        switch node.kind {
-        case .folder: return node.label ?? ""
-        case .pageRef:
-            return node.targetID.flatMap { id in
-                summaries.first { $0.id == id }?.title
-            } ?? ""
-        case .sourceRef:
-            return node.targetID.flatMap { id in
-                sources.first { $0.id == id }?.effectiveName
-            } ?? ""
-        case .chatRef:
-            return node.targetID.flatMap { id in
-                chats.first { $0.id == id }?.title
-            } ?? ""
+        switch node.content {
+        case .folder(let label): return label
+        case .page(let id): return summaries.first { $0.id == id }?.title ?? ""
+        case .source(let id): return sources.first { $0.id == id }?.effectiveName ?? ""
+        case .chat(let id): return chats.first { $0.id == id }?.title ?? ""
         }
     }
 
@@ -749,7 +744,7 @@ public final class WikiStoreModel {
         case .page:
             return summaries.first { $0.id == pageID }?.title
         case .source:
-            return sources.first { $0.id == pageID }?.effectiveName
+            return sources.first { $0.id.rawValue == pageID.rawValue }?.effectiveName
         case .chat:
             return chats.first { $0.id == pageID }?.title
         }
@@ -765,7 +760,7 @@ public final class WikiStoreModel {
     /// Resolve a source display name (or filename fallback) to its id
     /// (most-recently-updated on collision). Best-effort: `nil` on any error or
     /// no match. Used by "Copy File Path" to build the source's mount path.
-    public func sourceID(forDisplayName displayName: String) -> PageID? {
+    public func sourceID(forDisplayName displayName: String) -> SourceID? {
         do { return try store.resolveSourceByName(displayName) } catch { return nil }
     }
 
@@ -810,7 +805,7 @@ public final class WikiStoreModel {
     ///   *that* extraction so the quote is present in the rendered DOM. Nil
     ///   (no pin, or a non-quote pin) opens HEAD.
     @discardableResult
-    public func selectSource(byID id: PageID, anchor: String? = nil,
+    public func selectSource(byID id: SourceID, anchor: String? = nil,
                              openInNewTab: Bool = false,
                              pinnedExtractionID: PageID? = nil) -> Bool {
         guard sources.contains(where: { $0.id == id }) else { return false }
@@ -1826,7 +1821,7 @@ public final class WikiStoreModel {
     /// Rename a source's display name. Rewrites `[[source:<old>…]]` links in
     /// every page that references it (fragment + alias preserved), then refreshes
     /// the sidebar, open tabs, and File Provider mount.
-    public func renameSource(id: PageID, to newDisplayName: String) {
+    public func renameSource(id: SourceID, to newDisplayName: String) {
         do {
             try store.renameSource(id: id, to: newDisplayName)
             // No manual reload — the bus fires reloadFromStore() async after the
@@ -2061,7 +2056,7 @@ public final class WikiStoreModel {
     /// run the agent "Ingest into wiki" phase (see `AgentLauncher` /
     /// `ingestingSourceIDs`). Issue #178.
     public func addFiles(_ fileURLs: [URL]) async {
-        var lastSourceID: PageID?
+        var lastSourceID: SourceID?
         var lastSourceName: String?
         var duplicateNames: [String] = []
         for url in fileURLs {
@@ -2421,7 +2416,7 @@ public final class WikiStoreModel {
     /// throws — the embed has already landed; a markdown failure is a partial-
     /// failure log, not a throw (#475 discipline). Issue #646.
     private func writeSyntheticBytelessMarkdown(
-        sourceID: PageID,
+        sourceID: SourceID,
         url: String,
         metadata: MediaTitleFetcher.MediaOEmbedMetadata?,
         fallbackTitle: String,
@@ -2558,7 +2553,7 @@ public final class WikiStoreModel {
     #if PODCAST_TRANSCRIPTS
     @discardableResult
     public func refreshSource(
-        _ id: PageID,
+        _ id: SourceID,
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
         podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
     ) async throws -> String {
@@ -2569,7 +2564,7 @@ public final class WikiStoreModel {
     #else
     @discardableResult
     public func refreshSource(
-        _ id: PageID,
+        _ id: SourceID,
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
     ) async throws -> String {
         let service = SourceRefreshService(fetcher: fetcher)
@@ -2581,7 +2576,7 @@ public final class WikiStoreModel {
     /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
     /// duplicate the store-write logic.
     private func performRefresh(
-        id: PageID, service: SourceRefreshService
+        id: SourceID, service: SourceRefreshService
     ) async throws -> String {
         guard let origin = try store.sourceOrigin(sourceID: id) else {
             throw SourceRefreshService.RefreshError.notRefreshable("unknown")
@@ -2692,7 +2687,7 @@ public final class WikiStoreModel {
         var imported = 0
         var errorMessages: [String] = []
 
-        var firstSourceID: PageID?
+        var firstSourceID: SourceID?
         var firstSourceName: String?
         for file in result.files {
             let ext = (file.filename as NSString).pathExtension.lowercased()
@@ -2733,7 +2728,7 @@ public final class WikiStoreModel {
 
     /// Remove an ingested file from the list and the store, then signal so the
     /// `sources/` tree drops it.
-    public func deleteSource(_ id: PageID) {
+    public func deleteSource(_ id: SourceID) {
         do {
             try store.deleteSource(id: id)
             removeFromHistory(.source(id))
@@ -2795,7 +2790,7 @@ public final class WikiStoreModel {
     /// than reading from the ~5s-laggy read-only mount. `nil` if the read fails;
     /// the caller surfaces that as a preflight error instead of launching a run that
     /// would fall back to probing the mount.
-    public func sourceBytes(id: PageID) -> Data? {
+    public func sourceBytes(id: SourceID) -> Data? {
         DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) })
     }
 
@@ -2806,7 +2801,7 @@ public final class WikiStoreModel {
     /// The origin provenance of a source (provider agent + the activity that
     /// fetched/imported it). `nil` when the read fails or no version exists.
     /// Drives the "Origin" row in `SourceDetailView`.
-    public func sourceOrigin(for id: PageID) -> SourceOrigin? {
+    public func sourceOrigin(for id: SourceID) -> SourceOrigin? {
         DebugLog.trying("sourceOrigin", operation: { try store.sourceOrigin(sourceID: id) })
     }
 
@@ -2815,7 +2810,7 @@ public final class WikiStoreModel {
     /// or the source has no versions. Drives the History tab in
     /// `SourceDetailView`'s inspector (the source-side mirror of
     /// `pageEditHistory`).
-    public func sourceEditHistory(for id: PageID) -> [SourceOrigin] {
+    public func sourceEditHistory(for id: SourceID) -> [SourceOrigin] {
         DebugLog.trying("sourceEditHistory", operation: { try store.sourceEditHistory(sourceID: id) }) ?? []
     }
 
@@ -2871,7 +2866,7 @@ public final class WikiStoreModel {
     ///   support AND the `podcast-token-helper` binary is present at runtime.
     /// - Everything else (local-file, Zotero, folder, unknown, missing origin)
     ///   is import-only and not refreshable.
-    public func isSourceRefreshable(for id: PageID) -> Bool {
+    public func isSourceRefreshable(for id: SourceID) -> Bool {
         guard let origin = sourceOrigin(for: id), origin.plan != nil else { return false }
         // Delegate the baseline to `provider.supportsRefresh`, then layer the
         // runtime guards on top (snapshot image siblings for websites; the
@@ -2930,7 +2925,7 @@ public final class WikiStoreModel {
     }
 
     /// True when at least one processed-markdown version exists for this source.
-    public func hasProcessedMarkdown(for sourceID: PageID) -> Bool {
+    public func hasProcessedMarkdown(for sourceID: SourceID) -> Bool {
         DebugLog.trying("hasProcessedMarkdown", operation: { try store.hasProcessedMarkdown(sourceID: sourceID) }) ?? false
     }
 
@@ -2991,7 +2986,7 @@ public final class WikiStoreModel {
     }
 
     /// All versions for a source, newest first. Empty if none.
-    public func processedMarkdownHistory(for sourceID: PageID) -> [SourceMarkdownVersion] {
+    public func processedMarkdownHistory(for sourceID: SourceID) -> [SourceMarkdownVersion] {
         DebugLog.trying("processedMarkdownHistory", operation: { try store.processedMarkdownHistory(sourceID: sourceID) }) ?? []
     }
 
@@ -3006,7 +3001,7 @@ public final class WikiStoreModel {
     /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
     /// per source. Phase 6: the render precompute builds the `sourceID → [smvID]`
     /// map so `linkified` can resolve `@vN` per occurrence.
-    public func sourceDerivedChains() -> [PageID: [PageID]] {
+    public func sourceDerivedChains() -> [SourceID: [PageID]] {
         DebugLog.trying("sourceDerivedChains", operation: { try store.sourceDerivedChains() }) ?? [:]
     }
 
@@ -3014,14 +3009,14 @@ public final class WikiStoreModel {
     /// Phase 4b: the render precompute builds this once (main-actor read) and
     /// feeds `ExternalEmbed.target(for:)` to widen `![[source:…]]` embeds to
     /// external media. Returns `{}` on any query failure.
-    public func embedDescriptors() -> [PageID: SourceEmbedDescriptor] {
+    public func embedDescriptors() -> [SourceID: SourceEmbedDescriptor] {
         DebugLog.trying("embedDescriptors", operation: { try store.embedDescriptors() }) ?? [:]
     }
 
     /// Phase 4: batched sibling-image resolver maps for the render precompute.
     /// Per source, `[original_path → sibling sourceID]`. Returns `{}` on
     /// failure (images simply won't resolve — degraded, not fatal).
-    public func siblingImageResolvers() -> [PageID: [String: PageID]] {
+    public func siblingImageResolvers() -> [SourceID: [String: SourceID]] {
         DebugLog.trying("siblingImageResolvers", operation: { try store.siblingImageResolvers() }) ?? [:]
     }
 
@@ -3052,7 +3047,7 @@ public final class WikiStoreModel {
     /// genuinely differs from the current head — meaningful history, not
     /// keystroke spam.
     @discardableResult
-    public func saveProcessedMarkdown(for sourceID: PageID, content: String) -> SourceMarkdownVersion? {
+    public func saveProcessedMarkdown(for sourceID: SourceID, content: String) -> SourceMarkdownVersion? {
         do {
             return try store.appendProcessedMarkdown(
                 sourceID: sourceID, content: content, origin: .user, note: nil, technique: nil)
@@ -3070,7 +3065,7 @@ public final class WikiStoreModel {
     /// Double-seed guard: if a head already exists, returns it instead.
     @discardableResult
     public func seedPdfMarkdown(
-        for sourceID: PageID, content: String,
+        for sourceID: SourceID, content: String,
         backend: ExtractionBackend, modelVersion: String? = nil
     ) -> SourceMarkdownVersion? {
         if let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: sourceID) }) {
@@ -3096,7 +3091,7 @@ public final class WikiStoreModel {
     /// needed. Mirrors `seedPdfMarkdown`'s shape for extraction.
     @discardableResult
     public func appendTranscriptMarkdown(
-        for sourceID: PageID, content: String, technique: String
+        for sourceID: SourceID, content: String, technique: String
     ) -> SourceMarkdownVersion? {
         do {
             return try store.appendProcessedMarkdown(
@@ -3115,7 +3110,7 @@ public final class WikiStoreModel {
     /// alternative, or nil if the bytes can't be read or conversion fails.
     @discardableResult
     public func reExtractMarkdown(
-        for sourceID: PageID, filename: String,
+        for sourceID: SourceID, filename: String,
         using extractor: any MarkdownExtractor,
         backend: ExtractionBackend, modelVersion: String? = nil,
         onProgress: (@Sendable (String) -> Void)? = nil
@@ -3172,7 +3167,7 @@ public final class WikiStoreModel {
     ///   the store write threw.
     @discardableResult
     public func extractHtml(
-        for sourceID: PageID,
+        for sourceID: SourceID,
         backend: HtmlExtractionBackend
     ) async -> SourceMarkdownVersion? {
         guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
@@ -3267,7 +3262,7 @@ public final class WikiStoreModel {
     #if PODCAST_TRANSCRIPTS
     @discardableResult
     public func transcribe(
-        sourceID: PageID,
+        sourceID: SourceID,
         podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
         youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
         rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
@@ -3294,7 +3289,7 @@ public final class WikiStoreModel {
     #else
     @discardableResult
     public func transcribe(
-        sourceID: PageID,
+        sourceID: SourceID,
         podcastFetcher: Any? = nil,
         youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
         rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
@@ -3353,7 +3348,7 @@ public final class WikiStoreModel {
     /// caller has already verified the provider.
     #if PODCAST_TRANSCRIPTS
     private func transcribePodcast(
-        sourceID: PageID, origin: SourceOrigin,
+        sourceID: SourceID, origin: SourceOrigin,
         fetcher: (any PodcastTranscriptFetching)?
     ) async throws -> SourceMarkdownVersion? {
         guard let planURLString = origin.plan,
@@ -3386,7 +3381,7 @@ public final class WikiStoreModel {
     }
     #else
     private func transcribePodcast(
-        sourceID: PageID, origin: SourceOrigin,
+        sourceID: SourceID, origin: SourceOrigin,
         fetcher: Any?
     ) async throws -> SourceMarkdownVersion? {
         // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
@@ -3423,7 +3418,7 @@ public final class WikiStoreModel {
     /// propagates `YouTubeTranscriptError.*` from the scrape. Always appends —
     /// see the dispatch entry point's docstring.
     private func transcribeYouTube(
-        sourceID: PageID, origin: SourceOrigin,
+        sourceID: SourceID, origin: SourceOrigin,
         fetcher: (any YouTubeTranscriptFetching)?
     ) async throws -> SourceMarkdownVersion? {
         // externalIdentity IS the 11-char video ID (MediaEmbedURL.youtube
@@ -3484,7 +3479,7 @@ public final class WikiStoreModel {
     /// on a store-write failure, logs + returns nil (the fetch succeeded but
     /// the write didn't — a Console.app trace is left per #475/#492).
     private func transcribeRSSPodcast(
-        sourceID: PageID, origin: SourceOrigin,
+        sourceID: SourceID, origin: SourceOrigin,
         fetcher: (any RSSFeedTranscriptFetching)?
     ) async throws -> SourceMarkdownVersion? {
         guard let planURLString = origin.plan,
@@ -3562,19 +3557,19 @@ public final class WikiStoreModel {
 
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
-    public func setActiveMarkdown(for sourceID: PageID, to versionID: PageID) {
+    public func setActiveMarkdown(for sourceID: SourceID, to versionID: PageID) {
         DebugLog.trying("setActiveMarkdown", operation: { try store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
     }
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
-    public func processedMarkdownAgentNames(for sourceID: PageID) -> [String: String] {
+    public func processedMarkdownAgentNames(for sourceID: SourceID) -> [String: String] {
         DebugLog.trying("processedMarkdownAgentNames", operation: { try store.processedMarkdownAgentNames(sourceID: sourceID) }) ?? [:]
     }
 
     /// All extraction alternatives for a source with provenance + active flag,
     /// for the compare/nominate sheet (track C). Empty if none.
-    public func processedMarkdownAlternatives(for sourceID: PageID) -> [ExtractionAlternative] {
+    public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative] {
         DebugLog.trying("processedMarkdownAlternatives", operation: { try store.processedMarkdownAlternatives(sourceID: sourceID) }) ?? []
     }
 
@@ -3712,9 +3707,9 @@ public final class WikiStoreModel {
     /// Do NOT parallelize this — two threads on the store's cached statements is
     /// the race that crashed launch (`docs/skills/sqlite-concurrency/SKILL.md`).
     /// Returns the updated running count (for `searchUpgrade.done`).
-    private func embedAndStore(
-        _ work: [(id: PageID, text: String)],
-        into store: (PageID, [Data]) throws -> Void,
+    private func embedAndStore<ID: Hashable & Sendable>(
+        _ work: [(id: ID, text: String)],
+        into store: (ID, [Data]) throws -> Void,
         running done: Int
     ) async -> Int {
         var done = done
@@ -3748,17 +3743,18 @@ public final class WikiStoreModel {
     //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
     //      The store uses the leg INSTEAD of FTS5, then fuses it with the
     //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
-    //   3. `nil` leg → the store falls back to FTS5 (Tantivy unavailable, empty,
-    //      or all hits resolved to nothing). wikictl/tests always pass `nil`.
+    //   3. `nil` leg → the store runs without a BM25 leg (Tantivy unavailable,
+    //      empty, or all hits resolved to nothing). wikictl/tests always pass
+    //      `nil`.
     //
-    // FTS5 is kept fully intact for Phase 2 fallback; Phase 3 retires it.
+    // FTS5 was retired in #634, so there is no lexical fallback path here.
 
     #if os(macOS)
     /// Resolve Tantivy BM25 hits into full typed summaries from a cached
     /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
     /// Tantivy is unavailable, the index returned nothing, or every hit was
     /// missing from the catalog (e.g. a resource deleted since the last Tantivy
-    /// sync). A `nil` return makes the store fall back to FTS5.
+    /// sync). A `nil` return means "no BM25 leg" at the store call site.
     ///
     /// `catalog` is a value-type copy captured at the call site, so a main-actor
     /// mutation during the `await svc.search` suspension can't race the lookup.
@@ -3766,27 +3762,29 @@ public final class WikiStoreModel {
         query: String,
         kind: TantivyDocumentKind,
         limit: Int,
-        catalog: [T]
-    ) async -> [T]? where T.ID == PageID {
+        catalog: [T],
+        id: (String) -> T.ID
+    ) async -> [T]? where T.ID: Hashable {
         guard let svc = tantivySearch else { return nil }
         let hits = await svc.search(query: query, kinds: [kind], limit: limit)
         guard !hits.isEmpty else { return nil }
         let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let resolved = hits.compactMap { hit -> T? in
-            let id = PageID(rawValue: hit.ulid)
-            return byID[id]
+            return byID[id(hit.ulid)]
         }
         return resolved.isEmpty ? nil : resolved
     }
 
     #else
-    // Linux: Tantivy is unavailable — the BM25 leg is always nil (FTS5 fallback).
+    // Linux: Tantivy is unavailable — the BM25 leg is always nil (no lexical
+    // fallback path on this branch).
     private func resolveTantivyLeg<T: Identifiable & Sendable>(
         query: String,
         kind: TantivyDocumentKind,
         limit: Int,
-        catalog: [T]
-    ) async -> [T]? where T.ID == PageID { nil }
+        catalog: [T],
+        id: (String) -> T.ID
+    ) async -> [T]? where T.ID: Hashable { nil }
     #endif
 
     /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
@@ -3803,7 +3801,7 @@ public final class WikiStoreModel {
         leg: [T]?,
         fused: [T],
         t0: DispatchTime
-    ) where T.ID == PageID {
+    ) where T.ID: Hashable {
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
         let legIDs = Set((leg ?? []).map { $0.id })
         let fusedIDs = Set(fused.map { $0.id })
@@ -3828,7 +3826,8 @@ public final class WikiStoreModel {
             let query = self.searchQuery
             let t0 = DispatchTime.now()
             let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .page, limit: 20, catalog: self.summaries)
+                query: query, kind: .page, limit: 20, catalog: self.summaries,
+                id: PageID.init(rawValue:))
             let results: [WikiPageSummary]
             if let pool = self.readPool {
                 let fetched = await DebugLog.trying("searchSimilarPages", operation: { try await pool.asyncRead { reader in
@@ -3858,7 +3857,8 @@ public final class WikiStoreModel {
             let query = self.sourceSearchQuery
             let t0 = DispatchTime.now()
             let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .source, limit: 20, catalog: self.sources)
+                query: query, kind: .source, limit: 20, catalog: self.sources,
+                id: SourceID.init(rawValue:))
             let results: [SourceSummary]
             if let pool = self.readPool {
                 let fetched = await DebugLog.trying("searchSimilarSources", operation: { try await pool.asyncRead { reader in
@@ -3888,7 +3888,8 @@ public final class WikiStoreModel {
             let query = self.chatSearchQuery
             let t0 = DispatchTime.now()
             let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .chat, limit: 20, catalog: self.chats)
+                query: query, kind: .chat, limit: 20, catalog: self.chats,
+                id: PageID.init(rawValue:))
             // Use the main store (same connection as chatMessages load) so the
             // search results and the body load see the same WAL snapshot —
             // eliminates cross-connection staleness where the read pool could
@@ -3956,8 +3957,7 @@ public final class WikiStoreModel {
         let position = bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             let node = try store.createBookmarkNode(
-                parentID: parentID, position: position, kind: .folder,
-                label: name, targetID: nil)
+                parentID: parentID, position: position, content: .folder(label: name))
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
             return node.id
@@ -3974,8 +3974,7 @@ public final class WikiStoreModel {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: pos, kind: .pageRef,
-                label: nil, targetID: pageID)
+                parentID: parentID, position: pos, content: .page(pageID))
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
@@ -3987,12 +3986,11 @@ public final class WikiStoreModel {
 
     /// Add a source reference to a folder. Pass `position` to insert at a specific
     /// sibling index (the store shifts later siblings down); omit it to append.
-    public func addSourceRef(parentID: String?, sourceID: PageID, position: Int? = nil) {
+    public func addSourceRef(parentID: String?, sourceID: SourceID, position: Int? = nil) {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: pos, kind: .sourceRef,
-                label: nil, targetID: sourceID)
+                parentID: parentID, position: pos, content: .source(sourceID))
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
         } catch {
@@ -4006,8 +4004,7 @@ public final class WikiStoreModel {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
-                parentID: parentID, position: pos, kind: .chatRef,
-                label: nil, targetID: chatID)
+                parentID: parentID, position: pos, content: .chat(chatID))
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
         } catch {
@@ -4018,7 +4015,7 @@ public final class WikiStoreModel {
     /// Rename a folder.
     public func renameBookmarkNode(id: String, to label: String) {
         do {
-            try store.updateBookmarkNode(id: id, label: label)
+            try store.renameBookmarkFolder(id: id, to: label)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
         } catch {
@@ -4063,7 +4060,7 @@ public final class WikiStoreModel {
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        sourceIDs: Set<PageID>,
+        sourceIDs: Set<SourceID>,
         chatIDs: Set<PageID>
     ) -> Bool {
         switch value {

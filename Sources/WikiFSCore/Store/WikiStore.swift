@@ -7,6 +7,8 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case open(String)
     case sqlite(code: Int32, message: String)
     case notFound(PageID)
+    case sourceNotFound(SourceID)
+    case invalidBookmarkRow(id: String, reason: String)
     case unexpected(String)
     /// Thrown by `addSource` when the incoming bytes are byte-identical to an
     /// already-stored source (matched by `content_hash`). Carries the existing
@@ -19,6 +21,8 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .open(let m): return "WikiStore open failed: \(m)"
         case .sqlite(let code, let message): return "SQLite error \(code): \(message)"
         case .notFound(let id): return "Page not found: \(id.rawValue)"
+        case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
+        case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
             return "Duplicate content: already stored as \(existing.effectiveName) (\(existing.id.rawValue))"
@@ -119,11 +123,11 @@ public enum PageSourceLinkRole: String, Sendable {
 
 public struct PageSourceLink: Equatable, Sendable {
     public let pageID: PageID
-    public let sourceID: PageID
+    public let sourceID: SourceID
     public let linkText: String
     public let role: PageSourceLinkRole
 
-    public init(pageID: PageID, sourceID: PageID, linkText: String, role: PageSourceLinkRole) {
+    public init(pageID: PageID, sourceID: SourceID, linkText: String, role: PageSourceLinkRole) {
         self.pageID = pageID
         self.sourceID = sourceID
         self.linkText = linkText
@@ -166,7 +170,7 @@ public protocol WikiStore: Sendable {
     /// falling back to filename (so a retired display name still resolves via its
     /// original filename). Case-insensitive (COLLATE NOCASE). On a multi-match
     /// collision, the most recently updated source wins.
-    func resolveSourceByName(_ displayName: String) throws -> PageID?
+    func resolveSourceByName(_ displayName: String) throws -> SourceID?
 
     /// Replace ALL outgoing links for `pageID` with the resolved subset of
     /// `parsedLinks`, in one transaction. Targets that don't resolve to a page
@@ -245,10 +249,10 @@ public protocol WikiStore: Sendable {
     /// protocol so `WikiStoreModel` can STAGE the source into the agent's scratch
     /// dir (reading from SQLite, not the laggy mount) without downcasting. Throws
     /// `.notFound` if absent.
-    func sourceContent(id: PageID) throws -> Data
+    func sourceContent(id: SourceID) throws -> Data
 
     /// Remove a source by id.
-    func deleteSource(id: PageID) throws
+    func deleteSource(id: SourceID) throws
 
     /// The origin provenance of a source: the provider agent + the activity that
     /// fetched/imported it, joined from the active content version to its activity
@@ -256,12 +260,12 @@ public protocol WikiStore: Sendable {
     /// `plan`/`externalRef` come from the per-ingest **activity** row (so two
     /// website sources with different URLs each return their own URL); `agentName`
     /// from the **agent** row.
-    func sourceOrigin(sourceID: PageID) throws -> SourceOrigin?
+    func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin?
 
     /// The full edit history for a source — every `source_versions` row joined
     /// to its `activities` → `agents` (the source-side mirror of
     /// `pageEditHistory`). Ordered NEWEST-FIRST. Read-only: emits nothing.
-    func sourceEditHistory(sourceID: PageID) throws -> [SourceOrigin]
+    func sourceEditHistory(sourceID: SourceID) throws -> [SourceOrigin]
 
     /// The active content version for a source, resolved exactly like
     /// `sourceContent` (ref → version, else default-active `MAX(id)`). Returns
@@ -270,19 +274,19 @@ public protocol WikiStore: Sendable {
     /// and the refresh guard — can read it through `any WikiStore` without
     /// downcasting to a concrete backend. Both `GRDBWikiStore` and
     /// `GRDBWikiStore` implement this identically.
-    func activeContentVersion(sourceID: PageID) throws -> SourceVersion?
+    func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
 
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their
     /// link rows in one commit. Fragment and alias are preserved.
-    func renameSource(id: PageID, to newDisplayName: String) throws
+    func renameSource(id: SourceID, to newDisplayName: String) throws
     /// Set display_name without the link-rewrite/FTS overhead of renameSource.
-    func setSourceDisplayName(id: PageID, displayName: String) throws
+    func setSourceDisplayName(id: SourceID, displayName: String) throws
 
     /// Stamp a source as summarized-into-the-wiki. The agent calls this on
     /// successful completion via `wikictl log append --kind ingest --source <id>`;
     /// the UI reads it as the authoritative "Processed" status.
-    func markSourceIngested(id: PageID) throws
+    func markSourceIngested(id: SourceID) throws
 
     /// IDs of sources the agent has marked ingested — the deterministic
     /// source of truth for the "Processed" badge (no fuzzy log-title matching).
@@ -296,19 +300,19 @@ public protocol WikiStore: Sendable {
     /// one transaction. Used by the provider refresh path (Phase 3b).
     @discardableResult
     func appendContentVersion(
-        sourceID: PageID, data: Data, mimeType: String?,
+        sourceID: SourceID, data: Data, mimeType: String?,
         provenance: SourceProvenance?
     ) throws -> SourceVersion
 
     /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).
-    func processedMarkdownHead(sourceID: PageID) throws -> SourceMarkdownVersion?
+    func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
 
     /// True when at least one processed-markdown version exists for this source.
-    func hasProcessedMarkdown(sourceID: PageID) throws -> Bool
+    func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool
 
     /// All versions for a source, newest first (HEAD → v1). Empty if none.
-    func processedMarkdownHistory(sourceID: PageID) throws -> [SourceMarkdownVersion]
+    func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
 
     /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
     /// the blob-decoded `SourceMarkdownVersion`, or `nil` when no row matches.
@@ -320,14 +324,14 @@ public protocol WikiStore: Sendable {
     /// per source (chronological; index 0 = v1). Phase 6: the render precompute
     /// builds the `sourceID → [smvID]` map in one query so `linkified` can
     /// resolve `@vN` per occurrence.
-    func sourceDerivedChains() throws -> [PageID: [PageID]]
+    func sourceDerivedChains() throws -> [SourceID: [PageID]]
 
     /// Embed descriptors for every **byteless** source, batched in one query
     /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version →
     /// activity (`plan`) → agent (`name`), restricted to `blob_hash IS NULL`.
     /// Byteful sources are excluded. Used by the page-reader precompute to feed
     /// `ExternalEmbed.target(for:)` for byteless external embeds.
-    func embedDescriptors() throws -> [PageID: SourceEmbedDescriptor]
+    func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor]
 
     // MARK: - Phase 4: website snapshot store primitives
 
@@ -354,35 +358,35 @@ public protocol WikiStore: Sendable {
     /// True when the source's active content version's `activity_id` has
     /// sibling versions with non-null `original_path` (a snapshot page with
     /// images). Used by the refresh guard.
-    func hasImageSiblings(sourceID: PageID) throws -> Bool
+    func hasImageSiblings(sourceID: SourceID) throws -> Bool
 
     /// Batched sibling-image resolver maps: per source,
     /// `[original_path → sibling sourceID]`, joined on the source's active
     /// version's `activity_id`. First-wins per path in ULID order (§7).
-    func siblingImageResolvers() throws -> [PageID: [String: PageID]]
+    func siblingImageResolvers() throws -> [SourceID: [String: SourceID]]
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
-    func processedMarkdownAgentNames(sourceID: PageID) throws -> [String: String]
+    func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String]
 
     /// All extraction alternatives for a source, newest first, each bundled
     /// with its recoverable provenance (backend display name, model version,
     /// char count) and whether it is the active HEAD. Consolidates
     /// `processedMarkdownHistory` + `processedMarkdownAgentNames` into one join
     /// (smv → activity → agent). For the track C compare/nominate UI.
-    func processedMarkdownAlternatives(sourceID: PageID) throws -> [ExtractionAlternative]
+    func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
 
     /// Append a new full-text markdown version to the chain. Reads the current
     /// head to set `parentID`. Returns the new version.
     @discardableResult
-    func appendProcessedMarkdown(sourceID: PageID, content: String,
+    func appendProcessedMarkdown(sourceID: SourceID, content: String,
                                  origin: SourceMarkdownOrigin, note: String?,
                                  technique: String?) throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult
-    func revertProcessedMarkdown(sourceID: PageID, to versionID: PageID) throws -> SourceMarkdownVersion
+    func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion
 
     /// Record a provenance-carrying extraction alternative (§4.5, §4.7): create
     /// the backend's Agent + an `extract` Activity + a CAS'd markdown row in one
@@ -391,14 +395,14 @@ public protocol WikiStore: Sendable {
     /// alternatives until nominated via `setActiveMarkdown`.
     @discardableResult
     func recordMarkdownExtraction(
-        sourceID: PageID, content: String, backend: ExtractionBackend,
+        sourceID: SourceID, content: String, backend: ExtractionBackend,
         sourceVersionID: String?, note: String?, modelVersion: String?
     ) throws -> SourceMarkdownVersion
 
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Used by the alternatives UI,
     /// `wikictl source set-active`, and revert.
-    func setActiveMarkdown(sourceID: PageID, to versionID: PageID) throws
+    func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws
 
     // MARK: - Page versions (W0, PR #312)
 
@@ -606,11 +610,11 @@ public protocol WikiStore: Sendable {
 
     /// Store or replace ALL chunk embeddings for a source. Mirrors
     /// `storePageChunks` for sources.
-    func storeSourceChunks(id: PageID, chunks: [Data]) throws
+    func storeSourceChunks(id: SourceID, chunks: [Data]) throws
 
     /// Sources with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
     /// `missingPageEmbeddingWork`.
-    func missingSourceEmbeddingWork() -> [(id: PageID, text: String)]
+    func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
 
     /// Search sources semantically (cosine similarity via Swift-side
     /// `VectorCosine`, ranked by each source's best-matching chunk). Mirrors
@@ -632,13 +636,11 @@ public protocol WikiStore: Sendable {
     func createBookmarkNode(
         parentID: String?,
         position: Int,
-        kind: BookmarkNodeKind,
-        label: String?,
-        targetID: PageID?
+        content: BookmarkNode.Content
     ) throws -> BookmarkNode
 
     /// Update the label of a bookmark node (folders only).
-    func updateBookmarkNode(id: String, label: String?) throws
+    func renameBookmarkFolder(id: String, to label: String) throws
 
     /// Delete a bookmark node by id. `ON DELETE CASCADE` removes descendants.
     func deleteBookmarkNode(id: String) throws

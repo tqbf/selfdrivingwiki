@@ -41,7 +41,7 @@ struct SourceMaterializerTests {
     }
 
     /// `#require` can't wrap a throwing call directly, so resolve first.
-    private func requireOrigin(_ store: GRDBWikiStore, _ id: PageID) throws -> SourceOrigin {
+    private func requireOrigin(_ store: GRDBWikiStore, _ id: SourceID) throws -> SourceOrigin {
         let origin = try store.sourceOrigin(sourceID: id)
         return try #require(origin)
     }
@@ -365,7 +365,7 @@ struct SourceMaterializerTests {
 
     @Test func sourceOriginReturnsNilForUnknownID() throws {
         let store = try tempStore()
-        let origin = try store.sourceOrigin(sourceID: PageID(rawValue: "UNKNOWN"))
+        let origin = try store.sourceOrigin(sourceID: SourceID(rawValue: "UNKNOWN"))
         #expect(origin == nil)
     }
 

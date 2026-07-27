@@ -60,7 +60,7 @@ final class PendingPermissionEmitBox: @unchecked Sendable {
 /// `extractingSourceIDs`, `extractTask`, `stopExtraction`) with a
 /// queue-event-driven model.
 ///
-/// The tracker maps `QueueItem.ID` → `Set<PageID>` so it knows which source
+/// The tracker maps `QueueItem.ID` → `Set<SourceID>` so it knows which source
 /// IDs are being extracted, and exposes:
 /// - `isExtracting` / `extractingSourceIDs` — drives per-row "Extracting…"
 ///   labels and the sidebar spinner.
@@ -80,12 +80,12 @@ final class QueueActivityTracker {
     /// Source IDs currently being extracted (any extraction queue item in
     /// `.running` state). Drives per-file "Extracting…" labels and the
     /// standalone Extract button's per-file disable.
-    private(set) var extractingSourceIDs: Set<PageID> = []
+    private(set) var extractingSourceIDs: Set<SourceID> = []
 
     /// Source IDs currently being ingested (any ingestion queue item in
     /// `.running` state). Drives per-file "Ingesting…" labels and cross-file
     /// Ingest button disable. Replaces `launcher.ingestingSourceIDs`.
-    private(set) var ingestingSourceIDs: Set<PageID> = []
+    private(set) var ingestingSourceIDs: Set<SourceID> = []
 
     /// Queue item IDs currently running a lint (`.ingestion` items with
     /// `lintPageIDs != nil`). Lint items have empty `sourceIDs`, so they
@@ -155,7 +155,7 @@ final class QueueActivityTracker {
     /// and reflect the running state (the button reads "Transcribing…").
     /// Since transcription merged into `.extraction`, transcript items are
     /// tracked in `extractingSourceIDs` alongside PDF extractions.
-    func isTranscribing(sourceID: PageID) -> Bool {
+    func isTranscribing(sourceID: SourceID) -> Bool {
         extractingSourceIDs.contains(sourceID)
     }
 
@@ -196,7 +196,7 @@ final class QueueActivityTracker {
     /// items are tracked in `itemToSourceIDs` alongside PDF extractions.
     /// Mirrors `lintItemID(for:wikiID:)` (#837). Source IDs are
     /// ULIDs (globally unique), so no wiki-scoping is needed.
-    func transcriptionItemID(for sourceID: PageID) -> QueueItem.ID? {
+    func transcriptionItemID(for sourceID: SourceID) -> QueueItem.ID? {
         for (itemID, sourceIDs) in itemToSourceIDs {
             if sourceIDs.contains(sourceID) {
                 return itemID
@@ -286,7 +286,7 @@ final class QueueActivityTracker {
     /// ``transcriptionItemID(for:)`` since transcription merged into
     /// `.extraction` — transcript items are tracked here alongside PDF
     /// extractions.
-    private var itemToSourceIDs: [QueueItem.ID: Set<PageID>] = [:]
+    private var itemToSourceIDs: [QueueItem.ID: Set<SourceID>] = [:]
 
     /// Maps queue item ID → its `QueueKind`. Populated on `.enqueued`/`.started`
     /// so snapshot reconciliation (#871 self-heal) can clear the correct
@@ -473,7 +473,7 @@ final class QueueActivityTracker {
     /// True if an extraction is running but NOT for this specific source.
     /// Used to disable the Extract button when another file holds the
     /// extraction slot (local pdf2md is limit 1).
-    func isSlotBusyForOtherSource(_ id: PageID) -> Bool {
+    func isSlotBusyForOtherSource(_ id: SourceID) -> Bool {
         !extractingSourceIDs.isEmpty && !extractingSourceIDs.contains(id)
     }
 
