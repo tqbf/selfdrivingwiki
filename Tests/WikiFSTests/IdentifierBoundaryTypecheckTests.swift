@@ -43,14 +43,6 @@ struct IdentifierBoundaryTypecheckTests {
     private func runTypecheck(_ fixtureName: String) throws -> CompilerResult {
         let root = repositoryRoot()
         let modules = try modulesDirectory()
-        let tantivyHeaders = root.appendingPathComponent(
-            ".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/macos-arm64_x86_64/Headers"
-        )
-        let tantivyModuleMap = tantivyHeaders
-            .appendingPathComponent("tantivyFFI/module.modulemap")
-        let grdbSQLite = root.appendingPathComponent(
-            ".build/checkouts/GRDB.swift/Sources/GRDBSQLite"
-        )
         let scratchDirectory = root
             .appendingPathComponent("tmp/identifier-boundary-typecheck-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
@@ -64,16 +56,14 @@ struct IdentifierBoundaryTypecheckTests {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
+        var arguments = [
             "swiftc", "-typecheck",
             "-I", modules.path,
-            "-Xcc", "-I\(tantivyHeaders.path)",
-            "-Xcc", "-fmodule-map-file=\(tantivyModuleMap.path)",
-            "-Xcc", "-I\(grdbSQLite.path)",
-            "-Xcc", "-fmodule-map-file=\(grdbSQLite.appendingPathComponent("module.modulemap").path)",
             "-module-cache-path", scratchDirectory.path,
             fixtureURL(fixtureName).path,
         ]
+        arguments.insert(contentsOf: compilerSearchArguments(root: root), at: 4)
+        process.arguments = arguments
         process.currentDirectoryURL = root
 
         let output = Pipe()
@@ -87,6 +77,34 @@ struct IdentifierBoundaryTypecheckTests {
             status: process.terminationStatus,
             output: String(decoding: outputData, as: UTF8.self)
         )
+    }
+
+    private func compilerSearchArguments(root: URL) -> [String] {
+        var arguments: [String] = []
+        let fileManager = FileManager.default
+
+        let candidateDirectories = [
+            root.appendingPathComponent(".build/checkouts/GRDB.swift/Sources/GRDBSQLite"),
+            root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/macos-arm64_x86_64/Headers"),
+            root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/linux-x86_64/Headers"),
+        ]
+
+        for directory in candidateDirectories where fileManager.fileExists(atPath: directory.path) {
+            arguments += ["-Xcc", "-I\(directory.path)"]
+
+            let moduleMap = directory.appendingPathComponent("module.modulemap")
+            if fileManager.fileExists(atPath: moduleMap.path) {
+                arguments += ["-Xcc", "-fmodule-map-file=\(moduleMap.path)"]
+                continue
+            }
+
+            let tantivyModuleMap = directory.appendingPathComponent("tantivyFFI/module.modulemap")
+            if fileManager.fileExists(atPath: tantivyModuleMap.path) {
+                arguments += ["-Xcc", "-fmodule-map-file=\(tantivyModuleMap.path)"]
+            }
+        }
+
+        return arguments
     }
 
     @Test func positiveFixturesCompile() throws {
