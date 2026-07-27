@@ -684,7 +684,7 @@ public actor QueueEngine {
                 // post-claim state (counts updated, wiki inserted).
                 let limit: Int
                 switch item.queue {
-                case .extraction:
+                case .extraction, .transcription:
                     limit = config.extractionLimit(for: providerID)
                 case .ingestion:
                     limit = config.ingestionLimit(for: providerID)
@@ -972,4 +972,3 @@ public final class QueueEventBroadcaster: @unchecked Sendable {
         }
     }
 }
-

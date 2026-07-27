@@ -153,7 +153,7 @@ final class OperationNotifier {
     /// Determine the operation kind from a queue item.
     nonisolated static func operationKind(for item: QueueItem) -> OperationKind {
         switch item.queue {
-        case .extraction:
+        case .extraction, .transcription:
             return .extraction(sourceCount: item.payload.sourceIDs.count)
         case .ingestion:
             if let lintPageIDs = item.payload.lintPageIDs {
