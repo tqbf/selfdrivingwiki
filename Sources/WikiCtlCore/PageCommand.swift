@@ -14,10 +14,12 @@ public enum PageCommand {
     public struct Result: Equatable {
         public var output: String
         public var didCommit: Bool
+        public var stderrOutput: String?
 
-        public init(output: String, didCommit: Bool) {
+        public init(output: String, didCommit: Bool, stderrOutput: String? = nil) {
             self.output = output
             self.didCommit = didCommit
+            self.stderrOutput = stderrOutput
         }
     }
 
@@ -204,10 +206,11 @@ public enum PageCommand {
                     let data = try encoder.encode(row)
                     return Result(output: String(decoding: data, as: UTF8.self), didCommit: false)
                 }
-                if let headVersionID {
-                    FileHandle.standardError.write(Data("head_version_id: \(headVersionID)\n".utf8))
-                }
-                return Result(output: stagedBody, didCommit: false)
+                return Result(
+                    output: stagedBody,
+                    didCommit: false,
+                    stderrOutput: headVersionDiagnostic(headVersionID)
+                )
             }
             // Not staged in workspace, or no ID — fall through to main read.
         }
@@ -228,11 +231,13 @@ public enum PageCommand {
         // Text mode: print the body verbatim — this is the instant SoT read
         // that bypasses the ~5 s mount lag. The head_version_id goes to
         // stderr so stdout stays clean for body piping (agents read it from
-        // stderr for CAS threading).
-        if let headVersionID {
-            FileHandle.standardError.write(Data("head_version_id: \(headVersionID)\n".utf8))
-        }
-        return Result(output: page.bodyMarkdown, didCommit: false)
+        // stderr for CAS threading). The process layer writes it; the command
+        // layer returns it as data so tests stay side-effect free.
+        return Result(
+            output: page.bodyMarkdown,
+            didCommit: false,
+            stderrOutput: headVersionDiagnostic(headVersionID)
+        )
     }
 
     // MARK: - upsert
@@ -441,5 +446,10 @@ public enum PageCommand {
             }
             return id
         }
+    }
+
+    private static func headVersionDiagnostic(_ headVersionID: String?) -> String? {
+        guard let headVersionID else { return nil }
+        return "head_version_id: \(headVersionID)\n"
     }
 }

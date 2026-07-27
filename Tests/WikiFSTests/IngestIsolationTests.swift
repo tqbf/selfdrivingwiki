@@ -179,6 +179,7 @@ struct IngestIsolationTests {
             in: store)
         #expect(result.output == "staged")
         #expect(result.didCommit == false)
+        #expect(result.stderrOutput?.hasPrefix("head_version_id: ") == true)
     }
 
     @Test func pageUpsertWorkspaceWritesToWorkspaceNotMain() throws {
