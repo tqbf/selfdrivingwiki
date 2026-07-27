@@ -631,7 +631,7 @@ final class QueueActivityTracker {
             // #622: Optimistically reflect the queued state in the UI spinners
             // immediately, rather than waiting for .started.
             switch item.queue {
-            case .extraction:
+            case .extraction, .transcription:
                 extractingSourceIDs.formUnion(sourceIDs)
             case .ingestion:
                 if item.payload.lintPageIDs == nil {
@@ -646,7 +646,7 @@ final class QueueActivityTracker {
             itemToSourceIDs[item.id] = sourceIDs
             itemToQueue[item.id] = item.queue
             switch item.queue {
-            case .extraction:
+            case .extraction, .transcription:
                 extractingSourceIDs.formUnion(sourceIDs)
                 extractionLog = ""
                 extractionPID = nil
@@ -809,7 +809,7 @@ final class QueueActivityTracker {
         let queue = itemToQueue.removeValue(forKey: id)
         if let sourceIDs = itemToSourceIDs.removeValue(forKey: id) {
             switch queue {
-            case .extraction:
+            case .extraction, .transcription:
                 extractingSourceIDs.subtract(sourceIDs)
             case .ingestion:
                 ingestingSourceIDs.subtract(sourceIDs)

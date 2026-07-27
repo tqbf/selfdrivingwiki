@@ -341,12 +341,33 @@ public final class QueueStore: @unchecked Sendable {
     /// kind that was never shipped in `QueueKind` but can survive in databases
     /// migrated before the v1 cleanup `DELETE`. Lint is a payload variant of
     /// `.ingestion` (see `QueueKind`), so those rows decode as `.ingestion`.
+    /// Also tolerates legacy `"transcription"` rows from before transcript
+    /// work merged into `.extraction`.
     /// Genuinely unrecognized values still throw — so real corruption stays
     /// visible instead of being silently coerced.
     private static func decodeQueueKind(_ raw: String) throws -> QueueKind {
-        if let kind = QueueKind(rawValue: raw) { return kind }
+        if let kind = QueueKind(rawValue: raw) { return kind.canonical }
         if raw == "lint" { return .ingestion }
         throw QueueStoreError.sqlite(code: -1, message: "Unknown queue kind: \(raw)")
+    }
+
+    /// Decode rows one-by-one so a single unknown legacy/corrupt queue raw
+    /// value does not hide every other item in the same snapshot section.
+    private static func readItemsSkippingUnknownQueues(from rows: [Row]) throws -> [QueueItem] {
+        var items: [QueueItem] = []
+        items.reserveCapacity(rows.count)
+
+        for row in rows {
+            do {
+                items.append(try readItem(from: row))
+            } catch let QueueStoreError.sqlite(code, message)
+                where code == -1 && message.hasPrefix("Unknown queue kind:") {
+                let rowID = (row["id"] as String?) ?? "<missing-id>"
+                DebugLog.store("QueueStore: skipping row id=\(rowID) with \(message)")
+            }
+        }
+
+        return items
     }
 
     /// Read a `QueueItem` from a GRDB `Row`. Named column access (not positional)
@@ -499,7 +520,7 @@ public final class QueueStore: @unchecked Sendable {
                         ORDER BY ordering_key ASC;
                         """)
                 }
-                return try rows.map { try Self.readItem(from: $0) }
+                return try Self.readItemsSkippingUnknownQueues(from: rows)
             }
         }
     }
@@ -520,7 +541,7 @@ public final class QueueStore: @unchecked Sendable {
                     LIMIT ?;
                     """,
                     arguments: [Int64(limit)])
-                return try rows.map { try Self.readItem(from: $0) }
+                return try Self.readItemsSkippingUnknownQueues(from: rows)
             }
         }
     }
