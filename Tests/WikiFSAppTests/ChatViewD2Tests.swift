@@ -43,7 +43,7 @@ struct ChatViewD2Tests {
 
     @Test func activeChatID_setViaStartInteractiveQuery() async {
         let launcher = makeLauncher()
-        let chatID = "01J" + String(repeating: "A", count: 22)
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         // Simulate the runner passing chatID — the launcher records it.
         // We can't call startInteractiveQuery without a real backend, but we can
         // verify the property is settable (it's `var`, not private(set)), which is
@@ -55,9 +55,9 @@ struct ChatViewD2Tests {
     @Test func sourceOfTruth_liveChat_matchesActiveChatID() {
         let launcher = makeLauncher()
         let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
-        launcher.activeChatID = chatID.rawValue
+        launcher.activeChatID = chatID
         // The view's isLiveChat predicate:
-        let isLive = launcher.activeChatID == chatID.rawValue
+        let isLive = launcher.activeChatID == chatID
         #expect(isLive)
     }
 
@@ -65,13 +65,13 @@ struct ChatViewD2Tests {
         let launcher = makeLauncher()
         let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         // activeChatID is nil (no live session) → persisted path.
-        let isLive = launcher.activeChatID == chatID.rawValue
+        let isLive = launcher.activeChatID == chatID
         #expect(!isLive)
     }
 
     @Test func startNewChat_clearsActiveChatID() {
         let launcher = makeLauncher()
-        launcher.activeChatID = "some-chat-id"
+        launcher.activeChatID = ChatID(rawValue: "some-chat-id")
         // Pre-seed idle state so the guard passes.
         launcher.events = [.userText("hello")]
         launcher.isRunning = false
@@ -86,14 +86,14 @@ struct ChatViewD2Tests {
 
     @Test func retargetTab_preservesUUID_changesSelection() throws {
         let (model, store) = try tempModel()
-        let page = try store.createPage(title: "Page")
+        let chat = try store.createChat(kind: .edit, title: "Chat")
         model.reloadFromStore()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
         #expect(model.tabs[0].selection == .newChat)
 
         // Morph the tab in place: .newChat → .chat(id)
-        let chatID = page.id
+        let chatID = chat.id
         model.retargetTab(id: askTabID, to: .chat(chatID))
 
         #expect(model.tabs.count == 1)
@@ -202,7 +202,7 @@ struct ChatViewD2Tests {
 
     @Test func startNewChat_clearsActiveChatIDAndEvents() {
         let launcher = makeLauncher()
-        launcher.activeChatID = "live-chat-id"
+        launcher.activeChatID = ChatID(rawValue: "live-chat-id")
         launcher.events = [.userText("hello"), .assistantText("world")]
         launcher.isRunning = false
 

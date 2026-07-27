@@ -63,6 +63,14 @@ wiki links, provenance strings, paths, and CLI behavior must stay unchanged.
 - Focused chat boundary suite:
   `swift test --filter 'IdentifierBoundaryTypecheckTests|ChatAPISignatureManifestTests|ChatXPCRequestCompatibilityTests'`
   — 12 tests in 3 suites passed.
+- Focused ChatID follow-up core verification:
+  `swift test --filter 'ChatIDPersistenceTests|ChatAPISignatureManifestTests'`
+  — 5 tests in 2 suites passed.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'AgentToolsD4Tests|ChatViewD2Tests|ACPChatResumeTests'`
+  remains blocked by pre-existing unrelated app-test compile drift in the
+  opt-in `WikiFSAppTests` target. That target is not part of the standard CI
+  gate for this repository, so this follow-up branch does not broaden into
+  app-test harness repair.
 - `swift build --build-tests` — passed on the final tree.
 - `swift test` — 2,524 tests in 196 suites passed on the final tree.
 - `make lint` — 0 violations in 379 files; no new bare `try?`.

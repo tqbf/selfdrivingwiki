@@ -29,6 +29,7 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	public func getChat(id: ChatID) ->
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatSummary(chatID: ChatID, summary: String) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteChat(id: ChatID) {
+Sources/WikiFSEngine/AgentLauncher.swift	public var activeChatID: ChatID?
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID?
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
 Sources/WikiFSEngine/QueueEventEnvelope.swift	public let chatID: ChatID?

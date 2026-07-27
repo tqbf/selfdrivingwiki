@@ -87,7 +87,7 @@ public enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: wikictlDirectory,
-            chatID: chat?.id.rawValue,
+            chatID: chat?.id,
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
@@ -456,7 +456,7 @@ public enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: wikictlDirectory,
-            chatID: chatID.rawValue,
+            chatID: chatID,
         historySeed: history.map { $0.event },
             priorAcpSessionId: priorAcpSessionId,
             onAcpSessionId: { [weak store] sessionId in
