@@ -133,7 +133,7 @@ public protocol SourceMaterializer: Sendable {
 /// own); `agentName` from the **agent** row.
 public struct SourceOrigin: Sendable, Equatable {
     /// The source-version row id (the ULID of the `source_versions` row).
-    public let versionID: String
+    public let versionID: SourceVersionID
     public let agentName: String
     /// The agent's structured kind (`chat` / `agent` / `human` / `model` /
     /// `software`). Degrades to `"software"` for the legacy-import shared
@@ -150,7 +150,7 @@ public struct SourceOrigin: Sendable, Equatable {
     public let fetchedAt: Date
 
     public init(
-        versionID: String,
+        versionID: SourceVersionID,
         agentName: String,
         agentKind: String,
         activityKind: String,

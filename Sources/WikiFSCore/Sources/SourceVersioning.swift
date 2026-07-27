@@ -78,10 +78,10 @@ public struct ProvenanceActivity: Equatable, Sendable {
 /// working material is a derived transcript); `sourceContent` returns empty
 /// `Data()` for those and never throws.
 public struct SourceVersion: Equatable, Sendable {
-    public let id: String
+    public let id: SourceVersionID
     public let sourceID: SourceID
     /// `wasDerivedFrom` — the previous version's id; nil for v1.
-    public let parentID: String?
+    public let parentID: SourceVersionID?
     /// The content blob's hash; nil = byteless/external.
     public let blobHash: String?
     public let mimeType: String?
@@ -92,7 +92,7 @@ public struct SourceVersion: Equatable, Sendable {
     /// Generation time (PROV `generatedAtTime`).
     public let fetchedAt: Date
 
-    public init(id: String, sourceID: SourceID, parentID: String?,
+    public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?,
                 blobHash: String?, mimeType: String?, activityID: String?,
                 externalIdentity: String?, fetchedAt: Date) {
         self.id = id

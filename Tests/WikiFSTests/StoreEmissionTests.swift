@@ -217,7 +217,7 @@ struct StoreEmissionTests {
         let s = try addSeedSource(store)
         let v2 = try store.appendContentVersion(sourceID: s.id, data: Data("b2".utf8), mimeType: nil, provenance: nil)
         try await drain(rec)
-        try store.rollbackSourceContent(sourceID: s.id, to: PageID(rawValue: v2.id))
+        try store.rollbackSourceContent(sourceID: s.id, to: v2.id)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
         #expect(events.last?.change == .updated)

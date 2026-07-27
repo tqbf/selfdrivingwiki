@@ -206,7 +206,7 @@ import Testing
     /// property — only `agentName` matters; the other columns are filler.
     private func origin(agentName: String) -> SourceOrigin {
         SourceOrigin(
-            versionID: "01JTESTVERSION000000",
+            versionID: SourceVersionID(rawValue: "01JTESTVERSION000000"),
             agentName: agentName,
             agentKind: "software",
             activityKind: "import",

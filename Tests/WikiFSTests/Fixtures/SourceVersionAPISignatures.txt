@@ -1,0 +1,14 @@
+# Source content-version API signature manifest
+#
+# Format: <repository-relative Swift path><TAB><required source fragment>
+Sources/WikiFSCore/Sources/SourceVersioning.swift	public let id: SourceVersionID
+Sources/WikiFSCore/Sources/SourceVersioning.swift	public let parentID: SourceVersionID?
+Sources/WikiFSCore/Sources/SourceVersioning.swift	public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?
+Sources/WikiFSCore/Sources/SourceMaterializer.swift	public let versionID: SourceVersionID
+Sources/WikiFSCore/Sources/SourceMaterializer.swift	versionID: SourceVersionID,
+Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let sourceVersionID: SourceVersionID?
+Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	sourceVersionID: SourceVersionID? = nil,
+Sources/WikiFSCore/Store/WikiStore.swift	case sourceVersionNotFound(SourceVersionID)
+Sources/WikiFSCore/Store/WikiStore.swift	sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil

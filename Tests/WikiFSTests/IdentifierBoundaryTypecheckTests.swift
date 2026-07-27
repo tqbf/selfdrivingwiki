@@ -158,6 +158,15 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
+    @Test func pageIDIsRejectedBySourceVersionAPI() throws {
+        let result = try runTypecheck("page-id-to-source-version-api.swift")
+        #expect(result.status != 0, "PageID unexpectedly typechecked at a SourceVersionID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
     @Test func chatIDIsRejectedByPageAPI() throws {
         let result = try runTypecheck("chat-id-to-page-api.swift")
         #expect(result.status != 0, "ChatID unexpectedly typechecked at a PageID API boundary.")
@@ -176,6 +185,15 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
+    @Test func sourceIDIsRejectedBySourceVersionAPI() throws {
+        let result = try runTypecheck("source-id-to-source-version-api.swift")
+        #expect(result.status != 0, "SourceID unexpectedly typechecked at a SourceVersionID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
     @Test func sourceIDIsRejectedByChatAPI() throws {
         let result = try runTypecheck("source-id-to-chat-api.swift")
         #expect(result.status != 0, "SourceID unexpectedly typechecked at a ChatID API boundary.")
@@ -190,6 +208,24 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(result.status != 0, "ChatID unexpectedly typechecked at a SourceID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func markdownVersionIDIsRejectedBySourceVersionAPI() throws {
+        let result = try runTypecheck("markdown-version-id-to-source-version-api.swift")
+        #expect(result.status != 0, "SourceMarkdownVersion.id unexpectedly typechecked at a SourceVersionID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func sourceVersionIDIsRejectedBySourceAPI() throws {
+        let result = try runTypecheck("source-version-id-to-source-api.swift")
+        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a SourceID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceID'"),
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }

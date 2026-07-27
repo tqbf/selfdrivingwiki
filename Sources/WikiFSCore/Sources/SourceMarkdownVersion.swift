@@ -48,7 +48,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     public let activityID: String?
     /// The `source_versions.id` this extraction was derived from. nil when the
     /// extraction predates the content chain or the source has no versions.
-    public let sourceVersionID: String?
+    public let sourceVersionID: SourceVersionID?
     /// Content-addressed hash of the markdown body (CAS, §4.5). Rows sharing a
     /// blob hash store the bytes exactly once.
     public let blobHash: String?
@@ -68,7 +68,7 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
         note: String?,
         createdAt: Date,
         activityID: String? = nil,
-        sourceVersionID: String? = nil,
+        sourceVersionID: SourceVersionID? = nil,
         blobHash: String? = nil,
         mimeType: String = MimeType.markdown,
         technique: String? = nil
