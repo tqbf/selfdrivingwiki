@@ -186,7 +186,8 @@ public enum WikiLinkMarkdown {
             // fall back to the stored alias). Non-canonical links keep the
             // name-resolution path below.
             if WikiLinkParser.isCanonicalULID(bareTarget) {
-                let id = PageID(rawValue: bareTarget)
+                let pageID = PageID(rawValue: bareTarget)
+                let sourceID = SourceID(rawValue: bareTarget)
 
                 // Embed dispatch (Plan v2): page embeds + non-media source
                 // transclusions emit a collapsed `<details>`; media sources
@@ -199,14 +200,14 @@ public enum WikiLinkMarkdown {
                 if isEmbedPrefix {
                     let hasPagePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.page.linkPrefix)
                     let hasSourcePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.source.linkPrefix)
-                    let pageName = hasSourcePrefix ? nil : displayName(id.rawValue, .page)
-                    let sourceName = hasPagePrefix ? nil : displayName(id.rawValue, .source)
+                    let pageName = hasSourcePrefix ? nil : displayName(pageID.rawValue, .page)
+                    let sourceName = hasPagePrefix ? nil : displayName(sourceID.rawValue, .source)
                     let aliasDisplay: String? = fixed.alias.flatMap { collapseWhitespace($0) }.flatMap { $0.isEmpty ? nil : $0 }
 
                     if let pageName {
                         let display = aliasDisplay ?? pageName
                         out += transclusionEmbedHTML(display: display, kind: .page,
-                                                     id: id.rawValue, target: nil,
+                                                     id: pageID.rawValue, target: nil,
                                                      fragment: fragment, name: pageName)
                         continue
                     }
@@ -221,7 +222,7 @@ public enum WikiLinkMarkdown {
                        isNonMediaSource(mimeType: info.mimeType, target: info.target) {
                         let display = aliasDisplay ?? sourceName ?? bareTarget
                         out += transclusionEmbedHTML(display: display, kind: .source,
-                                                     id: id.rawValue, target: nil,
+                                                     id: sourceID.rawValue, target: nil,
                                                      fragment: fragment, name: display)
                         continue
                     }
@@ -231,7 +232,7 @@ public enum WikiLinkMarkdown {
                     continue
                 }
 
-                let currentName = displayName(id.rawValue, kind)
+                let currentName = displayName(bareTarget, kind)
                 let resolved = currentName != nil || isResolved(bareTarget, kind)
                 let display: String
                 if let currentName {
@@ -248,10 +249,10 @@ public enum WikiLinkMarkdown {
                 // highlighter finds it. A pinned link WITHOUT a fragment opens
                 // HEAD (the chosen scope): no `&pin=`. Embeds are excluded above.
                 let pinID: PageID? = (kind == .source && pin != nil && fragment != nil)
-                    ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(SourceID(rawValue: id.rawValue), $0) }
+                    ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(sourceID, $0) }
                     : nil
                 out += markdownLink(display: display, target: display, kind: kind,
-                                    resolved: resolved, fragment: fragment, id: id.rawValue,
+                                    resolved: resolved, fragment: fragment, id: bareTarget,
                                     pinID: pinID)
                 continue
             }
