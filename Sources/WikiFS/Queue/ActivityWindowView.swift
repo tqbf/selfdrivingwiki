@@ -781,7 +781,7 @@ struct ActivityWindowView: View {
     /// — revealing the source in the sidebar (not opening it as a tab, since
     /// sources are file-backed toms, not tabable documents). Mirrors how #583
     /// `openPage` lets lint jobs navigate back to a page.
-    private func revealSource(_ sourceID: PageID, in wikiID: WikiID) {
+    private func revealSource(_ sourceID: SourceID, in wikiID: WikiID) {
         guard let store = sessionManager?.sessions[wikiID]?.store else {
             DebugLog.tabs("Extraction Reveal Source: no live session for wiki \(wikiID.rawValue.prefix(8)); cannot reveal source")
             return

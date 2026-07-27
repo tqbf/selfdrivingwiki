@@ -109,7 +109,7 @@ public protocol QueueExtractionProvider: Sendable {
     ///   backend). The provider passes this to `ExtractionCoordinator`.
     func resolveExtraction(
         wikiID: WikiID,
-        sourceID: PageID,
+        sourceID: SourceID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution?
 
@@ -124,7 +124,7 @@ public protocol QueueExtractionProvider: Sendable {
     /// `recordMarkdownExtraction`.
     func persistExtraction(
         wikiID: WikiID,
-        sourceID: PageID,
+        sourceID: SourceID,
         markdown: String,
         backend: ExtractionBackend,
         modelVersion: String?,

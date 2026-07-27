@@ -32,7 +32,7 @@ struct SourceDetailView: View {
     /// last-activate-wins, so passing the session's explicit `wikiID` here is
     /// required to reach the correct FP extension (issue #672).
     let wikiID: WikiID
-    let runIngest: (PageID) -> Void
+    let runIngest: (SourceID) -> Void
     /// Shared launcher — used by the standalone `runExtraction` to take the
     /// extraction slot (so a standalone extract and an ingest-path extract serialize
     /// against each other) and to mirror this file's id into `extractingSourceIDs`
@@ -2028,7 +2028,7 @@ struct SourceDetailView: View {
 /// Keys the PDF-only anchor consume task so it re-fires on repeat quote clicks
 /// to the same un-extracted PDF (same file, bumped anchor version).
 private struct PDFTaskKey: Hashable {
-    let sourceID: PageID
+    let sourceID: SourceID
     let anchorVersion: Int
 }
 

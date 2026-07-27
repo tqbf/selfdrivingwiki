@@ -110,8 +110,8 @@ struct Phase5StoreCanonicalizationTests {
 
         // Render an inbound-link page: the stale alias "Old Title" must display
         // the CURRENT title "New Title" (display-at-render self-heal).
-        let displayName: (PageID, ParsedLink.LinkType) -> String? = { id, kind in
-            guard kind == .page, id == target.id else { return nil }
+        let displayName: (String, ParsedLink.LinkType) -> String? = { id, kind in
+            guard kind == .page, id == target.id.rawValue else { return nil }
             return "New Title"
         }
         let rendered = WikiLinkMarkdown.linkified(before[0].body,
@@ -149,8 +149,8 @@ struct Phase5StoreCanonicalizationTests {
         #expect(after.updatedAt == before.updatedAt)
 
         // The stale alias "Old Paper" self-heals to "New Paper" at render.
-        let displayName: (PageID, ParsedLink.LinkType) -> String? = { id, kind in
-            guard kind == .source, id == source.id else { return nil }
+        let displayName: (String, ParsedLink.LinkType) -> String? = { id, kind in
+            guard kind == .source, id == source.id.rawValue else { return nil }
             return "New Paper"
         }
         let rendered = WikiLinkMarkdown.linkified(after.bodyMarkdown,

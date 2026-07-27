@@ -20,7 +20,7 @@ struct SidebarView: View {
     @Bindable var launcher: AgentLauncher
     /// Files whose agent run is in flight (agent phase) — shows the
     /// "Ingesting…" spinner on those rows.
-    var ingestingSourceIDs: Set<PageID> = []
+    var ingestingSourceIDs: Set<SourceID> = []
 
     @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
@@ -214,9 +214,9 @@ private struct BookmarkPickerSheetModifier: ViewModifier {
                 onConfirm: { selectedIDs in
                     let parentID = ctx.parentID
                     for id in selectedIDs {
-                        switch ctx.kind {
-                        case .pages: store.addPageRef(parentID: parentID, pageID: id)
-                        case .sources: store.addSourceRef(parentID: parentID, sourceID: id)
+                        switch id {
+                        case .page(let pageID): store.addPageRef(parentID: parentID, pageID: pageID)
+                        case .source(let sourceID): store.addSourceRef(parentID: parentID, sourceID: sourceID)
                         }
                     }
                 }
@@ -227,9 +227,9 @@ private struct BookmarkPickerSheetModifier: ViewModifier {
     private func pickerItems(for kind: ItemPickerKind) -> [PickerItem] {
         switch kind {
         case .pages:
-            return store.summaries.map { PickerItem(id: $0.id, title: $0.title, isPage: true) }
+            return store.summaries.map { PickerItem(id: .page($0.id), title: $0.title, isPage: true) }
         case .sources:
-            return store.sources.map { PickerItem(id: $0.id, title: $0.effectiveName, isPage: false) }
+            return store.sources.map { PickerItem(id: .source($0.id), title: $0.effectiveName, isPage: false) }
         }
     }
 }

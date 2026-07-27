@@ -34,7 +34,7 @@ struct BookmarkInsertPositionTests {
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1])
-        #expect(nodes.map(\.targetID) == [p1.id, p2.id])
+        #expect(nodes.map(\.content) == [.page(p1.id), .page(p2.id)])
     }
 
     /// Inserting at position 0 pushes the existing first node down.
@@ -50,7 +50,7 @@ struct BookmarkInsertPositionTests {
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1])
-        #expect(nodes.first?.targetID == earlier.id,
+        #expect(nodes.first?.content == .page(earlier.id),
                 "position: 0 must land before the previously-first node")
     }
 
@@ -75,7 +75,10 @@ struct BookmarkInsertPositionTests {
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1, 2, 3])
         // A, MID, B, C
-        let titles: [String] = nodes.compactMap { $0.targetID }
+        let titles: [String] = nodes.compactMap { node -> PageID? in
+            guard case .page(let id) = node.content else { return nil }
+            return id
+        }
             .compactMap { id in [a, b, c, mid].first { $0.id == id }?.title }
         #expect(titles == ["A", "MID", "B", "C"])
     }
@@ -97,7 +100,7 @@ struct BookmarkInsertPositionTests {
 
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1, 2])
-        #expect(nodes[1].targetID == between.id,
+        #expect(nodes[1].content == .source(between.id),
                 "source ref inserted at position 1 must land between the two siblings")
     }
 
@@ -106,7 +109,7 @@ struct BookmarkInsertPositionTests {
     @Test func positionedInsertIsScopedToParent() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let folder = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder, label: "F", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "F"))
         let model = WikiStoreModel(store: store)
 
         let a = try store.createPage(title: "A")
@@ -128,12 +131,12 @@ struct BookmarkInsertPositionTests {
             .filter { $0.parentID == folder.id }
             .sorted { $0.position < $1.position }
         #expect(folderChildren.map(\.position) == [0, 1, 2])
-        #expect(folderChildren.first?.targetID == mid.id)
+        #expect(folderChildren.first?.content == .page(mid.id))
 
         let rootChildren = model.bookmarkNodes
             .filter { $0.parentID == nil && $0.kind == .pageRef }
         #expect(rootChildren.count == 1)
-        #expect(rootChildren.first?.targetID == root.id)
+        #expect(rootChildren.first?.content == .page(root.id))
     }
 
     /// Inserting past the end (a stale/out-of-range index) still yields a
@@ -152,6 +155,6 @@ struct BookmarkInsertPositionTests {
         let nodes = model.bookmarkNodes.sorted { $0.position < $1.position }
         #expect(nodes.map(\.position) == [0, 1],
                 "renumber pass must keep positions contiguous on an out-of-range insert")
-        #expect(nodes.last?.targetID == b.id)
+        #expect(nodes.last?.content == .page(b.id))
     }
 }

@@ -20,11 +20,12 @@ public enum SourceRole: String, Sendable {
 /// `GRDBWikiStore.sourceContent(id:)` so the list and the projection's
 /// `getattr`/enumeration never hold large blobs in memory.
 ///
-/// `id` reuses `PageID` (a ULID-string wrapper) since the source id is also a
-/// ULID — sortable, so the raw value orders by ingest time. Identifiable +
-/// Hashable so it drives a SwiftUI `List`/`ForEach` directly.
+/// `id` is a `SourceID` (a ULID-string wrapper). Its raw value remains sortable
+/// by ingest time, while the distinct type prevents source rows from entering
+/// page APIs. Identifiable + Hashable so it drives a SwiftUI `List`/`ForEach`
+/// directly.
 public struct SourceSummary: Identifiable, Hashable, Sendable {
-    public let id: PageID
+    public let id: SourceID
     public let filename: String
     /// Lowercased extension with no leading dot (`""` when the name has none).
     public let ext: String
@@ -68,7 +69,7 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
     }
 
     public init(
-        id: PageID,
+        id: SourceID,
         filename: String,
         ext: String,
         mimeType: String?,

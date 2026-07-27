@@ -362,6 +362,10 @@ let package = Package(
                                    condition: .when(platforms: [.linux])),
                            .product(name: "ACPModel", package: "swift-acp")],
             path: "Tests/WikiFSTests",
+            // Compiler-boundary fixtures deliberately include invalid Swift.
+            // They are invoked directly by IdentifierBoundaryTypecheckTests,
+            // not compiled as part of the test target itself.
+            exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
         // macOS-only tests — AppKit/WebKit/FileProvider/SwiftUI-hosted views,

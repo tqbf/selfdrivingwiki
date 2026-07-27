@@ -31,8 +31,7 @@ import Foundation
 
     @Test func listOutputsTSV() throws {
         let store = try tempStore()
-        _ = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder,
-                                          label: "Research", targetID: nil)
+        _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Research"))
         let result = try BookmarkCommand.run(.list(json: false), in: store)
         #expect(result.didCommit == false)
         #expect(result.output.contains("Research"))
@@ -41,8 +40,7 @@ import Foundation
 
     @Test func listOutputsJSON() throws {
         let store = try tempStore()
-        _ = try store.createBookmarkNode(parentID: nil, position: 0, kind: .folder,
-                                          label: "Research", targetID: nil)
+        _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Research"))
         let result = try BookmarkCommand.run(.list(json: true), in: store)
         #expect(result.didCommit == false)
         #expect(result.output.contains("\"label\":\"Research\""))
@@ -66,8 +64,7 @@ import Foundation
 
     @Test func createNestedFolder() throws {
         let store = try tempStore()
-        let parent = try store.createBookmarkNode(parentID: nil, position: 0,
-                                                    kind: .folder, label: "Parent", targetID: nil)
+        let parent = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Parent"))
         let result = try BookmarkCommand.run(
             .createFolder(parentID: parent.id, name: "Child"), in: store
         )
@@ -83,7 +80,7 @@ import Foundation
     @Test func addPageRefCommits() throws {
         let store = try tempStore()
         let result = try BookmarkCommand.run(
-            .addRef(parentID: nil, kind: .pageRef, targetID: PageID(rawValue: "01PAGE")),
+            .addRef(parentID: nil, content: .page(PageID(rawValue: "01PAGE"))),
             in: store
         )
         #expect(result.didCommit == true)
@@ -92,13 +89,13 @@ import Foundation
         let nodes = try store.listBookmarkNodes()
         #expect(nodes.count == 1)
         #expect(nodes[0].kind == .pageRef)
-        #expect(nodes[0].targetID?.rawValue == "01PAGE")
+        #expect(nodes[0].content == .page(PageID(rawValue: "01PAGE")))
     }
 
     @Test func addSourceRefCommits() throws {
         let store = try tempStore()
         let result = try BookmarkCommand.run(
-            .addRef(parentID: nil, kind: .sourceRef, targetID: PageID(rawValue: "01SRC")),
+            .addRef(parentID: nil, content: .source(SourceID(rawValue: "01SRC"))),
             in: store
         )
         #expect(result.didCommit == true)
@@ -108,7 +105,7 @@ import Foundation
     @Test func addChatRefCommits() throws {
         let store = try tempStore()
         let result = try BookmarkCommand.run(
-            .addRef(parentID: nil, kind: .chatRef, targetID: PageID(rawValue: "01CHAT")),
+            .addRef(parentID: nil, content: .chat(PageID(rawValue: "01CHAT"))),
             in: store
         )
         #expect(result.didCommit == true)
@@ -119,8 +116,7 @@ import Foundation
 
     @Test func renameCommitsAndUpdateLabel() throws {
         let store = try tempStore()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0,
-                                                 kind: .folder, label: "Old", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Old"))
         let result = try BookmarkCommand.run(
             .rename(id: node.id, to: "New"), in: store
         )
@@ -134,8 +130,7 @@ import Foundation
 
     @Test func deleteCommits() throws {
         let store = try tempStore()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0,
-                                                 kind: .folder, label: "ToDelete", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "ToDelete"))
         let result = try BookmarkCommand.run(.delete(id: node.id), in: store)
         #expect(result.didCommit == true)
         let nodes = try store.listBookmarkNodes()
@@ -146,8 +141,7 @@ import Foundation
 
     @Test func moveCommits() throws {
         let store = try tempStore()
-        let node = try store.createBookmarkNode(parentID: nil, position: 0,
-                                                 kind: .folder, label: "Movable", targetID: nil)
+        let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Movable"))
         let result = try BookmarkCommand.run(
             .move(id: node.id, toParentID: nil, position: 5), in: store
         )
@@ -182,12 +176,11 @@ import Foundation
             "--wiki", "W", "bookmark", "add-ref", "--kind", "page", "--target", "01PAGE"
         ], env: noEnv)
         guard case .bookmark(let action) = inv.command,
-              case .addRef(let parent, let kind, let target) = action else {
+              case .addRef(let parent, let content) = action else {
             Issue.record("expected .bookmark(.addRef)"); return
         }
         #expect(parent == nil)
-        #expect(kind == .pageRef)
-        #expect(target.rawValue == "01PAGE")
+        #expect(content == .page(PageID(rawValue: "01PAGE")))
     }
 
     @Test func parseRename() throws {

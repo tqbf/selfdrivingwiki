@@ -235,7 +235,7 @@ final class BookmarksOutlineViewController: NSViewController {
 
     /// Compact per-node signature covering all rendering-relevant fields.
     private func nodeSignature(_ nodes: [BookmarkNode]) -> String {
-        nodes.map { "\($0.id)|\($0.parentID ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetID?.rawValue ?? "")" }
+        nodes.map { "\($0.id)|\($0.parentID ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetRawValue ?? "")" }
             .joined(separator: "\n")
     }
 
@@ -247,30 +247,25 @@ final class BookmarksOutlineViewController: NSViewController {
 
     private func title(for node: BookmarkNode) -> String {
         guard let store else { return node.label ?? "(missing)" }
-        if let label = node.label { return label }
-        switch node.kind {
-        case .pageRef:
-            return node.targetID.flatMap { id in store.summaries.first { $0.id == id }?.title } ?? "(missing)"
-        case .sourceRef:
-            return node.targetID.flatMap { id in store.sources.first { $0.id == id }?.effectiveName } ?? "(missing)"
-        case .chatRef:
-            return node.targetID.flatMap { id in store.chats.first { $0.id == id }?.title } ?? "(missing)"
-        case .folder:
-            return node.label ?? "Untitled"
+        switch node.content {
+        case .folder(let label): return label
+        case .page(let id): return store.summaries.first { $0.id == id }?.title ?? "(missing)"
+        case .source(let id): return store.sources.first { $0.id == id }?.effectiveName ?? "(missing)"
+        case .chat(let id): return store.chats.first { $0.id == id }?.title ?? "(missing)"
         }
     }
 
     private func iconName(for node: BookmarkNode) -> String {
-        switch node.kind {
+        switch node.content {
         case .folder: return "folder"
-        case .pageRef:
-            let isStale = node.targetID.flatMap { id in store?.summaries.first { $0.id == id } } == nil
+        case .page(let id):
+            let isStale = store?.summaries.first { $0.id == id } == nil
             return isStale ? "exclamationmark.triangle" : ResourceKind.page.systemImageName
-        case .sourceRef:
-            let isStale = node.targetID.flatMap { id in store?.sources.first { $0.id == id } } == nil
+        case .source(let id):
+            let isStale = store?.sources.first { $0.id == id } == nil
             return isStale ? "exclamationmark.triangle" : ResourceKind.source.systemImageName
-        case .chatRef:
-            let isStale = node.targetID.flatMap { id in store?.chats.first { $0.id == id } } == nil
+        case .chat(let id):
+            let isStale = store?.chats.first { $0.id == id } == nil
             return isStale ? "exclamationmark.triangle" : ResourceKind.chat.systemImageName
         }
     }
@@ -287,16 +282,8 @@ final class BookmarksOutlineViewController: NSViewController {
             }
             return
         }
-        // Open page/source/chat ref.
-        if let targetID = item.targetID {
-            let sel: WikiSelection
-            switch item.kind {
-            case .pageRef: sel = .page(targetID)
-            case .sourceRef: sel = .source(targetID)
-            case .chatRef: sel = .chat(targetID)
-            case .folder: return
-            }
-            callbacks?.onOpen([sel])
+        if let selection = revealSelection(for: item) {
+            callbacks?.onOpen([selection])
         }
     }
 }
@@ -335,15 +322,15 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? BookmarkNode else { return nil }
         let payloads: [SidebarDragPayload]
-        switch node.kind {
-        case .pageRef, .sourceRef, .chatRef:
-            if let targetID = node.targetID, let kind = dragKind(for: node.kind) {
-                payloads = [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
-            } else {
-                payloads = []
-            }
+        switch node.content {
         case .folder:
             payloads = leafPayloads(under: node.id)
+        case .page(let id):
+            payloads = [SidebarDragPayload(kind: .page, id: id.rawValue)]
+        case .source(let id):
+            payloads = [SidebarDragPayload(kind: .source, id: id.rawValue)]
+        case .chat(let id):
+            payloads = [SidebarDragPayload(kind: .chat, id: id.rawValue)]
         }
         DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) payloadCount=\(payloads.count)")
         return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id)
@@ -353,10 +340,12 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     /// reachable under `folderID`, walking into nested subfolders too.
     private func leafPayloads(under folderID: String) -> [SidebarDragPayload] {
         children(of: folderID).flatMap { child -> [SidebarDragPayload] in
-            guard let targetID = child.targetID, let kind = dragKind(for: child.kind) else {
-                return child.kind == .folder ? leafPayloads(under: child.id) : []
+            switch child.content {
+            case .folder: return leafPayloads(under: child.id)
+            case .page(let id): return [SidebarDragPayload(kind: .page, id: id.rawValue)]
+            case .source(let id): return [SidebarDragPayload(kind: .source, id: id.rawValue)]
+            case .chat(let id): return [SidebarDragPayload(kind: .chat, id: id.rawValue)]
             }
-            return [SidebarDragPayload(kind: kind, id: targetID.rawValue)]
         }
     }
 
@@ -459,14 +448,13 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         }
         var position = basePosition
         for payload in list.items {
-            let pageID = PageID(rawValue: payload.id)
             switch payload.kind {
             case .page:
-                store.addPageRef(parentID: parentID, pageID: pageID, position: position)
+                store.addPageRef(parentID: parentID, pageID: PageID(rawValue: payload.id), position: position)
             case .source:
-                store.addSourceRef(parentID: parentID, sourceID: pageID, position: position)
+                store.addSourceRef(parentID: parentID, sourceID: SourceID(rawValue: payload.id), position: position)
             case .chat:
-                store.addChatRef(parentID: parentID, chatID: pageID, position: position)
+                store.addChatRef(parentID: parentID, chatID: PageID(rawValue: payload.id), position: position)
             }
             DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID ?? "root") position=\(position)")
             position += 1
@@ -496,19 +484,17 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         // row so a bookmark to a since-deleted target falls back to title-based
         // resolution instead of storing a dead id. Legacy `?title=`-only URLs
         // resolve by name as before.
-        let targetID: PageID?
+        let pageID: PageID?
+        let sourceID: SourceID?
         if let id = WikiLinkMarkdown.id(from: url) {
-            let exists = (kind == .page)
-                ? store.summaries.contains { $0.id == id }
-                : store.sources.contains { $0.id == id }
-            targetID = exists ? id
-                : (kind == .page ? store.pageID(forTitle: title) : store.sourceID(forDisplayName: title))
+            pageID = kind == .page && store.summaries.contains { $0.id == id } ? id : nil
+            sourceID = kind == .source && store.sources.contains { $0.id == SourceID(rawValue: id.rawValue) }
+                ? SourceID(rawValue: id.rawValue) : nil
         } else {
-            targetID = (kind == .page)
-                ? store.pageID(forTitle: title)
-                : store.sourceID(forDisplayName: title)
+            pageID = kind == .page ? store.pageID(forTitle: title) : nil
+            sourceID = kind == .source ? store.sourceID(forDisplayName: title) : nil
         }
-        guard let resolved = targetID else {
+        guard pageID != nil || sourceID != nil else {
             DebugLog.tabs("[drop] wiki-link bookmark drop: title \"\(title)\" did not resolve to a \(kind) id")
             return false
         }
@@ -529,8 +515,12 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             position = index >= 0 ? index : children(of: nil).count
         }
         switch kind {
-        case .page:   store.addPageRef(parentID: parentID, pageID: resolved, position: position)
-        case .source: store.addSourceRef(parentID: parentID, sourceID: resolved, position: position)
+        case .page:
+            guard let pageID else { return false }
+            store.addPageRef(parentID: parentID, pageID: pageID, position: position)
+        case .source:
+            guard let sourceID else { return false }
+            store.addSourceRef(parentID: parentID, sourceID: sourceID, position: position)
         case .chat:
             // Chat refs aren't a bookmark target yet (no `addChatRef`); reject
             // the drop so a chat wiki-link drag is a no-op rather than a crash.
@@ -766,13 +756,13 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             // Open With — single item only (batch open-with is ambiguous).
             if !isBatch, fileProvider?.path != nil {
                 let type: UTType
-                switch clicked.kind {
-                case .pageRef:
+                switch clicked.content {
+                case .page:
                     type = OpenWithMenu.pageContentType
-                case .sourceRef:
-                    let src = store?.sources.first { $0.id == clicked.targetID }
+                case .source(let sourceID):
+                    let src = store?.sources.first { $0.id == sourceID }
                     type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
-                case .chatRef:
+                case .chat:
                     type = OpenWithMenu.pageContentType
                 case .folder:
                     type = .data
@@ -794,7 +784,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
         }
 
         // Edit — single item only.
-        if !isBatch {
+        if !isBatch && clicked.kind == .folder {
             menu.addItem(menuItem("Edit…", systemImage: "pencil",
                                   action: #selector(editAction(_:)), payload: payload))
         }
@@ -847,28 +837,27 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
     }
 
     /// Maps a single bookmark node to the `WikiSelection` its target represents.
-    /// Returns `nil` for folders or nodes missing a target id. Shared by "Open"
-    /// and "Go to Original" so the kind→selection mapping lives in one place.
+    /// Returns `nil` for folders. Shared by "Open" and "Go to Original" so
+    /// the typed target→selection mapping lives in one place.
     private func revealSelection(for node: BookmarkNode) -> WikiSelection? {
-        guard let targetID = node.targetID else { return nil }
-        switch node.kind {
-        case .pageRef:   return .page(targetID)
-        case .sourceRef: return .source(targetID)
-        case .chatRef:   return .chat(targetID)
-        case .folder:    return nil
+        switch node.content {
+        case .folder: return nil
+        case .page(let id): return .page(id)
+        case .source(let id): return .source(id)
+        case .chat(let id): return .chat(id)
         }
     }
 
     @objc private func goToOriginalAction(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? BookmarksMenuPayload,
               let sel = revealSelection(for: payload.clicked) else { return }
-        DebugLog.tabs("Bookmarks goToOriginal: kind=\(payload.clicked.kind) targetID=\(payload.clicked.targetID?.rawValue ?? "nil")")
+        DebugLog.tabs("Bookmarks goToOriginal: kind=\(payload.clicked.kind) targetID=\(payload.clicked.targetRawValue ?? "nil")")
         callbacks?.onGoToOriginal(sel)
     }
 
     @objc private func openWithAppAction(_ sender: NSMenuItem) {
         guard let ref = sender.representedObject as? OpenWithBookmarkRef,
-              let targetID = ref.node.targetID, let fileProvider else { return }
+              let fileProvider else { return }
         Task {
             let picked: URL?
             if let appURL = ref.appURL {
@@ -877,15 +866,11 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
                 picked = await AppPicker.pick()
             }
             guard let appURL = picked else { return }
-            switch ref.node.kind {
-            case .pageRef:
-                await fileProvider.openPage(id: targetID, with: appURL)
-            case .sourceRef:
-                await fileProvider.openSource(id: targetID, with: appURL)
-            case .chatRef:
-                await fileProvider.openChat(id: targetID, with: appURL)
-            case .folder:
-                break
+            switch ref.node.content {
+            case .page(let id): await fileProvider.openPage(id: id, with: appURL)
+            case .source(let id): await fileProvider.openSource(id: id, with: appURL)
+            case .chat(let id): await fileProvider.openChat(id: id, with: appURL)
+            case .folder: break
             }
         }
     }

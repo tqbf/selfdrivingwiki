@@ -52,7 +52,7 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
             respond404(task, url: url)
             return
         }
-        let id = PageID(rawValue: idStr)
+        let id = SourceID(rawValue: idStr)
 
         guard let store, let (data, mimeType) = store.sourceContentAndMIME(id: id) else {
             respond404(task, url: url)

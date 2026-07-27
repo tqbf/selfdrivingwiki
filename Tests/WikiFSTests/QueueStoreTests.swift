@@ -17,6 +17,12 @@ struct QueueStoreTests {
 
     // MARK: - Test helpers
 
+    /// Canonical JSON string for structural comparison across Foundation runtimes.
+    private func normalizedJSONString(from object: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try #require(String(data: data, encoding: .utf8))
+    }
+
     /// A fresh on-disk `queue.sqlite` URL in a unique temp directory.
     private func tempDatabaseURL() -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -27,7 +33,50 @@ struct QueueStoreTests {
 
     /// A trivial payload for tests that don't care about payload specifics.
     private func makePayload() -> QueueItemPayload {
-        QueueItemPayload(sourceIDs: [PageID(rawValue: "TESTSOURCE001")])
+        QueueItemPayload(sourceIDs: [SourceID(rawValue: "TESTSOURCE001")])
+    }
+
+    @Test func preRefactorPayloadFixtureDecodes() throws {
+        let url = tempDatabaseURL()
+        let itemID: QueueItem.ID
+        do {
+            let store = try QueueStore(databaseURL: url)
+            itemID = try store.enqueue(
+                QueueItemRequest(
+                    queue: .extraction,
+                    wikiID: WikiID(rawValue: "legacy-wiki"),
+                    payload: makePayload()
+                )
+            ).id
+            store.close()
+        }
+
+        let legacyPayload = #"{"sourceIDs":["LEGACY-SOURCE-ID"]}"#
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let updateSQL = """
+        UPDATE queue_items
+        SET payload = '\(legacyPayload)'
+        WHERE id = '\(itemID.rawValue)';
+        """
+        #expect(sqlite3_exec(db, updateSQL, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let reopened = try QueueStore(databaseURL: url)
+        let item = try #require(try reopened.getItem(itemID))
+        #expect(item.payload.sourceIDs == [SourceID(rawValue: "LEGACY-SOURCE-ID")])
+    }
+
+    @Test func legacySourceIDPayloadDecodesAndReencodesCompatibly() throws {
+        let legacyPayload = Data(#"{"sourceIDs":["LEGACY-SOURCE-ID"]}"#.utf8)
+        let decoded = try JSONDecoder().decode(QueueItemPayload.self, from: legacyPayload)
+        let reencoded = try JSONEncoder().encode(decoded)
+
+        #expect(decoded.sourceIDs == [SourceID(rawValue: "LEGACY-SOURCE-ID")])
+
+        let legacyObject = try JSONSerialization.jsonObject(with: legacyPayload)
+        let reencodedObject = try JSONSerialization.jsonObject(with: reencoded)
+        #expect(try normalizedJSONString(from: legacyObject) == normalizedJSONString(from: reencodedObject))
     }
 
     // MARK: - AC.1: Durability — persistence across reopen

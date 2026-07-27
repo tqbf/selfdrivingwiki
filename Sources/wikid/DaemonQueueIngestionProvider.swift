@@ -62,7 +62,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     func runIngestion(
         wikiID: WikiID,
-        sourceIDs: [PageID],
+        sourceIDs: [SourceID],
         queueItemID: QueueItem.ID,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,

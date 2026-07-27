@@ -25,7 +25,7 @@ struct QueueExtractionTests {
     }
 
     private func makePayload(sourceID: String = "TESTSRC001") -> QueueItemPayload {
-        QueueItemPayload(sourceIDs: [PageID(rawValue: sourceID)])
+        QueueItemPayload(sourceIDs: [SourceID(rawValue: sourceID)])
     }
 
     // MARK: - AC.2: Enqueue returns immediately
@@ -300,7 +300,7 @@ struct QueueExtractionTests {
 
     // MARK: - Worker calls provider in order
 
-    @Test func testExtractionWorkerCallsProviderInOrder() async throws {
+    @Test func sourceIDReachesExtractionProvider() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let provider = FakeExtractionProvider(
@@ -349,7 +349,7 @@ struct QueueExtractionTests {
 
         // Enqueue with a backend override in the payload's stageRouting.
         let payload = QueueItemPayload(
-            sourceIDs: [PageID(rawValue: "SRC1")],
+            sourceIDs: [SourceID(rawValue: "SRC1")],
             stageRouting: [StageRoutingKey.backend.rawValue: "anthropic"])
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: payload))
@@ -416,7 +416,7 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     }
 
     func resolveExtraction(
-        wikiID: WikiID, sourceID: PageID,
+        wikiID: WikiID, sourceID: SourceID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
         lock.withLock { state in
@@ -441,7 +441,7 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     }
 
     func persistExtraction(
-        wikiID: WikiID, sourceID: PageID,
+        wikiID: WikiID, sourceID: SourceID,
         markdown: String, backend: ExtractionBackend,
         modelVersion: String?, technique: String?
     ) async throws {

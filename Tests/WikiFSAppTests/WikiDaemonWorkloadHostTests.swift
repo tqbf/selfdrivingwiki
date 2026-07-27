@@ -75,7 +75,7 @@ struct WikiDaemonWorkloadHostTests {
             QueueItemRequest(
                 queue: .extraction,
                 wikiID: WikiID(rawValue: "legacy-wiki"),
-                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "legacy-src")])
+                payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "legacy-src")])
             )
         )
         store.close()
@@ -243,7 +243,7 @@ struct WikiDaemonWorkloadHostTests {
 
         let request = QueueItemRequest(
             queue: .extraction, wikiID: WikiID(rawValue: "test-wiki"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -303,7 +303,7 @@ struct WikiDaemonWorkloadHostTests {
 
             let request = QueueItemRequest(
                 queue: .extraction, wikiID: WikiID(rawValue: "reconnect-wiki"),
-                payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
+                payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
             let requestData = try JSONEncoder().encode(request)
 
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -367,7 +367,7 @@ struct WikiDaemonWorkloadHostTests {
         // Enqueue with a valid request.
         let request = QueueItemRequest(
             queue: .extraction, wikiID: WikiID(rawValue: "roundtrip-wiki"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -423,7 +423,7 @@ struct WikiDaemonWorkloadHostTests {
         // Enqueue an item, then mark it completed directly via the engine.
         let request = QueueItemRequest(
             queue: .extraction, wikiID: WikiID(rawValue: "wait-wiki"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]))
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in

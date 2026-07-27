@@ -9,7 +9,7 @@ struct WikiLinkIndexTests {
 
     // MARK: - Entry construction + pass-through
 
-    @Test func entriesArePreservedInOrder() {
+    @Test func sourceIdentifierFieldsRemainRawStrings() {
         let index = WikiLinkIndex.build(
             pages: [
                 .init(id: "01AAA", title: "Home"),
@@ -47,8 +47,8 @@ struct WikiLinkIndexTests {
     }
 
     @Test func siblingImagesArePassedThrough() {
-        let sib: [PageID: [String: PageID]] = [
-            PageID(rawValue: "01SRC"): ["img/photo.jpg": PageID(rawValue: "02SIB")]
+        let sib: [SourceID: [String: SourceID]] = [
+            SourceID(rawValue: "01SRC"): ["img/photo.jpg": SourceID(rawValue: "02SIB")]
         ]
         let index = WikiLinkIndex.build(
             pages: [], sources: [], chats: [], siblingImages: sib)

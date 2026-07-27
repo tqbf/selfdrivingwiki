@@ -16,9 +16,30 @@ enum BookmarkRefKind: String, Sendable {
 /// from the Pages/Sources list, or the active chat) and the user picks the
 /// destination folder.
 struct BookmarkTargetPickerContext: Identifiable, Sendable {
+    enum Targets: Sendable {
+        case pages([PageID])
+        case sources([SourceID])
+        case chats([PageID])
+
+        var kind: BookmarkRefKind {
+            switch self {
+            case .pages: .pages
+            case .sources: .sources
+            case .chats: .chats
+            }
+        }
+
+        var count: Int {
+            switch self {
+            case .pages(let ids): ids.count
+            case .sources(let ids): ids.count
+            case .chats(let ids): ids.count
+            }
+        }
+    }
+
     let id = UUID()
-    let kind: BookmarkRefKind
-    let ids: [PageID]
+    let targets: Targets
 }
 
 /// The inverse of `ItemPickerSheet`: the item selection is fixed, and the user
@@ -44,8 +65,7 @@ enum BookmarkFolderSelection: Hashable {
 
 struct BookmarkTargetPickerSheet: View {
     @Bindable var store: WikiStoreModel
-    let kind: BookmarkRefKind
-    let ids: [PageID]
+    let targets: BookmarkTargetPickerContext.Targets
     /// Receives the chosen destination folder id (`nil` = bookmarks root).
     /// Main-actor: the caller touches the @MainActor WikiStoreModel.
     let onConfirm: (@MainActor @Sendable (String?) -> Void)
@@ -110,7 +130,7 @@ struct BookmarkTargetPickerSheet: View {
             Divider()
 
             HStack {
-                Text("\(ids.count) item\(ids.count == 1 ? "" : "s") will be added")
+                Text("\(targets.count) item\(targets.count == 1 ? "" : "s") will be added")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -121,7 +141,7 @@ struct BookmarkTargetPickerSheet: View {
                 .keyboardShortcut(.cancelAction)
                 Button("Add") {
                     let parentID = Self.parentID(forSelection: selection)
-                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID ?? "nil"), \(ids.count) items")
+                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID ?? "nil"), \(targets.count) items")
                     onConfirm(parentID)
                     dismiss()
                 }
@@ -132,7 +152,7 @@ struct BookmarkTargetPickerSheet: View {
         }
         .frame(width: 420, height: 480)
         .onAppear {
-            DebugLog.tabs("BookmarkTargetPickerSheet: appeared — kind=\(kind.rawValue) count=\(ids.count)")
+            DebugLog.tabs("BookmarkTargetPickerSheet: appeared — kind=\(targets.kind.rawValue) count=\(targets.count)")
         }
     }
 
@@ -162,12 +182,12 @@ struct BookmarkTargetPickerSheet: View {
     private var headerTitle: String {
         let noun: String
         let plural: String
-        switch kind {
+        switch targets.kind {
         case .pages: noun = "Page"; plural = "Pages"
         case .sources: noun = "Source"; plural = "Sources"
         case .chats: noun = "Chat"; plural = "Chats"
         }
-        let count = ids.count
+        let count = targets.count
         let nounText = count == 1 ? noun : plural
         return "Add \(count == 1 ? "" : "\(count) ")\(nounText) to Bookmarks"
     }

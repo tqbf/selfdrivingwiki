@@ -44,7 +44,7 @@ struct MediaEmbedPlayerTests {
 
     @Test func youTubeStartStampedIntoEmbedURL() throws {
         let d = SourceEmbedDescriptor(
-            id: PageID(rawValue: "01HEMBEDTEST0000000000002"),
+            id: SourceID(rawValue: "01HEMBEDTEST0000000000002"),
             mimeType: "video/youtube",
             externalIdentity: "-mwLAjsdgVM",
             agentName: "youtube",
@@ -57,7 +57,7 @@ struct MediaEmbedPlayerTests {
 
     @Test func youTubeStartOmittedWhenNoTimestamp() {
         let d = SourceEmbedDescriptor(
-            id: PageID(rawValue: "01HEMBEDTEST0000000000003"),
+            id: SourceID(rawValue: "01HEMBEDTEST0000000000003"),
             mimeType: "video/youtube",
             externalIdentity: "dQw4w9WgXcQ",
             agentName: "youtube",

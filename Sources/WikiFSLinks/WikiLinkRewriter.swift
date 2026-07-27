@@ -27,7 +27,7 @@ public enum WikiLinkRewriter {
     public static func canonicalize(
         in body: String,
         resolvePage: (String) throws -> PageID?,
-        resolveSource: (String) throws -> PageID?,
+        resolveSource: (String) throws -> SourceID?,
         resolveChat: (String) throws -> PageID? = { _ in nil }
     ) throws -> String? {
         let ns = body as NSString
@@ -97,14 +97,14 @@ public enum WikiLinkRewriter {
                         "\(bareTarget) | \(normalizedAlias)",
                         "\(bareTarget)|\(normalizedAlias)",
                     ]
-                    var wholeID: PageID? = nil
+                    var wholeID: String? = nil
                     var wholeName: String? = nil
                     for candidate in candidates {
-                        let id: PageID?
+                        let id: String?
                         switch kind {
-                        case .source: id = try resolveSource(candidate)
-                        case .chat:   id = try resolveChat(candidate)
-                        case .page:   id = try resolvePage(candidate)
+                        case .source: id = try resolveSource(candidate)?.rawValue
+                        case .chat:   id = try resolveChat(candidate)?.rawValue
+                        case .page:   id = try resolvePage(candidate)?.rawValue
                         }
                         if let id {
                             wholeID = id
@@ -114,7 +114,7 @@ public enum WikiLinkRewriter {
                     }
                     if let resolvedID = wholeID, let resolvedName = wholeName {
                         let prefix = kind.linkPrefix
-                        let canonicalTarget = prefix + resolvedID.rawValue
+                        let canonicalTarget = prefix + resolvedID
                         let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
                         let mutable = NSMutableString(string: result)
                         mutable.replaceCharacters(in: fullRange, with: replacement)
@@ -129,13 +129,13 @@ public enum WikiLinkRewriter {
             // capture the id in a single pass (resolvedSplit only yields a Split,
             // not the id). Unresolved → forward link, leave byte-identical.
             let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
-            var resolved: (id: PageID, fragment: String?)?
+            var resolved: (id: String, fragment: String?)?
             for split in WikiLinkResolver.candidateSplits(of: raw) {
-                let id: PageID?
+                let id: String?
                 switch kind {
-                case .source: id = try resolveSource(split.base)
-                case .chat:   id = try resolveChat(split.base)
-                case .page:   id = try resolvePage(split.base)
+                case .source: id = try resolveSource(split.base)?.rawValue
+                case .chat:   id = try resolveChat(split.base)?.rawValue
+                case .page:   id = try resolvePage(split.base)?.rawValue
                 }
                 if let id {
                     resolved = (id, split.fragment)
@@ -148,7 +148,7 @@ public enum WikiLinkRewriter {
             // Phase 6: the pin is preserved verbatim (`@v3`), not resolved here —
             // it stays in the body as the per-occurrence source of truth.
             let prefix = kind.linkPrefix
-            let canonicalTarget = prefix + resolvedID.rawValue
+            let canonicalTarget = prefix + resolvedID
                 + (pin.map { "@v\($0)" } ?? "")
                 + (resolvedFragment.map { "#\($0)" } ?? "")
 

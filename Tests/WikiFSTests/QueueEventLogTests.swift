@@ -28,7 +28,7 @@ struct QueueEventLogTests {
             id: QueueItemID(rawValue: "TESTCOMPLETED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")]),
             state: .completed,
             orderingKey: 1000,
             providerID: ProviderID(rawValue: "provider-A"),
@@ -46,7 +46,7 @@ struct QueueEventLogTests {
             id: QueueItemID(rawValue: "TESTQUEUED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")]),
             state: .queued,
             orderingKey: 1000,
             providerID: nil,
@@ -64,7 +64,7 @@ struct QueueEventLogTests {
             id: QueueItemID(rawValue: "TESTRUNNING001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")]),
             state: .running,
             orderingKey: 1000,
             providerID: ProviderID(rawValue: "provider-A"),
@@ -82,7 +82,7 @@ struct QueueEventLogTests {
             id: QueueItemID(rawValue: "TESTFAILED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")]),
             state: .failed,
             orderingKey: 1000,
             providerID: ProviderID(rawValue: "provider-A"),
@@ -100,7 +100,7 @@ struct QueueEventLogTests {
             id: QueueItemID(rawValue: "TESTCANCELLED001"),
             queue: .extraction,
             wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")]),
             state: .cancelled,
             orderingKey: 1000,
             providerID: ProviderID(rawValue: "provider-A"),
@@ -431,7 +431,7 @@ struct QueueEventLogTests {
 
         await engine.start()
         let itemID = try await engine.enqueue(
-            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "SRC1")])))
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "SRC1")])))
 
         // Wait for the item to complete (deterministic, avoids timing flakes on CI).
         _ = try await engine.waitForCompletion(of: itemID).get()

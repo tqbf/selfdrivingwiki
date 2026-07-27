@@ -373,7 +373,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// by its `by-id` leaf identifier (built from the shared prefix so it can’t
     /// drift), then hands it to `NSWorkspace`. URL asked at click time. Pass
     /// `appURL` to launch a specific app instead of the default handler.
-    func openSource(id: PageID, with appURL: URL? = nil) async {
+    func openSource(id: SourceID, with appURL: URL? = nil) async {
         DebugLog.agent("openSource: id=\(id.rawValue) activeWiki=\(activeWikiID?.rawValue ?? "nil") app=\(appURL?.lastPathComponent ?? "default")")
         status = ""   // clear any stale error from a prior attempt
         guard let wikiID = activeWikiID else {
@@ -477,7 +477,7 @@ final class FileProviderFacade: ChangeSignaler {
         }
     }
 
-    func revealSourceInFinder(id: PageID, wikiID: WikiID? = nil) async {
+    func revealSourceInFinder(id: SourceID, wikiID: WikiID? = nil) async {
         guard let url = await resolveSourceByNameURL(id: id, wikiID: wikiID) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -497,7 +497,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// FP extension (issue #672). The returned "file doesn't exist" error from
     /// `getUserVisibleURL` is the symptom of routing to the wrong domain — the
     /// extension reads the wrong wiki's DB and naturally doesn't find the item.
-    func resolveSourceByNameURL(id: PageID, wikiID: WikiID? = nil) async -> URL? {
+    func resolveSourceByNameURL(id: SourceID, wikiID: WikiID? = nil) async -> URL? {
         let resolvedWikiID = wikiID ?? activeWikiID
         guard let wiki = resolvedWikiID else {
             DebugLog.fileprovider("resolveSourceByNameURL: no wikiID (explicit=nil, active=nil) — id=\(id.rawValue)")

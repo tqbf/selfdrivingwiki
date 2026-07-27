@@ -29,11 +29,11 @@ struct WikiRenderContextTests {
     private func makeFixture() throws -> (store: GRDBWikiStore,
                                           model: WikiStoreModel,
                                           homeID: PageID,
-                                          paperID: PageID,
+                                          paperID: SourceID,
                                           v1ID: PageID,
                                           v2ID: PageID,
                                           v3ID: PageID,
-                                          ytID: PageID) {
+                                          ytID: SourceID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
@@ -88,7 +88,7 @@ struct WikiRenderContextTests {
         #expect(!isResolved(homeID.rawValue, .source))  // page id isn't a source
     }
 
-    @Test func isResolvedSourceByNameAndStrippedAndLoose() throws {
+    @Test func sourceMapsUseSourceID() throws {
         let (_, model, _, paperID, _, _, _, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let isResolved = ctx.isResolved
@@ -144,18 +144,18 @@ struct WikiRenderContextTests {
         let ctx = WikiRenderContext.build(from: model)
         let displayName = ctx.displayName
         // Source ULID → current display name (not the filename).
-        #expect(displayName(paperID, .source) == "My Paper")
+        #expect(displayName(paperID.rawValue, .source) == "My Paper")
         // Page ULID → current title.
-        #expect(displayName(homeID, .page) == "Home")
+        #expect(displayName(homeID.rawValue, .page) == "Home")
         // Unknown id → nil (renderer keeps the alias).
-        let unknown = PageID(rawValue: "01ZZZZZZZZZZZZZZZZZZZZZZZZ")
-        #expect(displayName(unknown, .page) == nil)
-        #expect(displayName(unknown, .source) == nil)
+        let unknown = SourceID(rawValue: "01ZZZZZZZZZZZZZZZZZZZZZZZZ")
+        #expect(displayName(unknown.rawValue, .page) == nil)
+        #expect(displayName(unknown.rawValue, .source) == nil)
     }
 
     // MARK: - pinnedExtractionID
 
-    @Test func pinnedExtractionIDResolvesOrdinalChain() throws {
+    @Test func sourceDerivedChainKeepsVersionIDs() throws {
         let (_, model, _, paperID, v1ID, v2ID, v3ID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let pin = ctx.pinnedExtractionID
@@ -168,7 +168,7 @@ struct WikiRenderContextTests {
         #expect(pin(paperID, 0) == nil)   // ordinal must be >= 1
         #expect(pin(paperID, -1) == nil)
         // Unknown source → nil.
-        let unknown = PageID(rawValue: "01ZZZZZZZZZZZZZZZZZZZZZZZZ")
+        let unknown = SourceID(rawValue: "01ZZZZZZZZZZZZZZZZZZZZZZZZ")
         #expect(pin(unknown, 1) == nil)
     }
 

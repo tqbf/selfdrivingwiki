@@ -20,7 +20,7 @@ struct WikiDaemonEventSinkTests {
     private func makeItem() -> QueueItem {
         QueueItem(
             id: QueueItemID(rawValue: "01ABCDEF"), queue: .extraction, wikiID: WikiID(rawValue: "wiki1"),
-            payload: QueueItemPayload(sourceIDs: [PageID(rawValue: "src1")]),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
     }
 

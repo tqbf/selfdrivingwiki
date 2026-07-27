@@ -25,7 +25,7 @@ struct QueueEngineTests {
 
     /// A trivial payload for tests that don't care about payload specifics.
     private func makePayload() -> QueueItemPayload {
-        QueueItemPayload(sourceIDs: [PageID(rawValue: "TESTSRC001")])
+        QueueItemPayload(sourceIDs: [SourceID(rawValue: "TESTSRC001")])
     }
 
     // MARK: - Dispatch order (AC2.2)

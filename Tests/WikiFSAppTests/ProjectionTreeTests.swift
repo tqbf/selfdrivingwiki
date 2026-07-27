@@ -139,7 +139,7 @@ struct ProjectionTreeTests {
         #expect(!text.contains("[[source:"))
     }
 
-    @Test func sourceNodeResolvesWithVerbatimContent() throws {
+    @Test func sourceProjectionIdentifiersRemainUnchanged() throws {
         let s = try seed()
         let id = Projection.Identity.sourceByID(s.pdfSource.id.rawValue)
         guard let node = s.projection.node(for: id) else {
@@ -192,7 +192,7 @@ struct ProjectionTreeTests {
 
     // MARK: - Source image rewriting (snapshot siblings)
 
-    @Test func snapshotImageSiblingResolvesAndRewritesPath() throws {
+    @Test func sourceIDSiblingImageProjectionResolves() throws {
         // Create a markdown-native source with an image that has a sibling.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-image-snapshot-\(UUID().uuidString).sqlite")
@@ -415,13 +415,13 @@ struct ProjectionTreeTests {
             mimeType: "application/pdf")
         let pages = try store.listAllPagesOrderedByID()
         let folderNode = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder, label: "Research", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Research"))
         let pageRefNode = try store.createBookmarkNode(
-            parentID: nil, position: 1, kind: .pageRef, label: nil, targetID: pages[0].id)
+            parentID: nil, position: 1, content: .page(pages[0].id))
         let sourceRefNode = try store.createBookmarkNode(
-            parentID: nil, position: 2, kind: .sourceRef, label: nil, targetID: pdfSource.id)
+            parentID: nil, position: 2, content: .source(pdfSource.id))
         let nestedNode = try store.createBookmarkNode(
-            parentID: folderNode.id, position: 0, kind: .folder, label: "Papers", targetID: nil)
+            parentID: folderNode.id, position: 0, content: .folder(label: "Papers"))
         let projection = Projection(wikiID: "proj-bm-\(UUID().uuidString)", databaseURL: url)
         return Bookmarked(projection: projection, store: store, pages: pages,
                           pdfSource: pdfSource, folderNode: folderNode, nestedNode: nestedNode,
@@ -488,8 +488,7 @@ struct ProjectionTreeTests {
         let b = try seedBookmarks()
         // A ref to a page that doesn't exist.
         let stale = try b.store.createBookmarkNode(
-            parentID: nil, position: 99, kind: .pageRef, label: nil,
-            targetID: PageID(rawValue: "does-not-exist"))
+            parentID: nil, position: 99, content: .page(PageID(rawValue: "does-not-exist")))
         let id = Projection.Identity.bookmarkPageRef(stale.id)
         guard let node = b.projection.node(for: id) else {
             Issue.record("stale node not found"); return
@@ -535,7 +534,7 @@ struct ProjectionTreeTests {
             id: home.id, title: "Home",
             body: "See [[page:\(target.id.rawValue)|t]].")
         let pageRefNode = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .pageRef, label: nil, targetID: home.id)
+            parentID: nil, position: 0, content: .page(home.id))
         let projection = Projection(wikiID: "bm-links-\(UUID().uuidString)", databaseURL: url)
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
@@ -568,9 +567,9 @@ struct ProjectionTreeTests {
             id: home.id, title: "Home",
             body: "Link: [[page:\(target.id.rawValue)]].")
         let folder = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .folder, label: "Research", targetID: nil)
+            parentID: nil, position: 0, content: .folder(label: "Research"))
         let pageRefNode = try store.createBookmarkNode(
-            parentID: folder.id, position: 0, kind: .pageRef, label: nil, targetID: home.id)
+            parentID: folder.id, position: 0, content: .page(home.id))
         let projection = Projection(wikiID: "bm-nested-\(UUID().uuidString)", databaseURL: url)
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
@@ -599,7 +598,7 @@ struct ProjectionTreeTests {
             events: [.userText("See [[page:\(target.id.rawValue)|that page]]."),
                      .assistantText("Sure.")])
         let chatRefNode = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .chatRef, label: nil, targetID: chat.id)
+            parentID: nil, position: 0, content: .chat(chat.id))
         let projection = Projection(wikiID: "bm-chat-\(UUID().uuidString)", databaseURL: url)
 
         let id = Projection.Identity.bookmarkChatRef(chatRefNode.id)
@@ -625,7 +624,7 @@ struct ProjectionTreeTests {
         let pdf = try store.addSource(
             filename: "doc.pdf", data: pdfBytes, mimeType: "application/pdf")
         let sourceRefNode = try store.createBookmarkNode(
-            parentID: nil, position: 0, kind: .sourceRef, label: nil, targetID: pdf.id)
+            parentID: nil, position: 0, content: .source(pdf.id))
         let projection = Projection(wikiID: "bm-source-\(UUID().uuidString)", databaseURL: url)
 
         let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id)

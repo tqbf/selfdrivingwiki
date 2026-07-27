@@ -79,7 +79,7 @@ public struct ProvenanceActivity: Equatable, Sendable {
 /// `Data()` for those and never throws.
 public struct SourceVersion: Equatable, Sendable {
     public let id: String
-    public let sourceID: PageID
+    public let sourceID: SourceID
     /// `wasDerivedFrom` — the previous version's id; nil for v1.
     public let parentID: String?
     /// The content blob's hash; nil = byteless/external.
@@ -92,7 +92,7 @@ public struct SourceVersion: Equatable, Sendable {
     /// Generation time (PROV `generatedAtTime`).
     public let fetchedAt: Date
 
-    public init(id: String, sourceID: PageID, parentID: String?,
+    public init(id: String, sourceID: SourceID, parentID: String?,
                 blobHash: String?, mimeType: String?, activityID: String?,
                 externalIdentity: String?, fetchedAt: Date) {
         self.id = id

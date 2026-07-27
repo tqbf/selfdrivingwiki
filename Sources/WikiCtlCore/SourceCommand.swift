@@ -31,7 +31,7 @@ public enum SourceCommand {
 
     /// How a file is selected for `cat` / `export`.
     public enum Selector: Equatable, Sendable {
-        case id(PageID)
+        case id(SourceID)
         case name(String)
     }
 
@@ -218,7 +218,7 @@ public enum SourceCommand {
 
     // MARK: - Selector resolution
 
-    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> PageID {
+    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> SourceID {
         switch selector {
         case .id(let id):
             return id

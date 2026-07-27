@@ -12,26 +12,23 @@ import WikiFSCore
     // MARK: - Helpers
 
     private func folder(_ id: String, parent: String? = nil, label: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, kind: .folder,
-                     label: label, targetID: nil)
+        BookmarkNode(id: id, parentID: parent, position: 0, content: .folder(label: label))
     }
 
     private func pageRef(_ id: String, parent: String?, target: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, kind: .pageRef,
-                     label: nil, targetID: PageID(rawValue: target))
+        BookmarkNode(id: id, parentID: parent, position: 0, content: .page(PageID(rawValue: target)))
     }
 
     private func sourceRef(_ id: String, parent: String?, target: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, kind: .sourceRef,
-                     label: nil, targetID: PageID(rawValue: target))
+        BookmarkNode(id: id, parentID: parent, position: 0, content: .source(SourceID(rawValue: target)))
     }
 
-    /// A trivial title resolver: maps node.targetID?.rawValue to the title,
+    /// A trivial title resolver: maps the raw target to the title,
     /// or node.label for folders.
     private static func resolver(_ node: BookmarkNode) -> String {
         switch node.kind {
         case .folder: return node.label ?? ""
-        default: return node.targetID?.rawValue ?? ""
+        default: return node.targetRawValue ?? ""
         }
     }
 

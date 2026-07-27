@@ -163,7 +163,7 @@ struct DiagramEmbedTests {
     // MARK: - embedHTML emits the mermaid fence (#670 §3)
 
     @Test func embedDiagramTargetRendersMermaidFence() throws {
-        let id = PageID(rawValue: "01HDIAGRAM000000000000000A")
+        let id = SourceID(rawValue: "01HDIAGRAM000000000000000A")
         let target = EmbedTarget(
             kind: .diagram, url: id.rawValue,
             content: "flowchart LR\n  A --> B")
@@ -203,7 +203,7 @@ struct DiagramEmbedTests {
         // is needed at the linkify stage. visitCodeBlock will escape once (so
         // the HTML parser stays safe), and `code.textContent` reads back the
         // raw `<`/`>`/`&`. This replaces the old escape-on-emit contract.
-        let id = PageID(rawValue: "01HDIAGRAM000000000000000B")
+        let id = SourceID(rawValue: "01HDIAGRAM000000000000000B")
         // A diagram with `<`, `>`, `&` in the body (e.g. a node label).
         let diagram = "flowchart LR\n  A[\"x < y & z > w\"] --> B"
         let target = EmbedTarget(
@@ -229,7 +229,7 @@ struct DiagramEmbedTests {
         // When the diagram source itself contains a ``` run (or longer), the
         // emitted fence must be one longer so it isn't closed early. CommonMark
         // §4.5: a closing fence must be at least as long as the opening fence.
-        let id = PageID(rawValue: "01HDIAGRAM000000000000000C")
+        let id = SourceID(rawValue: "01HDIAGRAM000000000000000C")
         let diagram = "graph TD\n    A[\"has ``` triple backticks\"] --> B"
         let target = EmbedTarget(
             kind: .diagram, url: id.rawValue, content: diagram)
@@ -275,7 +275,7 @@ struct DiagramEmbedTests {
         // textContent equals the original diagram source. The previous raw-
         // `<div>` emit broke in: (a) paragraph surrounds, (b) blank line
         // inside the diagram, (c) inside a list, (d) mid-paragraph.
-        let id = PageID(rawValue: "01HDIAGRAM000000000000000D")
+        let id = SourceID(rawValue: "01HDIAGRAM000000000000000D")
         let cases: [(String, String, String)] = [
             ("surrounded-by-paragraphs",
              "intro.\n\n![[source:d.mmd]]\n\noutro.",
@@ -330,12 +330,12 @@ struct DiagramEmbedTests {
         // still render through the same `embedHTML` switch now that `.diagram`
         // is a fourth arm. (Existing `WikiLinkMarkdownTests` cover this in
         // depth; this is the #670 non-regression guard.)
-        let ytID = PageID(rawValue: "01HTESTYT00000000000000YA")
+        let ytID = SourceID(rawValue: "01HTESTYT00000000000000YA")
         let yt = EmbedTarget(kind: .iframe,
             url: "https://www.youtube-nocookie.com/embed/x")
-        let audioID = PageID(rawValue: "01HTESTMP300000000000YA")
+        let audioID = SourceID(rawValue: "01HTESTMP300000000000YA")
         let audio = EmbedTarget(kind: .audio, url: "https://x/live.mp3")
-        let videoID = PageID(rawValue: "01HTESTMP40000000000YA")
+        let videoID = SourceID(rawValue: "01HTESTMP40000000000YA")
         let video = EmbedTarget(kind: .video, url: "https://x/clip.mp4")
 
         let ytOut = WikiLinkMarkdown.linkified("![[source:yt]]",

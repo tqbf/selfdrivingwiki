@@ -222,7 +222,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listPages(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
     }
 
     /// Resolve a Tantivy BM25 leg for `wikictl source search`. Same contract
@@ -249,7 +249,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listSources(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: SourceID.init(rawValue:))
     }
 
     /// Resolve a Tantivy BM25 leg for `wikictl chat search`. Same contract as
@@ -276,7 +276,7 @@ public enum CLITantivyLegResolver {
             DebugLog.store("wikictl: listChats(leg) failed for wiki \(wikiID): \(error)")
             return nil
         }
-        return resolveHits(hits, catalog: catalog)
+        return resolveHits(hits, catalog: catalog, idFromRawValue: PageID.init(rawValue:))
     }
 
     // MARK: - Internal
@@ -347,11 +347,12 @@ public enum CLITantivyLegResolver {
     /// an error.
     private static func resolveHits<T: Identifiable & Sendable>(
         _ hits: [TantivyShadowSearchResult],
-        catalog: [T]
-    ) -> [T]? where T.ID == PageID {
+        catalog: [T],
+        idFromRawValue: (String) -> T.ID
+    ) -> [T]? {
         let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let resolved = hits.compactMap { hit -> T? in
-            let id = PageID(rawValue: hit.ulid)
+            let id = idFromRawValue(hit.ulid)
             return byID[id]
         }
         return resolved.isEmpty ? nil : resolved

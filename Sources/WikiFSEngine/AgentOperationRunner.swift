@@ -535,7 +535,7 @@ public enum AgentOperationRunner {
         wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
-        ingestingSourceIDs: Set<PageID> = [],
+        ingestingSourceIDs: Set<SourceID> = [],
         workspaceID: String? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {

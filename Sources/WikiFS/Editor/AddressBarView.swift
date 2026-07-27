@@ -285,7 +285,7 @@ struct AddressBarView: View {
 
     private enum BookmarkTarget {
         case page(PageID)
-        case source(PageID)
+        case source(SourceID)
         case chat(PageID)
     }
 
@@ -304,11 +304,11 @@ struct AddressBarView: View {
     private func addToBookmarks(_ target: BookmarkTarget) {
         switch target {
         case .page(let id):
-            onAddToBookmarks(BookmarkTargetPickerContext(kind: .pages, ids: [id]))
+            onAddToBookmarks(BookmarkTargetPickerContext(targets: .pages([id])))
         case .source(let id):
-            onAddToBookmarks(BookmarkTargetPickerContext(kind: .sources, ids: [id]))
+            onAddToBookmarks(BookmarkTargetPickerContext(targets: .sources([id])))
         case .chat(let id):
-            onAddToBookmarks(BookmarkTargetPickerContext(kind: .chats, ids: [id]))
+            onAddToBookmarks(BookmarkTargetPickerContext(targets: .chats([id])))
         }
     }
 

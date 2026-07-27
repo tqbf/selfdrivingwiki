@@ -16,7 +16,7 @@ struct AgentLauncherStageKeyDispatchTests {
 
     private let emptyState = ""
     private let emptySource = OperationRequest.StagedSource(
-        bytes: Data(), ext: "md", displayPath: "x.md", name: "x", sourceID: PageID(rawValue: "ulid"))
+        bytes: Data(), ext: "md", displayPath: "x.md", name: "x", sourceID: SourceID(rawValue: "ulid"))
 
     @Test func ingestMapsToPlanner() {
         // Small-source OR large-source ingest (the large/small split is

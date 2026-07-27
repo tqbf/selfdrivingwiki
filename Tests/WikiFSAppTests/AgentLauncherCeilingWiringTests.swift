@@ -107,7 +107,7 @@ struct AgentLauncherCeilingWiringTests {
                     ext: "md",
                     displayPath: "sources/by-id/test.md",
                     name: "Test Source",
-                    sourceID: PageID(rawValue: "01TEST01KQ8HDDR3ZXK72XHG6R")
+                    sourceID: SourceID(rawValue: "01TEST01KQ8HDDR3ZXK72XHG6R")
                 )],
                 stateMarkdown: "# State"),
             wikiID: WikiID(rawValue: "test-wiki"),

@@ -123,10 +123,10 @@ struct DroppedLinkRoundTripTests {
     /// in even when name resolution would otherwise succeed.
     @Test func rewriterIsNoOpEvenWhenResolversCanResolveByName() throws {
         let resolvers: (page: (String) throws -> PageID?,
-                        source: (String) throws -> PageID?,
+                        source: (String) throws -> SourceID?,
                         chat: (String) throws -> PageID?) = (
             page: { _ in PageID(rawValue: "01HWIKIPEDIAFORCESTUBEXXXXXXXXX") },
-            source: { _ in PageID(rawValue: "01JWIKIPEDIAFORCESTUBEXXXXXXXXX") },
+            source: { _ in SourceID(rawValue: "01JWIKIPEDIAFORCESTUBEXXXXXXXXX") },
             chat: { _ in PageID(rawValue: "01KXWIKIPEDIAFORCESTUBEXXXXXXXX") }
         )
         let pageLink = DroppedLinkFormatter.link(

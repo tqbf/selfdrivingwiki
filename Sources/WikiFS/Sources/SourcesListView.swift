@@ -18,8 +18,8 @@ struct SourcesListView: NSViewControllerRepresentable {
     let fileProvider: FileProviderFacade
     let session: WikiSession
     let launcher: AgentLauncher
-    let ingestingSourceIDs: Set<PageID>
-    let extractingSourceIDs: Set<PageID>
+    let ingestingSourceIDs: Set<SourceID>
+    let extractingSourceIDs: Set<SourceID>
     /// The filtered+searched source list, computed by the container.
     let sources: [SourceSummary]
     let callbacks: SourcesListCallbacks
@@ -63,38 +63,51 @@ struct SourcesListView: NSViewControllerRepresentable {
 /// One item for the Extract action: enough to drive queue-based extraction per
 /// source without the controller knowing about the launcher.
 struct SourceExtractItem {
-    let id: PageID
+    let id: SourceID
     let filename: String
     let data: Data
 }
 
 struct SourcesListCallbacks {
     /// Open an in-app source tab (single or batch), foreground.
-    var onOpen: ([PageID]) -> Void
+    var onOpen: ([SourceID]) -> Void
     /// Open externally via the File Provider (single or batch). Pass an app URL
     /// to launch a specific editor (chosen from the "Open With" submenu), or nil
     /// for the default handler.
-    var onOpenExternal: (_ ids: [PageID], _ appURL: URL?) -> Void
+    var onOpenExternal: (_ ids: [SourceID], _ appURL: URL?) -> Void
     /// Open an in-app background tab.
-    var onOpenBackground: ([PageID]) -> Void
-    var onShare: ([PageID]) -> Void
-    var onReveal: (PageID) -> Void
+    var onOpenBackground: ([SourceID]) -> Void
+    var onShare: ([SourceID]) -> Void
+    var onReveal: (SourceID) -> Void
     /// Ingest directly (no already-ingested members in the set).
-    var onIngest: ([PageID]) -> Void
+    var onIngest: ([SourceID]) -> Void
     /// Some already-ingested sources are in the set — surface the "Ingest
     /// Again?" confirmation. `names` lists the already-ingested sources.
-    var onIngestNeedsConfirmation: (_ ids: [PageID], _ names: [String]) -> Void
+    var onIngestNeedsConfirmation: (_ ids: [SourceID], _ names: [String]) -> Void
     var onExtract: ([SourceExtractItem]) -> Void
     var onRename: (SourceSummary) -> Void
-    var onDelete: ([PageID]) -> Void
+    var onDelete: ([SourceID]) -> Void
     /// Bookmark a multi-row selection (or a single row) into a folder the user
     /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
-    var onAddToBookmarks: ([PageID]) -> Void
+    var onAddToBookmarks: ([SourceID]) -> Void
 }
 
 private struct SourcesMenuPayload {
     let clicked: SourceSummary
     let effective: [SourceSummary]
+}
+
+/// AppKit menu payload for source-only "Open With" actions. Keeping this
+/// separate from the page payload makes it impossible for a source selection
+/// to enter a page-opening callback before the File Provider boundary.
+private final class SourceOpenWithIDsRef {
+    let appURL: URL?
+    let ids: [SourceID]
+
+    init(appURL: URL?, ids: [SourceID]) {
+        self.appURL = appURL
+        self.ids = ids
+    }
 }
 
 // MARK: - Cell
@@ -225,8 +238,8 @@ final class SourcesListViewController: NSViewController {
     var fileProvider: FileProviderFacade?
     var launcher: AgentLauncher?
     var callbacks: SourcesListCallbacks?
-    var ingestingIDs: Set<PageID> = []
-    var extractingIDs: Set<PageID> = []
+    var ingestingIDs: Set<SourceID> = []
+    var extractingIDs: Set<SourceID> = []
 
     private var items: [SourceSummary] = []
     private var lastCount = -1
@@ -315,7 +328,7 @@ final class SourcesListViewController: NSViewController {
     /// (an explicit user action should win over a Cmd/Shift selection) and always
     /// scrolls. Returns whether the row was found in the current items.
     @discardableResult
-    func revealAndSelect(id: PageID) -> Bool {
+    func revealAndSelect(id: SourceID) -> Bool {
         guard let row = items.firstIndex(where: { $0.id == id }) else { return false }
         isReconcilingHighlight = true
         tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)
@@ -417,7 +430,7 @@ extension SourcesListViewController {
                 target: self,
                 action: #selector(openWithAppAction(_:)),
                 payload: { appURL in
-                    OpenWithIDsRef(appURL: appURL, ids: payload.effective.map(\.id))
+                    SourceOpenWithIDsRef(appURL: appURL, ids: payload.effective.map(\.id))
                 })
             let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
             parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
@@ -538,7 +551,7 @@ extension SourcesListViewController {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onOpen(p.effective.map(\.id)) }
     }
     @objc private func openWithAppAction(_ sender: NSMenuItem) {
-        guard let ref = sender.representedObject as? OpenWithIDsRef else { return }
+        guard let ref = sender.representedObject as? SourceOpenWithIDsRef else { return }
         Task { [weak self] in
             // nil appURL = the "Other…" item → present an app picker.
             let picked: URL?

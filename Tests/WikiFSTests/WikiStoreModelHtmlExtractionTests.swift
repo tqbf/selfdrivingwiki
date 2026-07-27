@@ -71,7 +71,7 @@ struct WikiStoreModelHtmlExtractionTests {
     /// PR2 the ingest path still auto-extracts, but `extractHtml` reads the
     /// HTML source bytes directly and is independent of any sidecar the ingest
     /// path may already have written). Returns the new source's id.
-    private func modelWithHTMLSource() throws -> (GRDBWikiStore, WikiStoreModel, PageID) {
+    private func modelWithHTMLSource() throws -> (GRDBWikiStore, WikiStoreModel, SourceID) {
         let store = try tempStore()
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-html-extract"))
         let model = WikiStoreModel(store: store)

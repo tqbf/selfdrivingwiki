@@ -67,17 +67,17 @@ struct FilenameEscapingTests {
 
     // MARK: - Ingested files (Phase 5)
 
-    @Test func byIDSourceFilenamePreservesExtension() {
+    @Test func sourceIdentifierFilenameRemainsUnchanged() {
         #expect(
             FilenameEscaping.byIDSourceFilename(
-                sourceID: PageID(rawValue: "01KV6EAH410NWC9K9ZM44DNMXT"), ext: "pdf")
+                sourceID: SourceID(rawValue: "01KV6EAH410NWC9K9ZM44DNMXT"), ext: "pdf")
                 == "01KV6EAH410NWC9K9ZM44DNMXT.pdf")
     }
 
     @Test func byIDSourceFilenameOmitsDotWhenNoExtension() {
         #expect(
             FilenameEscaping.byIDSourceFilename(
-                sourceID: PageID(rawValue: "01KV6EAH410NWC9K9ZM44DNMXT"), ext: "")
+                sourceID: SourceID(rawValue: "01KV6EAH410NWC9K9ZM44DNMXT"), ext: "")
                 == "01KV6EAH410NWC9K9ZM44DNMXT")
     }
 
@@ -85,12 +85,12 @@ struct FilenameEscapingTests {
         #expect(
             FilenameEscaping.byNameSourceFilename(
                 filename: "Trip Report.pdf", ext: "pdf",
-                sourceID: PageID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
+                sourceID: SourceID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
                 == "Trip Report--01JABCDE.pdf")
         // Stem with a path-hostile char is escaped; original ext preserved.
         #expect(
             FilenameEscaping.byNameSourceFilename(
-                filename: "a/b.txt", ext: "txt", sourceID: PageID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
+                filename: "a/b.txt", ext: "txt", sourceID: SourceID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
                 == "a-b--01JABCDE.txt")
     }
 
@@ -98,7 +98,7 @@ struct FilenameEscapingTests {
         // Extension-less, weird name: stem escapes to "untitled", no dot appended.
         #expect(
             FilenameEscaping.byNameSourceFilename(
-                filename: "", ext: "", sourceID: PageID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
+                filename: "", ext: "", sourceID: SourceID(rawValue: "01JABCDEFGHJKMNPQRSTVWXYZ0"))
                 == "untitled--01JABCDE")
     }
 }
