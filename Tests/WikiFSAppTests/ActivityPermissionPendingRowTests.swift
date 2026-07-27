@@ -62,10 +62,12 @@ struct ActivityPermissionPendingRowTests {
     /// height (the height the view requests when given unlimited vertical
     /// space). Mirrors `AddressBarLayoutHostedTests.renderedWidth(...)`.
     private func renderedHeight<V: View>(_ view: V) async -> CGFloat {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         _ = Self.app
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.orderOut(nil) }
         // Give SwiftUI a layout pass before reading geometry. ~150ms is what
         // the other hosted tests use; sufficient for a single pass on a leaf

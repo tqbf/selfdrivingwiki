@@ -36,6 +36,8 @@ struct AddressBarLayoutHostedTests {
     /// Hosts the real `AddressBarView` at a fixed `detailWidth` and returns its
     /// rendered width — the width NSToolbar would center as the `.principal` item.
     private func renderedWidth(detailWidth: CGFloat, sidebarVisible: Bool = true) async throws -> CGFloat {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         _ = Self.app
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
@@ -48,7 +50,7 @@ struct AddressBarLayoutHostedTests {
             .environment(FindModel())
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.orderOut(nil) }
         // Give SwiftUI a layout pass before reading geometry.
         try await Task.sleep(nanoseconds: 150_000_000)

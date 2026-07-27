@@ -1,8 +1,16 @@
 #if os(macOS)
 import Foundation
 
-actor AutocompleteHostedTestGate {
-    static let shared = AutocompleteHostedTestGate()
+/// Shared lifecycle harness for tests that mount live AppKit or WebKit views
+/// inside the single `swift test` host process. These suites are correct in
+/// production under user-driven interaction, but the CLI host's single
+/// AppKit/WebKit environment can wedge when multiple window-owning suites
+/// overlap under Swift Testing's default suite-level parallelism.
+///
+/// Keep this gate in `Tests/` so the serialization policy is explicit test
+/// infrastructure rather than production behavior.
+actor HostedAppKitTestGate {
+    static let shared = HostedAppKitTestGate()
 
     private var held = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -45,7 +53,7 @@ actor AutocompleteHostedTestGate {
             }
             isReleased = true
             lock.unlock()
-            Task {
+            Task.detached { [onRelease = self.onRelease] in
                 await onRelease()
             }
         }
@@ -55,4 +63,6 @@ actor AutocompleteHostedTestGate {
         }
     }
 }
+
+typealias AutocompleteHostedTestGate = HostedAppKitTestGate
 #endif
