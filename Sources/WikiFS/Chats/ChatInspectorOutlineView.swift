@@ -15,26 +15,26 @@ struct ChatInspectorOutlineView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             if let ts = entry.questionTimestamp {
                                 Text(ts, format: .dateTime.hour().minute())
-                                    .font(.caption2)
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.tertiary)
                                     .padding(.bottom, 2)
                             }
                             HStack(alignment: .top, spacing: 4) {
                                 Text("•")
-                                    .font(.caption)
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
                                 Text(entry.question.isEmpty ? "(empty)" : entry.question)
-                                    .font(.callout)
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.primary)
                                     .multilineTextAlignment(.leading)
                             }
                             if let response = entry.response {
                                 HStack(alignment: .top, spacing: 4) {
                                     Text("•")
-                                        .font(.caption)
+                                        .font(.system(size: 13))
                                         .foregroundStyle(.secondary)
                                     Text(response)
-                                        .font(.caption)
+                                        .font(.system(size: 13))
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.leading)
                                 }

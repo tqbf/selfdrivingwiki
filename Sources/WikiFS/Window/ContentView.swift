@@ -87,13 +87,13 @@ struct ContentView: View {
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
         // (§3.5). The view, not the binding, is the right place for this.
-        .onChange(of: store.selection) { _, newValue in
+        .onChange(of: store.selection, initial: false) { _, newValue in
             store.handleSelectionChange(to: newValue)
             switch newValue {
             case .page, .source, .chat:
                 break
             case .none, .newChat, .changeLog, .bookmark:
-                rightInspector.updateAvailability(false)
+                rightInspector.updateRegistration(nil)
             }
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
@@ -253,9 +253,16 @@ struct ContentView: View {
                     .frame(width: 340)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+
+            if rightInspector.isPresented, let registration = rightInspector.registration {
+                Divider()
+                RightSidebarHostView(registration: registration)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: store.tabs.count > 1)
         .animation(.easeInOut(duration: 0.18), value: store.isChangeLogSidebarVisible)
+        .animation(.easeInOut(duration: 0.18), value: rightInspector.isPresented)
         // Measure the detail column's width — the span the toolbar covers — and
         // feed it to the omnibox. Measuring here is reliable in every state the
         // field's own leading edge is not: this view never lands in toolbar
@@ -409,6 +416,25 @@ struct ContentView: View {
         }
     }
 
+}
+
+private struct RightSidebarHostView: View {
+    let registration: RightSidebarRegistration
+
+    var body: some View {
+        DetailInspectorView(
+            inspectorTab: registration.inspectorTab,
+            outlineWidth: registration.outlineWidth,
+            showsOutlineTab: registration.showsOutlineTab,
+            showsHistoryTab: registration.showsHistoryTab,
+            origin: registration.origin,
+            history: registration.history,
+            store: registration.store,
+            onCompareVersions: registration.onCompareVersions
+        ) {
+            registration.outline()
+        }
+    }
 }
 
 /// The "Add from URL" sheet's presentation payload: the URL to pre-fill the

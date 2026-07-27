@@ -548,10 +548,8 @@ struct SourceDetailView: View {
             isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
-            rightInspector.updateAvailability(sourceInspectorAvailable)
-            if !showsSourceOutlineTab, inspectorTab == .outline {
-                inspectorTab = .history
-            }
+            normalizeSourceInspectorTab()
+            updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
             // Navigating between ingested files REUSES this view instance (same
@@ -582,10 +580,8 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
-            rightInspector.updateAvailability(sourceInspectorAvailable)
-            if !showsSourceOutlineTab, inspectorTab == .outline {
-                inspectorTab = .history
-            }
+            normalizeSourceInspectorTab()
+            updateRightSidebarRegistration()
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
             // Only consume for un-extracted PDFs (the markdown side handles
@@ -610,15 +606,14 @@ struct SourceDetailView: View {
         .onChange(of: store.selection) {
             flushEditIfDirty()
             isEditing = false
-            rightInspector.updateAvailability(sourceInspectorAvailable)
+            updateRightSidebarRegistration()
         }
-        .onChange(of: sourceInspectorAvailable) { _, available in
-            rightInspector.updateAvailability(available)
+        .onChange(of: sourceInspectorAvailable) { _, _ in
+            updateRightSidebarRegistration()
         }
         .onChange(of: showsSourceOutlineTab) { _, showsOutline in
-            if !showsOutline, inspectorTab == .outline {
-                inspectorTab = .history
-            }
+            if !showsOutline, inspectorTab == .outline { inspectorTab = .history }
+            updateRightSidebarRegistration()
         }
         // #842 PR2 C6: refresh the transcript head when the store's source list
         // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
@@ -634,6 +629,7 @@ struct SourceDetailView: View {
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
             }
+            updateRightSidebarRegistration()
         }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
@@ -641,6 +637,7 @@ struct SourceDetailView: View {
         .onChange(of: currentMarkdownContent) { _, newContent in
             findModel.content = newContent
             findModel.search()
+            updateRightSidebarRegistration()
         }
         .onChange(of: findModel.isShowing) { _, showing in
             if showing {
@@ -674,6 +671,7 @@ struct SourceDetailView: View {
             editBuffer = content
             isEditing = true
             shouldRestoreEditing = false
+            updateRightSidebarRegistration()
         }
         .onChange(of: isEditing) { _, newValue in
             if let id = store.activeTabID {
@@ -681,6 +679,7 @@ struct SourceDetailView: View {
             }
             if newValue { isHeaderExpanded = true } // reveal Save/Cancel
             if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
+            updateRightSidebarRegistration()
         }
     }
 
@@ -1128,28 +1127,42 @@ struct SourceDetailView: View {
     /// above, but no longer receive their click. Issue #656.
     @ViewBuilder
     private var contentAndOutline: some View {
-        HStack(spacing: 0) {
-            contentArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // `isOutlineApplicable` excludes pure Mermaid sources (`.mmd` /
-            // `text/mermaid`) — the outline parses markdown headings, which a
-            // diagram source has none of. Without this guard the pane leaks
-            // open from a previous markdown source via the global
-            // `@AppStorage("isSourceOutlineExpanded")` flag (issue #642).
-            if rightInspector.isPresented, sourceInspectorAvailable {
-                DetailInspectorView(
-                    inspectorTab: $inspectorTab,
-                    outlineWidth: $outlineWidth,
-                    showsOutlineTab: showsSourceOutlineTab,
-                    showsHistoryTab: true,
-                    origin: origin?.provenanceEntry,
-                    history: editHistory.map(\.provenanceEntry),
-                    store: store) {
-                    if let markdown = currentMarkdownContent, showsSourceOutlineTab {
-                        outlineView(markdown: markdown)
-                    }
+        contentArea
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func normalizeSourceInspectorTab() {
+        if !showsSourceOutlineTab, inspectorTab == .outline {
+            inspectorTab = .history
+        }
+    }
+
+    private func updateRightSidebarRegistration() {
+        guard sourceInspectorAvailable else {
+            rightInspector.updateRegistration(nil)
+            return
+        }
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                showsOutlineTab: showsSourceOutlineTab,
+                showsHistoryTab: true,
+                origin: origin?.provenanceEntry,
+                history: editHistory.map(\.provenanceEntry),
+                store: store,
+                onCompareVersions: nil,
+                outline: {
+                    AnyView(sourceSidebarOutlineView())
                 }
-            }
+            )
+        )
+    }
+
+    @ViewBuilder
+    private func sourceSidebarOutlineView() -> some View {
+        if let markdown = currentMarkdownContent, showsSourceOutlineTab {
+            outlineView(markdown: markdown)
         }
     }
 

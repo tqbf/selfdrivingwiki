@@ -107,7 +107,7 @@ struct PageDetailView: View {
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
             lastKnownActiveTabID = store.activeTabID
-            rightInspector.updateAvailability(true)
+            updateRightSidebarRegistration()
             // Seed edit mode from the active tab on first mount. `.onChange(of:
             // store.activeTabID)` below only fires on *subsequent* tab switches,
             // so without this a freshly-created "start in editor" tab would
@@ -128,7 +128,7 @@ struct PageDetailView: View {
             if store.activeTabID == lastKnownActiveTabID {
                 isEditing = false
             }
-            rightInspector.updateAvailability(true)
+            updateRightSidebarRegistration()
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
@@ -159,14 +159,25 @@ struct PageDetailView: View {
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
         }
+        .onChange(of: store.draftBody) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: provenanceOrigin) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: provenanceHistory) { _, _ in
+            updateRightSidebarRegistration()
+        }
         .task(id: currentPageID) {
             guard let pageID = currentPageID else {
                 provenanceOrigin = nil
                 provenanceHistory = []
+                rightInspector.updateRegistration(nil)
                 return
             }
             provenanceOrigin = store.pageOrigin(for: pageID)
             provenanceHistory = store.pageEditHistory(for: pageID)
+            updateRightSidebarRegistration()
         }
         .alert(
             "Title Already Exists",
@@ -323,37 +334,43 @@ struct PageDetailView: View {
     /// subtree independently.
     @ViewBuilder
     private var contentAndOutline: some View {
-        HStack(spacing: 0) {
-            Group {
-                if isEditing {
-                    editorContent
-                } else {
-                    readerContent
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            if rightInspector.isPresented {
-                DetailInspectorView(
-                    inspectorTab: $inspectorTab,
-                    outlineWidth: $outlineWidth,
-                    origin: provenanceOrigin?.provenanceEntry,
-                    history: provenanceHistory.map(\.provenanceEntry),
-                    store: store,
-                    onCompareVersions: openVersionsWindow) {
-                    PageOutlineView(markdown: store.draftBody,
-                                    caretCharIndex: caretCharIndex) { heading in
-                        if isEditing {
-                            editorScrollRequest = EditorScrollRequest(
-                                charOffset: heading.charOffset,
-                                version: (editorScrollRequest?.version ?? 0) + 1)
-                        } else {
-                            store.jumpToAnchorInCurrentSelection(heading.id)
-                        }
-                    }
-                }
+        Group {
+            if isEditing {
+                editorContent
+            } else {
+                readerContent
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func updateRightSidebarRegistration() {
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                showsOutlineTab: true,
+                showsHistoryTab: true,
+                origin: provenanceOrigin?.provenanceEntry,
+                history: provenanceHistory.map(\.provenanceEntry),
+                store: store,
+                onCompareVersions: openVersionsWindow,
+                outline: {
+                    AnyView(
+                        PageOutlineView(markdown: store.draftBody,
+                                        caretCharIndex: caretCharIndex) { heading in
+                            if isEditing {
+                                editorScrollRequest = EditorScrollRequest(
+                                    charOffset: heading.charOffset,
+                                    version: (editorScrollRequest?.version ?? 0) + 1)
+                            } else {
+                                store.jumpToAnchorInCurrentSelection(heading.id)
+                            }
+                        }
+                    )
+                }
+            )
+        )
     }
 
     private var editorContent: some View {

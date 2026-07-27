@@ -246,10 +246,10 @@ struct ChatDetailView: View {
             }
         }
         .onAppear {
-            rightInspector.updateAvailability(chatInspectorAvailable)
+            updateRightSidebarRegistration()
         }
-        .onChange(of: chatInspectorAvailable) { _, available in
-            rightInspector.updateAvailability(available)
+        .onChange(of: chatInspectorAvailable) { _, _ in
+            updateRightSidebarRegistration()
         }
         // D2: when the live session ends (activeChatID clears), re-read from the
         // store so the view flips source WITHOUT a visible change (the final
@@ -259,6 +259,7 @@ struct ChatDetailView: View {
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
+            updateRightSidebarRegistration()
         }
         // TEMPORARY (chat transcript freezes mid-stream): seam 7 of 8. Keyed on
         // a composed string so it emits one line per real transition rather
@@ -427,8 +428,7 @@ struct ChatDetailView: View {
                 header(for: chat)
                 Divider().opacity(PageEditorMetrics.dividerOpacity)
             }
-            HStack(spacing: 0) {
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
                     // Pre-spawn failure banner (#613): surfaces a previously
                     // captured `remoteSession.preflightError` so a rolled-back chat
                     // doesn't silently revert to the empty draft composer. The
@@ -488,25 +488,6 @@ struct ChatDetailView: View {
                         .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                         .padding(.top, ChatMetrics.sectionSpacing)
                         .padding(.bottom, ChatMetrics.contentInset)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if rightInspector.isPresented, chatInspectorAvailable {
-                    DetailInspectorView(
-                        inspectorTab: $inspectorTab,
-                        outlineWidth: $outlineWidth,
-                        showsOutlineTab: true,
-                        showsHistoryTab: false,
-                        origin: nil,
-                        history: []
-                    ) {
-                        ChatInspectorOutlineView(entries: chatOutlineEntries) { turnIndex in
-                            outlineScroll = ChatScrollRequest(
-                                version: (outlineScroll?.version ?? 0) + 1,
-                                turnIndex: turnIndex)
-                        }
-                    }
-                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -535,6 +516,34 @@ struct ChatDetailView: View {
         // #740: animate the queued list in/out (macos-design: every state
         // change gets a transition). `[PendingQueuedMessage]` is Equatable.
         .animation(.snappy, value: queuedMessages)
+    }
+
+    private func updateRightSidebarRegistration() {
+        guard chatInspectorAvailable else {
+            rightInspector.updateRegistration(nil)
+            return
+        }
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                showsOutlineTab: true,
+                showsHistoryTab: false,
+                origin: nil,
+                history: [],
+                store: nil,
+                onCompareVersions: nil,
+                outline: {
+                    AnyView(
+                        ChatInspectorOutlineView(entries: chatOutlineEntries) { turnIndex in
+                            outlineScroll = ChatScrollRequest(
+                                version: (outlineScroll?.version ?? 0) + 1,
+                                turnIndex: turnIndex)
+                        }
+                    )
+                }
+            )
+        )
     }
 
     /// #740: the per-item "Queued" affordance shown under the composer while
