@@ -76,13 +76,14 @@ struct YouTubeEmbedWebViewTests {
     }
 
     @MainActor
-    private func hostedReader(markdown: String, store: WikiStoreModel) throws
-        -> (window: NSWindow, webView: WKWebView) {
+    private func hostedReader(markdown: String, store: WikiStoreModel) async throws
+        -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, webView: WKWebView) {
+        let lease = await HostedAppKitTestGate.shared.acquire()
         let view = WikiReaderView(markdown: markdown, currentSelection: store.selection, store: store)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.makeKeyAndOrderFront(nil)
-        return (window, findWebView(window.contentView!) ?? WKWebView())
+        window.orderFront(nil)
+        return (lease, window, findWebView(window.contentView!) ?? WKWebView())
     }
 
     /// The gold-standard AC.9 reproduction: seed a byteless YouTube source, render
@@ -112,8 +113,11 @@ struct YouTubeEmbedWebViewTests {
         // WikiRenderContext.embedInfo → ExternalEmbed.target.
         let markdown = "# Watch\n\n![[source:youtube-\(videoID)]]"
 
-        let (window, _) = try hostedReader(markdown: markdown, store: store)
-        defer { window.orderOut(nil) }
+        let (lease, window, _) = try await hostedReader(markdown: markdown, store: store)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
         let webView = try await waitForWebView(in: window)
 
         // 1. The iframe painted with the corrected embed URL (origin threaded in).

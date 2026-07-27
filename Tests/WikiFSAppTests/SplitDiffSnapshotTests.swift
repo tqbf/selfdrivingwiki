@@ -11,7 +11,16 @@ import Testing
 /// dark window, lets async work settle, then writes PNGs so the redesigned diff
 /// and chrome can be eyeballed (the "acceptance test is a screenshot" this
 /// layout rework needs). A light structural assertion keeps them honest.
-@Suite
+///
+/// Opt-in only: these hosted snapshot renders can trigger macOS UI approval
+/// prompts in some local environments, so the default `swift test` path skips
+/// them unless the operator explicitly asks for this manual suite.
+@Suite(
+    "ManualSplitDiffSnapshotTests",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["WIKIFS_UI_DIFF_SNAPSHOTS"] == nil,
+        "Set WIKIFS_UI_DIFF_SNAPSHOTS=1 to run the manual diff snapshot UI suite.")
+)
 @MainActor
 struct SplitDiffSnapshotTests {
     private static let snapshotsDirectory: URL = {
@@ -37,7 +46,7 @@ struct SplitDiffSnapshotTests {
         let window = NSWindow(contentViewController: hosting)
         window.appearance = NSAppearance(named: .darkAqua)
         window.setContentSize(size)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.orderOut(nil) }
 
         for _ in 0..<settle { try await Task.sleep(for: .milliseconds(30)) }
@@ -60,6 +69,8 @@ struct SplitDiffSnapshotTests {
     // MARK: - SplitDiffView in isolation
 
     @Test func renderDiffPaneToPNG() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let left = SampleDiff.left, right = SampleDiff.right
         let view = SplitDiffView(leftLabel: "Legacy", rightLabel: "Unknown",
                                  left: left, right: right)
@@ -70,6 +81,8 @@ struct SplitDiffSnapshotTests {
     // MARK: - Full ExtractionCompareSheet (chrome + HSplitView context + nominate)
 
     @Test func renderFullSheetBothModesAndNominate() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let store = try makeTwoBackendStore()
         let sourceID = store.sources.first { $0.filename.hasSuffix(".pdf") }!.id
 

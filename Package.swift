@@ -12,6 +12,10 @@ import Foundation
 // drops the helper target AND compiles the feature out of the Swift sources via the
 // `PODCAST_TRANSCRIPTS` compilation condition. See plans/podcast-transcripts.md.
 let podcastTranscriptsEnabled = ProcessInfo.processInfo.environment["WIKIFS_APP_STORE"] == nil
+/// The macOS integration target can wedge SwiftPM's shared test helper when its
+/// AppKit, WebKit, File Provider, and daemon suites overlap. Keep it out of the
+/// default test graph; opt in with `WIKIFS_APP_TESTS=1 swift test`.
+let appTestsEnabled = ProcessInfo.processInfo.environment["WIKIFS_APP_TESTS"] == "1"
 let podcastSwiftSettings: [SwiftSetting] = podcastTranscriptsEnabled ? [.define("PODCAST_TRANSCRIPTS")] : []
 /// Treat compiler warnings as errors so they never silently accumulate (#493).
 let strictSwiftSettings: [SwiftSetting] = podcastSwiftSettings + [.unsafeFlags(["-warnings-as-errors"])]
@@ -431,6 +435,7 @@ let package = Package(
         //
         // NOTE: wikid is intentionally NOT filtered — it has a Linux
         // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
+        if $0.name == "WikiFSAppTests" && !appTestsEnabled { return false }
         #if os(Linux)
         if $0.name == "podcast-token-helper" { return false }
         if $0.name == "wikictl" { return false }
