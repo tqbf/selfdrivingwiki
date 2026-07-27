@@ -88,6 +88,7 @@ test would put a modal panel on screen (and CI has no printer), so tests pin
 everything up to the call and `ReaderPrinting.run(for:)` is the small
 straight-line remainder. Paper output and page breaks across long code blocks
 need a human with a printer or a Save-as-PDF run.
+
 ## 2026-07-27 — LOW audit: AutocompleteHostedTestGate
 
 Audited `Tests/WikiFSAppTests/AutocompleteHostedTestGate.swift` and its two
