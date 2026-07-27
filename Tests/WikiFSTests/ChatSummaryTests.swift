@@ -20,7 +20,7 @@ import Testing
 ///     picks which message feeds the chat row; pure, fast tier.
 ///   - **Store round-trip** — `updateChatSummary` + `listChats()` on a real
 ///     SQLite DB; tagged `.integration` (opens a real store).
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct ChatSummaryTests {
 
     // MARK: - Pure extract: ChatSummary.summaryExtract

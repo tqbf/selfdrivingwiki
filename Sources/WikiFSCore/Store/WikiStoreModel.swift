@@ -310,11 +310,13 @@ public final class WikiStoreModel {
     /// store + bus the model wraps, but construction happens post-init so this is
     /// set rather than a constructor param — same lifecycle as `readPool`).
     /// `nil` when Tantivy construction failed (the session never breaks over a
-    /// derived index) — search silently falls back to FTS5 in that case.
+    /// derived index) — search then runs without a BM25 leg (cosine-only when
+    /// semantic search is available).
     #if os(macOS)
     @ObservationIgnored public var tantivySearch: TantivySearchService?
     #else
-    // Linux: Tantivy is unavailable — the search path uses nil bm25Leg (FTS5 fallback).
+    // Linux: Tantivy is unavailable — the search path uses `nil` `bm25Leg`
+    // (no lexical BM25 leg on this branch).
     @ObservationIgnored public var tantivySearch: Any?
     #endif
     /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
@@ -623,7 +625,7 @@ public final class WikiStoreModel {
     /// submenu, via `WikiLinkMenuNSItems`).
     ///
     /// #925: this used to bridge the actor-isolated Tantivy query back to a
-    /// synchronous main-actor call with a `DispatchSemaphore`. That parked the
+    /// synchronous main-actor call with a blocking semaphore. That parked the
     /// main thread *and* a cooperative-pool thread on every right-click, which
     /// is one of the four starvation sites the issue tracks; the awaited leg
     /// below is the whole fix. Callers that need a menu item synchronously must
@@ -3748,17 +3750,18 @@ public final class WikiStoreModel {
     //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
     //      The store uses the leg INSTEAD of FTS5, then fuses it with the
     //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
-    //   3. `nil` leg → the store falls back to FTS5 (Tantivy unavailable, empty,
-    //      or all hits resolved to nothing). wikictl/tests always pass `nil`.
+    //   3. `nil` leg → the store runs without a BM25 leg (Tantivy unavailable,
+    //      empty, or all hits resolved to nothing). wikictl/tests always pass
+    //      `nil`.
     //
-    // FTS5 is kept fully intact for Phase 2 fallback; Phase 3 retires it.
+    // FTS5 was retired in #634, so there is no lexical fallback path here.
 
     #if os(macOS)
     /// Resolve Tantivy BM25 hits into full typed summaries from a cached
     /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
     /// Tantivy is unavailable, the index returned nothing, or every hit was
     /// missing from the catalog (e.g. a resource deleted since the last Tantivy
-    /// sync). A `nil` return makes the store fall back to FTS5.
+    /// sync). A `nil` return means "no BM25 leg" at the store call site.
     ///
     /// `catalog` is a value-type copy captured at the call site, so a main-actor
     /// mutation during the `await svc.search` suspension can't race the lookup.
@@ -3780,7 +3783,8 @@ public final class WikiStoreModel {
     }
 
     #else
-    // Linux: Tantivy is unavailable — the BM25 leg is always nil (FTS5 fallback).
+    // Linux: Tantivy is unavailable — the BM25 leg is always nil (no lexical
+    // fallback path on this branch).
     private func resolveTantivyLeg<T: Identifiable & Sendable>(
         query: String,
         kind: TantivyDocumentKind,

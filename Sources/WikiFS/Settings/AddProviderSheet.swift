@@ -389,7 +389,7 @@ final class AddProviderModel {
     /// the user's login PATH) — never call this on the main actor.
     func scan() async {
         isScanning = true
-        let found = await Task.detached { ACPProviderDiscovery.discover() }.value
+        let found = await ACPProviderDiscovery.discoverOnLoginShell()
         detected = found
         isScanning = false
     }

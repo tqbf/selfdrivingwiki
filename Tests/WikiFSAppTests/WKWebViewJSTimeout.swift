@@ -8,9 +8,10 @@ import WebKit
 /// `evaluateJavaScript`'s completion handler is delivered via a block on
 /// Swift's cooperative thread pool. When `swift test` runs the full suite,
 /// other suites in the SAME process can saturate that pool with synchronous
-/// blocking calls (`DispatchSemaphore.wait()`, `Process.waitUntilExit()` —
-/// see `WikiStoreModel.resolveTantivyLegSync`), leaving no thread free to
-/// deliver the reply. A raw `withCheckedContinuation` then suspends forever —
+/// blocking calls (`DispatchSemaphore.wait()`, `Process.waitUntilExit()`, or
+/// the same semaphore-style sync↔async bridges #925 removed from the Tantivy
+/// menu path), leaving no thread free to deliver the reply. A raw
+/// `withCheckedContinuation` then suspends forever —
 /// a hang `.timeLimit` cannot interrupt, because cancelling the test's Task
 /// does not resume an abandoned continuation. This is the exact failure mode
 /// already named in `.github/workflows/ci.yml` / #664 / #732, which is why

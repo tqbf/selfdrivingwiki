@@ -1,45 +1,29 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #if canImport(AppKit)
 import AppKit
 #endif
 
 /// Shared subprocess infrastructure for transcript-fetching PEP 723 scripts
 /// (`youtube-transcript`, `podcast-transcript`). Both scripts share the
-/// `env -S uv run --script` shebang and are spawned identically: resolve the
-/// bundled script, spawn via `Process`, drain stdout/stderr continuously via
-/// `readabilityHandler`, clean up in `terminationHandler`, and return captured
-/// output.
+/// `env -S uv run --script` shebang and are spawned identically.
 ///
-/// Mirrors `PdfExtractionService` (Sources/WikiFS/Sources/PdfExtractionService.swift)
-/// but lives in WikiFSCore so the transcript services can use it without importing
-/// the app module. The pattern is identical — see the load-bearing invariants
-/// documented there (continuous stdout drain, terminationHandler pipe drain,
-/// ProcessRegistry orphan killing, no bare `try?`).
+/// Lives in WikiFSCore so the transcript services can use it without importing
+/// the app module. The low-level process execution is delegated to
+/// `AsyncProcessRunner`; this type keeps only transcript-specific script
+/// resolution, PATH augmentation, and app-lifetime orphan cleanup.
 enum TranscriptSubprocess {
-
-    // MARK: - OutputBuffer
-
-    /// Thread-safe byte accumulator for a pipe drained on a background queue.
-    /// The pipe `readabilityHandler` fires off-actor, so the buffer it appends to
-    /// must be its own lock-guarded box (not actor state).
-    final class OutputBuffer: @unchecked Sendable {
-        private var data = Data()
-        private let lock = NSLock()
-        func append(_ chunk: Data) {
-            lock.lock(); data.append(chunk); lock.unlock()
-        }
-        func take() -> Data {
-            lock.lock(); defer { lock.unlock() }; return data
-        }
-    }
 
     // MARK: - ProcessRegistry
 
-    /// Tracks live subprocesses so `NSApplication.willTerminate` kills orphans.
-    /// Nonisolated so termination handlers (which fire on background threads)
-    /// can call track/untrack without crossing actor isolation.
+    /// Tracks live subprocess ids so `NSApplication.willTerminate` kills
+    /// orphans without needing to own the `Process` instances directly.
     final class ProcessRegistry: @unchecked Sendable {
-        private var procs = Set<Process>()
+        private var processIDs = Set<Int32>()
         private var registered = false
         private let lock = NSLock()
 
@@ -62,26 +46,26 @@ enum TranscriptSubprocess {
             #endif
         }
 
-        func track(_ process: Process) {
+        func track(_ processID: Int32) {
             registerIfNeeded()
             lock.lock()
-            procs.insert(process)
+            processIDs.insert(processID)
             lock.unlock()
         }
 
-        func untrack(_ process: Process) {
+        func untrack(_ processID: Int32) {
             lock.lock()
-            procs.remove(process)
+            processIDs.remove(processID)
             lock.unlock()
         }
 
         func terminateAllForTesting() { terminateAll() }
         private func terminateAll() {
             lock.lock()
-            let snapshot = procs
+            let snapshot = processIDs
             lock.unlock()
-            for p in snapshot where p.isRunning {
-                p.terminate()
+            for processID in snapshot where kill(processID, 0) == 0 {
+                _ = kill(processID, SIGTERM)
             }
         }
     }
@@ -121,74 +105,40 @@ enum TranscriptSubprocess {
 
     /// Run a transcript script to completion, returning captured stdout.
     /// Cancellable: cancelling the surrounding Task terminates the subprocess.
-    ///
-    /// Load-bearing invariants (identical to `PdfExtractionService.run()`):
-    /// - Continuous stdout drain via `readabilityHandler`, NOT post-exit read.
-    /// - `terminationHandler` nils handlers and drains the kernel pipe one last time.
-    /// - Non-zero exit → throws with captured stderr.
-    /// - Empty output → throws `.emptyOutput`.
     static func run(
         script: URL,
         arguments: [String]
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
-        let process = Process()
-        process.executableURL = script
-        process.arguments = arguments
-
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "\(uvSearchPATH):\(env["PATH"] ?? "")"
-        process.environment = env
+        let request = AsyncProcessRequest(
+            executableURL: script,
+            arguments: arguments,
+            environment: env,
+            outputMode: .separate)
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let stdoutBuffer = OutputBuffer()
-        let stderrBuffer = OutputBuffer()
-        stdoutPipe.fileHandleForReading.readabilityHandler = { @Sendable handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            stdoutBuffer.append(data)
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { @Sendable handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            stderrBuffer.append(data)
-        }
-
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(stdout: String, stderr: String, status: Int32), Error>) in
-                process.terminationHandler = { proc in
-                    processRegistry.untrack(proc)
-                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                    stderrPipe.fileHandleForReading.readabilityHandler = nil
-                    Thread.sleep(forTimeInterval: 0.05)
-                    while true {
-                        let data = stdoutPipe.fileHandleForReading.availableData
-                        if data.isEmpty { break }
-                        stdoutBuffer.append(data)
-                    }
-                    while true {
-                        let data = stderrPipe.fileHandleForReading.availableData
-                        if data.isEmpty { break }
-                        stderrBuffer.append(data)
-                    }
-                    let status = proc.terminationStatus
-                    let out = String(data: stdoutBuffer.take(), encoding: .utf8) ?? ""
-                    let err = String(data: stderrBuffer.take(), encoding: .utf8) ?? ""
-                    cont.resume(returning: (stdout: out, stderr: err, status: status))
-                }
-                processRegistry.track(process)
-                do {
-                    try process.run()
-                } catch {
-                    processRegistry.untrack(process)
-                    cont.resume(throwing: TranscriptSubprocessError.processFailed(error.localizedDescription))
-                }
+        do {
+            let result = try await AsyncProcessRunner.run(
+                request,
+                hooks: .init(
+                    didLaunch: { processID in
+                        processRegistry.track(processID)
+                    },
+                    didTerminate: { processID, _ in
+                        processRegistry.untrack(processID)
+                    }))
+            let stdout = String(data: result.stdoutData, encoding: .utf8) ?? ""
+            let stderr = String(data: result.stderrData, encoding: .utf8) ?? ""
+            return (stdout: stdout, stderr: stderr, status: result.terminationStatus)
+        } catch let error as AsyncProcessRunnerError {
+            switch error {
+            case .cancelled:
+                throw CancellationError()
+            case .launchFailed(let message), .pipeSetupFailed(let message):
+                throw TranscriptSubprocessError.processFailed(message)
             }
-        } onCancel: {
-            if process.isRunning { process.terminate() }
+        } catch {
+            throw TranscriptSubprocessError.processFailed(error.localizedDescription)
         }
     }
 

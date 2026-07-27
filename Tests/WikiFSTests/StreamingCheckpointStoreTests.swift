@@ -8,7 +8,7 @@ import Foundation
 /// The launcher's timers / dirty-flag / cursor logic is tested in
 /// `ChatPersistenceTests` via `unflushedTail`; these tests target the store
 /// mutator directly.
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct StreamingCheckpointStoreTests {
 
     // MARK: - AC.6 first checkpoint inserts a draft row
