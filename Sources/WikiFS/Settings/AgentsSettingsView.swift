@@ -594,7 +594,7 @@ private struct ProviderDetailPane: View {
             return
         }
         Task {
-            let result = await Task.detached { PathPreflight.resolveOnLoginShell(executable: exe) }.value
+            let result = await PathPreflight.resolveOnLoginShell(executable: exe)
             await MainActor.run {
                 isAvailable = if case .found = result { true } else { false }
             }
@@ -622,9 +622,7 @@ private struct ProviderDetailPane: View {
         let env = EnvVarText.parse(envText)
         let cleanLabel = label.trimmingCharacters(in: .whitespaces)
         Task {
-            let resolved = await Task.detached {
-                PathPreflight.resolveOnLoginShell(executable: exe)
-            }.value
+            let resolved = await PathPreflight.resolveOnLoginShell(executable: exe)
             let resolvedWords: [String]
             switch resolved {
             case .found(let absolutePath):

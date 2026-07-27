@@ -218,7 +218,7 @@ struct QueueStoreTests {
         #expect(completedCount <= 200)
 
         // Queued items should be untouched.
-        let active = try store.loadActive(for: .extraction)
+        let active = try store.loadActive()
         #expect(active.count == 5)
         for id in queuedIDs {
             #expect(active.contains { $0.id == id })
@@ -260,7 +260,7 @@ struct QueueStoreTests {
         // raw SQL, the same pattern the canonicalization tests use.
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-        let updateSQL = "UPDATE queue_items SET queue = 'lint' WHERE id = '\(lintID)';"
+        let updateSQL = "UPDATE queue_items SET queue = 'lint' WHERE id = '\(lintID.rawValue)';"
         #expect(sqlite3_exec(db, updateSQL, nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
 
@@ -274,6 +274,39 @@ struct QueueStoreTests {
         let stamped = recent.first { $0.id == lintID }
         #expect(stamped != nil)
         #expect(stamped?.queue == .ingestion)
+    }
+
+    /// Unknown queue raw values should be isolated to the bad row, not abort
+    /// the whole active-items read. This preserves daemon/app snapshots when a
+    /// single stale or corrupt row is present.
+    @Test func testUnknownQueueRowIsSkippedWithoutHidingOtherActiveItems() throws {
+        let url = tempDatabaseURL()
+
+        let validID: QueueItem.ID
+        let unknownID: QueueItem.ID
+        do {
+            let store = try QueueStore(databaseURL: url)
+            validID = try store.enqueue(
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
+            ).id
+            unknownID = try store.enqueue(
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload())
+            ).id
+            store.close()
+        }
+
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let updateSQL = "UPDATE queue_items SET queue = 'totally-unknown-queue' WHERE id = '\(unknownID.rawValue)';"
+        #expect(sqlite3_exec(db, updateSQL, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let store = try QueueStore(databaseURL: url)
+        let active = try store.loadActive()
+
+        #expect(active.count == 1)
+        #expect(active.first?.id == validID)
+        #expect(active.contains { $0.id == unknownID } == false)
     }
 
     // MARK: - AC.5: Headless isolation (source-scan)

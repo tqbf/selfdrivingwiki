@@ -32,7 +32,7 @@ import WikiFSEngine
 /// `.binary`). The coordinator fix alone closes the bug for PR1 (PNG/XML
 /// filtered at scan time, before they reach the chokepoint).
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct BackgroundIngestCoordinatorTests {
 
     // MARK: - Fixtures

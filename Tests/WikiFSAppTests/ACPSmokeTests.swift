@@ -30,14 +30,8 @@ import WikiFSCore
 ///   advertises `authMethods` → `ACPBackendError.missingAPIKey`).
 /// - `ACP_SMOKE_PROMPT` (default `Reply with exactly: ACP_OK`).
 ///
-/// `.serialized` (#925, mirrors #664's fallback direction): this suite
-/// resolves the agent path via `PathPreflight.resolveOnLoginShell`, which
-/// blocks a cooperative-pool thread on a real `Process().waitUntilExit()`,
-/// alongside spawning + streaming a real ACP subprocess. `.serialized`
-/// prevents that from compounding with other tests in the same run.
 @Suite(
     .timeLimit(.minutes(5)),
-    .serialized,
     .disabled(
         if: ProcessInfo.processInfo.environment["ACP_SMOKE"] == nil,
         "Set ACP_SMOKE=1 (and ANTHROPIC_API_KEY for a full turn) to run the live ACP smoke test.")
@@ -58,7 +52,7 @@ struct ACPSmokeTests {
         // command (e.g. "npx") to an absolute path via the login shell, mirroring
         // the launcher's preflight (so the default works without ACP_AGENT_PATH).
         let resolvedAgentPath: String
-        switch PathPreflight.resolveOnLoginShell(executable: agentPath) {
+        switch await PathPreflight.resolveOnLoginShell(executable: agentPath) {
         case .found(let path):
             resolvedAgentPath = path
         case .missing(let reason):
@@ -71,7 +65,13 @@ struct ACPSmokeTests {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-smoke-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: scratch) }
+        defer {
+            do {
+                try FileManager.default.removeItem(at: scratch)
+            } catch {
+                Issue.record("Failed to remove temp directory: \(error.localizedDescription)")
+            }
+        }
 
         var hints: [String: String] = [
             HintKey.acpAgentPath.rawValue: resolvedAgentPath,

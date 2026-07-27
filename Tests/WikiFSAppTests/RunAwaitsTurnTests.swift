@@ -47,6 +47,18 @@ struct RunAwaitsTurnTests {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let providerConfig = AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: ProviderID(rawValue: "fake"),
+                    label: "Fake",
+                    command: ["/usr/bin/true"],
+                    enabled: true,
+                    isDefault: true
+                )
+            ],
+            selectedModelIds: ["fake": "fake-model"])
+        try? providerConfig.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir
         return launcher

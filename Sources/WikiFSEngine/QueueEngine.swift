@@ -92,6 +92,17 @@ public actor QueueEngine {
         self.workerFactory = workerFactory
     }
 
+    deinit {
+        for task in runningTasks.values {
+            task.cancel()
+        }
+        for waiters in completionWaiters.values {
+            for waiter in waiters {
+                waiter.resume(returning: .failure(CancellationError()))
+            }
+        }
+    }
+
     // MARK: - Start (rehydration + initial dispatch)
 
     /// Rehydrate in-memory state from the store: crash-recover running items,
@@ -684,7 +695,7 @@ public actor QueueEngine {
                 // post-claim state (counts updated, wiki inserted).
                 let limit: Int
                 switch item.queue {
-                case .extraction:
+                case .extraction, .transcription:
                     limit = config.extractionLimit(for: providerID)
                 case .ingestion:
                     limit = config.ingestionLimit(for: providerID)
@@ -972,4 +983,3 @@ public final class QueueEventBroadcaster: @unchecked Sendable {
         }
     }
 }
-

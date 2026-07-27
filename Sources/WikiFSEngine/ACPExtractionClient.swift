@@ -231,22 +231,13 @@ public struct ACPExtractionClient: MarkdownExtractor {
         containerDirectory: URL,
         acpProviderId: String? = nil,
         acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore(),
-        resolveCommand: (AgentProvider) -> [String]? = { provider in
-            guard let command = provider.command, let exe = command.first else {
-                return nil
-            }
-            if exe == "bun", let bundled = AgentLauncher.bundledHelperPath("bun") {
-                return [bundled] + Array(command.dropFirst())
-            }
-            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
-            case .found(let path):
-                return [path] + Array(command.dropFirst())
-            case .missing:
-                return nil
-            }
-        }
+        searchPath: String? = nil,
+        resolveCommand: ((AgentProvider) -> [String]?)? = nil
     ) -> ACPExtractionClient? {
         let config = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
+        let commandResolver = resolveCommand ?? { provider in
+            AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
+        }
 
         // Use the explicitly-configured extraction provider if set + valid;
         // otherwise fall back to the app's selected (default) provider.
@@ -257,7 +248,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
             provider = config.selectedProvider()
         }
 
-        guard let resolvedCommand = resolveCommand(provider) else {
+        guard let resolvedCommand = commandResolver(provider) else {
             return nil
         }
 

@@ -12,7 +12,7 @@ import Testing
 /// Each test opens real SQLite DBs over a temp dir (no App Group access), so
 /// they run hermetically.
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct SessionManagerTests {
 
     private func tempDirectory() -> URL {

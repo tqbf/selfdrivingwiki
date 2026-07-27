@@ -74,6 +74,7 @@ import Testing
     @Test func pagesTableDoesNotStealCmdAFromOmniboxField() throws {
         let event = try #require(cmdAEvent())
         let window = makeWindow()
+        defer { window.orderOut(nil) }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)
         let omnibox = NSTextField(string: "omnibox text")
@@ -93,6 +94,7 @@ import Testing
     @Test func sourcesTableDoesNotStealCmdAFromOmniboxField() throws {
         let event = try #require(cmdAEvent())
         let window = makeWindow()
+        defer { window.orderOut(nil) }
         let table = SourcesNSTableView()
         window.contentView?.addSubview(table)
         let omnibox = NSTextField(string: "omnibox text")
@@ -113,6 +115,7 @@ import Testing
             windowNumber: 0, context: nil, characters: "b",
             charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11))
         let window = makeWindow()
+        defer { window.orderOut(nil) }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)
         // Anything that isn't Cmd+A defers to super regardless of focus.

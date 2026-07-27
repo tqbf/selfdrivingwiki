@@ -52,11 +52,28 @@ public enum PathPreflight {
 
     /// Resolve `executable` against the user's LOGIN-shell PATH — not the GUI
     /// app's process PATH, which is the launchd-minimal one and usually lacks
-    /// `/opt/homebrew/bin`. Runs `zsh -lc 'echo $PATH'` to read the real PATH,
-    /// then searches it. Best-effort: if the shell hop fails we fall back to the
-    /// process PATH so we never spuriously block a working setup.
-    public static func resolveOnLoginShell(executable: String = "claude") -> Result {
-        let path = loginShellPATH() ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+    /// `/opt/homebrew/bin`. Best-effort: if the shell hop fails we fall back to
+    /// the process PATH so we never spuriously block a working setup.
+    public static func resolveOnLoginShell(executable: String = "claude") async -> Result {
+        await resolveOnLoginShell(executable: executable, runProcess: AsyncProcessRunner.run)
+    }
+
+    static func resolveOnLoginShell(
+        executable: String = "claude",
+        runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> Result {
+        await resolveOnLoginShell(
+            executable: executable,
+            runProcess: runProcess,
+            fallbackPath: ProcessInfo.processInfo.environment["PATH"] ?? "")
+    }
+
+    static func resolveOnLoginShell(
+        executable: String = "claude",
+        runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult,
+        fallbackPath: String
+    ) async -> Result {
+        let path = (await loginShellPATH(using: runProcess)) ?? fallbackPath
         return resolve(
             executable: executable,
             onPath: path,
@@ -64,23 +81,37 @@ public enum PathPreflight {
         )
     }
 
-    /// The login-shell PATH (`zsh -lc 'echo $PATH'`), or nil if the hop fails.
-    public static func loginShellPATH() -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "printf %s \"$PATH\""]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+    /// The login-shell PATH (`zsh -lc 'printf %s "$PATH"'`), or nil if the
+    /// hop fails.
+    public static func loginShellPATH() async -> String? {
+        await loginShellPATH(using: AsyncProcessRunner.run)
+    }
+
+    static func loginShellPATH(
+        using runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> String? {
+        let request = AsyncProcessRequest(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: ["-lc", "printf %s \"$PATH\""])
+
         do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let path = String(data: data, encoding: .utf8)?
+            let result = try await runProcess(request)
+            guard result.terminationStatus == 0 else { return nil }
+            let path = String(data: result.stdoutData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (path?.isEmpty == false) ? path : nil
         } catch {
             return nil
         }
+    }
+
+    public static func resolve(
+        executable: String,
+        usingSearchPath path: String
+    ) -> Result {
+        resolve(
+            executable: executable,
+            onPath: path,
+            fileExists: { FileManager.default.isExecutableFile(atPath: $0) })
     }
 }

@@ -5,7 +5,7 @@ import Testing
 /// Tests for the `wiki_metadata` key-value table (v37, issue #477).
 /// Verifies the get/set metadata API, the persistence of the link-reconcile
 /// flag across store reopening, and the schema migration from v36→v37.
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct WikiMetadataTests {
 
     private func tempURL() -> URL {

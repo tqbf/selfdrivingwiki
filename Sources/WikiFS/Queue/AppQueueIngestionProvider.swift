@@ -92,7 +92,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         }
 
         let provider = resolveSelectedProvider()
-        let message = AgentLauncher.readinessMessage(for: provider)
+        let loginShellPath = await PathPreflight.loginShellPATH()
+        let message = AgentLauncher.readinessMessage(
+            for: provider,
+            searchPath: loginShellPath)
         if message != nil {
             DebugLog.ingest("AppQueueIngestionProvider.readiness: NOT READY provider=\(provider.id) label=\(provider.label)")
         }

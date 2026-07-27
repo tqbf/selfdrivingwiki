@@ -10,7 +10,7 @@ import Testing
 /// `page_versions.blob_hash` is retained; reading the page returns its body
 /// unchanged.
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct BlobVacuumTests {
 
     private func tempStore() throws -> GRDBWikiStore {

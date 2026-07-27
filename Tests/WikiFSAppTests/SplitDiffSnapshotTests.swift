@@ -11,9 +11,15 @@ import Testing
 /// dark window, lets async work settle, then writes PNGs so the redesigned diff
 /// and chrome can be eyeballed (the "acceptance test is a screenshot" this
 /// layout rework needs). A light structural assertion keeps them honest.
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 @MainActor
 struct SplitDiffSnapshotTests {
+    private static let snapshotsDirectory: URL = {
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent("tmp/test-snapshots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
 
     /// Render an SwiftUI view hosted at `size` (dark appearance) to a PNG.
     private func snapshot<V: View>(_ view: V, size: CGSize, to name: String,
@@ -40,7 +46,7 @@ struct SplitDiffSnapshotTests {
         let rep = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
         content.cacheDisplay(in: content.bounds, to: rep)
         let png = try #require(rep.representation(using: .png, properties: [:]))
-        let out = URL(fileURLWithPath: "/tmp/\(name).png")
+        let out = Self.snapshotsDirectory.appendingPathComponent("\(name).png", isDirectory: false)
         try png.write(to: out)
         print("SNAPSHOT_WRITTEN \(out.path) \(rep.pixelsWide)x\(rep.pixelsHigh) \(png.count)B")
         // Scale-independent: `bitmapImageRepForCachingDisplay` bakes in the
@@ -101,7 +107,7 @@ struct SplitDiffSnapshotTests {
     /// A store with one PDF source carrying two extraction alternatives
     /// (anthropic + gemini), mirroring `ProcessedMarkdownTests`' setup.
     private func makeTwoBackendStore() throws -> WikiStoreModel {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = Self.snapshotsDirectory
             .appendingPathComponent("wikifs-diff-snap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))

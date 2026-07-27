@@ -16,6 +16,9 @@
 * Record progress in PROGRESS.md. I should be able to tell a future agent "read PLAN.md and
 PROGRESS.md" and trust it's up to speed with this codebase.
 
+* When writing prose, use the ste-testing skill to ensure clarity.  This applies to pull requests, 
+  github issues, plans in the plans folder, and progress in PROGRESS.md.
+
 * Before and after deciding on code, use the swiftui-pro skill to ensure we're following
   modern best practices.
 

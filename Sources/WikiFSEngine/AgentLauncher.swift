@@ -16,8 +16,8 @@ import ACPModel
 ///
 /// `@MainActor @Observable`: the view binds `events`, `isRunning`, `exitStatus`,
 /// `preflightError`, and `logFileURL`. State is mutated on the main actor from the
-/// pipe `readabilityHandler`s — we NEVER block on `waitUntilExit`; completion
-/// arrives via `terminationHandler`, which is also where the per-wiki
+/// pipe `readabilityHandler`s — completion arrives via `terminationHandler`,
+/// which is also where the per-wiki
 /// agent-run lifecycle ref-count is decremented.
 @MainActor
 @Observable
@@ -196,10 +196,11 @@ public final class AgentLauncher {
     /// The spawned process ID while running, useful context when a run looks quiet.
     public private(set) var currentProcessID: Int32?
 
-    /// Builds the login-shell PATH-resolved `claude` path. Injected so tests can
-    /// stub it; the app uses the real login-shell preflight.
+    /// Builds the PATH-resolved `claude` path. Injected so tests can stub it.
     @ObservationIgnored var resolveClaude: () -> PathPreflight.Result = {
-        PathPreflight.resolveOnLoginShell(executable: "claude")
+        PathPreflight.resolve(
+            executable: "claude",
+            usingSearchPath: ProcessInfo.processInfo.environment["PATH"] ?? "")
     }
 
     /// The App Group container directory the provider config is loaded from.
@@ -1208,11 +1209,12 @@ public final class AgentLauncher {
             return
         }
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+        let loginShellPath = await PathPreflight.loginShellPATH()
 
         // Resolve the provider's spawn command (PATH-resolved because the
         // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
         // API key (keyed by provider id).
-        guard let spawn = resolveACPProviderSpawn(provider) else {
+        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
             isRunning = false
             releaseGenerationSlot()
             return
@@ -1592,6 +1594,7 @@ public final class AgentLauncher {
             finish(status: -1)
             return
         }
+        let loginShellPath = await PathPreflight.loginShellPATH()
         // Resolve spawn config for the first provider (for the model validation
         // below + the baseHints). Fallback providers' spawn is resolved lazily
         // by runPhaseWithFallback.
@@ -1599,7 +1602,7 @@ public final class AgentLauncher {
         let plannerModel = config.modelId(forStage: ACPIngestStage.planner.rawValue)
         let executorModel = config.modelId(forStage: ACPIngestStage.executor.rawValue)
         let finalizerModel = config.modelId(forStage: ACPIngestStage.finalizer.rawValue)
-        guard let spawn = resolveACPProviderSpawn(provider) else {
+        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
             DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
             preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
             finish(status: -1)
@@ -1684,6 +1687,7 @@ public final class AgentLauncher {
             stage: .planner,
             chain: plannerChain,
             quotaFallback: quotaFallback,
+            searchPath: loginShellPath,
             systemPrompt: systemPrompt,
             stageModelId: plannerModel,
             baselineModelId: nil,  // planner uses createSession — baseline from newSession (fresh)
@@ -1806,6 +1810,7 @@ public final class AgentLauncher {
                     stage: .executor,
                     chain: executorChain,
                     quotaFallback: quotaFallback,
+                    searchPath: loginShellPath,
                     systemPrompt: systemPrompt,
                     stageModelId: executorModel,
                     baselineModelId: plannerModel,  // §4.5 HIGH #2 — planner's RESOLVED model, NOT stale stored
@@ -1868,6 +1873,7 @@ public final class AgentLauncher {
             stage: .finalizer,
             chain: finalizerChain,
             quotaFallback: quotaFallback,
+            searchPath: loginShellPath,
             systemPrompt: systemPrompt,
             stageModelId: finalizerModel,
             baselineModelId: nil,  // finalizer uses createSession — baseline from newSession (fresh)
@@ -2168,6 +2174,7 @@ public final class AgentLauncher {
         stage: ACPIngestStage,
         chain: [AgentProvider],
         quotaFallback: QuotaFallbackCoordinator,
+        searchPath: String?,
         systemPrompt: String,
         stageModelId: String?,
         baselineModelId: String?,
@@ -2183,7 +2190,7 @@ public final class AgentLauncher {
         var attemptChain = chain
         while let provider = quotaFallback.firstLive(in: attemptChain) {
             // Resolve spawn config for THIS provider.
-            guard let spawn = resolveACPProviderSpawn(provider) else {
+            guard let spawn = resolveACPProviderSpawn(provider, searchPath: searchPath) else {
                 DebugLog.agent("runPhaseWithFallback[\(phaseName)]: no spawn for \(provider.id) — skipping")
                 attemptChain = attemptChain.filter { $0.id != provider.id }
                 continue
@@ -2668,23 +2675,34 @@ public final class AgentLauncher {
     /// #440 — replaces the cryptic `"bun: not found"` spawn error with
     /// actionable guidance. The returned message is shown verbatim in the
     /// Activity window (and carries a CTA to open Settings → Providers).
+    public static nonisolated func resolveCommand(
+        for provider: AgentProvider,
+        searchPath: String?
+    ) -> [String]? {
+        guard let command = provider.command, let exe = command.first else {
+            return nil
+        }
+        if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
+            return [bundled] + Array(command.dropFirst())
+        }
+        let resolved = PathPreflight.resolve(
+            executable: ShellArgv.expandTilde(exe),
+            usingSearchPath: searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? "")
+        switch resolved {
+        case .found(let path):
+            return [path] + Array(command.dropFirst())
+        case .missing:
+            return nil
+        }
+    }
+
     public static nonisolated func readinessMessage(
         for provider: AgentProvider,
+        searchPath: String? = nil,
         resolveCommand: ((AgentProvider) -> [String]?)? = nil
     ) -> String? {
         let resolver = resolveCommand ?? { provider in
-            guard let command = provider.command, let exe = command.first else {
-                return nil
-            }
-            if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
-                return [bundled] + Array(command.dropFirst())
-            }
-            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
-            case .found(let path):
-                return [path] + Array(command.dropFirst())
-            case .missing:
-                return nil
-            }
+            Self.resolveCommand(for: provider, searchPath: searchPath)
         }
         guard let command = provider.command, let exe = command.first else {
             return "Provider ‘\(provider.label)’ has no command configured. Open Settings → Providers to fix it."
@@ -2711,22 +2729,26 @@ public final class AgentLauncher {
     /// system-wide bun install. Sets `preflightError` and returns `nil` on
     /// failure — callers must bail out (`isRunning = false` +
     /// `releaseGenerationSlot()`) when this returns `nil`.
-    func resolveACPProviderSpawn(_ provider: AgentProvider) -> (command: [String], apiKey: String?)? {
+    func resolveACPProviderSpawn(
+        _ provider: AgentProvider,
+        searchPath: String?
+    ) -> (command: [String], apiKey: String?)? {
         guard let command = provider.command, let exe = command.first else {
             preflightError = "Provider ‘\(provider.label)’ has no command configured."
             return nil
         }
-        let resolvedCommand: [String]
-        if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
-            resolvedCommand = [bundled] + Array(command.dropFirst())
-        } else {
-            switch PathPreflight.resolveOnLoginShell(executable: ShellArgv.expandTilde(exe)) {
-            case .found(let path):
-                resolvedCommand = [path] + Array(command.dropFirst())
+        guard let resolvedCommand = Self.resolveCommand(for: provider, searchPath: searchPath) else {
+            let resolution = PathPreflight.resolve(
+                executable: ShellArgv.expandTilde(exe),
+                usingSearchPath: searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+            )
+            switch resolution {
+            case .found:
+                preflightError = "‘\(exe)’ resolved unexpectedly."
             case .missing(let reason):
                 preflightError = reason
-                return nil
             }
+            return nil
         }
         return (resolvedCommand, acpCredentialStore.apiKey(forProvider: provider.id.rawValue))
     }
@@ -2953,10 +2975,11 @@ public final class AgentLauncher {
         }
 
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+        let loginShellPath = await PathPreflight.loginShellPATH()
 
         // Resolve the provider's spawn command (PATH-resolved) + the
         // Keychain-backed API key (keyed by provider id).
-        guard let spawn = resolveACPProviderSpawn(provider) else {
+        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
             DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")")
             return
         }
@@ -3299,8 +3322,8 @@ public final class AgentLauncher {
                     // set). Safe because: flushTranscript() already persisted
                     // the turn's events to the DB above; the sink's compute-once
                     // guard (summary == nil) skips already-summarized rows; and
-                    // model mode dispatches the actual LLM call off-main via
-                    // Task.detached, so it doesn't block this turn. The finish()
+                    // model mode dispatches the actual LLM call off-main, so it
+                    // doesn't block this turn. The finish()
                     // call remains as a safety net for the one-shot run() path.
                     self.fireMessageSummarySink()
                     // Capture the per-turn usage delta and forward it to the
@@ -3724,6 +3747,9 @@ public final class AgentLauncher {
         runningKind = nil
         sessionHandle = nil
         plannerSessionHandle = nil
+        // Disarm stale onExit callbacks from the just-finished session before a
+        // later run can reuse this launcher.
+        currentRunToken = nil
         currentProcessID = nil
         ingestingSourceIDs = []
         // Cancel any in-flight send task (gate wait or stream consumer). Clear the
@@ -3806,6 +3832,7 @@ public final class AgentLauncher {
         currentProcessID = nil
         sessionHandle = nil
         plannerSessionHandle = nil
+        currentRunToken = nil
         runTotalUsage = nil
         // Interactive usage: clear the per-session baseline so each
         // interactive run starts fresh (the first turn's delta == full usage).

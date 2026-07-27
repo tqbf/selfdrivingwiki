@@ -49,39 +49,50 @@ enum FileProviderSetupVerifier {
     private static let pluginKitURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
 
     static func verifyAndRepairInstalledProvider() async -> FileProviderSetupWarning? {
+        await verifyAndRepairInstalledProvider(
+            fileExists: { FileManager.default.fileExists(atPath: $0.path) },
+            runCommand: { request in try await AsyncProcessRunner.run(request) })
+    }
+
+    static func verifyAndRepairInstalledProvider(
+        fileExists: (URL) -> Bool,
+        runCommand: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> FileProviderSetupWarning? {
         let expectedAppURL = URL(fileURLWithPath: AppInstallationPolicy.expectedAppPath)
             .standardizedFileURL
         let expectedExtensionURL = expectedAppURL
             .appendingPathComponent("Contents/PlugIns/\(extensionName).appex", isDirectory: true)
             .standardizedFileURL
 
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: expectedAppURL.path) else {
+        guard fileExists(expectedAppURL) else {
             return FileProviderSetupWarning(
                 expectedAppURL: expectedAppURL,
                 expectedExtensionURL: expectedExtensionURL,
                 reason: .installedAppMissing)
         }
-        guard fileManager.fileExists(atPath: expectedExtensionURL.path) else {
+        guard fileExists(expectedExtensionURL) else {
             return FileProviderSetupWarning(
                 expectedAppURL: expectedAppURL,
                 expectedExtensionURL: expectedExtensionURL,
                 reason: .bundledExtensionMissing)
         }
 
-        let paths = await registeredProviderPaths()
+        let paths = await registeredProviderPaths(runCommand: runCommand)
         if paths == [expectedExtensionURL.path] {
             return nil
         }
 
-        if let failure = await repairRegistration(expectedExtensionURL: expectedExtensionURL) {
+        if let failure = await repairRegistration(
+            expectedExtensionURL: expectedExtensionURL,
+            runCommand: runCommand)
+        {
             return FileProviderSetupWarning(
                 expectedAppURL: expectedAppURL,
                 expectedExtensionURL: expectedExtensionURL,
                 reason: .registrationCommandFailed(failure))
         }
 
-        let repairedPaths = await registeredProviderPaths()
+        let repairedPaths = await registeredProviderPaths(runCommand: runCommand)
         guard repairedPaths == [expectedExtensionURL.path] else {
             return FileProviderSetupWarning(
                 expectedAppURL: expectedAppURL,
@@ -91,20 +102,27 @@ enum FileProviderSetupVerifier {
         return nil
     }
 
-    private static func repairRegistration(expectedExtensionURL: URL) async -> String? {
-        for path in await registeredProviderPaths() where path != expectedExtensionURL.path {
-            _ = await runPluginKit(["-r", path])
+    private static func repairRegistration(
+        expectedExtensionURL: URL,
+        runCommand: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> String? {
+        for path in await registeredProviderPaths(runCommand: runCommand) where path != expectedExtensionURL.path {
+            _ = await runPluginKit(["-r", path], runCommand: runCommand)
         }
-        let add = await runPluginKit(["-a", expectedExtensionURL.path])
+        let add = await runPluginKit(["-a", expectedExtensionURL.path], runCommand: runCommand)
         guard add.exitCode == 0 else { return add.diagnostic }
-        _ = await runPluginKit(["-e", "use", "-i", providerID, "-p", "com.apple.fileprovider-nonui"])
+        _ = await runPluginKit(
+            ["-e", "use", "-i", providerID, "-p", "com.apple.fileprovider-nonui"],
+            runCommand: runCommand)
         return nil
     }
 
-    private static func registeredProviderPaths() async -> [String] {
+    private static func registeredProviderPaths(
+        runCommand: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> [String] {
         let result = await runPluginKit([
             "-m", "-p", "com.apple.fileprovider-nonui", "-i", providerID, "-A", "-D", "-vvv",
-        ])
+        ], runCommand: runCommand)
         guard result.exitCode == 0 else { return [] }
         return result.output
             .split(separator: "\n")
@@ -116,26 +134,22 @@ enum FileProviderSetupVerifier {
             .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
     }
 
-    private static func runPluginKit(_ arguments: [String]) async -> ProcessResult {
-        await Task.detached(priority: .utility) {
-            let process = Process()
-            process.executableURL = pluginKitURL
-            process.arguments = arguments
+    private static func runPluginKit(
+        _ arguments: [String],
+        runCommand: (AsyncProcessRequest) async throws -> AsyncProcessResult
+    ) async -> ProcessResult {
+        let request = AsyncProcessRequest(
+            executableURL: pluginKitURL,
+            arguments: arguments,
+            outputMode: .combined)
 
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                let text = String(data: data, encoding: .utf8) ?? ""
-                return ProcessResult(exitCode: process.terminationStatus, output: text)
-            } catch {
-                return ProcessResult(exitCode: 1, output: error.localizedDescription)
-            }
-        }.value
+        do {
+            let result = try await runCommand(request)
+            let text = String(data: result.combinedData, encoding: .utf8) ?? ""
+            return ProcessResult(exitCode: result.terminationStatus, output: text)
+        } catch {
+            return ProcessResult(exitCode: 1, output: error.localizedDescription)
+        }
     }
 
     private struct ProcessResult: Sendable {

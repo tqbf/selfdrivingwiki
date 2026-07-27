@@ -1,0 +1,11 @@
+# PID<TAB>PPID<TAB>PGID<TAB>COMMAND
+101	1	101	/Applications/Xcode.app/Contents/Developer/usr/bin/swiftpm-testing-helper /tmp/paseo-worktrees/alpha one/.build/apple/Products/Debug/WikiFSPackageTests.xctest
+102	103	1002	/tmp/paseo-worktrees/alpha one/.build/apple/Products/Debug/WikiFSPackageTests.xctest/Contents/MacOS/WikiFSPackageTests
+103	104	1002	/usr/bin/swift test --filter StoreConcurrencyTests
+104	200	1002	/usr/bin/time -p swift test --filter StoreConcurrencyTests
+105	200	1002	/usr/bin/tee /tmp/paseo-worktrees/alpha one/tmp/test.log
+106	107	1003	/tmp/paseo-worktrees/beta[2]/.build/apple/Products/Debug/WikiFSPackageTests.xctest/Contents/MacOS/WikiFSPackageTests
+107	200	1003	/usr/bin/swift test --filter QueueEngineTests
+108	200	1003	/usr/bin/tee /tmp/paseo-worktrees/beta[2]/tmp/test.log
+109	1	109	/tmp/paseo-worktrees/alpha one-backup/.build/apple/Products/Debug/WikiFSPackageTests.xctest/Contents/MacOS/WikiFSPackageTests
+110	1	110	/usr/bin/vim /tmp/paseo-worktrees/alpha one/Notes.md
