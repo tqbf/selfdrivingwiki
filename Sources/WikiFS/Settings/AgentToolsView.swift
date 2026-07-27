@@ -156,8 +156,8 @@ struct AgentToolsView: View {
     /// `AgentLauncher.showsQueryDebugControls`). The native
     /// `ChatsListViewController.isLive` delegates to this.
     static func isLiveRow(
-        activeChatID: String?, isGenerating: Bool, chatID: ChatID
+        activeChatID: ChatID?, isGenerating: Bool, chatID: ChatID
     ) -> Bool {
-        isGenerating && activeChatID == chatID.rawValue
+        isGenerating && activeChatID == chatID
     }
 }

@@ -29,6 +29,12 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	public func getChat(id: ChatID) ->
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatSummary(chatID: ChatID, summary: String) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteChat(id: ChatID) {
+Sources/WikiFSEngine/AgentLauncher.swift	public var activeChatID: ChatID?
+Sources/WikiFSEngine/AgentLauncher.swift	        chatID: ChatID? = nil,
+Sources/WikiFSEngine/AgentLauncher.swift	        onMessageSummary: (@MainActor (ChatID) -> Void)? = nil,
+Sources/WikiFSEngine/AgentLauncher.swift	        onStreamingCheckpoint: (@MainActor (ChatID, String, AgentEvent, Bool) -> Bool)? = nil
+Sources/WikiFSEngine/AgentOperationRunner.swift	        let persistedChatID: ChatID? = chat?.id
+Sources/WikiFSEngine/AgentOperationRunner.swift	        let continuedChatID: ChatID = chatID
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID?
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
 Sources/WikiFSEngine/QueueEventEnvelope.swift	public let chatID: ChatID?
@@ -36,4 +42,9 @@ Sources/WikiFS/Chats/ChatSessionKey.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatWebView.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {
+Sources/WikiFS/Settings/AgentToolsView.swift	        activeChatID: ChatID?, isGenerating: Bool, chatID: ChatID
 Sources/WikiCtlCore/ChatCommand.swift	        case id(ChatID)
+Sources/wikid/DaemonChatHost.swift	        let persistedChatID: ChatID = chat.id
+Sources/wikid/DaemonChatHost.swift	        let continuedChatID: ChatID = chatID
+Sources/wikid/DaemonChatHost.swift	    ) async throws -> ChatID {
+Sources/wikid/DaemonChatHost.swift	    func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {

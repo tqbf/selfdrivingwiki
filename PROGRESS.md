@@ -39,6 +39,12 @@ wiki links, provenance strings, paths, and CLI behavior must stay unchanged.
   fixtures still reused page resolvers for chat links.
 - Review pass 2 re-ran the verification gates after those fixes. No further
   findings remained.
+- Review follow-up 3 added the last two HIGH coverage fixes before merge:
+  `ChatIDPersistenceTests` now build a literal pre-#957 SQLite fixture at
+  `PRAGMA user_version = 45` before opening `GRDBWikiStore`, and the chat API
+  manifest/typecheck coverage now pins public launcher signatures plus typed
+  handoff seams in `AgentOperationRunner`, `DaemonChatHost`, and
+  `AgentToolsView`.
 
 **Final `PageID` / raw-string audit.**
 - Retained message identity by design:
@@ -63,8 +69,24 @@ wiki links, provenance strings, paths, and CLI behavior must stay unchanged.
 - Focused chat boundary suite:
   `swift test --filter 'IdentifierBoundaryTypecheckTests|ChatAPISignatureManifestTests|ChatXPCRequestCompatibilityTests'`
   — 12 tests in 3 suites passed.
+- Focused ChatID follow-up core verification:
+  `swift test --filter 'ChatIDPersistenceTests|ChatAPISignatureManifestTests|IdentifierBoundaryTypecheckTests'`
+  — 14 tests in 3 suites passed.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'AgentToolsD4Tests|ChatViewD2Tests|ACPChatResumeTests'`
+  remains blocked by pre-existing unrelated app-test compile drift in the
+  opt-in `WikiFSAppTests` target. That target is not part of the standard CI
+  gate for this repository, so this follow-up branch does not broaden into
+  app-test harness repair.
 - `swift build --build-tests` — passed on the final tree.
-- `swift test` — 2,524 tests in 196 suites passed on the final tree.
+- First `swift test` run hit three timeout-only failures in
+  `AsyncProcessRunnerTests`
+  (`cancellationEscalatesWhenChildIgnoresTermination`,
+  `cancellationDuringOutputCleansUpOnce`,
+  `cancellationReturnsWhenDescendantKeepsPipeOpen`).
+- Focused flake check:
+  `swift test --filter AsyncProcessRunnerTests` — 10 tests in 1 suite passed.
+- Second `swift test` run — 2,530 tests in 197 suites passed on the final
+  tree.
 - `make lint` — 0 violations in 379 files; no new bare `try?`.
 - `git diff --check` — clean.
 

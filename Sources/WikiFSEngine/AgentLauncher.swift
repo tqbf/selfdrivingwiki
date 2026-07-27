@@ -785,7 +785,7 @@ public final class AgentLauncher {
     /// back to draft) and in `finish()` AFTER the final turn-boundary flush has
     /// committed — clearing it too early re-sources the view from the store before
     /// the tail lands, producing a transient truncated transcript (D2 flip-timing).
-    public var activeChatID: String?
+    public var activeChatID: ChatID?
     /// Stored, cancellable Task for the current interactive send (which waits for
     /// the generation gate before writing to stdin). Cancelled by `stopAgent()` and
     /// `finish()` so an in-flight gate wait doesn't outlive the session.
@@ -2824,8 +2824,8 @@ public final class AgentLauncher {
     /// Routes through `PageAuthor` (#797) — the single source of truth for the
     /// `agents.name` convention — so the builder and the parse sites
     /// (`GRDBWikiStore.authorKind`, `ProvenancePanel`) can't drift.
-    static func authorForRun(kind: WikiOperation.Kind, chatID: String?) -> String {
-        if let chatID { return PageAuthor.chat(chatID).rawValue }
+    static func authorForRun(kind: WikiOperation.Kind, chatID: ChatID?) -> String {
+        if let chatID { return PageAuthor.chat(chatID.rawValue).rawValue }
         return PageAuthor.agent(kind.rawValue).rawValue
     }
 
@@ -2881,7 +2881,7 @@ public final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
-        chatID: String? = nil,
+        chatID: ChatID? = nil,
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
         priorAcpSessionId: AcpSessionID? = nil,
@@ -2908,7 +2908,7 @@ public final class AgentLauncher {
             events = historySeed
             persistedEventCount = historySeed.count
         }
-        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID ?? "nil") wikiID=\(wikiID.rawValue) historySeed=\(historySeed.count)")
+        DebugLog.agent("startInteractiveQuery: enter firstMsg=\"\(firstMessage.prefix(80))\" chatID=\(chatID?.rawValue ?? "nil") wikiID=\(wikiID.rawValue) historySeed=\(historySeed.count)")
         // Consumed by the first `sendInteractiveMessage` to skip re-persisting
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
@@ -2988,7 +2988,7 @@ public final class AgentLauncher {
         let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
-        guard let scratch = makeScratchDirectory(id: chatID) else {
+        guard let scratch = makeScratchDirectory(id: chatID?.rawValue) else {
             preflightError = "Could not create a scratch working directory for the agent."
             return
         }
@@ -3090,7 +3090,7 @@ public final class AgentLauncher {
                 // prefix can't drift from the `ResourceKind.chat.linkPrefix`
                 // value the link resolver honours.
                 if let chatID {
-                    hints[HintKey.env("WIKI_AUTHOR")] = PageAuthor.chat(chatID).rawValue
+                    hints[HintKey.env("WIKI_AUTHOR")] = PageAuthor.chat(chatID.rawValue).rawValue
                 }
                 return hints
             }(),
@@ -3108,7 +3108,7 @@ public final class AgentLauncher {
         // support it), fall through to the fresh-start + preamble path below.
         var resumedSession: SessionHandle? = nil
         if let priorAcpSessionId {
-            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId.rawValue) for chat \(chatID ?? "?")")
+            DebugLog.agent("startInteractiveQuery: attempting to resume ACP session \(priorAcpSessionId.rawValue) for chat \(chatID?.rawValue ?? "?")")
             do {
                 if let handle = try await backend.resume(
                     sessionID: priorAcpSessionId.rawValue,
@@ -3161,7 +3161,7 @@ public final class AgentLauncher {
                 if let acpBackend = backend as? ACPBackend {
                     if let sessionId = await acpBackend.currentResumableSessionId() {
                         onAcpSessionId?(AcpSessionID(rawValue: sessionId.value))
-                        DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID ?? "?")")
+                        DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID?.rawValue ?? "?")")
                     }
                 }
             }
@@ -3464,8 +3464,8 @@ public final class AgentLauncher {
             DebugLog.ingest("fireMessageSummarySink: no activeChatID, skipping")
             return
         }
-        DebugLog.ingest("fireMessageSummarySink: activeChatID=\(chatID)")
-        messageSummarySink?(ChatID(rawValue: chatID))
+        DebugLog.ingest("fireMessageSummarySink: activeChatID=\(chatID.rawValue)")
+        messageSummarySink?(chatID)
     }
 
     /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
@@ -3546,7 +3546,7 @@ public final class AgentLauncher {
               case .assistantText = events[idx],
               streamingRowDirty || finalize else { return }
         let isDraft = !finalize
-        let ok = sink(ChatID(rawValue: chatID), handle, events[idx], isDraft)
+        let ok = sink(chatID, handle, events[idx], isDraft)
         if ok {
             streamingRowDirty = false
             persistedEventCount = max(persistedEventCount, idx + 1)
@@ -3679,7 +3679,7 @@ public final class AgentLauncher {
             DebugLog.agent("finish: ignored (already torn down) status=\(status)")
             return
         }
-        DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID ?? "nil")")
+        DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID?.rawValue ?? "nil")")
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasWarned = false
@@ -3807,7 +3807,7 @@ public final class AgentLauncher {
     /// touch `isRunning` — process lifetime is managed explicitly. Called right
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
-        DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID ?? "nil"))")
+        DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID?.rawValue ?? "nil"))")
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasWarned = false

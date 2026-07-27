@@ -75,6 +75,7 @@ public enum AgentOperationRunner {
         if let chat {
             store.retargetActiveTabToChat(chatID: chat.id)
         }
+        let persistedChatID: ChatID? = chat?.id
 
         // Start the interactive session. The agent-run lifecycle is ref-counted
         // (agentRunStarted/agentRunEnded) for sidebar reload on last-run-end;
@@ -87,7 +88,7 @@ public enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: wikictlDirectory,
-            chatID: chat?.id.rawValue,
+            chatID: persistedChatID,
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
@@ -447,6 +448,7 @@ public enum AgentOperationRunner {
         // flips ChatDetailView to live for this tab (seq continues, title
         // preserved, updatedAt bumps on the first persisted append). The sink is
         // keyed by chatID and appends to the same row.
+        let continuedChatID: ChatID = chatID
         DebugLog.agent("continueChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chatID.rawValue)")
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
@@ -456,7 +458,7 @@ public enum AgentOperationRunner {
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
             wikictlDirectory: wikictlDirectory,
-            chatID: chatID.rawValue,
+            chatID: continuedChatID,
         historySeed: history.map { $0.event },
             priorAcpSessionId: priorAcpSessionId,
             onAcpSessionId: { [weak store] sessionId in

@@ -113,6 +113,13 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
+    #if os(macOS)
+    @Test func launcherPositiveFixturesCompile() throws {
+        let result = try runTypecheck("positive-launcher-macos.swift")
+        #expect(result.status == 0, "launcher positive fixture failed to typecheck:\n\(result.output)")
+    }
+    #endif
+
     @Test func pageIDIsRejectedByChatAPI() throws {
         let result = try runTypecheck("page-id-to-chat-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatID API boundary.")
@@ -121,6 +128,26 @@ struct IdentifierBoundaryTypecheckTests {
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }
+
+    #if os(macOS)
+    @Test func pageIDIsRejectedByLauncherChatAPI() throws {
+        let result = try runTypecheck("page-id-to-launcher-chat-api.swift")
+        #expect(result.status != 0, "PageID unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func stringIsRejectedByLauncherChatAPI() throws {
+        let result = try runTypecheck("string-to-launcher-chat-api.swift")
+        #expect(result.status != 0, "String unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+    #endif
 
     @Test func pageIDIsRejectedBySourceAPI() throws {
         let result = try runTypecheck("page-id-to-source-api.swift")

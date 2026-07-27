@@ -37,20 +37,20 @@ struct AgentToolsD4Tests {
     @Test func liveIndicator_trueWhenActiveChatIDMatchesAndGenerating() {
         let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         #expect(AgentToolsView.isLiveRow(
-            activeChatID: id.rawValue, isGenerating: true, chatID: id))
+            activeChatID: id, isGenerating: true, chatID: id))
     }
 
     @Test func liveIndicator_falseWhenNotGenerating_evenIfChatMatches() {
         // An open-but-idle session: process alive, between turns. No badge.
         let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
         #expect(!AgentToolsView.isLiveRow(
-            activeChatID: id.rawValue, isGenerating: false, chatID: id))
+            activeChatID: id, isGenerating: false, chatID: id))
     }
 
     @Test func liveIndicator_falseWhenChatIDDiffers_evenIfGenerating() {
         // The other chat is generating, not this one.
         let id = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
-        let other = "01J" + String(repeating: "B", count: 22)
+        let other = ChatID(rawValue: "01J" + String(repeating: "B", count: 22))
         #expect(!AgentToolsView.isLiveRow(
             activeChatID: other, isGenerating: true, chatID: id))
     }
