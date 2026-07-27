@@ -61,8 +61,9 @@ deduplicate active work rather than retain completed services indefinitely.
 Current contract:
 
 - `resolvePageLeg`, `resolveSourceLeg`, and `resolveChatLeg` are `async`.
-- Overlapping searches for the same `(wikiID, containerDirectory)` share one
-  in-flight task.
+- Overlapping searches share one in-flight task only when the full request key
+  `(wikiID, standardized container path, query, kind, limit)` matches; requests
+  differing in any component run independently.
 - Completed searches release their `TantivySearchService`, so temp test
   indexes are not pinned for the rest of the process.
 - Rank order and nil semantics are preserved.
@@ -149,6 +150,26 @@ The reconstructed stack needed three extra fixes during Phase 5 verification:
 
 These were not new design work; they were integration fallout exposed by the
 same "run the entire suite twice" acceptance gate.
+
+### LOW audit: `AutocompleteHostedTestGate`
+
+The gate was reviewed as a test-harness concern, not a production lock. Both
+hosted suites are `@MainActor` and `.serialized` internally, but Swift Testing
+may still run the two suites concurrently. Each suite creates an AppKit
+`NSWindow` containing a live `NSTextView` hierarchy and retains the most recent
+window in a suite static until deferred teardown runs. There is no `WKWebView`
+in either suite. The gate covers the complete create/use/teardown lifecycle
+because the observed full-matrix failure was an idle AppKit-hosted helper after
+the window lifetime became unstable; gating only construction or only teardown
+would leave the hosted interaction overlappable.
+
+This is a technically defensible rebuttal to narrowing the gate: the shared
+state is test-only AppKit object lifetime, not production autocomplete or
+Tantivy contention, and the gate is already an explicit lifecycle harness
+(`acquire`/lease/deferred release), not an implicit global in production code.
+Removing it would require replacing suite-static retained-window ownership with
+per-test lifecycle isolation and adding a deliberately concurrent hosted
+regression. That is outside this bounded audit. No test code was changed.
 
 ## Pattern Audit
 

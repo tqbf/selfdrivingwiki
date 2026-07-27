@@ -1,5 +1,23 @@
 # Progress log
 
+## 2026-07-27 — LOW audit: AutocompleteHostedTestGate
+
+Audited `Tests/WikiFSAppTests/AutocompleteHostedTestGate.swift` and its two
+users, `EditorAutocompleteHostedTests.swift` and
+`ComposerAutocompleteHostedTests.swift`. No `WKWebView` is used. Both suites
+are `@MainActor` and `.serialized` internally, while Swift Testing can still
+overlap the suites; each creates a live AppKit `NSWindow`/`NSTextView` hierarchy
+and retains a suite-static window through deferred teardown. The gate therefore
+protects a test-only hosted AppKit lifecycle, not production autocomplete
+contention. Based on the prior full-matrix idle-helper failure, narrowing it to
+construction or teardown alone is not technically safe: the entire hosted
+interaction must remain within the lease.
+
+Conclusion: retain the explicit lifecycle gate as a technically defensible
+rebuttal to the LOW concern. A narrower design would first need per-test window
+ownership plus a targeted concurrent hosted regression; that is a separate
+harness redesign, not a safe bounded edit. No test code was changed.
+
 ## fix: cooperative-pool starvation (#925) integrated, documented, and re-verified on `fix/cooperative-pool-starvation`
 
 **What was integrated.** The branch reconstruction kept the approved three-phase
@@ -22,7 +40,9 @@ integration fallout that needed source fixes on this branch:
   test container for the life of the process, leaving many Tantivy watchers and
   `.tantivy-writer.lock` / sqlite handles open. The second bare full-suite run
   then stalled late. The final fix keeps only **in-flight** search coalescing:
-  overlapping calls share one task, but completed searches release the service.
+  overlapping calls share one task only when the full `(wikiID, standardized
+  container path, query, kind, limit)` key matches; requests differing in any
+  component run independently, and completed searches release the service.
 - `QueueEngine` needed `deinit` cleanup for `runningTasks` and pending
   `waitForCompletion` continuations, otherwise late-suite teardown could leave
   a waiter parked after the engine died.

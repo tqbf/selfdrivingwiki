@@ -34,21 +34,24 @@ import WikiFSCore
 /// build via `TantivyShadowSync.start()`), the Tantivy leg is populated.
 public enum CLITantivyLegResolver {
     private enum SearchRetryPolicy {
-        static let maximumAttempts = 5
+        static let maximumAttempts = 20
     }
 
-    private struct ServiceKey: Hashable, Sendable {
+    struct SearchRequestKey: Hashable, Sendable {
         let wikiID: WikiID
         let containerPath: String
+        let query: String
+        let kind: TantivyDocumentKind
+        let limit: Int
+    }
+
+    private struct InFlightSearch: Sendable {
+        let token: UUID
+        let task: Task<[TantivyShadowSearchResult], Never>
     }
 
     private actor SearchServicePool {
-        private struct InFlightSearch {
-            let token: UUID
-            let task: Task<[TantivyShadowSearchResult], Never>
-        }
-
-        private var inFlightSearches: [ServiceKey: InFlightSearch] = [:]
+        private var inFlightSearches: [SearchRequestKey: InFlightSearch] = [:]
 
         func search(
             wikiID: WikiID,
@@ -58,9 +61,15 @@ public enum CLITantivyLegResolver {
             kind: TantivyDocumentKind,
             limit: Int
         ) async -> [TantivyShadowSearchResult] {
-            let key = ServiceKey(
+            let key = SearchRequestKey(
                 wikiID: wikiID,
-                containerPath: containerDirectory.standardizedFileURL.path)
+                containerPath: containerDirectory.standardizedFileURL.path,
+                query: query,
+                kind: kind,
+                limit: limit)
+
+            await runTestSearchHook(key)
+
             if let existing = inFlightSearches[key] {
                 return await existing.task.value
             }
@@ -74,6 +83,7 @@ public enum CLITantivyLegResolver {
                 else {
                     return []
                 }
+
                 return await CLITantivyLegResolver.runSearch(
                     svc: service,
                     query: query,
@@ -82,15 +92,51 @@ public enum CLITantivyLegResolver {
             }
             inFlightSearches[key] = InFlightSearch(token: token, task: task)
 
-            let hits = await task.value
+            let results = await task.value
             if inFlightSearches[key]?.token == token {
-                inFlightSearches[key] = nil
+                inFlightSearches.removeValue(forKey: key)
             }
-            return hits
+            return results
         }
     }
 
     private static let searchServicePool = SearchServicePool()
+
+    #if DEBUG
+    private actor TestSearchHookBox {
+        private var hook: (@Sendable (SearchRequestKey) async -> Void)?
+
+        func install(_ hook: @escaping @Sendable (SearchRequestKey) async -> Void) {
+            self.hook = hook
+        }
+
+        func reset() {
+            hook = nil
+        }
+
+        func run(_ key: SearchRequestKey) async {
+            await hook?(key)
+        }
+    }
+
+    private static let testSearchHookBox = TestSearchHookBox()
+
+    static func installTestSearchHook(
+        _ hook: @escaping @Sendable (SearchRequestKey) async -> Void
+    ) async {
+        await testSearchHookBox.install(hook)
+    }
+
+    static func resetTestSearchHook() async {
+        await testSearchHookBox.reset()
+    }
+
+    private static func runTestSearchHook(_ key: SearchRequestKey) async {
+        await testSearchHookBox.run(key)
+    }
+    #else
+    private static func runTestSearchHook(_ key: SearchRequestKey) async {}
+    #endif
 
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
     /// when the index is unavailable/empty — post-#634 that means no BM25
