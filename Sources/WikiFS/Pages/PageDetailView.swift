@@ -24,7 +24,6 @@ struct PageDetailView: View {
     @State private var lastKnownActiveTabID: UUID? = nil
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("isOutlineExpanded") private var isOutlineExpanded = false
     @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
     @AppStorage("pageOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
@@ -39,6 +38,7 @@ struct PageDetailView: View {
     // via environment) so the address bar's "Find on Page…" menu item can drive
     // the same find bar that Cmd+F toggles here (issue #157).
     @Environment(FindModel.self) private var findModel
+    @Environment(WindowRightInspectorController.self) private var rightInspector
     @State private var findVersion = 0
 
     /// The app-wide queue activity tracker — used to reflect an in-flight lint
@@ -107,6 +107,7 @@ struct PageDetailView: View {
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
             lastKnownActiveTabID = store.activeTabID
+            updateRightSidebarRegistration()
             // Seed edit mode from the active tab on first mount. `.onChange(of:
             // store.activeTabID)` below only fires on *subsequent* tab switches,
             // so without this a freshly-created "start in editor" tab would
@@ -127,6 +128,7 @@ struct PageDetailView: View {
             if store.activeTabID == lastKnownActiveTabID {
                 isEditing = false
             }
+            updateRightSidebarRegistration()
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
@@ -157,14 +159,25 @@ struct PageDetailView: View {
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
         }
+        .onChange(of: store.draftBody) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: provenanceOrigin) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: provenanceHistory) { _, _ in
+            updateRightSidebarRegistration()
+        }
         .task(id: currentPageID) {
             guard let pageID = currentPageID else {
                 provenanceOrigin = nil
                 provenanceHistory = []
+                rightInspector.updateRegistration(nil)
                 return
             }
             provenanceOrigin = store.pageOrigin(for: pageID)
             provenanceHistory = store.pageEditHistory(for: pageID)
+            updateRightSidebarRegistration()
         }
         .alert(
             "Title Already Exists",
@@ -212,13 +225,6 @@ struct PageDetailView: View {
                 // expands/collapses — keeps "Show in List" and friends
                 // in a fixed position).
                 Spacer()
-                Button {
-                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped (editing)")
-                    isOutlineExpanded.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("Toggle Inspector")
             } else {
                 Button("Edit",
                        systemImage: "pencil") {
@@ -268,13 +274,6 @@ struct PageDetailView: View {
                 // toggle at the trailing edge (see the matching comment
                 // in the editing branch above).
                 Spacer()
-                Button {
-                    DebugLog.tabs("PageDetailView: Toggle Inspector tapped")
-                    isOutlineExpanded.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("Toggle Inspector")
             }
             }
             .frame(maxWidth: .infinity)
@@ -335,37 +334,43 @@ struct PageDetailView: View {
     /// subtree independently.
     @ViewBuilder
     private var contentAndOutline: some View {
-        HStack(spacing: 0) {
-            Group {
-                if isEditing {
-                    editorContent
-                } else {
-                    readerContent
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            if isOutlineExpanded {
-                DetailInspectorView(
-                    inspectorTab: $inspectorTab,
-                    outlineWidth: $outlineWidth,
-                    origin: provenanceOrigin?.provenanceEntry,
-                    history: provenanceHistory.map(\.provenanceEntry),
-                    store: store,
-                    onCompareVersions: openVersionsWindow) {
-                    PageOutlineView(markdown: store.draftBody,
-                                    caretCharIndex: caretCharIndex) { heading in
-                        if isEditing {
-                            editorScrollRequest = EditorScrollRequest(
-                                charOffset: heading.charOffset,
-                                version: (editorScrollRequest?.version ?? 0) + 1)
-                        } else {
-                            store.jumpToAnchorInCurrentSelection(heading.id)
-                        }
-                    }
-                }
+        Group {
+            if isEditing {
+                editorContent
+            } else {
+                readerContent
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func updateRightSidebarRegistration() {
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                showsOutlineTab: true,
+                showsHistoryTab: true,
+                origin: provenanceOrigin?.provenanceEntry,
+                history: provenanceHistory.map(\.provenanceEntry),
+                store: store,
+                onCompareVersions: openVersionsWindow,
+                outline: {
+                    AnyView(
+                        PageOutlineView(markdown: store.draftBody,
+                                        caretCharIndex: caretCharIndex) { heading in
+                            if isEditing {
+                                editorScrollRequest = EditorScrollRequest(
+                                    charOffset: heading.charOffset,
+                                    version: (editorScrollRequest?.version ?? 0) + 1)
+                            } else {
+                                store.jumpToAnchorInCurrentSelection(heading.id)
+                            }
+                        }
+                    )
+                }
+            )
+        )
     }
 
     private var editorContent: some View {
@@ -714,4 +719,3 @@ struct PageOutlineView: View {
         return result
     }
 }
-

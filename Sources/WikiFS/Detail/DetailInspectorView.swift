@@ -31,6 +31,8 @@ enum InspectorTab: String, CaseIterable {
 struct DetailInspectorView<Outline: View>: View {
     @Binding var inspectorTab: InspectorTab
     @Binding var outlineWidth: Double
+    var showsOutlineTab = true
+    var showsHistoryTab = true
     let origin: ProvenanceEntry?
     let history: [ProvenanceEntry]
     var store: WikiStoreModel?
@@ -56,6 +58,19 @@ struct DetailInspectorView<Outline: View>: View {
     /// Clamp a proposed inspector width to the allowed range.
     private func clampedWidth(_ width: Double) -> Double {
         max(180, min(500, width))
+    }
+
+    private var effectiveInspectorTab: InspectorTab {
+        switch (showsOutlineTab, showsHistoryTab, inspectorTab) {
+        case (true, true, _):
+            return inspectorTab
+        case (true, false, _):
+            return .outline
+        case (false, true, _):
+            return .history
+        case (false, false, _):
+            return .outline
+        }
     }
 
     var body: some View {
@@ -95,19 +110,21 @@ struct DetailInspectorView<Outline: View>: View {
                 .zIndex(1)
 
             VStack(alignment: .leading, spacing: 0) {
-                Picker("Inspector", selection: $inspectorTab) {
-                    Label("Outline", systemImage: "list.bullet.indent")
-                        .tag(InspectorTab.outline)
-                    Label("History", systemImage: "clock.arrow.circlepath")
-                        .tag(InspectorTab.history)
+                if showsOutlineTab && showsHistoryTab {
+                    Picker("Inspector", selection: $inspectorTab) {
+                        Label("Outline", systemImage: "list.bullet.indent")
+                            .tag(InspectorTab.outline)
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                            .tag(InspectorTab.history)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(8)
+
+                    Divider()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(8)
 
-                Divider()
-
-                switch inspectorTab {
+                switch effectiveInspectorTab {
                 case .outline:
                     outline()
                 case .history:
