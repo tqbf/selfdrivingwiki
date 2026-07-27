@@ -17,6 +17,12 @@ struct QueueStoreTests {
 
     // MARK: - Test helpers
 
+    /// Canonical JSON string for structural comparison across Foundation runtimes.
+    private func normalizedJSONString(from object: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try #require(String(data: data, encoding: .utf8))
+    }
+
     /// A fresh on-disk `queue.sqlite` URL in a unique temp directory.
     private func tempDatabaseURL() -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -70,7 +76,7 @@ struct QueueStoreTests {
 
         let legacyObject = try JSONSerialization.jsonObject(with: legacyPayload)
         let reencodedObject = try JSONSerialization.jsonObject(with: reencoded)
-        #expect((legacyObject as AnyObject).isEqual(reencodedObject))
+        #expect(try normalizedJSONString(from: legacyObject) == normalizedJSONString(from: reencodedObject))
     }
 
     // MARK: - AC.1: Durability — persistence across reopen
