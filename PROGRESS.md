@@ -1,5 +1,101 @@
 # Progress log
 
+## fix: cooperative-pool starvation (#925) integrated, documented, and re-verified on `fix/cooperative-pool-starvation`
+
+**What was integrated.** The branch reconstruction kept the approved three-phase
+stack in order on top of the pre-integration feature-branch base:
+
+- `779f4d9` — Phase 1 async subprocess migration
+- `77bddaa` — Phase 2 async CLI Tantivy conversion
+- `b3862a1` — Phase 3 non-blocking context-menu similar-page search
+
+The safety ref created during the earlier history repair was left untouched:
+`backup/fix-cooperative-pool-starvation-pre-rebuild-20260726-150103`.
+
+**What verification found beyond the reconstructed commits.** The approved task
+was not done at "history is correct"; Phase 4/5 verification exposed real
+integration fallout that needed source fixes on this branch:
+
+- `CLITantivyLegResolver` originally gained a process-global service cache so
+  concurrent searches would not reopen the same index repeatedly. Under the full
+  `swift test` host, that cache retained one `TantivySearchService` per temp
+  test container for the life of the process, leaving many Tantivy watchers and
+  `.tantivy-writer.lock` / sqlite handles open. The second bare full-suite run
+  then stalled late. The final fix keeps only **in-flight** search coalescing:
+  overlapping calls share one task, but completed searches release the service.
+- `QueueEngine` needed `deinit` cleanup for `runningTasks` and pending
+  `waitForCompletion` continuations, otherwise late-suite teardown could leave
+  a waiter parked after the engine died.
+- `AgentLauncher` needed to clear `currentRunToken` whenever a run finished or
+  reset artifacts; otherwise a stale `onExit` disarm state broke
+  `RunAwaitsTurnTests.secondRunProceedsWithoutDeadlock`.
+- The hosted autocomplete tests needed explicit `NSWindow` retention during
+  full-suite execution; filtered runs passed, but late-suite bare runs could
+  freeze when the hosting window lifetime ended too early. The final full-suite
+  wrapper fix also added `AutocompleteHostedTestGate` so the editor/composer
+  hosted suites do not overlap each other under Swift Testing's suite-level
+  parallelism.
+- `SplitDiffSnapshotTests` was moved from `/tmp` to repo-local
+  `tmp/test-snapshots/`, avoiding environment friction and keeping scratch
+  artifacts inside the project as required by AGENTS.md.
+- Several stale inline comments were updated to match the post-#634 / post-#925
+  reality, including `WKWebViewJSTimeout`.
+- Several suite-wide five-minute `Swift Testing` time limits were removed after
+  they proved to be false queue-time failures under the larger full suite rather
+  than genuine per-test hangs.
+
+**Focused verification before the final bare reruns.**
+
+- `swift build --build-tests` — passed.
+- `swift test --filter AsyncProcessRunnerTests` — 10 tests passed.
+- `swift test --filter PathPreflightTests` — no matching tests.
+- `swift test --filter ACPProviderDiscoveryTests` — 7 tests passed.
+- `swift test --filter ACPProviderModelProbeTests` — 25 tests in 2 suites passed.
+- `swift test --filter FileProviderSetupVerifierTests` — 3 tests passed.
+- `swift test --filter CLITantivyLegResolverTests` — 7 tests passed.
+- `swift test --filter WikiLinkMenuNSItemsTests` — 7 tests passed.
+- `swift test --filter YouTubeTranscriptSubprocessTests` — 14 tests passed.
+- `swift test --filter RunAwaitsTurnTests` — 3 tests passed.
+- `swift test --filter 'QueueEngineTests|QueueExtractionTests|QueueTranscriptionTests'`
+  — 54 tests in 4 suites passed.
+
+Additional debugging/late-suite validation that informed the final fixes:
+
+- `swift test --filter SplitDiffSnapshotTests`
+- `swift test --filter EditorAutocompleteHostedTests`
+- `swift test --filter 'EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests'`
+- a 14-suite late-region subset covering the synchronized timeout zone
+
+**Bare full-suite investigation record.**
+
+- `tmp/test-logs/swift-test-run1-20260726-1538.log` — stalled first at
+  `SplitDiffSnapshotTests` while the test still wrote scratch output under
+  `/tmp`.
+- `tmp/test-logs/swift-test-run1-fixed-20260726-1548.log` — surfaced broad
+  300-second suite time-limit failures, which turned out to be queue-time false
+  positives from suite-level `.timeLimit(.minutes(5))` annotations.
+- `tmp/test-logs/swift-test-run2-final-20260726-1613.log`,
+  `tmp/test-logs/swift-test-run2b-final-20260726-1629.log`, and
+  `tmp/test-logs/swift-test-run2c-final-20260726-1641.log` — late-suite stalls
+  used to isolate the hosted-window lifetime issue and then the retained CLI
+  Tantivy service lifetime issue. A live sample of the final stalled helper was
+  captured at `tmp/test-logs/swift-test-run2c-sample.txt`.
+
+**Final post-fix acceptance.**
+
+- `swift-test-run1-accept5-20260727-1727.log` — `3956 tests in 332 suites passed after 18.463 seconds`; `/usr/bin/time -p`: `real 23.10`, `user 22.97`, `sys 9.77`.
+- `swift-test-run2-accept5-20260727-1728.log` — `3956 tests in 332 suites passed after 17.819 seconds`; `/usr/bin/time -p`: `real 19.04`, `user 20.18`, `sys 9.06`.
+- `make test` — after capturing and killing two stalled wrapper-owned helper trees, the final rerun (`tmp/test-logs/make-test-rerun2-20260727.log`) passed: `3956 tests in 332 suites passed after 20.765 seconds`, wrapper epilogue `✓ tests pass`.
+- explicit doc guards passed: `PLAN.md` links the issue plan, `PROGRESS.md` contains this branch entry, and `plans/issue-925-cooperative-pool-starvation.md` exists.
+- `git diff --check` still reports unrelated pre-existing trailing whitespace in `AGENTS.md:19`.
+
+**Documentation.** Added
+[`plans/issue-925-cooperative-pool-starvation.md`](plans/issue-925-cooperative-pool-starvation.md)
+and indexed it from `PLAN.md`. The deep doc records the starvation mechanics,
+the four fixed sites, the shared async-process contract, the lazy AppKit
+submenu lifecycle, the retained-service follow-up fix, the verification
+evidence, and the deferred standalone `wikictl` / `wikid` entry-point audit.
+
 ## fix: menu-bar wiki selection opens the typed wiki scene
 
 **Bug.** The status menu stored `WikiID` in each wiki item’s

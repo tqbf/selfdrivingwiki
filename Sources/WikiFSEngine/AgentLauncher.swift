@@ -3747,6 +3747,9 @@ public final class AgentLauncher {
         runningKind = nil
         sessionHandle = nil
         plannerSessionHandle = nil
+        // Disarm stale onExit callbacks from the just-finished session before a
+        // later run can reuse this launcher.
+        currentRunToken = nil
         currentProcessID = nil
         ingestingSourceIDs = []
         // Cancel any in-flight send task (gate wait or stream consumer). Clear the
@@ -3829,6 +3832,7 @@ public final class AgentLauncher {
         currentProcessID = nil
         sessionHandle = nil
         plannerSessionHandle = nil
+        currentRunToken = nil
         runTotalUsage = nil
         // Interactive usage: clear the per-session baseline so each
         // interactive run starts fresh (the first turn's delta == full usage).

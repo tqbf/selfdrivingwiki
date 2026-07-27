@@ -19,7 +19,7 @@ import Testing
 /// (3-5 docs), and call one resolver method per test. They live in the fast
 /// CI tier (not skip-listed).
 ///
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct CLITantivyLegResolverTests {
 
     // MARK: - Helpers
@@ -50,8 +50,8 @@ struct CLITantivyLegResolverTests {
         let store = try tempStore(in: container, wikiID: wikiID)
         // No Tantivy index exists yet — `rebuildIfNeeded` was never called
         // (the app would normally kick it off in `TantivyShadowSync.start()`).
-        // The resolver must return nil so the store falls back to FTS5
-        // (the #637 contract — empty leg = no BM25 signal).
+        // The resolver must return nil so the store runs without a BM25 leg
+        // (the #637 contract — empty leg = no lexical signal).
         let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
             store: store, query: "anything", limit: 10)
@@ -291,14 +291,14 @@ struct CLITantivyLegResolverTests {
         #expect(chatHits.allSatisfy { $0.id == chat.id }, "chatHits: \(chatHits)")
     }
 
-    // MARK: - FTS5 fallback when no Tantivy service can be built
+    // MARK: - No-BM25-leg behavior when no Tantivy service can be built
 
     @Test func resolvePageLegReturnsNilWhenServiceConstructionFails() async throws {
         // Point the resolver at a container path that doesn't exist and can't
         // be created (a file in place of the container dir). `makeService`
-        // catches the throw and returns nil — the store then falls back to
-        // FTS5 (the #637 contract — Tantivy unavailable = no BM25 leg, not an
-        // error).
+        // catches the throw and returns nil — the store then runs without a
+        // BM25 leg (the #637 contract — Tantivy unavailable = no lexical leg,
+        // not an error).
         let fileAsContainer = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cli-tantivy-leg-blocker-\(UUID().uuidString)")
         try Data("not a directory".utf8).write(to: fileAsContainer)

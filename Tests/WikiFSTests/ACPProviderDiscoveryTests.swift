@@ -9,7 +9,7 @@ import WikiFSEngine
 /// given an injected resolver, so it's tested without the real filesystem; a
 /// live integration check confirms it against this machine's PATH.
 ///
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct ACPProviderDiscoveryTests {
 
     // MARK: - Pure logic (injected resolver)

@@ -37,6 +37,61 @@ public enum CLITantivyLegResolver {
         static let maximumAttempts = 5
     }
 
+    private struct ServiceKey: Hashable, Sendable {
+        let wikiID: WikiID
+        let containerPath: String
+    }
+
+    private actor SearchServicePool {
+        private struct InFlightSearch {
+            let token: UUID
+            let task: Task<[TantivyShadowSearchResult], Never>
+        }
+
+        private var inFlightSearches: [ServiceKey: InFlightSearch] = [:]
+
+        func search(
+            wikiID: WikiID,
+            containerDirectory: URL,
+            store: WikiStore,
+            query: String,
+            kind: TantivyDocumentKind,
+            limit: Int
+        ) async -> [TantivyShadowSearchResult] {
+            let key = ServiceKey(
+                wikiID: wikiID,
+                containerPath: containerDirectory.standardizedFileURL.path)
+            if let existing = inFlightSearches[key] {
+                return await existing.task.value
+            }
+
+            let token = UUID()
+            let task: Task<[TantivyShadowSearchResult], Never> = Task {
+                guard let service = CLITantivyLegResolver.makeService(
+                    wikiID: wikiID,
+                    containerDirectory: containerDirectory,
+                    store: store)
+                else {
+                    return []
+                }
+                return await CLITantivyLegResolver.runSearch(
+                    svc: service,
+                    query: query,
+                    kind: kind,
+                    limit: limit)
+            }
+            inFlightSearches[key] = InFlightSearch(token: token, task: task)
+
+            let hits = await task.value
+            if inFlightSearches[key]?.token == token {
+                inFlightSearches[key] = nil
+            }
+            return hits
+        }
+    }
+
+    private static let searchServicePool = SearchServicePool()
+
     /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
     /// when the index is unavailable/empty — post-#634 that means no BM25
     /// leg (FTS5 was dropped in #634; the cosine leg still answers when
@@ -48,10 +103,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [WikiPageSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .page, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .page,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [WikiPageSummary]
         do {
@@ -72,10 +130,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [SourceSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .source, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .source,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [SourceSummary]
         do {
@@ -96,10 +157,13 @@ public enum CLITantivyLegResolver {
         query: String,
         limit: Int
     ) async -> [ChatSummary]? {
-        guard let svc = makeService(wikiID: wikiID, containerDirectory: containerDirectory, store: store) else {
-            return nil
-        }
-        let hits = await runSearch(svc: svc, query: query, kind: .chat, limit: limit)
+        let hits = await searchServicePool.search(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory,
+            store: store,
+            query: query,
+            kind: .chat,
+            limit: limit)
         guard !hits.isEmpty else { return nil }
         let catalog: [ChatSummary]
         do {

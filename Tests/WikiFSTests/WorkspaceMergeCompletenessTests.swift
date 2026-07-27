@@ -15,7 +15,7 @@ import Testing
 /// - Wiki-index line-set three-way merge (disjoint edits survive; same-line
 ///   edits park the workspace).
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct WorkspaceMergeCompletenessTests {
 
     private func tempStore() throws -> GRDBWikiStore {

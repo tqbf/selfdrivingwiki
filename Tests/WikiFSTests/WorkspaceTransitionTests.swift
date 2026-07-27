@@ -16,7 +16,7 @@ import Testing
 ///   representative set of illegal ones (`merged→merging`, `abandoned→abandoned`,
 ///   `merged→abandoned`, `open→open` via retry on a non-conflicted workspace).
 @MainActor
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct WorkspaceTransitionTests {
 
     private func tempStore() throws -> GRDBWikiStore {

@@ -109,8 +109,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil) }
 
         let pasted = Array(repeating: "Line of pasted markdown text.", count: 150).joined(separator: "\n")
         textView.string = pasted
@@ -131,8 +132,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil) }
 
         textView.string = "edited by the user"
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
@@ -146,8 +148,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, coordinator) = makeHostedComposer(
+        let (window, textView, coordinator) = makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil) }
         textView.postsFrameChangedNotifications = true
         coordinator.observeFrameChanges(for: textView)
 
@@ -176,8 +179,9 @@ import Testing
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (_, textView, _) = makeHostedComposer(
+        let (window, textView, _) = makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
+        defer { window.orderOut(nil) }
         #expect(textView.isEditable == true)
         #expect(textView.isSelectable == true)
 

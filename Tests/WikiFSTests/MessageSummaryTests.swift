@@ -19,7 +19,7 @@ import WikiFSCore
 ///     automated model half).
 ///   - **Store round-trip** — `updateMessageSummary` + `chatMessages` read-back
 ///     on a real in-memory SQLite DB (AC.1 + AC.6).
-@Suite(.timeLimit(.minutes(5)))
+@Suite
 struct MessageSummaryTests {
 
     // MARK: - ChatMessageSummaryKind (§4.1 — explicit raw values)

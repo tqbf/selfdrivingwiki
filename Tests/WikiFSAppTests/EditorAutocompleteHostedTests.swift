@@ -32,6 +32,14 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorAutocompleteHostedTests {
+    private static var retainedWindow: NSWindow?
+
+    private static func releaseWindow(_ window: NSWindow) {
+        window.orderOut(nil)
+        if retainedWindow === window {
+            retainedWindow = nil
+        }
+    }
 
     // MARK: - Hosted editor builder
 
@@ -159,6 +167,8 @@ struct EditorAutocompleteHostedTests {
 
         let window = makeWindow()
         window.contentView?.addSubview(scrollView)
+        Self.retainedWindow?.orderOut(nil)
+        Self.retainedWindow = window
 
         return (window, textView, coordinator)
     }
@@ -173,6 +183,8 @@ struct EditorAutocompleteHostedTests {
     // MARK: - Trigger fires (mirror of chat suite's openTriggerFiresFetchAndAppliesResults)
 
     @Test func openTriggerFiresFetchAndAppliesResults() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -189,8 +201,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 1)
@@ -207,6 +220,8 @@ struct EditorAutocompleteHostedTests {
     // MARK: - AC #5: debounce cancels stale in-flight partials (typos / fast typing)
 
     @Test func debouncedQueryCancelsStaleInFlightPartial() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -221,8 +236,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Er", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 1)
@@ -243,6 +259,8 @@ struct EditorAutocompleteHostedTests {
     // MARK: - No trigger → no fetch
 
     @Test func noOpenTriggerDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -253,8 +271,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("Just a markdown paragraph.", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 0, "no schedule should be created without an open-link trigger")
@@ -266,6 +285,8 @@ struct EditorAutocompleteHostedTests {
     }
 
     @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -276,8 +297,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erickson]]", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 0, "no schedule should be created for a closed link")
@@ -291,6 +313,8 @@ struct EditorAutocompleteHostedTests {
     // MARK: - Reviewer correction #4: newline/paste guards (chat suite has these too)
 
     @Test func newlineInTriggerDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -301,8 +325,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl\nmore stuff", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 0, "newline in the trigger should bail (paste/multi-line guard)")
@@ -314,6 +339,8 @@ struct EditorAutocompleteHostedTests {
     }
 
     @Test func overlongPartialDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -324,8 +351,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         let long = String(repeating: "a", count: WikiLinkPrefixScanner.maxPartialSpan + 1)
         type("[[page:\(long)", into: textView, coordinator: coordinator)
@@ -342,7 +370,9 @@ struct EditorAutocompleteHostedTests {
     /// Plain Return while the dropdown is open: consume (the controller will
     /// commit the selected row). Shift/Option/Cmd+Return: fall through.
     /// Dropdown closed: never consume (let the editor insert a newline).
-    @Test func shouldConsumeReturnFalseWhenDropdownClosed() {
+    @Test func shouldConsumeReturnFalseWhenDropdownClosed() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // No trigger → no fetch → dropdown stays closed → Return is NOT
         // consumed by autocomplete (editor inserts a newline).
         var text = ""
@@ -355,8 +385,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("plain paragraph — no trigger", into: textView, coordinator: coordinator)
         let consume = coordinator.textView(
@@ -366,6 +397,8 @@ struct EditorAutocompleteHostedTests {
     }
 
     @Test func shouldConsumeReturnTrueWhenDropdownOpenAndPlainReturn() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // Drive the trigger → fetch → render → THEN call doCommandBy: with
         // plain Return. Should consume + commit the top row.
         var text = ""
@@ -382,8 +415,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
         await scheduler.fireAll()  // results applied; dropdown logically "open"
@@ -404,6 +438,8 @@ struct EditorAutocompleteHostedTests {
     }
 
     @Test func shouldConsumeReturnFalseWhenDropdownOpenButShiftOptionCmd() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         // Shift/Option/Cmd+Return while the dropdown is open should fall
         // through (let NSTextView insert a literal newline) — same as the
         // chat composer (ComposerTextView.keyAction). The editor doesn't have
@@ -423,8 +459,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[page:Erl", into: textView, coordinator: coordinator)
         await scheduler.fireAll()
@@ -482,6 +519,8 @@ struct EditorAutocompleteHostedTests {
     /// `WikiLinkPrefixScanner` ↔ hooks plumbing routes by kind correctly
     /// through the editor's coordinator (the chat suite covers only `.page`).
     @Test func sourceKindPrefixRoutesToSourceFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -496,8 +535,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[source:Des", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 1)
@@ -511,6 +551,8 @@ struct EditorAutocompleteHostedTests {
     }
 
     @Test func chatKindPrefixRoutesToChatFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
@@ -525,8 +567,9 @@ struct EditorAutocompleteHostedTests {
             format: Self.formatHit
         )
 
-        let (_, textView, coordinator) = makeHostedEditor(
+        let (window, textView, coordinator) = makeHostedEditor(
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
+        defer { Self.releaseWindow(window) }
 
         type("[[chat:Yes", into: textView, coordinator: coordinator)
         await scheduler.fireAll()
@@ -540,6 +583,8 @@ struct EditorAutocompleteHostedTests {
     // MARK: - No hooks → no fetch (parity with chat composer's "no wiki open" path)
 
     @Test func nilHooksDoesNotFireFetch() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
 
