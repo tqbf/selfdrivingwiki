@@ -1,5 +1,44 @@
 # Progress log
 
+## 2026-07-27 — SourceVersionID separation (#955)
+
+**Scope.** This branch adds a public `SourceVersionID` namespace for
+`source_versions.id` and `source_versions.parent_id`. `SourceID` stays the
+source-entity identifier. `PageID` stays the markdown-version identifier for
+`SourceMarkdownVersion.id` and `parentID`. Raw SQLite text, schema SQL,
+`PRAGMA user_version`, and external raw-string contracts must stay unchanged.
+
+**Documentation checkpoint.**
+- Added [`plans/source-version-id-separation.md`](plans/source-version-id-separation.md)
+  as the design and implementation record.
+- Added the plan to `PLAN.md`.
+- Extended `DocumentationContractTests` so the namespace boundary,
+  no-migration rule, raw-boundary rule, `refs.version_id` polymorphism, and
+  deferred markdown-version namespace cannot silently disappear.
+
+**Documented decisions.**
+- `SourceVersionID` is only for `source_versions.id` and `parent_id`.
+- `SourceOrigin.versionID` and `SourceMarkdownVersion.sourceVersionID` will
+  move to `SourceVersionID`.
+- `SourceMarkdownVersion.id` and `parentID` stay `PageID` in this work.
+- `refs.version_id` stays polymorphic by `RefKind`:
+  `source-content` uses `SourceVersionID`, `source-derived` uses `PageID`, and
+  page-content refs stay in the page-version namespace.
+- `rollbackSourceContent(sourceID:to:)` will move to `SourceVersionID` and add
+  a typed `sourceVersionNotFound` error.
+- Live source-version creation paths to type are ordinary source ingest,
+  byteless ingest, content append, and snapshot/image child creation.
+
+**Verification.**
+- `make keychain` — regenerated the gitignored
+  `Sources/WikiFSCore/GeneratedKeychain.swift` prerequisite for local SwiftPM
+  builds.
+- `make version` — regenerated the gitignored
+  `Sources/WikiFSCore/GeneratedVersion.swift` prerequisite for local SwiftPM
+  builds.
+- `swift test --filter DocumentationContractTests` — 3 tests in 1 suite
+  passed.
+
 ## 2026-07-27 — ChatID namespace separation (#954)
 
 **Scope.** This branch introduces a public `ChatID` namespace for persisted
