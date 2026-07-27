@@ -12,6 +12,12 @@ import Testing
 /// moved from chat-valued `PageID` to `ChatID`.
 struct ChatIDPersistenceTests {
 
+    /// Freeze the literal pre-#957 persisted-chat schema version here rather
+    /// than reading `GRDBWikiStore.schemaVersion`. Migration history records
+    /// v44→v45 as the last chat-schema change before the nominal `ChatID`
+    /// refactor (chat model override columns on `chats`), so this work must
+    /// keep the legacy fixture at user_version 45.
+    private let preChatIDRefactorSchemaVersion = "45"
     private let legacyChatID = "01JCHATLEGACY0000000000000"
     private let legacyMessageID = "01JMSGLEGACY00000000000000"
     private let legacyAcpSessionID = "acp-legacy-session"
@@ -101,9 +107,62 @@ struct ChatIDPersistenceTests {
         }
     }
 
-    private func seedLegacyChatFixture(at databaseURL: URL) throws {
+    private func pragmaValue(_ pragma: String, at databaseURL: URL) throws -> String {
+        try #require(try normalizedRows("PRAGMA \(pragma);", at: databaseURL).first)
+    }
+
+    private func createPreChatIDRefactorFixture(at databaseURL: URL) throws {
         try execute(
             """
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE chats (
+                id                 TEXT PRIMARY KEY,
+                kind               TEXT NOT NULL,
+                title              TEXT NOT NULL,
+                created_at         REAL NOT NULL,
+                updated_at         REAL NOT NULL,
+                summary            TEXT,
+                summary_at         REAL,
+                acp_session_id     TEXT,
+                model_provider_id  TEXT,
+                model_id           TEXT
+            );
+            CREATE INDEX chats_updated ON chats(updated_at);
+
+            CREATE TABLE chat_messages (
+                id           TEXT PRIMARY KEY,
+                chat_id      TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                seq          INTEGER NOT NULL,
+                role         TEXT NOT NULL,
+                event_json   TEXT NOT NULL,
+                text         TEXT NOT NULL DEFAULT '',
+                created_at   REAL NOT NULL,
+                summary      TEXT,
+                summary_kind TEXT,
+                summary_at   REAL,
+                is_draft     INTEGER NOT NULL DEFAULT 0,
+                draft_handle TEXT
+            );
+            CREATE UNIQUE INDEX chat_messages_seq ON chat_messages(chat_id, seq);
+            CREATE UNIQUE INDEX chat_messages_draft_handle
+                ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
+
+            CREATE TABLE chat_chunks (
+                chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                chunk_idx INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (chat_id, chunk_idx)
+            ) WITHOUT ROWID;
+
+            CREATE TABLE chat_search (
+                chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+                title   TEXT NOT NULL,
+                body    TEXT NOT NULL
+            );
+
+            PRAGMA user_version = \(preChatIDRefactorSchemaVersion);
+
             INSERT INTO chats (
                 id, kind, title, created_at, updated_at, summary, summary_at,
                 acp_session_id, model_provider_id, model_id
@@ -134,92 +193,8 @@ struct ChatIDPersistenceTests {
         )
     }
 
-    @Test func legacyChatRowsDecodeWithoutMigration() throws {
-        let databaseURL = try temporaryDatabaseURL()
-        let initialStore = try GRDBWikiStore(databaseURL: databaseURL)
-        let schemaVersionBefore = initialStore.pragmaValue("user_version")
-        initialStore.close()
-
-        try seedLegacyChatFixture(at: databaseURL)
-
-        let reopened = try GRDBWikiStore(databaseURL: databaseURL)
-        let chat = try #require(try reopened.listChats().first { $0.id.rawValue == legacyChatID })
-
-        #expect(chat.id == ChatID(rawValue: legacyChatID))
-        #expect(chat.title == "Legacy Chat")
-        #expect(chat.acpSessionId == AcpSessionID(rawValue: legacyAcpSessionID))
-        #expect(reopened.pragmaValue("user_version") == schemaVersionBefore)
-        #expect(schemaVersionBefore == "\(GRDBWikiStore.schemaVersion)")
-    }
-
-    @Test func legacyChatMessageRowsPreserveTypedRelationship() throws {
-        let databaseURL = try temporaryDatabaseURL()
-        let initialStore = try GRDBWikiStore(databaseURL: databaseURL)
-        initialStore.close()
-        try seedLegacyChatFixture(at: databaseURL)
-
-        let store = try GRDBWikiStore(databaseURL: databaseURL)
-        let messages = try store.chatMessages(chatID: ChatID(rawValue: legacyChatID))
-        #expect(messages.count == 1)
-        let message = try #require(messages.first)
-
-        #expect(message.chatID == ChatID(rawValue: legacyChatID))
-        #expect(message.id == PageID(rawValue: legacyMessageID))
-        #expect(message.event == .userText("legacy hello"))
-
-        #expect(try normalizedRows(
-            "SELECT chat_id || '|' || chunk_idx || '|' || hex(embedding) FROM chat_chunks;",
-            at: databaseURL
-        ) == ["\(legacyChatID)|0|0102"])
-        #expect(try normalizedRows(
-            "SELECT chat_id || '|' || title || '|' || body FROM chat_search;",
-            at: databaseURL
-        ) == ["\(legacyChatID)|Legacy Chat|legacy hello"])
-    }
-
-    @Test func chatWritesPreserveRawIdentifiersAndSchemaVersion() throws {
-        let databaseURL = try temporaryDatabaseURL()
-        let initialStore = try GRDBWikiStore(databaseURL: databaseURL)
-        let schemaVersionBefore = initialStore.pragmaValue("user_version")
-        initialStore.close()
-        try seedLegacyChatFixture(at: databaseURL)
-
-        let store = try GRDBWikiStore(databaseURL: databaseURL)
-        let chatID = ChatID(rawValue: legacyChatID)
-        _ = try store.appendChatMessages(chatID: chatID, events: [.assistantText("follow up")])
-        try store.renameChat(id: chatID, to: "Renamed Legacy Chat")
-        try store.storeChatChunks(id: chatID, chunks: [Data([0xAA, 0xBB, 0xCC]), Data([0xDD])])
-
-        #expect(store.pragmaValue("user_version") == schemaVersionBefore)
-        #expect(try normalizedRows(
-            "SELECT id FROM chats WHERE id = '\(legacyChatID)';",
-            at: databaseURL
-        ) == [legacyChatID])
-        #expect(try normalizedRows(
-            "SELECT chat_id || '|' || seq || '|' || role FROM chat_messages ORDER BY seq;",
-            at: databaseURL
-        ) == [
-            "\(legacyChatID)|0|user",
-            "\(legacyChatID)|1|assistant",
-        ])
-        #expect(try normalizedRows(
-            "SELECT chat_id || '|' || chunk_idx || '|' || hex(embedding) FROM chat_chunks ORDER BY chunk_idx;",
-            at: databaseURL
-        ) == [
-            "\(legacyChatID)|0|AABBCC",
-            "\(legacyChatID)|1|DD",
-        ])
-        #expect(try normalizedRows(
-            "SELECT chat_id || '|' || title FROM chat_search;",
-            at: databaseURL
-        ) == ["\(legacyChatID)|Renamed Legacy Chat"])
-    }
-
-    @Test func chatIdentifierRefactorPreservesSchemaLayout() throws {
-        let databaseURL = try temporaryDatabaseURL()
-        let store = try GRDBWikiStore(databaseURL: databaseURL)
-
-        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
+    private func assertPreChatIDRefactorSchemaLayout(at databaseURL: URL) throws {
+        #expect(try pragmaValue("user_version", at: databaseURL) == preChatIDRefactorSchemaVersion)
         #expect(try normalizedRows("PRAGMA table_info('chats');", at: databaseURL) == [
             "0|id|TEXT|0|NULL|1",
             "1|kind|TEXT|1|NULL|0",
@@ -273,5 +248,88 @@ struct ChatIDPersistenceTests {
             "chat_messages_seq|CREATE UNIQUE INDEX chat_messages_seq ON chat_messages(chat_id, seq)",
             "chats_updated|CREATE INDEX chats_updated ON chats(updated_at)",
         ])
+    }
+
+    @Test func legacyChatRowsDecodeWithoutMigration() throws {
+        let databaseURL = try temporaryDatabaseURL()
+        try createPreChatIDRefactorFixture(at: databaseURL)
+        #expect(try pragmaValue("user_version", at: databaseURL) == preChatIDRefactorSchemaVersion)
+
+        let reopened = try GRDBWikiStore(databaseURL: databaseURL)
+        let chat = try #require(try reopened.listChats().first { $0.id.rawValue == legacyChatID })
+
+        #expect(chat.id == ChatID(rawValue: legacyChatID))
+        #expect(chat.title == "Legacy Chat")
+        #expect(chat.acpSessionId == AcpSessionID(rawValue: legacyAcpSessionID))
+        #expect(reopened.pragmaValue("user_version") == preChatIDRefactorSchemaVersion)
+    }
+
+    @Test func legacyChatMessageRowsPreserveTypedRelationship() throws {
+        let databaseURL = try temporaryDatabaseURL()
+        try createPreChatIDRefactorFixture(at: databaseURL)
+
+        let store = try GRDBWikiStore(databaseURL: databaseURL)
+        let messages = try store.chatMessages(chatID: ChatID(rawValue: legacyChatID))
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
+
+        #expect(message.chatID == ChatID(rawValue: legacyChatID))
+        #expect(message.id == PageID(rawValue: legacyMessageID))
+        #expect(message.event == .userText("legacy hello"))
+
+        #expect(try normalizedRows(
+            "SELECT chat_id || '|' || chunk_idx || '|' || hex(embedding) FROM chat_chunks;",
+            at: databaseURL
+        ) == ["\(legacyChatID)|0|0102"])
+        #expect(try normalizedRows(
+            "SELECT chat_id || '|' || title || '|' || body FROM chat_search;",
+            at: databaseURL
+        ) == ["\(legacyChatID)|Legacy Chat|legacy hello"])
+    }
+
+    @Test func chatWritesPreserveRawIdentifiersAndSchemaVersion() throws {
+        let databaseURL = try temporaryDatabaseURL()
+        try createPreChatIDRefactorFixture(at: databaseURL)
+        #expect(try pragmaValue("user_version", at: databaseURL) == preChatIDRefactorSchemaVersion)
+
+        let store = try GRDBWikiStore(databaseURL: databaseURL)
+        let chatID = ChatID(rawValue: legacyChatID)
+        _ = try store.appendChatMessages(chatID: chatID, events: [.assistantText("follow up")])
+        try store.renameChat(id: chatID, to: "Renamed Legacy Chat")
+        try store.storeChatChunks(id: chatID, chunks: [Data([0xAA, 0xBB, 0xCC]), Data([0xDD])])
+
+        #expect(store.pragmaValue("user_version") == preChatIDRefactorSchemaVersion)
+        #expect(try normalizedRows(
+            "SELECT id FROM chats WHERE id = '\(legacyChatID)';",
+            at: databaseURL
+        ) == [legacyChatID])
+        #expect(try normalizedRows(
+            "SELECT chat_id || '|' || seq || '|' || role FROM chat_messages ORDER BY seq;",
+            at: databaseURL
+        ) == [
+            "\(legacyChatID)|0|user",
+            "\(legacyChatID)|1|assistant",
+        ])
+        #expect(try normalizedRows(
+            "SELECT chat_id || '|' || chunk_idx || '|' || hex(embedding) FROM chat_chunks ORDER BY chunk_idx;",
+            at: databaseURL
+        ) == [
+            "\(legacyChatID)|0|AABBCC",
+            "\(legacyChatID)|1|DD",
+        ])
+        #expect(try normalizedRows(
+            "SELECT chat_id || '|' || title FROM chat_search;",
+            at: databaseURL
+        ) == ["\(legacyChatID)|Renamed Legacy Chat"])
+    }
+
+    @Test func chatIdentifierRefactorPreservesSchemaLayout() throws {
+        let databaseURL = try temporaryDatabaseURL()
+        try createPreChatIDRefactorFixture(at: databaseURL)
+        try assertPreChatIDRefactorSchemaLayout(at: databaseURL)
+
+        let store = try GRDBWikiStore(databaseURL: databaseURL)
+        #expect(store.pragmaValue("user_version") == preChatIDRefactorSchemaVersion)
+        try assertPreChatIDRefactorSchemaLayout(at: databaseURL)
     }
 }

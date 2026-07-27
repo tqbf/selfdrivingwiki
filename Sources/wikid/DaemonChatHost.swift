@@ -144,7 +144,7 @@ final class DaemonChatHost: @unchecked Sendable {
         let launcher = await getOrCreateLauncher(chatID: chat.id, wikiID: wikiID)
 
         // 4. Start the interactive session.
-        let chatIDPage = chat.id
+        let persistedChatID: ChatID = chat.id
         let wikiIDCapture = wikiID
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
@@ -153,13 +153,13 @@ final class DaemonChatHost: @unchecked Sendable {
             wikiRoot: "",
             systemPrompt: systemPromptBody,
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            chatID: chat.id,
+            chatID: persistedChatID,
             firstMessagePrePersisted: true,
             chatOverrideProviderId: providerId,
             chatOverrideModelId: modelId,
             onAcpSessionId: { [weak self] sessionId in
                 self?.handleAcpSessionId(
-                    chatID: chatIDPage, sessionId: sessionId, wikiID: wikiIDCapture)
+                    chatID: persistedChatID, sessionId: sessionId, wikiID: wikiIDCapture)
             },
             onLock: { },
             onUnlock: {
@@ -167,7 +167,7 @@ final class DaemonChatHost: @unchecked Sendable {
             },
             onTranscript: { [weak self] events in
                 self?.handleTranscript(
-                    chatID: chatIDPage, events: events, wikiID: wikiIDCapture)
+                    chatID: persistedChatID, events: events, wikiID: wikiIDCapture)
             },
             onMessageSummary: { [weak self] id in
                 self?.summarizePendingMessages(
@@ -196,7 +196,7 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.preflightFailed(preflightError ?? "unknown")
         }
 
-        return chat.id
+        return persistedChatID
     }
 
     // MARK: - Continue a persisted chat
@@ -258,6 +258,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
         DebugLog.agent("DaemonChatHost.continueChat: history=\(history.count) priorAcpSession=\(priorAcpSessionId?.rawValue ?? "nil")")
 
+        let continuedChatID: ChatID = chatID
         let wikiIDCapture = wikiID
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
@@ -267,14 +268,14 @@ final class DaemonChatHost: @unchecked Sendable {
             wikiRoot: "",
             systemPrompt: systemPromptBody,
             wikictlDirectory: HelpersLocation.wikictlDirectory,
-            chatID: chatID,
+            chatID: continuedChatID,
             historySeed: history.map(\.event),
             priorAcpSessionId: priorAcpSessionId,
             chatOverrideProviderId: chatRow.modelProviderId,
             chatOverrideModelId: chatRow.modelId,
             onAcpSessionId: { [weak self] sessionId in
                 self?.handleAcpSessionId(
-                    chatID: chatIDPage, sessionId: sessionId, wikiID: wikiIDCapture)
+                    chatID: continuedChatID, sessionId: sessionId, wikiID: wikiIDCapture)
             },
             onLock: { },
             onUnlock: {
@@ -282,7 +283,7 @@ final class DaemonChatHost: @unchecked Sendable {
             },
             onTranscript: { [weak self] events in
                 self?.handleTranscript(
-                    chatID: chatIDPage, events: events, wikiID: wikiIDCapture)
+                    chatID: continuedChatID, events: events, wikiID: wikiIDCapture)
             },
             onMessageSummary: { [weak self] id in
                 self?.summarizePendingMessages(
@@ -297,8 +298,8 @@ final class DaemonChatHost: @unchecked Sendable {
         )
 
         // Re-wire the event stream (resetRunArtifacts cleared it).
-        await wireEventStream(chatID: chatID, launcher: launcher)
-        startStatePoll(for: chatID, launcher: launcher)
+        await wireEventStream(chatID: continuedChatID, launcher: launcher)
+        startStatePoll(for: continuedChatID, launcher: launcher)
     }
 
     // MARK: - Send a follow-up turn (RC1)

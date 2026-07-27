@@ -34,6 +34,42 @@ struct ChatViewD2Tests {
         return launcher
     }
 
+    private func makeTempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-chat-view-d2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dummy = dir.appendingPathComponent("fake-agent")
+        let script = "#!/bin/sh\nexit 0\n"
+        try script.write(to: dummy, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dummy.path)
+        return dir
+    }
+
+    private func makeInteractiveLauncher(
+        backend: FakeAgentBackend, dummyPath: String, tempDir: URL
+    ) throws -> AgentLauncher {
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "test-chat-view"),
+            label: "Test Chat View",
+            command: [dummyPath],
+            env: [:],
+            enabled: true,
+            isDefault: true
+        )
+        let launcher = AgentLauncher()
+        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.acpCredentialStore = InMemoryACPCredentialStore()
+        launcher.resolveSelectedProvider = { provider }
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: "fake-model"]
+        )
+        try config.save(to: tempDir)
+        launcher.resolveProvidersContainerDirectory = { tempDir }
+        launcher.containerDirectory = tempDir
+        return launcher
+    }
+
     // MARK: - (a) Source-of-truth rule + flip timing
 
     @Test func activeChatID_isNil_byDefault() {
@@ -41,15 +77,36 @@ struct ChatViewD2Tests {
         #expect(launcher.activeChatID == nil)
     }
 
-    @Test func activeChatID_setViaStartInteractiveQuery() async {
-        let launcher = makeLauncher()
+    @Test func activeChatID_isSetByStartInteractiveQuery() async throws {
+        let tempDir = try makeTempDir()
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tempDir)
+            } catch {
+                Issue.record("failed to remove ChatViewD2 test temp dir: \(error)")
+            }
+        }
+        let dummyPath = tempDir.appendingPathComponent("fake-agent").path
+        let backend = FakeAgentBackend(behaviors: [FakeSessionBehavior(neverFinish: true)])
+        let launcher = try makeInteractiveLauncher(
+            backend: backend, dummyPath: dummyPath, tempDir: tempDir)
         let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
-        // Simulate the runner passing chatID — the launcher records it.
-        // We can't call startInteractiveQuery without a real backend, but we can
-        // verify the property is settable (it's `var`, not private(set)), which is
-        // the contract ChatDetailView relies on.
-        launcher.activeChatID = chatID
+
+        await launcher.startInteractiveQuery(
+            firstMessage: "hello",
+            stateMarkdown: "",
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: tempDir.path,
+            systemPrompt: "",
+            wikictlDirectory: tempDir.path,
+            chatID: chatID,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        #expect(launcher.preflightError == nil)
         #expect(launcher.activeChatID == chatID)
+        launcher.startNewChat()
     }
 
     @Test func sourceOfTruth_liveChat_matchesActiveChatID() {
