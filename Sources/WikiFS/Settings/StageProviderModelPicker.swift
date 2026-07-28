@@ -1,6 +1,36 @@
 import SwiftUI
 import WikiFSCore
 
+enum StageProviderSelectionState: Equatable {
+    case inherited
+    case pinnedEnabled(id: String)
+    case pinnedDisabled(id: String, label: String)
+    case pinnedMissing(id: String)
+
+    static func resolve(config: AgentProvidersConfig, stageKey: String) -> StageProviderSelectionState {
+        guard let pinnedID = config.stageProviderIds[stageKey], !pinnedID.isEmpty else {
+            return .inherited
+        }
+        let providerID = ProviderID(rawValue: pinnedID)
+        guard let provider = config.provider(id: providerID) else {
+            return .pinnedMissing(id: pinnedID)
+        }
+        guard provider.enabled else {
+            return .pinnedDisabled(id: pinnedID, label: provider.label)
+        }
+        return .pinnedEnabled(id: pinnedID)
+    }
+
+    var isUnavailable: Bool {
+        switch self {
+        case .pinnedDisabled, .pinnedMissing:
+            return true
+        case .inherited, .pinnedEnabled:
+            return false
+        }
+    }
+}
+
 /// A provider + model picker for a single agent stage/operation
 /// (`plans/agent-settings-tabs.md` §2.2/§6). Reused for the Chat Model,
 /// Planner/Executor/Finalizer Models, and Lint Model rows in the nested
@@ -34,6 +64,10 @@ struct StageProviderModelPicker: View {
     let label: String
     var defaultOptionLabel: String = "Default"
 
+    private var selectionState: StageProviderSelectionState {
+        StageProviderSelectionState.resolve(config: config, stageKey: stageKey)
+    }
+
     /// The effective provider for this stage (pinned when set + enabled, else
     /// the global default). Drives the model dropdown's contents.
     private var resolvedProvider: AgentProvider {
@@ -54,18 +88,80 @@ struct StageProviderModelPicker: View {
         config.selectedModelId(forProvider: resolvedProvider.id) ?? "default"
     }
 
+    /// The Summary tab's provider pin is load-bearing: a non-empty but
+    /// unavailable pin keeps model mode selected, so the UI must surface the
+    /// invalid state instead of pretending the fallback provider is in force.
+    private var shouldDisableModelPickerForUnavailablePin: Bool {
+        stageKey == "summarizer" && selectionState.isUnavailable
+    }
+
+    private var modelPickerPlaceholder: String {
+        shouldDisableModelPickerForUnavailablePin
+            ? "Selected provider unavailable"
+            : "Chat with this provider to discover models"
+    }
+
+    private var modelPickerHelpText: String {
+        if let unavailableProviderMessage {
+            return unavailableProviderMessage
+        }
+        return resolvedModels.isEmpty
+            ? "Chat with this provider once to discover its models."
+            : "Pick a model for the \(label) stage. “Same as provider” uses the provider's selected model."
+    }
+
+    private var unavailableOptionLabel: String? {
+        switch selectionState {
+        case .pinnedDisabled(_, let providerLabel):
+            return "\(providerLabel) (disabled)"
+        case .pinnedMissing(let providerID):
+            return "\(providerID) (missing)"
+        case .inherited, .pinnedEnabled:
+            return nil
+        }
+    }
+
+    private var unavailableOptionTag: String? {
+        switch selectionState {
+        case .pinnedDisabled(let providerID, _), .pinnedMissing(let providerID):
+            return providerID
+        case .inherited, .pinnedEnabled:
+            return nil
+        }
+    }
+
+    private var unavailableProviderMessage: String? {
+        switch selectionState {
+        case .pinnedDisabled(_, let providerLabel):
+            if stageKey == "summarizer" {
+                return "Selected provider “\(providerLabel)” is disabled. Summary generation will stay unavailable until you re-enable it, pick another provider, or choose \(defaultOptionLabel)."
+            }
+            return "Selected provider “\(providerLabel)” is disabled. This stage is currently falling back to the default provider until you re-enable it or pick another provider."
+        case .pinnedMissing(let providerID):
+            if stageKey == "summarizer" {
+                return "Selected provider “\(providerID)” no longer exists. Summary generation will stay unavailable until you pick another provider or choose \(defaultOptionLabel)."
+            }
+            return "Selected provider “\(providerID)” no longer exists. This stage is currently falling back to the default provider until you pick another provider."
+        case .inherited, .pinnedEnabled:
+            return nil
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("\(label) Provider", selection: providerBinding) {
                 Text(defaultOptionLabel).tag("")
+                if let unavailableOptionLabel, let unavailableOptionTag {
+                    Text(unavailableOptionLabel).tag(unavailableOptionTag)
+                }
                 ForEach(config.enabledProviders) { p in
-                    Text(p.label).tag(p.id)
+                    Text(p.label).tag(p.id.rawValue)
                 }
             }
 
             Picker("\(label) Model", selection: modelBinding) {
-                if resolvedModels.isEmpty {
-                    Text("Chat with this provider to discover models").tag("")
+                if shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty {
+                    Text(modelPickerPlaceholder).tag("")
                 } else {
                     Text("Same as provider (\(fallbackLabel))").tag("")
                     ForEach(resolvedModels, id: \.modelId) { model in
@@ -73,10 +169,14 @@ struct StageProviderModelPicker: View {
                     }
                 }
             }
-            .disabled(resolvedModels.isEmpty)
-            .help(resolvedModels.isEmpty
-                  ? "Chat with this provider once to discover its models."
-                  : "Pick a model for the \(label) stage. “Same as provider” uses the provider's selected model.")
+            .disabled(shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty)
+            .help(modelPickerHelpText)
+
+            if let unavailableProviderMessage {
+                Text(unavailableProviderMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
 
             // #612: info-tone nudge when the stage's resolved model (pinned or
             // inherited from the provider) is a known free-tier model (e.g.
