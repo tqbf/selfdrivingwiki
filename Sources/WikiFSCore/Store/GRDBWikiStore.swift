@@ -6104,7 +6104,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func createChat(
         kind: ChatKind, title: String,
-        modelProviderId: String?, modelId: String?
+        modelProviderId: ProviderID?, modelId: ModelID?
     ) throws -> ChatSummary {
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
@@ -6117,7 +6117,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [
                 id.rawValue, kind.rawValue, title,
                 now.timeIntervalSince1970, now.timeIntervalSince1970,
-                modelProviderId, modelId
+                modelProviderId?.rawValue, modelId?.rawValue
             ])
             return ChatSummary(
                 id: id, kind: kind, title: title,

@@ -43,9 +43,9 @@ public enum FreeTierModelNudge {
     ///   `selectedModelId`). `nil`/empty → `nil` (no nudge).
     /// - Returns: The nudge message string when the model is free-tier; `nil`
     ///   when the model is unknown or free of free-tier patterns.
-    public static func message(for modelId: String?) -> String? {
-        guard let modelId, !modelId.isEmpty else { return nil }
-        let lower = modelId.lowercased()
+    public static func message(for modelId: ModelID?) -> String? {
+        guard let modelId, !modelId.rawValue.isEmpty else { return nil }
+        let lower = modelId.rawValue.lowercased()
         guard freeTierModelPatterns.contains(where: { lower.contains($0) }) else {
             return nil
         }

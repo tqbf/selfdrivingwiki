@@ -185,10 +185,11 @@ public final class ChatDaemonCoordinator {
     @discardableResult
     public func startChat(
         wikiID: WikiID, firstMessage: String,
-        providerId: String? = nil, modelId: String? = nil
+        providerId: ProviderID? = nil, modelId: ModelID? = nil
     ) async throws -> ChatID {
         try await client.startChat(ChatStartRequest(
-            wikiID: wikiID, firstMessage: firstMessage, providerId: providerId, modelId: modelId))
+            wikiID: wikiID, firstMessage: firstMessage,
+            providerId: providerId?.rawValue, modelId: modelId?.rawValue))
     }
 
     /// Continue a persisted chat with a new user turn.

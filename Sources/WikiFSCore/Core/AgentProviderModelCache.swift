@@ -12,7 +12,7 @@ import Foundation
 public struct CachedModelInfo: Codable, Hashable, Sendable, Identifiable {
     /// The model id passed back to the agent via `session/set_model` — the same
     /// value the ACP SDK's `ModelInfo.modelId` advertises.
-    public let modelId: String
+    public let modelId: ModelID
     /// Human label (e.g. "GLM-4.7", "Claude Sonnet 4.5"). Falls back to
     /// `modelId` at the display seam when the agent omits a friendly name.
     public let name: String
@@ -21,9 +21,9 @@ public struct CachedModelInfo: Codable, Hashable, Sendable, Identifiable {
 
     /// `Identifiable` over `modelId` so SwiftUI `ForEach`/`List` can drive the
     /// model picker without an extra `.id()`.
-    public var id: String { modelId }
+    public var id: ModelID { modelId }
 
-    public init(modelId: String, name: String, description: String? = nil) {
+    public init(modelId: ModelID, name: String, description: String? = nil) {
         self.modelId = modelId
         self.name = name
         self.description = description
@@ -33,7 +33,7 @@ public struct CachedModelInfo: Codable, Hashable, Sendable, Identifiable {
     /// present, else the raw `modelId` (so a bad-default model like `glm-4-7`
     /// is still visible/recognizable — the whole point of the picker). PURE.
     public var displayLabel: String {
-        name.isEmpty ? modelId : name
+        name.isEmpty ? modelId.rawValue : name
     }
 }
 
