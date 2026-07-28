@@ -30,10 +30,10 @@ public enum DomainRemovalReason: String, Equatable, Sendable, CaseIterable {
 /// still existed. That gap is why #919's in-place `add` upsert needs a
 /// post-condition check rather than trust in the SDK doc comment.
 public struct RegisteredDomain: Equatable, Sendable {
-    public let id: String
+    public let id: WikiID
     public let displayName: String
 
-    public init(id: String, displayName: String) {
+    public init(id: WikiID, displayName: String) {
         self.id = id
         self.displayName = displayName
     }
@@ -52,11 +52,11 @@ public protocol FileProviderDomainService: Sendable {
     /// This is an upsert keyed by identifier: "If a domain with the same
     /// identifier already exists, `addDomain` will update the display name and
     /// hidden state of the domain and succeed" (`NSFileProviderManager.h`).
-    func add(id: String, displayName: String) async throws
+    func add(id: WikiID, displayName: String) async throws
 
     /// Tear down a domain AND its on-disk replica. Destructive — see
     /// ``DomainRemovalReason``.
-    func remove(id: String, reason: DomainRemovalReason) async throws
+    func remove(id: WikiID, reason: DomainRemovalReason) async throws
 
     /// The daemon's current domain list. Returns `[]` if the list can't be
     /// fetched, so callers read a failure as "not present" and keep retrying.
@@ -66,7 +66,7 @@ public protocol FileProviderDomainService: Sendable {
 extension FileProviderDomainService {
     /// The display name the daemon currently reports for `id`, or `nil` if the
     /// domain isn't registered. Used to verify an in-place rename landed.
-    public func displayName(for id: String) async -> String? {
+    public func displayName(for id: WikiID) async -> String? {
         await domains().first { $0.id == id }?.displayName
     }
 }
