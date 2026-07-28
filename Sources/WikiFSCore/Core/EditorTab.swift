@@ -44,7 +44,7 @@ extension WikiStoreModel {
             guard let source = sources.first(where: { $0.id == id }) else { return "Source" }
             return source.effectiveName.nonEmpty ?? "Source"
         case .bookmark(let id):
-            return bookmarkNodes.first(where: { $0.id == id })?.label ?? "Bookmark"
+            return bookmarkNodes.first(where: { $0.id.rawValue == id })?.label ?? "Bookmark"
         case .chat(let id):
             return chats.first { $0.id == id }?.title ?? "Chat"
         }

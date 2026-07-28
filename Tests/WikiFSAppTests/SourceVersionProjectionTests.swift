@@ -19,6 +19,7 @@ struct SourceVersionProjectionTests {
             fetchedAt: Date(timeIntervalSince1970: 1_000)
         )
 
-        #expect(origin.provenanceEntry.versionID == versionID.rawValue)
+        #expect(origin.provenanceEntry.versionID == .source(versionID))
+        #expect(origin.provenanceEntry.versionID.rawValue == versionID.rawValue)
     }
 }

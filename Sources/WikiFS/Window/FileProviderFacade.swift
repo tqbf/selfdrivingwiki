@@ -88,7 +88,7 @@ final class FileProviderFacade: ChangeSignaler {
         DebugLog.fileprovider("schema migration: \(stored) → \(Self.currentSchemaVersion) — removing \(wikiIDs.count) domain(s)")
         for id in wikiIDs {
             do {
-                try await domainService.remove(id: id.rawValue, reason: .schemaMigration)
+                try await domainService.remove(id: id, reason: .schemaMigration)
                 DebugLog.fileprovider("schema migration: removed domain \(id.rawValue)")
             } catch {
                 DebugLog.fileprovider("schema migration: remove domain \(id.rawValue) failed: \(error.localizedDescription)")
@@ -143,7 +143,7 @@ final class FileProviderFacade: ChangeSignaler {
     @discardableResult
     func registerDomain(id: WikiID, displayName: String) async -> Bool {
         if ProcessInfo.processInfo.environment["WIKIFS_REENUMERATE"] == "1" {
-            do { try await domainService.remove(id: id.rawValue, reason: .reenumerateHatch) }
+            do { try await domainService.remove(id: id, reason: .reenumerateHatch) }
             catch { DebugLog.fileprovider("registerDomain: re-enumerate remove failed: \(error)") }
         }
 
@@ -151,7 +151,7 @@ final class FileProviderFacade: ChangeSignaler {
         // the new container layout (e.g. `files` → `sources` rename).
         if needsDomainMigration {
             DebugLog.fileprovider("registerDomain: removing \(id.rawValue) for schema migration")
-            do { try await domainService.remove(id: id.rawValue, reason: .schemaMigration) }
+            do { try await domainService.remove(id: id, reason: .schemaMigration) }
             catch { DebugLog.fileprovider("registerDomain: migration remove failed: \(error)") }
         }
 
@@ -161,7 +161,7 @@ final class FileProviderFacade: ChangeSignaler {
             // racing add that won) must not error out the whole flow.
             if !(await isDomainRegistered(id: id)) {
                 do {
-                    try await domainService.add(id: id.rawValue, displayName: displayName)
+                    try await domainService.add(id: id, displayName: displayName)
                 } catch {
                     // Distinguish benign already-exists (the verify below confirms
                     // presence) from a real failure we must not bury: log it AND
@@ -223,7 +223,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// belonged to that wiki.
     func removeDomain(id: WikiID) async {
         do {
-            try await domainService.remove(id: id.rawValue, reason: .wikiDeleted)
+            try await domainService.remove(id: id, reason: .wikiDeleted)
             if activeWikiID == id {
                 activeWikiID = nil
                 path = nil
@@ -259,14 +259,14 @@ final class FileProviderFacade: ChangeSignaler {
         // we're registering from scratch (and could hit NSFileWriteFileExistsError
         // against a leftover replica). Those fail very differently — worth one
         // `domains()` call on an operation the user triggers by hand.
-        let previousName = await domainService.displayName(for: id.rawValue)
+        let previousName = await domainService.displayName(for: id)
         DebugLog.fileprovider("""
             FileProviderFacade.renameDomain(\(id.rawValue) → \(displayName)): \
             in-place add; wasRegistered=\(previousName != nil), \
             daemonName=\(previousName ?? "<absent>"), isActive=\(activeWikiID == id)
             """)
         do {
-            try await domainService.add(id: id.rawValue, displayName: displayName)
+            try await domainService.add(id: id, displayName: displayName)
             if activeWikiID == id { activeDisplayName = displayName }
             status = "Renamed \(displayName)"
 
@@ -276,7 +276,7 @@ final class FileProviderFacade: ChangeSignaler {
             // whole fix rests on documented-but-unobservable behaviour, confirm it
             // against what the daemon now reports. Diagnostic only — the operation
             // has already succeeded as far as the user is concerned.
-            let observed = await domainService.displayName(for: id.rawValue)
+            let observed = await domainService.displayName(for: id)
             if observed != displayName {
                 DebugLog.fileprovider("""
                     FileProviderFacade.renameDomain(\(id.rawValue)): MISMATCH — add succeeded but \

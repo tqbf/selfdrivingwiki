@@ -14,7 +14,7 @@ sources, schema, pages, index, and log. Multi-wiki is foundational here (Phase 0
 not an afterthought; v0 was single-wiki and everything below is wiki-scoped.
 
 This doc is the source of truth for *what we're adding and in what order*. Read
-`PLAN.md` then `PROGRESS.md` first; read this before starting Phase 0.
+`PLAN.md` then `progress/` first; read this before starting Phase 0.
 
 ## How the pattern maps onto what we already have
 

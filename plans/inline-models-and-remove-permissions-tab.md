@@ -283,9 +283,9 @@ unchanged (the exact bug). This guards against the field set drifting again.
    caption. No change to `SpawnModelGuard`.
 
 ## Documentation Strategy
-- Update `PROGRESS.md` with: Permissions tab removed; model selection + per-mode
+- Update `progress/` with: Permissions tab removed; model selection + per-mode
   assignment (chat/ingest/lint chips) moved inline onto the Agents provider rows;
-  the §3e field-carrying fix. A future agent reading `PLAN.md`/`PROGRESS.md`
+  the §3e field-carrying fix. A future agent reading `PLAN.md`/`progress/`
   should know the Permissions tab no longer exists and where the per-mode model
   config now lives.
 - No user-facing docs exist beyond the app itself (Settings UI is self-describing

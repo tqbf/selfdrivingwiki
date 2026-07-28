@@ -25,7 +25,7 @@ The page pipeline already does everything we need; we mirror it for sources:
 - `Sources/WikiFS/SourcesSectionView.swift`, `Sources/WikiFS/SidebarView.swift` — search box + reindex.
 - `Sources/WikiCtlCore/SourceCommand.swift`, `Sources/WikiCtlCore/ArgumentParser.swift` — `source search`.
 - `Sources/WikiFSCore/SystemPrompt.swift` — document the new command for the agent.
-- Tests + `PROGRESS.md`.
+- Tests + `progress/`.
 
 **Non-goals:** no unified/command-palette search, no cross-entity search, no change to page search, no new embedding model.
 
@@ -219,7 +219,7 @@ and add a short note in the navigation/guidance text (near lines 186–190, wher
 ## Documentation Strategy
 
 - **Agent-facing:** `SystemPrompt.swift` (Phase 3.6) is the agent's primary documentation — the command list is what it reads.
-- **Repo:** append a short entry to `PROGRESS.md` (repo convention: keep `PLAN.md`/`PROGRESS.md` current).
+- **Repo:** append a short entry to `progress/` (repo convention: keep `PLAN.md`/`progress/` current).
 - **CLI:** `usageText` (Phase 3.4) documents `source search` for human users.
 - The sidebar search box is self-evident; no separate user-facing doc page is warranted. No `AGENTS.md` change required unless repo guidance says otherwise.
 

@@ -164,7 +164,7 @@ own machine, and `--dangerously-skip-permissions` is already the trust model.
 - **Not per-wiki.** App-wide config, like Zotero. Easy to move per-wiki later if
   needed.
 - **No comment/doc sweep.** `claude -p` appears in many historical comments;
-  updates are limited to the modified files. `PROGRESS.md` / `PLAN.md` prose is a
+  updates are limited to the modified files. `progress/` / `PLAN.md` prose is a
   historical record and is left as-is.
 
 ## Verification

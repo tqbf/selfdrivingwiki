@@ -666,7 +666,7 @@ public final class WikiStoreModel {
     /// and bookmark nodes. The result always starts with an `.ask(question:)`
     /// action row (so the user can send the query straight to chat), followed by
     /// up to 3 pages, 2 sources, 2 chats, and 3 bookmark matches.
-    public func searchOmnibox(query: String) -> [OmniboxResult] {
+    public func searchOmnibox(query: String) async -> [OmniboxResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -676,15 +676,30 @@ public final class WikiStoreModel {
         results.append(.ask(question: trimmed))
 
         // 2. Pages (semantic + FTS).
-        let pages = searchSimilar(query: trimmed, limit: 3)
+        let pageLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .page, limit: 3, catalog: summaries,
+            id: PageID.init(rawValue:))
+        let pages = (DebugLog.trying("searchOmniboxPages", operation: {
+            try store.searchSimilar(query: trimmed, limit: 3, bm25Leg: pageLeg)
+        }) ?? [])
         results.append(contentsOf: pages.map { .page($0) })
 
         // 3. Sources (semantic + FTS).
-        let sources = searchSimilarSources(query: trimmed, limit: 2)
+        let sourceLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .source, limit: 2, catalog: sources,
+            id: SourceID.init(rawValue:))
+        let sources = (DebugLog.trying("searchOmniboxSources", operation: {
+            try store.searchSimilarSources(query: trimmed, limit: 2, bm25Leg: sourceLeg)
+        }) ?? [])
         results.append(contentsOf: sources.map { .source($0) })
 
         // 4. Chats (semantic + FTS).
-        let chats = searchSimilarChats(query: trimmed, limit: 2)
+        let chatLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .chat, limit: 2, catalog: chats,
+            id: ChatID.init(rawValue:))
+        let chats = (DebugLog.trying("searchOmniboxChats", operation: {
+            try store.searchSimilarChats(query: trimmed, limit: 2, bm25Leg: chatLeg)
+        }) ?? [])
         results.append(contentsOf: chats.map { .chat($0) })
 
         // 5. Bookmarks (plain substring over folder labels + resolved ref titles).
@@ -705,7 +720,7 @@ public final class WikiStoreModel {
         guard !query.isEmpty else { return bookmarkNodes }
         let byID = Dictionary(uniqueKeysWithValues: bookmarkNodes.map { ($0.id, $0) })
 
-        var matchingIDs = Set<String>()
+        var matchingIDs = Set<BookmarkID>()
         for node in bookmarkNodes {
             let title = resolveBookmarkTitle(node)
             if title.localizedCaseInsensitiveContains(query) {
@@ -713,9 +728,9 @@ public final class WikiStoreModel {
             }
         }
 
-        var visibleIDs = Set<String>()
+        var visibleIDs = Set<BookmarkID>()
         for id in matchingIDs {
-            var current: String? = id
+            var current: BookmarkID? = id
             while let cid = current, let node = byID[cid] {
                 visibleIDs.insert(cid)
                 current = node.parentID
@@ -3952,7 +3967,7 @@ public final class WikiStoreModel {
     /// Create a folder at root or inside another folder. Returns the new node id,
     /// or `nil` on failure.
     @discardableResult
-    public func createFolder(parentID: String?, name: String) -> String? {
+    public func createFolder(parentID: BookmarkID?, name: String) -> BookmarkID? {
         // Determine the position (append at end of siblings).
         let position = bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
@@ -3969,7 +3984,7 @@ public final class WikiStoreModel {
 
     /// Add a page reference to a folder. Pass `position` to insert at a specific
     /// sibling index (the store shifts later siblings down); omit it to append.
-    public func addPageRef(parentID: String?, pageID: PageID, position: Int? = nil) {
+    public func addPageRef(parentID: BookmarkID?, pageID: PageID, position: Int? = nil) {
         let t0 = DispatchTime.now()
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
@@ -3986,7 +4001,7 @@ public final class WikiStoreModel {
 
     /// Add a source reference to a folder. Pass `position` to insert at a specific
     /// sibling index (the store shifts later siblings down); omit it to append.
-    public func addSourceRef(parentID: String?, sourceID: SourceID, position: Int? = nil) {
+    public func addSourceRef(parentID: BookmarkID?, sourceID: SourceID, position: Int? = nil) {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
@@ -4000,7 +4015,7 @@ public final class WikiStoreModel {
 
     /// Add a chat reference to a folder. Pass `position` to insert at a specific
     /// sibling index (the store shifts later siblings down); omit it to append.
-    public func addChatRef(parentID: String?, chatID: ChatID, position: Int? = nil) {
+    public func addChatRef(parentID: BookmarkID?, chatID: ChatID, position: Int? = nil) {
         let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
         do {
             _ = try store.createBookmarkNode(
@@ -4013,7 +4028,7 @@ public final class WikiStoreModel {
     }
 
     /// Rename a folder.
-    public func renameBookmarkNode(id: String, to label: String) {
+    public func renameBookmarkNode(id: BookmarkID, to label: String) {
         do {
             try store.renameBookmarkFolder(id: id, to: label)
             // No manual reload — the bus fires reloadFromStore() async after the
@@ -4024,7 +4039,7 @@ public final class WikiStoreModel {
     }
 
     /// Delete a bookmark node (cascade-deletes children for folders).
-    public func deleteBookmarkNode(id: String) {
+    public func deleteBookmarkNode(id: BookmarkID) {
         do {
             try store.deleteBookmarkNode(id: id)
             // No manual reload — the bus fires reloadFromStore() async after the
@@ -4037,7 +4052,7 @@ public final class WikiStoreModel {
     /// Move a node to a new parent and/or position. Returns `false` (and logs)
     /// if the store rejects the move — e.g. it would create a parent cycle.
     @discardableResult
-    public func moveBookmarkNode(id: String, toParentID: String?, position: Int) -> Bool {
+    public func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) -> Bool {
         do {
             try store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
             // No manual reload — the bus fires reloadFromStore() async after the

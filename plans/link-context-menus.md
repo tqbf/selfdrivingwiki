@@ -2,7 +2,7 @@
 
 > **Status: design only.** This is a written problem statement + decision for a
 > follow-on PR. No context-menu code ships in the PR that created this document
-> (that PR only made unresolved wiki-links render red — see `PROGRESS.md`).
+> (that PR only made unresolved wiki-links render red — see `progress/`).
 > Read this before implementing link context menus.
 
 ## Feature
@@ -96,7 +96,7 @@ headings / lists / code blocks / wrapping without access to Textual's laid-out
 text — unreliable hit-testing — and it re-introduces the exact
 `NSViewRepresentable`-overlay-menu pattern that caused "severe bugs" in the tab
 system (see `plans/tab-context-menu-rebuild.md`, and the `2026-06-19` entry in
-`PROGRESS.md`).
+`progress/`).
 
 ## Approved decision: vendor Textual in-repo
 

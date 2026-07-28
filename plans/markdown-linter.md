@@ -1,7 +1,7 @@
 # Markdown linter for wiki pages
 
 Design of record for the save-time markdown auto-fix feature. See
-`PROGRESS.md` for the build evidence.
+`progress/` for the build evidence.
 
 ## Goal
 

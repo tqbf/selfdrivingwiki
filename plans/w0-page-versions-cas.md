@@ -185,7 +185,7 @@ append-only chain is correct without GC, just grows.
   - Migration: seed root versions for existing pages, verify body unchanged.
   - FTS still works after versioned save.
 
-### Step 8 — `PROGRESS.md` + `PLAN.md` updates
+### Step 8 — `progress/` + `PLAN.md` updates
 
 ## What's NOT in W0 (deferred)
 

@@ -82,7 +82,7 @@ clients.
 | RC4 | Implemented | Per-chat takeover (`.refused` only) |
 | RC5 | Implemented | `summarizePendingMessages` for `GRDBWikiStore` |
 | RC6 | Implemented | AC.4a automated XPC round-trip test |
-| RC7 | Done | This doc + PLAN.md + PROGRESS.md |
+| RC7 | Done | This doc + PLAN.md + progress/ |
 | RC8 | Confirmed | 6 XPC methods |
 | RC9 | Implemented | `resolvePendingPermission`, `availableThinkingOptions`, `logFileURL`, `runTotalUsage` |
 

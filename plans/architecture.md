@@ -2,7 +2,7 @@
 
 This is the developer's map of how WikiFS fits together. It is grounded in the
 code; where it would only duplicate another doc it cross-links instead. Read
-[`PLAN.md`](../PLAN.md) → [`PROGRESS.md`](../PROGRESS.md) for status and build
+[`PLAN.md`](../PLAN.md) → [`progress/`](../progress/README.md) for status and build
 history, [`INITIAL.md`](INITIAL.md) for the original architecture, and
 [`llm-wiki.md`](llm-wiki.md) for the LLM-wiki design and the phase plan. Known
 limitations live in [`ISSUES.md`](../ISSUES.md).

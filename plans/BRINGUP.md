@@ -6,7 +6,7 @@ A 4-phase path from the current skeleton to v0, derived from
 map onto these four phases.
 
 > **Phase 0 — App skeleton — ✅ done.** SwiftPM build environment, signing,
-> launching SwiftUI window. See `PROGRESS.md` (2026-06-15) and
+> launching SwiftUI window. See `progress/` (2026-06-15) and
 > `plans/build-environment.md`. Everything below is remaining work.
 >
 > **Provisioning (the Apple incantations) — done up front.** Per the user's
@@ -210,7 +210,7 @@ INITIAL.md §5 and §8.
   extension, and retroactively lets Phase 1's DB live in the shared container
   without a migration.
 - Per `SWIFTUI-RULES` §9, every phase ends with a **live run**, not just a
-  green `make check`. Record each phase in `PROGRESS.md`.
+  green `make check`. Record each phase in `progress/`.
 - Per `CLAUDE.md`: run `swiftui-pro` before/after each UI chunk,
   `typography-designer` when setting type, `macos-design` for layout. PRs are
   fine; never merge to `main`.

@@ -86,7 +86,7 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	        for sourceID: SourceID, co
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID)
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative]
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func addSourceRef(parentID: String?, sourceID: SourceID, position: Int? = nil)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func addSourceRef(parentID: BookmarkID?, sourceID: SourceID, position: Int? = nil)
 Sources/WikiFSCore/Core/QueueTypes.swift	public var sourceIDs: [SourceID]
 Sources/WikiFSCore/Core/WikiSelection.swift	case source(SourceID)
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceIDToName: [SourceID: String]

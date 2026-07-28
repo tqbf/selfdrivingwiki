@@ -11,7 +11,7 @@ struct BookmarksContainerView: View {
     // All closures are main-actor-isolated: they touch the @MainActor
     // WikiStoreModel or present sheets/state on the main actor.
     var onShowPicker: (@MainActor @Sendable (PickerContext) -> Void)
-    var onEdit: (@MainActor @Sendable (String) -> Void)
+    var onEdit: (@MainActor @Sendable (BookmarkID) -> Void)
     var onNewFolder: (@MainActor @Sendable () -> Void)
 
     @State private var searchText: String = ""
@@ -169,7 +169,7 @@ struct BookmarksContainerView: View {
         let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
 
         // Collect ids of nodes that match the query.
-        var matchingIDs = Set<String>()
+        var matchingIDs = Set<BookmarkID>()
         for node in nodes {
             let title = resolveTitle(node)
             if title.localizedCaseInsensitiveContains(q) {
@@ -179,9 +179,9 @@ struct BookmarksContainerView: View {
 
         // Expand to include all ancestors of matching nodes (so a hit inside a
         // nested folder is visible when the folder would otherwise be collapsed).
-        var visibleIDs = Set<String>()
+        var visibleIDs = Set<BookmarkID>()
         for id in matchingIDs {
-            var current: String? = id
+            var current: BookmarkID? = id
             while let cid = current, let node = byID[cid] {
                 visibleIDs.insert(cid)
                 current = node.parentID
@@ -194,11 +194,11 @@ struct BookmarksContainerView: View {
 
 struct PickerContext: Identifiable, Sendable {
     let id: UUID
-    let parentID: String?
+    let parentID: BookmarkID?
     let kind: ItemPickerKind
 }
 
 struct EditBookmarkContext: Identifiable {
     let id = UUID()
-    let nodeID: String
+    let nodeID: BookmarkID
 }

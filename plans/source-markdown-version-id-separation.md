@@ -69,7 +69,7 @@ Primary files include:
 - Source UI, reader, File Provider, daemon, and queue adapters that carry Markdown-version IDs
 - `Tests/WikiFSTests/Fixtures/IdentifierBoundaryTypecheck/`
 - A new Markdown-version API signature manifest and its Swift Testing suite
-- `plans/source-markdown-version-id-separation.md`, `PLAN.md`, and `PROGRESS.md`
+- `plans/source-markdown-version-id-separation.md`, `PLAN.md`, and `progress/`
 
 Do not change SQLite tables, columns, schema versions, refs, raw ULID text, queue JSON, wiki-link `@vN` syntax, File Provider identifiers, CLI output, or agent-facing formats. Do not add implicit conversions or cross-type equality.
 
@@ -152,7 +152,7 @@ Do not change SQLite tables, columns, schema versions, refs, raw ULID text, queu
 1. Create `plans/source-markdown-version-id-separation.md` as the design and implementation record.
 2. Document the three source-related namespaces, the no-migration decision, polymorphic refs, source-link pins, raw-string boundaries, and rejected cross-namespace calls.
 3. Add the plan to the documentation index in `PLAN.md`.
-4. Record implementation progress, decisions, and exact verification results in `PROGRESS.md`.
+4. Record implementation progress, decisions, and exact verification results in `progress/`.
 5. Use STE-flavored prose for repository documents and the pull request.
 6. Work on a feature branch. Push it and open a pull request. Do not merge it.
 
@@ -170,7 +170,7 @@ Do not change SQLite tables, columns, schema versions, refs, raw ULID text, queu
 - **AC.10:** SQLite schema, `PRAGMA user_version`, stored ULID text, queue JSON, wiki links, `@vN`, File Provider identifiers, CLI output, and agent-facing formats remain unchanged.
 - **AC.11:** Pinning, rendering, extraction, queue restart, CLI, projection, persistence, and store emission tests pass.
 - **AC.12:** `make prompts`, `swift build --build-tests`, full `swift test`, `make lint`, `git diff --check`, and CI pass under SwiftPM.
-- **AC.13:** The new design document, `PLAN.md`, and `PROGRESS.md` describe the final boundary and verification evidence.
+- **AC.13:** The new design document, `PLAN.md`, and `progress/` describe the final boundary and verification evidence.
 
 ## Test Strategy
 
@@ -228,7 +228,7 @@ Fix or explicitly rebut all findings. Repeat review after critical findings unti
 
 Create `plans/source-markdown-version-id-separation.md` and add it to `PLAN.md`. Use it as the design and implementation record for issue #956.
 
-Update `PROGRESS.md` with phases, compatibility evidence, focused test results, final SwiftPM results, lint results, and CI status. Extend `DocumentationContractTests` so the namespace boundary and no-migration rule cannot silently disappear.
+Update `progress/` with phases, compatibility evidence, focused test results, final SwiftPM results, lint results, and CI status. Extend `DocumentationContractTests` so the namespace boundary and no-migration rule cannot silently disappear.
 
 No user-guide update is needed because visible behavior and external formats do not change.
 

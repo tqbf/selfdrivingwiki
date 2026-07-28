@@ -365,7 +365,7 @@ provider's enabled switch, and the per-stage picks silently revert.
 
 ## Documentation Strategy
 
-- Update `PROGRESS.md` with: Permissions tab removed; the per-stage model
+- Update `progress/` with: Permissions tab removed; the per-stage model
   section + the inline per-provider Model dropdown moved into the Agents
   tab; the §4f field-carrying fix (now carries `ingestStageModelIds` too).
 - Add a one-liner to v1 (`plans/inline-models-and-remove-permissions-tab.md`)

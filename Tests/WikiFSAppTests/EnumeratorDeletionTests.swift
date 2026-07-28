@@ -158,7 +158,7 @@ struct EnumeratorDeletionTests {
         #expect(enumObs.enumerated.count == 1)
 
         let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
-        let deletedID = Projection.Identity.bookmarkPageRef(ref.id)
+        let deletedID = Projection.Identity.bookmarkPageRef(ref.id.rawValue)
         try s.store.deleteBookmarkNode(id: ref.id)
 
         let changeObs = MockChangeObserver()
@@ -210,7 +210,7 @@ struct EnumeratorDeletionTests {
         #expect(enumObs.enumerated.count == 1)
 
         let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
-        let deletedID = Projection.Identity.bookmarkFolder(folder.id)
+        let deletedID = Projection.Identity.bookmarkFolder(folder.id.rawValue)
         try s.store.deleteBookmarkNode(id: folder.id)
 
         let changeObs = MockChangeObserver()

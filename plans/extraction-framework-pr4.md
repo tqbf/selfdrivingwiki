@@ -725,7 +725,7 @@ swift test                        # full suite — ~1.5 min (in-memory fixtures 
     `podcastRefreshAppendsDerivedMarkdown` — v1 transcript comes from
     `transcribePodcast`, not `addURL`).
 - **Edit (docs):** `PLAN.md` (master index — mark PR4 landed + the
-  podcast ingest-contract change), `PROGRESS.md` (entry for PR4), this file.
+  podcast ingest-contract change), `progress/` (entry for PR4), this file.
 
 ## Out of scope (covered by parent plan)
 

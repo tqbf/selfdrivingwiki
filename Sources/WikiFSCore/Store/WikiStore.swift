@@ -640,20 +640,20 @@ public protocol WikiStore: Sendable {
     /// Returns the inserted node with its generated id.
     @discardableResult
     func createBookmarkNode(
-        parentID: String?,
+        parentID: BookmarkID?,
         position: Int,
         content: BookmarkNode.Content
     ) throws -> BookmarkNode
 
     /// Update the label of a bookmark node (folders only).
-    func renameBookmarkFolder(id: String, to label: String) throws
+    func renameBookmarkFolder(id: BookmarkID, to label: String) throws
 
     /// Delete a bookmark node by id. `ON DELETE CASCADE` removes descendants.
-    func deleteBookmarkNode(id: String) throws
+    func deleteBookmarkNode(id: BookmarkID) throws
 
     /// Move a node to a new parent and/or position. Renumber siblings of both
     /// the old and new parent so positions stay contiguous (0, 1, 2, …).
-    func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws
+    func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) throws
 
     // MARK: - Persisted chats (issue #119 phase 1)
 
