@@ -21,7 +21,7 @@ grdb.private-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiSto
 grdb.public-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
 grdb.read-source-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private static func readSourceVersion(from row: Row) throws -> SourceVersion
 grdb.read-source-version.decode-id	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	id: SourceVersionID(rawValue: id),
-grdb.origin-from	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	versionID: SourceVersionID(rawValue: versionID),
+grdb.origin-from	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let versionID = SourceVersionID(rawValue: (row[0] as String?) ?? "")
 grdb.public-append-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceVersion {
 grdb.public-append-content-version.writer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let versionID = SourceVersionID(rawValue: ULID.generate())
 grdb.record-markdown-extraction	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil

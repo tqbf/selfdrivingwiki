@@ -5073,7 +5073,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
             """, arguments: [workspaceID, pageID.rawValue]) else { return nil }
 
-            let versionID: String? = row["version_id"]
+            let versionID = (row["version_id"] as String?).map(PageVersionID.init(rawValue:))
             let blobHash: String? = row["blob_hash"]
 
             if let versionID {
@@ -5081,7 +5081,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 if let blobRow = try Row.fetchOne(db, sql: """
                 SELECT pv.blob_hash, b.content FROM page_versions pv
                 JOIN blobs b ON b.hash = pv.blob_hash WHERE pv.id = ?;
-                """, arguments: [versionID]) {
+                """, arguments: [versionID.rawValue]) {
                     let data: Data = blobRow["content"]
                     return String(data: data, encoding: .utf8)
                 }
@@ -7202,7 +7202,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// LEFT-joined columns can be NULL. Position 7 is the `runTitle` subquery
     /// (#745) — NULL for non-chat agents or when the chat has been deleted.
     private static func originFrom(row: Row) -> SourceOrigin {
-        let versionID: String = (row[0] as String?) ?? ""
+        let versionID = SourceVersionID(rawValue: (row[0] as String?) ?? "")
         let agentName: String? = row[1]
         let agentKind: String? = row[2]
         let activityKind: String? = row[3]
@@ -7212,7 +7212,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let fetchedAt: Double = (row[7] as Double?) ?? 0
         let runTitle: String? = row[8]
         return SourceOrigin(
-            versionID: SourceVersionID(rawValue: versionID),
+            versionID: versionID,
             agentName: agentName ?? "unknown",
             agentKind: agentKind ?? "software",
             activityKind: activityKind ?? "import",

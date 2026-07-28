@@ -34,7 +34,7 @@ struct AgentCASTests {
         // Upsert with the correct head → should succeed (no conflict).
         let result = try PageCommand.run(
             .add(id: page.id, title: "CAS Page", body: .inline("v2 body"),
-                     expectHead: head?.rawValue),
+                     expectHead: head),
             in: store)
         #expect(result.didCommit == true)
 
@@ -66,7 +66,7 @@ struct AgentCASTests {
         #expect(throws: PageConflictError.self) {
             _ = try PageCommand.run(
                 .add(id: page.id, title: "Stale Page", body: .inline("v2 body (original)"),
-                         expectHead: oldHead?.rawValue),
+                         expectHead: oldHead),
                 in: store)
         }
 
@@ -127,7 +127,7 @@ struct AgentCASTests {
             return
         }
         #expect(title == "Test")
-        #expect(expectHead == "01ABC123")
+        #expect(expectHead == PageVersionID(rawValue: "01ABC123"))
     }
 
     @Test func parserParsesGetJson() throws {

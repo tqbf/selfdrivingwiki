@@ -39,7 +39,7 @@ public enum PageCommand {
         /// caller read before editing); when non-nil, the upsert routes through
         /// `appendPageVersion` and a mismatch throws `PageConflictError`
         /// (Phase 1: agent CAS writes).
-        case add(id: PageID?, title: String, body: BodySource, expectHead: String? = nil, workspace: String? = nil, author: String? = nil)
+        case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, workspace: String? = nil, author: String? = nil)
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// Swift-side `VectorCosine`), falling back to LIKE title match.
@@ -49,7 +49,7 @@ public enum PageCommand {
         case history(Selector)
         /// Revert a page to a specific version (W0, PR #312). Repoints the
         /// page-content ref to `versionID` and updates the body mirror.
-        case revert(Selector, versionID: String)
+        case revert(Selector, versionID: PageVersionID)
         /// Print identity (id, title, slug, created/updated, version count) +
         /// origin provenance (HEAD's agent + activity, edit history) for a
         /// page. Mirrors `source info` (`SourceCommand.info`) — a read-side
@@ -246,7 +246,7 @@ public enum PageCommand {
         id: PageID?,
         title: String,
         body: String,
-        expectHead: String? = nil,
+        expectHead: PageVersionID? = nil,
         workspace: String? = nil,
         author: String? = nil,
         in store: WikiStore,
@@ -298,9 +298,8 @@ public enum PageCommand {
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
         //    the in-app editor, so the link graph stays consistent across both
         //    writers.
-        let expectedHeadVersionID = expectHead.map(PageVersionID.init(rawValue:))
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
-                                             expectedHeadVersionID: expectedHeadVersionID, author: author)
+                                             expectedHeadVersionID: expectHead, author: author)
         return Result(output: outcome.id.rawValue, didCommit: true)
     }
 
@@ -367,12 +366,11 @@ public enum PageCommand {
     // MARK: - revert (W0, PR #312)
 
     private static func revert(
-        _ selector: Selector, versionID: String, in store: WikiStore
+        _ selector: Selector, versionID: PageVersionID, in store: WikiStore
     ) throws -> Result {
         let id = try resolve(selector, in: store)
-        let typedVersionID = PageVersionID(rawValue: versionID)
-        try store.revertPage(pageID: id, to: typedVersionID)
-        return Result(output: "reverted \(id.rawValue) to \(versionID)", didCommit: true)
+        try store.revertPage(pageID: id, to: versionID)
+        return Result(output: "reverted \(id.rawValue) to \(versionID.rawValue)", didCommit: true)
     }
 
     // MARK: - info (page provenance, #page-provenance)

@@ -78,6 +78,13 @@ struct WikiCtlCommandTests {
         #expect(update.command == .page(.add(id: PageID(rawValue: "01X"), title: "T", body: .file("body.md"), expectHead: nil, workspace: nil, author: nil)))
     }
 
+    @Test func parsesRevertWithTypedVersionID() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "revert", "--id", "01X", "--version", "01V"],
+            env: noEnv)
+        #expect(invocation.command == .page(.revert(.id(PageID(rawValue: "01X")), versionID: PageVersionID(rawValue: "01V"))))
+    }
+
     @Test func upsertRequiresTitleAndBodyFile() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
