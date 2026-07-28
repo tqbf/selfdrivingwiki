@@ -9,9 +9,9 @@ extension PageOrigin {
     var provenanceEntry: ProvenanceEntry {
         ProvenanceEntry(
             versionID: .page(versionID),
-            agentName: agentName,
-            agentKind: agentKind,
-            activityKind: activityKind,
+            agentName: agentName.rawValue,
+            agentKind: agentKind.rawValue,
+            activityKind: activityKind.rawValue,
             plan: plan,
             externalRef: externalRef,
             runTitle: runTitle,
