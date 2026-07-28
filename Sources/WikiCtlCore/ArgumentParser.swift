@@ -251,7 +251,7 @@ public enum ArgumentParser {
                 throw Failure.usage("page add: --body-file is required (path or -)")
             }
             let id = options.value("--id").map { PageID(rawValue: $0) }
-            let expectHead = options.value("--expect-head")
+            let expectHead = options.value("--expect-head").map(PageVersionID.init(rawValue:))
             let workspace = options.value("--workspace")
             let author = options.value("--author")
             return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, workspace: workspace, author: author))
@@ -281,7 +281,7 @@ public enum ArgumentParser {
             return .page(.history(try options.requireSelector()))
 
         case "revert":
-            guard let versionID = options.value("--version") else {
+            guard let versionID = options.value("--version").map(PageVersionID.init(rawValue:)) else {
                 throw Failure.usage("page revert: --version is required")
             }
             return .page(.revert(try options.requireSelector(), versionID: versionID))
