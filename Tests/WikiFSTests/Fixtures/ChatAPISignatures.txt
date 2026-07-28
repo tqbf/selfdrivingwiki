@@ -17,7 +17,7 @@ Sources/WikiFSCore/Store/WikiStore.swift	func renameChat(id: ChatID, to title: S
 Sources/WikiFSCore/Store/WikiStore.swift	func deleteChat(id: ChatID) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatSummary(chatID: ChatID, summary: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
-Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) throws
+Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func getChat(id: ChatID) throws -> ChatSummary
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
 Sources/WikiFSCore/Store/WikiStore.swift	func resolveChatByTitle(_ title: String) throws -> ChatID?
