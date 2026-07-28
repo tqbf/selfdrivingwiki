@@ -546,7 +546,7 @@ are normal for these.
 
 ### 10.1 Keep a running log.
 
-Whatever you call it — `PROGRESS.md`, `CHANGELOG.md`, a dated
+Whatever you call it — `progress/`, `CHANGELOG.md`, a dated
 journal — append every meaningful change with what you did, what you
 learned, and what surprised you. Future-you reads this when the next
 bug looks familiar. Future-them reads this when you're not around.

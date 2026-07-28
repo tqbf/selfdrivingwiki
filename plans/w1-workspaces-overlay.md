@@ -159,7 +159,7 @@ version_id instead.
   - Overlay read: workspace version seen, not main.
   - Page created in workspace (base = nil) → merges by creating the page.
 
-### Step 7 — PROGRESS.md + PLAN.md updates
+### Step 7 — progress/ + PLAN.md updates
 
 ## What's NOT in W1 (deferred)
 

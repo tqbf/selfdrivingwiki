@@ -16,7 +16,7 @@ Primary touch points:
 - `Sources/WikiFSEngine/ChatXPCRequests.swift`, daemon event envelopes, `Sources/wikid`, and app-side remote session/coordinator code
 - Chat projections in `WikiFSFileProvider`, chat commands in `WikiCtlCore`, and relevant `WikiFS` views/routes
 - `Tests/WikiFSTests` and `Tests/WikiFSAppTests`, including compiler fixtures and a new chat API signature manifest
-- Documentation index and progress artifacts: `PLAN.md`, a new `plans/chat-id-separation.md`, and `PROGRESS.md`
+- Documentation index and progress artifacts: `PLAN.md`, a new `plans/chat-id-separation.md`, and `progress/`
 
 Scope boundaries:
 
@@ -123,7 +123,7 @@ Scope boundaries:
 ## Phase 8: Documentation, review, and delivery
 
 1. Create `plans/chat-id-separation.md` as the durable implementation record. Document the namespace rule, characterized Codable shape, no-migration decision, raw boundaries, unchanged external formats, and deferred `ChatMessageID` work.
-2. Add the new plan to the master `PLAN.md` index and record phase progress, decisions, and exact verification results in `PROGRESS.md`.
+2. Add the new plan to the master `PLAN.md` index and record phase progress, decisions, and exact verification results in `progress/`.
 3. Write plan/progress/PR prose in the repository's required simplified technical style. The configured skill name `ste-testing` is not available in the current harness; use the available `ste-writing` skill during execution unless the operator provides the intended replacement.
 4. Work on a feature branch, push it, and open a PR. Never commit, push, or merge directly on `main`; do not merge the PR.
 5. After implementation and all automated tests, run an implementation review using repository guidance or a `general-purpose` reviewer. Fix or explicitly rebut every finding. Repeat after critical findings until none remain.
@@ -140,7 +140,7 @@ Scope boundaries:
 - **AC.8** Chat navigation, tab restoration, sidebar/address-bar selection, provenance navigation, transcript identity/rebuild behavior, bookmarks, and rendering preserve observable behavior.
 - **AC.9** File Provider item identifiers/paths/projections, chat wiki-link syntax, provenance strings, CLI inputs/outputs, daemon payloads, and agent-facing chat references remain byte-for-byte or normalized-JSON compatible as appropriate. Internal diagnostic log call sites continue to interpolate the same `ChatID.rawValue`, but exact unified-log rendering is not an acceptance contract because the repository has no deterministic `os_log` capture seam.
 - **AC.10** A non-empty chat API signature manifest passes and the final audit finds no persisted chat entity API still typed as `PageID` or an untagged internal `String`.
-- **AC.11** Documentation records the namespace boundary, compatibility contract, no-migration decision, raw boundaries, and deferred message-ID namespace in `plans/chat-id-separation.md`, `PLAN.md`, and `PROGRESS.md`.
+- **AC.11** Documentation records the namespace boundary, compatibility contract, no-migration decision, raw boundaries, and deferred message-ID namespace in `plans/chat-id-separation.md`, `PLAN.md`, and `progress/`.
 - **AC.12** `make prompts`, focused tests, `swift build --build-tests`, full `swift test`, `make lint`, `git diff --check`, and CI pass using command-line SwiftPM.
 
 # Test Strategy
@@ -158,8 +158,8 @@ Use Swift Testing for all new tests and follow the repository's `swift-testing-p
 | AC.7 | `WikiSelectionTests.chatSelectionRetainsChatID`; `BookmarkNodeStoreTests.chatTargetRoundTripsAsChatID`; `ChatWebViewTranscriptIDTests.chatAndQueueNamespacesRemainDistinct`; `ChatSessionKeyTests.draftAndPersistedChatRemainDistinct` |
 | AC.8 | Existing/extended `WikiReaderRoutingTests`, `NavigationSaveTests`, `EditorTabTests`, bookmark suites, `QueryNewChatTests`, `OrphanChatSeedingTests`, `ChatPersistenceTests`, `ChatTranscriptRendererTests`, and `ChatWebViewTranscriptIDTests.switchingChatsForcesRebuild` |
 | AC.9 | Existing/extended `ProjectionTests.chatProjectionPreservesLegacyIdentifiersAndPaths` and `ProjectionTreeTests.chatTreePreservesLegacyPaths`; `WikiLinkNavigationTests.chatReferencePreservesLegacyRawULID` and `WikiLinkMarkdownCanonicalTests.chatSyntaxIsUnchanged` for both user- and agent-facing `[[chat:…]]` references; `ProvenanceNavigationTests.chatProvenancePreservesRawIdentifier`; `WikiCtlCommandTests.chatArgumentsAndOutputPreserveRawIdentifier` and `BookmarkCommandTests.chatTargetOutputPreservesRawIdentifier`; `ChatXPCRequestCompatibilityTests` for normalized daemon JSON. Exact unified-log rendering is excluded because no deterministic `os_log` capture seam exists; code review must confirm changed log call sites still use `.rawValue`. |
-| AC.10 | `ChatAPISignatureManifestTests.allChatEntitySignaturesUseChatID`; final reviewed `rg` audit recorded in `PROGRESS.md` |
-| AC.11 | Extend `DocumentationContractTests.chatIDSeparationContractIsDocumented` and verify `PLAN.md` references `plans/chat-id-separation.md`; record exact results in `PROGRESS.md` |
+| AC.10 | `ChatAPISignatureManifestTests.allChatEntitySignaturesUseChatID`; final reviewed `rg` audit recorded in `progress/` |
+| AC.11 | Extend `DocumentationContractTests.chatIDSeparationContractIsDocumented` and verify `PLAN.md` references `plans/chat-id-separation.md`; record exact results in `progress/` |
 | AC.12 | Command gates listed below plus repository CI |
 
 Focused verification order:
@@ -202,7 +202,7 @@ Fix or explicitly rebut all implementation-review findings. Repeat review after 
 
 # Documentation Strategy
 
-Create `plans/chat-id-separation.md` as the detailed design/implementation record and index it from `PLAN.md`. Record phase completion and exact verification evidence in `PROGRESS.md`. Extend `DocumentationContractTests` so the namespace rule, no-migration decision, raw compatibility boundaries, and deferred `ChatMessageID` work cannot silently disappear.
+Create `plans/chat-id-separation.md` as the detailed design/implementation record and index it from `PLAN.md`. Record phase completion and exact verification evidence in `progress/`. Extend `DocumentationContractTests` so the namespace rule, no-migration decision, raw compatibility boundaries, and deferred `ChatMessageID` work cannot silently disappear.
 
 No user-facing documentation change is needed because visible syntax, CLI behavior, projections, and payloads remain unchanged. If execution discovers an externally visible change, stop and treat it as a scope/product decision rather than documenting accidental drift.
 

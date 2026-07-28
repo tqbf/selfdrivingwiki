@@ -15,11 +15,11 @@ Last verified: 2026-07-27
 
 * Store specific in-depth documentation in plans/whatever.md.
 
-* Record progress in PROGRESS.md. I should be able to tell a future agent "read PLAN.md and
-PROGRESS.md" and trust it's up to speed with this codebase.
+* Record progress in `progress/`. I should be able to tell a future agent
+  "read PLAN.md and progress/" and trust it is up to speed with this codebase.
 
-* When writing prose, use the ste-testing skill to ensure clarity.  This applies to pull requests, 
-  github issues, plans in the plans folder, and progress in PROGRESS.md.
+* When writing prose, use the ste-writing skill to ensure clarity. This applies to pull requests,
+  GitHub issues, plans in the plans folder, and progress in `progress/`.
 
 * Before and after deciding on code, use the swiftui-pro skill to ensure we're following
   modern best practices.

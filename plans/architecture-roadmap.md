@@ -101,7 +101,7 @@ That is the storage truth the access layer is built over.
   daemon's multi-client streaming: gRPC server-stream, REST SSE, and MCP
   `notifications/resources/list_changed` all multicast the *same* event.
   Designed once, per §3 — it becomes the thing the daemon later serializes.
-  See [`plans/event-bus.md`](event-bus.md); full test gate in `PROGRESS.md`.
+  See [`plans/event-bus.md`](event-bus.md); full test gate in `progress/`.
 - **(2b) Resource protocol + projection dedup + generic changeToken.** Do this
   **after graph-model Phase 1**, so it models refs/blobs/byteless from the
   start instead of over the flat `sources.content` it would have to rewrite.

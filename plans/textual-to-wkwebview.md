@@ -376,7 +376,7 @@ AC.6, AC.7 (interactivity / live-WKWebView behavior not unit-testable).
 
 ## Documentation strategy
 
-- Update `PLAN.md` doc-index (the broadened row) + `PROGRESS.md` entry.
+- Update `PLAN.md` doc-index (the broadened row) + `progress/` entry.
 - Update `ISSUES.md` (remove "Vendored Textual fork" entry).
 - Update `Package.swift` comment (remove fork rationale).
 - `SWIFTUI-RULES.md`: no change (rules are framework-agnostic), but verify no

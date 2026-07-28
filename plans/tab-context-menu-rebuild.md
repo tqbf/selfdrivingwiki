@@ -667,7 +667,7 @@ are Low or "verified correct" with no plan change required.
 
 ## Documentation Strategy
 
-- **`PROGRESS.md`** — append a dated entry documenting the rebuild: what was
+- **`progress/`** — append a dated entry documenting the rebuild: what was
   broken in the merged system, the ID-based redesign, the native context menu,
   the opacity-fade fix, test count, and the live-gate result.
 - **`plans/multi-tab-editor.md`** — update the "Approach" section to reflect

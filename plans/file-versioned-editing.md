@@ -219,5 +219,5 @@ first PDFKit dependency — add the `import` and the small representable.
   green.
 - Apply the `swiftui-pro`, `typography-designer`, and `macos-design` skills to the
   detail-view rework (per `CLAUDE.md`).
-- Update `PROGRESS.md` (newest-first) and this doc is linked from `PLAN.md`'s
+- Update `progress/` (newest-first) and this doc is linked from `PLAN.md`'s
   documentation index.

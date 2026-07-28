@@ -275,7 +275,7 @@ the stream:
 | `Tests/WikiFSTests/TurnLivenessPolicyTests.swift` (**new**) | 7 pure tests |
 | `Tests/WikiFSTests/NotificationFanoutTests.swift` (**new**) | 5 fanout tests |
 | `Tests/WikiFSTests/ACPStallRecoveryTests.swift` (**new**) | 1c stop-while-stalled test |
-| `PROGRESS.md` | Entry |
+| `progress/` | Entry |
 
 ## Acceptance criteria (Phase 1)
 

@@ -21,9 +21,10 @@ load-bearing for the app to function.
 
 - **This file (`PLAN.md`)** — the master index: the doc map below, milestone
   status, and the build quick-reference.
-- **`PROGRESS.md`** — the running log, newest first: what was built each step and
-  the evidence each gate passed. *To get a future agent up to speed, read
-  `PLAN.md` then `PROGRESS.md`.*
+- **[`progress/`](progress/README.md)** — the running log: what was built each
+  step and the evidence each gate passed. Read entry files in reverse lexical
+  order for newest first. *To get a future agent up to speed, read `PLAN.md`
+  then `progress/`.*
 - **`plans/`** — the deep design docs (architecture, build, File Provider,
   signing); see the table below for which is which.
 - **`ISSUES.md`** — known limitations we've chosen to live with.
@@ -79,7 +80,7 @@ load-bearing for the app to function.
 | [`plans/extraction-vs-ingestion-lock.md`](plans/extraction-vs-ingestion-lock.md) | **Current direction:** treat markdown *extraction* (pdf2md) and agent *ingestion* (the `claude -p` run) as two phases. Extraction must never lock queries, edits, or another file's ingest. Split the overloaded `ingestingFileIDs` into `extractingFileIDs` (pdf2md phase) + `ingestingFileIDs` (agent-spawn phase), plus an optional separate extraction lock to serialize pdf2md without touching the spawn slot. |
 | [`plans/wikictl-file-reads.md`](plans/wikictl-file-reads.md) | A `wikictl file` command family (`list` / `cat` / `export`) so the agent reads raw ingested files from SQLite instead of the File Provider mount during Query. First concrete step of the provider-decouple effort; rewrites the Query prompt off `$WIKI_ROOT/files/...`. |
 | [`plans/tab-context-menu-rebuild.md`](plans/tab-context-menu-rebuild.md) | Multi-tab editor space — design of record. `activeTabID: UUID?` source of truth (no index arithmetic), one-intent-per-method tab ops, tab reuse, native SwiftUI `.contextMenu` (Close / Close Others / Close Tabs After / Close All), opacity-fade close button, responsive shrink-to-fit strip with overflow menu. 43 `EditorTabTests` + 7 `TabBarLayoutTests`. |
-| [`plans/link-context-menus.md`](plans/link-context-menus.md) | **Implemented (`feature/link-context-menus`).** Right-click link context menus (Suggest for missing links, Find Similar for any link, Copy as wiki-link, Open in Browser + Copy Link) — right-click now selects the **whole link**, not the word under the cursor. Documents the Textual blocker (its `NSTextInteractionView` owns right-click + the menu internally; `model.url(for:)` hit-test is internal) and the decision to vendor Textual in-repo. Copy File Path + Edit Link are classified but deferred (see `PROGRESS.md`). **Issue #188 add-on:** an **Add Bookmark…** item (`.addBookmark` action) now appears on **resolved internal wiki links** (`[[Page]]` / `[[source:Name]]`) — resolves the target id and files it into a folder via `BookmarkTargetPickerSheet` (new `\.addBookmarkHandler` env value; no fetch). |
+| [`plans/link-context-menus.md`](plans/link-context-menus.md) | **Implemented (`feature/link-context-menus`).** Right-click link context menus (Suggest for missing links, Find Similar for any link, Copy as wiki-link, Open in Browser + Copy Link) — right-click now selects the **whole link**, not the word under the cursor. Documents the Textual blocker (its `NSTextInteractionView` owns right-click + the menu internally; `model.url(for:)` hit-test is internal) and the decision to vendor Textual in-repo. Copy File Path + Edit Link are classified but deferred (see `progress/`). **Issue #188 add-on:** an **Add Bookmark…** item (`.addBookmark` action) now appears on **resolved internal wiki links** (`[[Page]]` / `[[source:Name]]`) — resolves the target id and files it into a folder via `BookmarkTargetPickerSheet` (new `\.addBookmarkHandler` env value; no fetch). |
 | [`plans/issue-933-page-context-menu.md`](plans/issue-933-page-context-menu.md) | **Implemented (`fix/933-page-context-menu`, issue #933).** Right-clicking the rendered page (not a link) now offers **Back / Forward / Print Page…** above and below WebKit's Reload, Safari's order. Navigation reads `WikiStoreModel.canNavigateBack`/`navigateBack()` — the same history stacks the toolbar chevrons (⌘[ / ⌘]) and swipe monitor use; the reader loads via `loadHTMLString` so `WKWebView.canGoBack` is always false and is **not** the source of truth. New `PageContextMenuNSItems` (typed `PageContextMenuAction` label/symbol + menu splicing) and `ReaderPrinting` — the app's **first and only** print path, `WKWebView.printOperation(with:)` on a copied `NSPrintInfo`, run sheet-modal so the main actor never blocks. `NSMenuItem.wikiItem` gained a closure `isEnabled` and `ClosureMenuItemTarget` now conforms to `NSMenuItemValidation`, so enablement is re-derived by AppKit at display time instead of frozen at build time. Link right-clicks are unchanged (#925's lazy Suggest… submenu intact). 15 tests over the real `NSMenu` path + a hosted `NSWindow` test. |
 | [`plans/reader-editor-zoom.md`](plans/reader-editor-zoom.md) | Safari-style text zoom for the page reader and monospace editors. Pure `ZoomScale` model (0.5–3.0, ×/÷1.1 step, scroll-step accumulation); `@AppStorage` keys `reader.zoom` and `editor.zoom` (first in the app); ⌘+/⌘=/⌘−/⌘0 via `.opacity(0)` buttons (`ZoomShortcuts`) and ⌘+scroll (`ZoomScroll`) in `PageDetailView` and `SourceDetailView`. No menu item. 21 `ZoomScaleTests`. |
 | [`plans/dirty-editor-protection.md`](plans/dirty-editor-protection.md) | **Implemented (`feature/dirty-editor-protection`).** Three editor-UX fixes: outline toggle button added to the edit-mode toolbar in both `PageDetailView` and `SourceDetailView`; per-tab edit-mode persistence via `EditorTab.isEditing` (switching tabs and back restores edit mode); close-tab confirmation (`pendingCloseTabID` deferred close + "Close Tab?" alert) so ⌘W / × while editing cannot silently discard the edit session. Sources flush `editBuffer` before `confirmCloseTab()` to ensure `file.id` is still the closing tab's source. |
@@ -147,7 +148,7 @@ load-bearing for the app to function.
 
 ## Status
 
-See `PROGRESS.md` for the running log. Current: **🎉 LLM Wiki COMPLETE ✅ — all
+See `progress/` for the running log. Current: **🎉 LLM Wiki COMPLETE ✅ — all
 five phases (0, A, B, C, D) gate-passed.** Self Driving Wiki is now a self-maintaining LLM
 wiki: a user keeps **many** wikis (one SQLite DB + one File Provider domain
 each); an LLM (`claude -p`, run as **Ingest / Query / Lint** from the app)
@@ -240,7 +241,7 @@ change — code-only. **Phase gate met: 1653 tests green** (AC.1–AC.10). See
   `AgentRunBanner` and scopes its debug cluster to active query runs only. 6 new
   `AgentSpawnSlotTests`.
 
-**Phase summary (newest first; see `PROGRESS.md` for each gate's evidence):**
+**Phase summary (newest first; see `progress/` for each gate's evidence):**
 - **Page body contract** ✅ `body_markdown` in SQLite now stores clean body only
   (no H1, no frontmatter); `PageMarkdownFormat` strips both on load/rename and
   regenerates them in the file provider (`Projection`); outline flicker
@@ -283,7 +284,7 @@ projected read-only onto the filesystem via a File Provider extension, kept
 fresh on edit, and traversable by an agent launched with `WIKI_ROOT`. Delivered
 across four stacked, **unmerged** branches off a pristine `main`
 (`phase-1-local-wiki` → `phase-2-file-provider` → `phase-3-verify-fresh` →
-`phase-4-agent-wiki`) — review and merge locally. See `PROGRESS.md` for each
+`phase-4-agent-wiki`) — review and merge locally. See `progress/` for each
 gate's evidence and the known v0 gaps.
 
 **Post-v0 features** (also stacked, unmerged):
@@ -296,7 +297,7 @@ gate's evidence and the known v0 gaps.
   `system_prompt` table, v2→3 migration) projected **read-only at the wiki root
   as both `CLAUDE.md` and `AGENTS.md`** (identical bytes). Edited in-app via a
   pinned sidebar item. Code complete + unit-tested (69 tests); **live-mount gate
-  pending**. See `PROGRESS.md`.
+  pending**. See `progress/`.
 
 ## Milestones (from `plans/INITIAL.md`)
 

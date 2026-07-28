@@ -267,5 +267,5 @@ if liveProviders.isEmpty {
 5. Add integration tests
 6. Verify end-to-end behavior
 7. Update PLAN.md with new feature
-8. Update PROGRESS.md with implementation notes
+8. Update progress/ with implementation notes
 9. Push branch and open PR linking #813

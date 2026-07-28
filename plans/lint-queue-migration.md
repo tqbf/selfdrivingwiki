@@ -75,4 +75,4 @@ re-renders state), so enqueued items use current wiki state, not a stale snapsho
 
 - QueueEngine tests: lint dispatch, per-wiki serialization with ingestion, pause/halt
 - Build + fast test tier
-- Update PROGRESS.md
+- Update progress/

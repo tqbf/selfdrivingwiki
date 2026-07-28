@@ -234,7 +234,7 @@ Final post-fix acceptance on the integrated branch:
 
 Final integration guard commands:
 
-- `rg -n 'issue-925-cooperative-pool-starvation\\.md' PLAN.md && rg -n '^## fix: cooperative-pool starvation \\(#925\\)' PROGRESS.md && test -f plans/issue-925-cooperative-pool-starvation.md` → passed.
+- `rg -n 'issue-925-cooperative-pool-starvation\\.md' PLAN.md && rg -n '^# fix: cooperative-pool starvation \\(#925\\)' progress/ && test -f plans/issue-925-cooperative-pool-starvation.md` → passed.
 - `git diff --check`: failed only on unrelated pre-existing trailing whitespace in `AGENTS.md:19`.
 
 ## Deferred Standalone CLI/Daemon Audit

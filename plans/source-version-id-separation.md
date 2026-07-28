@@ -166,7 +166,7 @@ Keep existing page and chat not-found cases unchanged.
 2. Match the `SourceID` and `ChatID` nominal pattern exactly.
 3. Add raw-value, identity, hash, and `Codable` tests.
 4. Extend `DocumentationContractTests` for this plan.
-5. Record the first-commit evidence in `PROGRESS.md`.
+5. Record the first-commit evidence in `progress/`.
 
 ### Phase 2: Convert source content-version models
 

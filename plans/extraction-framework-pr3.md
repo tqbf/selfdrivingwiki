@@ -333,7 +333,7 @@ swift test                        # full suite — ~1.5 min (in-memory fixtures 
   `…WithoutMarkdownSidecar`; assert `source.extractedMarkdown == nil`).
 - **Edit (docs):** `PLAN.md` (master index — mark PR3 landed +
   the `WebsiteSnapshotExtractor` scope-boundary tweak),
-  `PROGRESS.md` (entry for PR3), this file.
+  `progress/` (entry for PR3), this file.
 
 ## Out of scope (covered by parent plan)
 

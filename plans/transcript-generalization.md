@@ -329,7 +329,7 @@ revisit when the Python-subprocess backend lands (#584).
 | File | Change |
 |---|---|
 | `PLAN.md` | Add a row for the transcript-generalization plan. |
-| `PROGRESS.md` | Entry for the generalization PR. |
+| `progress/` | Entry for the generalization PR. |
 | `plans/transcript-generalization.md` | Move this scratch doc into `plans/` (the implementation design). |
 
 ---
