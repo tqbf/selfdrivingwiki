@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 
 /// The read-side projection of a page's origin provenance — the inverse of the
 /// write-path that stamps an `agents` + `activities` + `page_versions` triple
@@ -26,16 +27,16 @@ public struct PageOrigin: Sendable, Equatable {
     public let blobHash: String?
     /// The agent's display name — `chat:<chatID>` / `agent:<kind>` / `user` /
     /// a model id — i.e. exactly the value `last_edited_by` carries (and that
-    /// the writer threads into `ensureAgent`). Degrades to `"unknown"` when
-    /// the activity has no agent (NULL FK).
-    public let agentName: String
+    /// the writer threads into `ensureAgent`). Degrades to `.other("unknown")`
+    /// when the activity has no agent (NULL FK).
+    public let agentName: PageAuthor
     /// The agent's structured kind (`chat` / `agent` / `human` / `model` /
-    /// `software`). Degrades to `"software"` for the legacy-import shared
+    /// `software`). Degrades to `.software` for the legacy-import shared
     /// agent so the UI can label pre-v39 rows distinctly.
-    public let agentKind: String
+    public let agentKind: AgentKind
     /// The activity's kind: `'import'` (page create) or `'edit'` (page update).
-    /// Degrades to `"import"` when NULL.
-    public let activityKind: String
+    /// Degrades to `.import` when NULL.
+    public let activityKind: ActivityKind
     /// Optional activity `plan` (executor phase / run label). Not yet
     /// populated by the write path (Phase 2 will thread a `WIKI_RUN_REF`).
     public let plan: String?
@@ -57,9 +58,9 @@ public struct PageOrigin: Sendable, Equatable {
         versionID: PageVersionID,
         title: String,
         blobHash: String?,
-        agentName: String,
-        agentKind: String,
-        activityKind: String,
+        agentName: PageAuthor,
+        agentKind: AgentKind,
+        activityKind: ActivityKind,
         plan: String?,
         externalRef: String?,
         runTitle: String? = nil,
