@@ -307,6 +307,9 @@ let package = Package(
             name: "FuzzHarness",
             dependencies: ["WikiFSLinks", "WikiFSMarkdown", "WikiFSTypes"],
             path: "Sources/FuzzHarness",
+            resources: [
+                .copy("fuzz-dict.txt")
+            ],
             // No `-warnings-as-errors` here — fuzzer output is noisy and the
             // harness deliberately exercises formatting paths that are
             // sometimes_warnable. The dependencies still build strict.
