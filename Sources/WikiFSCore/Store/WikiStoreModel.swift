@@ -666,7 +666,7 @@ public final class WikiStoreModel {
     /// and bookmark nodes. The result always starts with an `.ask(question:)`
     /// action row (so the user can send the query straight to chat), followed by
     /// up to 3 pages, 2 sources, 2 chats, and 3 bookmark matches.
-    public func searchOmnibox(query: String) -> [OmniboxResult] {
+    public func searchOmnibox(query: String) async -> [OmniboxResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -676,15 +676,30 @@ public final class WikiStoreModel {
         results.append(.ask(question: trimmed))
 
         // 2. Pages (semantic + FTS).
-        let pages = searchSimilar(query: trimmed, limit: 3)
+        let pageLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .page, limit: 3, catalog: summaries,
+            id: PageID.init(rawValue:))
+        let pages = (DebugLog.trying("searchOmniboxPages", operation: {
+            try store.searchSimilar(query: trimmed, limit: 3, bm25Leg: pageLeg)
+        }) ?? [])
         results.append(contentsOf: pages.map { .page($0) })
 
         // 3. Sources (semantic + FTS).
-        let sources = searchSimilarSources(query: trimmed, limit: 2)
+        let sourceLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .source, limit: 2, catalog: sources,
+            id: SourceID.init(rawValue:))
+        let sources = (DebugLog.trying("searchOmniboxSources", operation: {
+            try store.searchSimilarSources(query: trimmed, limit: 2, bm25Leg: sourceLeg)
+        }) ?? [])
         results.append(contentsOf: sources.map { .source($0) })
 
         // 4. Chats (semantic + FTS).
-        let chats = searchSimilarChats(query: trimmed, limit: 2)
+        let chatLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .chat, limit: 2, catalog: chats,
+            id: ChatID.init(rawValue:))
+        let chats = (DebugLog.trying("searchOmniboxChats", operation: {
+            try store.searchSimilarChats(query: trimmed, limit: 2, bm25Leg: chatLeg)
+        }) ?? [])
         results.append(contentsOf: chats.map { .chat($0) })
 
         // 5. Bookmarks (plain substring over folder labels + resolved ref titles).

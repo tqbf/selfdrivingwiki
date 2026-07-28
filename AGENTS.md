@@ -18,6 +18,9 @@ Last verified: 2026-07-27
 * Record progress in PROGRESS.md. I should be able to tell a future agent "read PLAN.md and
 PROGRESS.md" and trust it's up to speed with this codebase.
 
+* `PLAN.md` and `PROGRESS.md` document features and design-relevant refactorings only.
+  Do not add bug-fix entries to either file.
+
 * When writing prose, use the ste-testing skill to ensure clarity.  This applies to pull requests, 
   github issues, plans in the plans folder, and progress in PROGRESS.md.
 
