@@ -89,16 +89,19 @@ struct TantivyShadowIndexTests {
         let page1 = makeSnapshot(ulid: "01PAGE0001", kind: .page, title: "Rust Ownership", body: "Borrowing and lifetimes in the Rust language.")
         let page2 = makeSnapshot(ulid: "01PAGE0002", kind: .page, title: "Swift Concurrency", body: "Actors and structured concurrency.")
         let source1 = makeSnapshot(ulid: "01SRC00001", kind: .source, title: "Tantivy Docs", body: "Full text search engine written in Rust.")
+        let page3 = makeSnapshot(ulid: "01PAGE0003", kind: .page, title: "Websockets Guide", body: "Building a realtime client with websockets.")
         await source.upsert(page1)
         await source.upsert(page2)
         await source.upsert(source1)
+        await source.upsert(page3)
 
         await service.indexer.upsert(ulid: page1.ulid, kind: .page)
         await service.indexer.upsert(ulid: page2.ulid, kind: .page)
         await service.indexer.upsert(ulid: source1.ulid, kind: .source)
+        await service.indexer.upsert(ulid: page3.ulid, kind: .page)
 
         let count = await service.indexer.count()
-        #expect(count == 3, "three documents should be indexed")
+        #expect(count == 4, "four documents should be indexed")
 
         // Search for "rust" — should match the Rust page AND the Tantivy source
         // (body contains "Rust"). Both are lexical BM25 hits.
@@ -115,6 +118,8 @@ struct TantivyShadowIndexTests {
 
         // Fuzzy search: "concurency" (typo) should still match "Concurrency".
         let fuzzyResults = await service.search(query: "concurency", limit: 10)
+        let websocketsResults = await service.search(query: "websockets", limit: 10)
+        #expect(websocketsResults.contains { $0.title == "Websockets Guide" }, "compound technical terms should be searchable from the omnibox")
         #expect(fuzzyResults.contains { $0.title == "Swift Concurrency" }, "fuzzy match should find 'Swift Concurrency' despite the typo")
     }
 

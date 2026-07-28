@@ -1,5 +1,17 @@
 # Progress log
 
+## 2026-07-28 — Omnibox lexical search fix (#971)
+
+The omnibox previously called the synchronous no-BM25 search wrappers. Since
+FTS5 was retired, that path returned no lexical results for queries such as
+`websockets`. `WikiStoreModel.searchOmnibox` now resolves Tantivy hits for
+pages, sources, and chats before hybrid ranking, and `AddressBarView` awaits
+the result inside its existing debounce task. Added compound-term Tantivy
+regression coverage.
+
+**Verification.** Focused Tantivy test is running; full `swift test` remains
+the final gate.
+
 ## 2026-07-28 — PageVersionID separation
 
 Added `PageVersionID` for `page_versions.id` and migrated page history, CAS, revert, restore, workspace, compare UI, CLI, and provenance paths. Created workspace pages return `nil` from `workspaceWritePage` because blob-only staging has no page-version row. Workspace conflicts tag real page versions separately from staged blob hashes, and wiki-index conflicts no longer masquerade as page-version IDs. Shared provenance uses tagged page/source version IDs.
