@@ -67,25 +67,25 @@ struct FileProviderDomainLifecycleTests {
         /// `NSFileWriteFileExistsError` against a leftover replica.
         func failAdds(with error: any Error) { lock.withLock { _addError = error } }
 
-        func add(id: String, displayName: String) async throws {
+        func add(id: WikiID, displayName: String) async throws {
             try lock.withLock {
-                _calls.append(.add(id: id, displayName: displayName))
+                _calls.append(.add(id: id.rawValue, displayName: displayName))
                 if let _addError { throw _addError }
-                registered[id] = displayName
+                registered[id.rawValue] = displayName
             }
         }
 
-        func remove(id: String, reason: DomainRemovalReason) async throws {
+        func remove(id: WikiID, reason: DomainRemovalReason) async throws {
             lock.withLock {
-                _calls.append(.remove(id: id, reason: reason))
-                registered[id] = nil
+                _calls.append(.remove(id: id.rawValue, reason: reason))
+                registered[id.rawValue] = nil
             }
         }
 
         func domains() async -> [RegisteredDomain] {
             lock.withLock {
                 _calls.append(.domains)
-                return registered.map { RegisteredDomain(id: $0.key, displayName: $0.value) }
+                return registered.map { RegisteredDomain(id: WikiID(rawValue: $0.key), displayName: $0.value) }
             }
         }
     }
