@@ -224,6 +224,18 @@ import ACPModel
         #expect(!prompt.contains("source-1.md"))
     }
 
+    @Test func executorPromptIncludesPriorCeilingKillAdvisory() {
+        let prompt = ACPIngestPrompts.executorPrompt(
+            stateFilePath: "/tmp/state.md",
+            assignments: [],
+            allPageTitles: [],
+            sourceIDs: ["id1"],
+            retryAdvisory: "Prior turn hit its ceiling after 10m 0s while permission for `Bash` waited 9m 0s.")
+
+        #expect(prompt.contains("## Prior ceiling-kill context"))
+        #expect(prompt.contains("permission for `Bash` waited 9m 0s"))
+    }
+
     @Test func testFinalizerPromptFillsPlaceholders() {
         let prompt = ACPIngestPrompts.finalizerPrompt(
             stateFilePath: "/tmp/state.md",

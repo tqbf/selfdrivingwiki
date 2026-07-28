@@ -145,6 +145,9 @@ public final class AgentLauncher {
     /// and the provider throws so the queue item transitions to `.failed`
     /// instead of `.completed`. Cleared in `resetRunArtifacts()`.
     @ObservationIgnored public var runHadTurnFailure = false
+    /// Ceiling-kill forensic context inherited from the most recent prior run
+    /// of this queue item. Nil for first attempts and non-queue runs.
+    @ObservationIgnored private var retryCeilingKillContext: CeilingKillContext?
     /// Set when the PATH preflight fails (claude not resolvable) or the spawn
     /// itself throws; shown in the UI instead of spawning. Cleared on the next
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
@@ -1230,6 +1233,10 @@ public final class AgentLauncher {
             releaseGenerationSlot()
             return
         }
+        if queueItemID != nil {
+            retryCeilingKillContext = CeilingKillContext.loadLatestPriorRun(
+                in: scratch.deletingLastPathComponent(), excluding: scratch)
+        }
 
         // Stage inputs into scratch from reliable local disk, then finalize the
         // operation with the staged absolute paths. A staging failure aborts the run
@@ -1692,11 +1699,12 @@ public final class AgentLauncher {
             stageModelId: plannerModel,
             baselineModelId: nil,  // planner uses createSession — baseline from newSession (fresh)
             forkFrom: nil,
-            buildPrompt: { _ in
-                ACPIngestPrompts.plannerPrompt(
-                    stateFilePath: stateFilePath,
-                    stagedSourcePaths: stagedSourcePaths,
-                    sourceIDs: sourceIDs)
+                    buildPrompt: { _ in
+                        ACPIngestPrompts.plannerPrompt(
+                            stateFilePath: stateFilePath,
+                            stagedSourcePaths: stagedSourcePaths,
+                            sourceIDs: sourceIDs,
+                            retryAdvisory: self.retryCeilingKillContext?.retryAdvisory)
             },
             scratch: scratch,
             makeCLIProfile: makeCLIProfile,
@@ -1820,7 +1828,8 @@ public final class AgentLauncher {
                             stateFilePath: stateFilePath,
                             assignments: executorAssignments,
                             allPageTitles: plan.allPageTitles,
-                            sourceIDs: sourceIDs)
+                            sourceIDs: sourceIDs,
+                            retryAdvisory: self.retryCeilingKillContext?.retryAdvisory)
                     },
                     scratch: scratch,
                     makeCLIProfile: makeCLIProfile,
@@ -2000,7 +2009,8 @@ public final class AgentLauncher {
                     stateFilePath: stateFilePath,
                     assignments: assignments,
                     allPageTitles: allPageTitles,
-                    sourceIDs: sourceIDs)
+                    sourceIDs: sourceIDs,
+                    retryAdvisory: self.retryCeilingKillContext?.retryAdvisory)
                 let phaseName = "executor[\(sourceFile)]"
                 let workDir = profile.scratchDirectory?.path
                 let parentHandle = forkFrom
@@ -3651,10 +3661,26 @@ public final class AgentLauncher {
             runHadTurnFailure = true
         }
 
+        // The live pending-permission row clears during terminal teardown. Keep
+        // the forensic cause visible in the Activity transcript by forwarding a
+        // compact postmortem event after the ceiling-failure event.
+        let ceilingKillActivityEvent: AgentEvent? = {
+            guard case .turnFailed(.ceilingExceeded) = event,
+                  let debugFolderURL,
+                  let context = CeilingKillContext.load(
+                    from: debugFolderURL.appendingPathComponent("ceiling-kill-context.json")),
+                  let advisory = context.retryAdvisory
+            else { return nil }
+            return .raw("⚠️ \(advisory)")
+        }()
+
         // Forward to the queue's per-item transcript callback (Activity window).
         // Fired on every event so the tracker gets a live, complete transcript.
         if let onAgentEvent {
             onAgentEvent(event)
+            if let ceilingKillActivityEvent {
+                onAgentEvent(ceilingKillActivityEvent)
+            }
         } else {
             DebugLog.agent("mergeOrAppend: onAgentEvent is nil — event not forwarded to tracker")
         }
@@ -3764,6 +3790,7 @@ public final class AgentLauncher {
         // in-flight always-ask continuations.
         stopPendingPermissionPoller()
         pendingPermissions = []
+        retryCeilingKillContext = nil
 
         // #813 Phase 3: Clear ACP session ID on successful completion
         if status == 0,

@@ -131,6 +131,31 @@ final class DebugRunLoggerTests: XCTestCase {
         XCTAssertEqual(obj?["durationSeconds"] as? Double, 10.0)
     }
 
+    func testCeilingKillContextIsWrittenWithPendingCommandAndWaitTime() throws {
+        let debugURL = tempDir.appendingPathComponent("debug", isDirectory: true)
+        let logger = try XCTUnwrap(DebugRunLogger(folderURL: debugURL))
+        let context = CeilingKillContext(
+            occurredAt: Date(timeIntervalSince1970: 1_200),
+            totalSeconds: 600,
+            pendingPermissions: [
+                .init(
+                    toolCallID: ToolCallID(rawValue: "call-1"),
+                    toolName: "Bash",
+                    inputSummary: "$WIKICTL page get state | python",
+                    requestedAt: Date(timeIntervalSince1970: 900),
+                    waitSeconds: 300)
+            ])
+
+        logger.logCeilingKillContext(context)
+
+        let url = debugURL.appendingPathComponent("ceiling-kill-context.json", isDirectory: false)
+        let data = try Data(contentsOf: url)
+        let decoded = try JSONDecoder().decode(CeilingKillContext.self, from: data)
+        XCTAssertEqual(decoded.totalSeconds, 600)
+        XCTAssertEqual(decoded.pendingPermissions.first?.inputSummary, "$WIKICTL page get state | python")
+        XCTAssertEqual(decoded.pendingPermissions.first?.waitSeconds, 300)
+    }
+
     func testSessionNewIsWritten() throws {
         let debugURL = tempDir.appendingPathComponent("debug", isDirectory: true)
         guard let logger = DebugRunLogger(folderURL: debugURL) else {

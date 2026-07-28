@@ -900,6 +900,7 @@ public actor ACPBackend: AgentBackend {
 
         let client = session.client
         let sessionId = session.sessionId
+        let permissionDelegate = session.permissionDelegate
         let translator = ACPEventTranslator()
         let fanout = session.notificationFanout
         let ceilingTimeout = turnCeilingTimeout
@@ -941,7 +942,7 @@ public actor ACPBackend: AgentBackend {
             // produce notifications for every activity (thinking, tool calls,
             // sub-agent lifecycle), so a live agent is almost never truly idle.
             // Process death is detected separately by `sendPrompt` throwing.
-            let watchdogTask = Task { [client, sessionId, completionFlag, processHealth] in
+            let watchdogTask = Task { [client, sessionId, permissionDelegate, completionFlag, processHealth] in
                 while !Task.isCancelled {
                     // Task.sleep only throws CancellationError — expected, not actionable.
                     // swiftlint:disable:next silent_try_optional
@@ -964,6 +965,13 @@ public actor ACPBackend: AgentBackend {
                         continue
                     case .ceilingExceeded(let total):
                         DebugLog.agent("ACPBackend: TURN CEILING exceeded (\(Int(total))s), recovering")
+                        // Persist the still-live continuation before cancellation
+                        // drains it. A subsequent queue retry reads this artifact.
+                        let now = Date()
+                        debugLogger?.logCeilingKillContext(
+                            permissionDelegate.ceilingKillContext(
+                                occurredAt: now,
+                                totalSeconds: total))
                         completionFlag.markDone()
                         for event in Self.turnEndEvents(error: ACPBackendError.turnCeilingExceeded(totalSeconds: total)) {
                             continuation.yield(event)

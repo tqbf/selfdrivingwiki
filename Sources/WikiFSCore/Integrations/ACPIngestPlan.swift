@@ -147,7 +147,8 @@ public enum ACPIngestPrompts {
     public static func plannerPrompt(
         stateFilePath: String,
         stagedSourcePaths: [String],
-        sourceIDs: [String]
+        sourceIDs: [String],
+        retryAdvisory: String? = nil
     ) -> String {
         let sourceFiles = stagedSourcePaths
             .map { path -> String in
@@ -158,11 +159,12 @@ public enum ACPIngestPrompts {
             }
             .joined(separator: "\n")
 
-        return PromptTemplate.fill(GeneratedPrompts.ingestPlanner, [
+        let prompt = PromptTemplate.fill(GeneratedPrompts.ingestPlanner, [
             "STATE_FILE_PATH": stateFilePath,
             "SOURCE_FILES": sourceFiles,
             "SOURCE_IDS": sourceIDs.joined(separator: ", "),
         ])
+        return appendRetryAdvisory(retryAdvisory, to: prompt)
     }
 
     /// The executor task prompt. Instructs Sonnet to read its assigned source
@@ -172,7 +174,8 @@ public enum ACPIngestPrompts {
         stateFilePath: String,
         assignments: [ACPIngestPageAssignment],
         allPageTitles: [String],
-        sourceIDs: [String]
+        sourceIDs: [String],
+        retryAdvisory: String? = nil
     ) -> String {
         let assignedPages = assignments.map { a -> String in
             """
@@ -189,13 +192,19 @@ public enum ACPIngestPrompts {
         // is visible at a glance rather than masquerading as a real source.
         let primarySourceFile = assignments.first?.sourceFile ?? "source.md"
 
-        return PromptTemplate.fill(GeneratedPrompts.ingestExecutor, [
+        let prompt = PromptTemplate.fill(GeneratedPrompts.ingestExecutor, [
             "STATE_FILE_PATH": stateFilePath,
             "ASSIGNED_PAGES": assignedPages,
             "ALL_PAGE_TITLES": allPageTitles.map { "- \($0)" }.joined(separator: "\n"),
             "SOURCE_IDS": sourceIDs.joined(separator: ", "),
             "PRIMARY_SOURCE_FILE": primarySourceFile,
         ])
+        return appendRetryAdvisory(retryAdvisory, to: prompt)
+    }
+
+    private static func appendRetryAdvisory(_ advisory: String?, to prompt: String) -> String {
+        guard let advisory, !advisory.isEmpty else { return prompt }
+        return "\(prompt)\n\n## Prior ceiling-kill context\n\(advisory)"
     }
 
     /// The finalizer task prompt. Instructs Opus to write `index.md` and record
