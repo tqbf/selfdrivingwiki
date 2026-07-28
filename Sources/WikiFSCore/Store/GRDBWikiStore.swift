@@ -5863,12 +5863,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let kind: String = row["kind"]
                 let label: String? = row["label"]
                 let targetRawValue: String? = row["target_id"]
+                let parentIDRaw: String? = row["parent_id"]
                 return BookmarkNode(
-                    id: id,
-                    parentID: row["parent_id"],
+                    id: BookmarkID(rawValue: id),
+                    parentID: parentIDRaw.map(BookmarkID.init(rawValue:)),
                     position: row["position"],
                     content: try BookmarkNode.content(
-                        bookmarkID: id,
+                        bookmarkID: BookmarkID(rawValue: id),
                         kindRawValue: kind,
                         label: label,
                         targetRawValue: targetRawValue
@@ -5882,19 +5883,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func createBookmarkNode(
-        parentID: String?, position: Int,
+        parentID: BookmarkID?, position: Int,
         content: BookmarkNode.Content
     ) throws -> BookmarkNode {
         try mutate(event: { node in
-            self.localEvent(.bookmark, id: node.id, change: .created)
+            self.localEvent(.bookmark, id: node.id.rawValue, change: .created)
         }) { db in
             _ = try BookmarkNode.content(
-                bookmarkID: "<new bookmark>",
+                bookmarkID: BookmarkID(rawValue: "<new bookmark>"),
                 kindRawValue: content.kind.rawValue,
                 label: content.label,
                 targetRawValue: content.targetRawValue
             )
-            let id = ULID.generate()
+            let id = BookmarkID(rawValue: ULID.generate())
             let now = Date().timeIntervalSince1970
 
             // Shift siblings at >= position up by 1 within the same parent.
@@ -5902,13 +5903,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             UPDATE bookmark_nodes SET position = position + 1
             WHERE parent_id IS ? AND position >= ?;
-            """, arguments: [parentID as String?, position])
+            """, arguments: [parentID?.rawValue as String?, position])
 
             try db.execute(sql: """
             INSERT INTO bookmark_nodes (id, parent_id, position, kind, label, target_id, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """, arguments: [
-                id, parentID as String?, position, content.kind.rawValue,
+                id.rawValue, parentID?.rawValue as String?, position, content.kind.rawValue,
                 content.label as String?, content.targetRawValue as String?, now, now
             ])
 
@@ -5917,7 +5918,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let parentArg: String?
             if let parentID {
                 parentColumn = "parent_id = ?"
-                parentArg = parentID
+                parentArg = parentID.rawValue
             } else {
                 parentColumn = "parent_id IS NULL"
                 parentArg = nil
@@ -5944,37 +5945,37 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func renameBookmarkFolder(id: String, to label: String) throws {
+    public func renameBookmarkFolder(id: BookmarkID, to label: String) throws {
         try mutate(event: { _ in
-            self.localEvent(.bookmark, id: id, change: .updated)
+            self.localEvent(.bookmark, id: id.rawValue, change: .updated)
         }) { db in
             guard !label.isEmpty else {
-                throw WikiStoreError.invalidBookmarkRow(id: id, reason: "folder requires a non-empty label")
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folder requires a non-empty label")
             }
             let now = Date().timeIntervalSince1970
             try db.execute(sql: """
             UPDATE bookmark_nodes SET label = ?, updated_at = ? WHERE id = ? AND kind = ?;
-            """, arguments: [label, now, id, BookmarkNodeKind.folder.rawValue])
+            """, arguments: [label, now, id.rawValue, BookmarkNodeKind.folder.rawValue])
             guard db.changesCount == 1 else {
-                throw WikiStoreError.invalidBookmarkRow(id: id, reason: "only folders can be renamed")
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "only folders can be renamed")
             }
         }
     }
 
 
-    public func deleteBookmarkNode(id: String) throws {
+    public func deleteBookmarkNode(id: BookmarkID) throws {
         try mutate(event: { _ in
-            self.localEvent(.bookmark, id: id, change: .deleted)
+            self.localEvent(.bookmark, id: id.rawValue, change: .deleted)
         }) { db in
             // Capture the parent for sibling renumbering after the delete.
             let oldParent: String? = try String.fetchOne(
                 db,
                 sql: "SELECT parent_id FROM bookmark_nodes WHERE id = ?;",
-                arguments: [id]
+                arguments: [id.rawValue]
             )
             try db.execute(
                 sql: "DELETE FROM bookmark_nodes WHERE id = ?;",
-                arguments: [id]
+                arguments: [id.rawValue]
             )
             // Renumber old siblings to be contiguous.
             let parentColumn: String
@@ -6002,17 +6003,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func moveBookmarkNode(id: String, toParentID: String?, position: Int) throws {
+    public func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) throws {
         try mutate(event: { _ in
-            self.localEvent(.bookmark, id: id, change: .updated)
+            self.localEvent(.bookmark, id: id.rawValue, change: .updated)
         }) { db in
             // Read the node's current parent.
             guard let row = try Row.fetchOne(
                 db,
                 sql: "SELECT parent_id, position FROM bookmark_nodes WHERE id = ?;",
-                arguments: [id]
+                arguments: [id.rawValue]
             ) else {
-                throw WikiStoreError.unexpected("moveBookmarkNode: node \(id) not found")
+                throw WikiStoreError.unexpected("moveBookmarkNode: node \(id.rawValue) not found")
             }
             let oldParent: String? = row["parent_id"]
 
@@ -6020,11 +6021,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // descendants. Walk up the parent chain from toParentID — if we
             // encounter `id`, it's a descendant (or the node itself).
             if let toParentID {
-                var ancestor: String? = toParentID
+                var ancestor: String? = toParentID.rawValue
                 while let current = ancestor {
-                    if current == id {
+                    if current == id.rawValue {
                         throw WikiStoreError.unexpected(
-                            "moveBookmarkNode: cannot move \(id) into its own descendant \(toParentID)"
+                            "moveBookmarkNode: cannot move \(id.rawValue) into its own descendant \(toParentID.rawValue)"
                         )
                     }
                     ancestor = try String.fetchOne(
@@ -6037,7 +6038,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             let sameParent: Bool
             if let oldParent, let toParentID {
-                sameParent = oldParent == toParentID
+                sameParent = oldParent == toParentID.rawValue
             } else {
                 sameParent = oldParent == nil && toParentID == nil
             }
@@ -6047,23 +6048,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             UPDATE bookmark_nodes SET position = position + 1
             WHERE parent_id IS ? AND position >= ? AND id != ?;
-            """, arguments: [toParentID as String?, position, id])
+            """, arguments: [toParentID?.rawValue as String?, position, id.rawValue])
 
             // Step 2: Update the node's parent + position.
             try db.execute(sql: """
             UPDATE bookmark_nodes SET parent_id = ?, position = ? WHERE id = ?;
-            """, arguments: [toParentID as String?, position, id])
+            """, arguments: [toParentID?.rawValue as String?, position, id.rawValue])
 
             // Step 2b: A move to a NEW parent bumps updated_at; a pure same-parent
             // reorder does NOT (organizing siblings shouldn't reshuffle the recency view).
             if !sameParent {
                 try db.execute(sql: """
                 UPDATE bookmark_nodes SET updated_at = ? WHERE id = ?;
-                """, arguments: [Date().timeIntervalSince1970, id])
+                """, arguments: [Date().timeIntervalSince1970, id.rawValue])
             }
 
             // Step 3: Renumber siblings on both old and new parent (or root).
-            for parent in [toParentID, sameParent ? nil : oldParent].compactMap({ $0 }) {
+            for parent in [toParentID?.rawValue, sameParent ? nil : oldParent].compactMap({ $0 }) {
                 let sibRows = try Row.fetchAll(
                     db,
                     sql: "SELECT id FROM bookmark_nodes WHERE parent_id = ? ORDER BY position ASC;",

@@ -4,7 +4,7 @@ import WikiFSCore
 /// Sheet for editing a bookmark folder's name.
 struct EditBookmarkSheet: View {
     let store: WikiStoreModel
-    let nodeID: String
+    let nodeID: BookmarkID
     /// Receives the chosen folder name. Main-actor: the caller touches the
     /// @MainActor WikiStoreModel to create bookmark refs.
     let onSave: (@MainActor @Sendable (String) -> Void)

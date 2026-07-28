@@ -154,7 +154,7 @@ public struct WikiStateSnapshot: Equatable, Sendable {
   /// show their target id. The indentation level reflects nesting depth.
   static func renderBookmarkTree(_ nodes: [BookmarkNode]) -> String {
     // Build parent→children map for tree traversal.
-    var childrenMap: [String?: [BookmarkNode]] = [:]
+    var childrenMap: [BookmarkID?: [BookmarkNode]] = [:]
     for node in nodes {
       childrenMap[node.parentID, default: []].append(node)
     }
@@ -164,7 +164,7 @@ public struct WikiStateSnapshot: Equatable, Sendable {
     }
 
     var lines: [String] = []
-    func renderChildren(of parentID: String?, depth: Int) {
+    func renderChildren(of parentID: BookmarkID?, depth: Int) {
       let children = childrenMap[parentID] ?? []
       for child in children {
         let indent = String(repeating: "  ", count: depth)

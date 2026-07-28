@@ -66,10 +66,10 @@ public enum BookmarkCommand {
         if json {
             // Manual JSONL — BookmarkNode isn't Codable.
             let lines = nodes.map { node in
-                let parent = node.parentID ?? ""
+                let parent = node.parentID?.rawValue ?? ""
                 let label = node.label ?? ""
                 let target = node.targetRawValue ?? ""
-                return "{\"id\":\"\(escape(node.id))\",\"parentID\":\"\(escape(parent))\",\"position\":\(node.position),\"kind\":\"\(node.kind.rawValue)\",\"label\":\"\(escape(label))\",\"targetID\":\"\(escape(target))\"}"
+                return "{\"id\":\"\(escape(node.id.rawValue))\",\"parentID\":\"\(escape(parent))\",\"position\":\(node.position),\"kind\":\"\(node.kind.rawValue)\",\"label\":\"\(escape(label))\",\"targetID\":\"\(escape(target))\"}"
             }
             return Result(
                 output: lines.joined(separator: "\n"),
@@ -78,7 +78,7 @@ public enum BookmarkCommand {
         }
         // TSV: id <tab> parentID <tab> position <tab> kind <tab> label <tab> targetID
         let lines = nodes.map { node in
-            "\(node.id)\t\(node.parentID ?? "")\t\(node.position)\t\(node.kind.rawValue)\t\(node.label ?? "")\t\(node.targetRawValue ?? "")"
+            "\(node.id.rawValue)\t\(node.parentID?.rawValue ?? "")\t\(node.position)\t\(node.kind.rawValue)\t\(node.label ?? "")\t\(node.targetRawValue ?? "")"
         }
         return Result(
             output: lines.joined(separator: "\n"),
@@ -98,9 +98,9 @@ public enum BookmarkCommand {
 
     private static func createFolder(parentID: String?, name: String, in store: WikiStore) throws -> Result {
         let node = try store.createBookmarkNode(
-            parentID: parentID, position: -1, content: .folder(label: name)
+            parentID: parentID.map(BookmarkID.init(rawValue:)), position: -1, content: .folder(label: name)
         )
-        return Result(output: "Created folder \"\(name)\" (id: \(node.id)).", didCommit: true)
+        return Result(output: "Created folder \"\(name)\" (id: \(node.id.rawValue)).", didCommit: true)
     }
 
     // MARK: - add-ref
@@ -111,7 +111,9 @@ public enum BookmarkCommand {
         guard content.kind != .folder else {
             throw Failure.message("folder is not a reference")
         }
-        let node = try store.createBookmarkNode(parentID: parentID, position: -1, content: content)
+        let node = try store.createBookmarkNode(
+            parentID: parentID.map(BookmarkID.init(rawValue:)), position: -1, content: content
+        )
         let kindLabel: String
         switch content.kind {
         case .pageRef: kindLabel = "page"
@@ -120,7 +122,7 @@ public enum BookmarkCommand {
         case .folder: kindLabel = "folder"
         }
         return Result(
-            output: "Added \(kindLabel) ref (\(content.targetRawValue ?? "")) to bookmarks (id: \(node.id)).",
+            output: "Added \(kindLabel) ref (\(content.targetRawValue ?? "")) to bookmarks (id: \(node.id.rawValue)).",
             didCommit: true
         )
     }
@@ -128,21 +130,23 @@ public enum BookmarkCommand {
     // MARK: - rename
 
     private static func rename(id: String, to newName: String, in store: WikiStore) throws -> Result {
-        try store.renameBookmarkFolder(id: id, to: newName)
+        try store.renameBookmarkFolder(id: BookmarkID(rawValue: id), to: newName)
         return Result(output: "Renamed bookmark node \(id) to \"\(newName)\".", didCommit: true)
     }
 
     // MARK: - delete
 
     private static func delete(id: String, in store: WikiStore) throws -> Result {
-        try store.deleteBookmarkNode(id: id)
+        try store.deleteBookmarkNode(id: BookmarkID(rawValue: id))
         return Result(output: "Deleted bookmark node \(id) (and descendants).", didCommit: true)
     }
 
     // MARK: - move
 
     private static func move(id: String, toParentID: String?, position: Int, in store: WikiStore) throws -> Result {
-        try store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
+        try store.moveBookmarkNode(
+            id: BookmarkID(rawValue: id), toParentID: toParentID.map(BookmarkID.init(rawValue:)), position: position
+        )
         return Result(output: "Moved bookmark node \(id).", didCommit: true)
     }
 }

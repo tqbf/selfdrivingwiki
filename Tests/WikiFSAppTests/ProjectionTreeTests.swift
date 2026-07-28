@@ -443,7 +443,7 @@ struct ProjectionTreeTests {
 
     @Test func nestedBookmarkFolderEnumeratesChildren() throws {
         let b = try seedBookmarks()
-        let folderID = Projection.Identity.bookmarkFolder(b.nestedNode.id)
+        let folderID = Projection.Identity.bookmarkFolder(b.nestedNode.id.rawValue)
         let children = b.projection.children(of: folderID)
         // "Papers" folder has no children yet.
         #expect(children.isEmpty)
@@ -451,7 +451,7 @@ struct ProjectionTreeTests {
 
     @Test func bookmarkFolderNodeResolves() throws {
         let b = try seedBookmarks()
-        let id = Projection.Identity.bookmarkFolder(b.folderNode.id)
+        let id = Projection.Identity.bookmarkFolder(b.folderNode.id.rawValue)
         guard let node = b.projection.node(for: id) else {
             Issue.record("folder node not found"); return
         }
@@ -462,7 +462,7 @@ struct ProjectionTreeTests {
 
     @Test func bookmarkPageRefServesTargetContent() throws {
         let b = try seedBookmarks()
-        let id = Projection.Identity.bookmarkPageRef(b.pageRefNode.id)
+        let id = Projection.Identity.bookmarkPageRef(b.pageRefNode.id.rawValue)
         guard let node = b.projection.node(for: id) else {
             Issue.record("page ref node not found"); return
         }
@@ -474,7 +474,7 @@ struct ProjectionTreeTests {
 
     @Test func bookmarkSourceRefServesTargetContent() throws {
         let b = try seedBookmarks()
-        let id = Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id)
+        let id = Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id.rawValue)
         guard let node = b.projection.node(for: id) else {
             Issue.record("source ref node not found"); return
         }
@@ -489,7 +489,7 @@ struct ProjectionTreeTests {
         // A ref to a page that doesn't exist.
         let stale = try b.store.createBookmarkNode(
             parentID: nil, position: 99, content: .page(PageID(rawValue: "does-not-exist")))
-        let id = Projection.Identity.bookmarkPageRef(stale.id)
+        let id = Projection.Identity.bookmarkPageRef(stale.id.rawValue)
         guard let node = b.projection.node(for: id) else {
             Issue.record("stale node not found"); return
         }
@@ -502,10 +502,10 @@ struct ProjectionTreeTests {
     @Test func workingSetIncludesAllBookmarkNodes() throws {
         let b = try seedBookmarks()
         let ids = Set(b.projection.children(of: .workingSet).map(\.id))
-        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.folderNode.id)))
-        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.nestedNode.id)))
-        #expect(ids.contains(Projection.Identity.bookmarkPageRef(b.pageRefNode.id)))
-        #expect(ids.contains(Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id)))
+        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.folderNode.id.rawValue)))
+        #expect(ids.contains(Projection.Identity.bookmarkFolder(b.nestedNode.id.rawValue)))
+        #expect(ids.contains(Projection.Identity.bookmarkPageRef(b.pageRefNode.id.rawValue)))
+        #expect(ids.contains(Projection.Identity.bookmarkSourceRef(b.sourceRefNode.id.rawValue)))
     }
 
     @Test func emptyBookmarksFolderIsStillListedAtRoot() throws {
@@ -537,7 +537,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 0, content: .page(home.id))
         let projection = Projection(wikiID: WikiID(rawValue: "bm-links-\(UUID().uuidString)"), databaseURL: url)
 
-        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
+        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id.rawValue)
         guard let node = projection.node(for: id),
               let bytes = projection.contents(for: id) else {
             Issue.record("bookmark page ref node/content not found"); return
@@ -572,7 +572,7 @@ struct ProjectionTreeTests {
             parentID: folder.id, position: 0, content: .page(home.id))
         let projection = Projection(wikiID: WikiID(rawValue: "bm-nested-\(UUID().uuidString)"), databaseURL: url)
 
-        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
+        let id = Projection.Identity.bookmarkPageRef(pageRefNode.id.rawValue)
         guard let node = projection.node(for: id),
               let bytes = projection.contents(for: id) else {
             Issue.record("nested bookmark content not found"); return
@@ -601,7 +601,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 0, content: .chat(chat.id))
         let projection = Projection(wikiID: WikiID(rawValue: "bm-chat-\(UUID().uuidString)"), databaseURL: url)
 
-        let id = Projection.Identity.bookmarkChatRef(chatRefNode.id)
+        let id = Projection.Identity.bookmarkChatRef(chatRefNode.id.rawValue)
         guard let node = projection.node(for: id),
               let bytes = projection.contents(for: id) else {
             Issue.record("bookmark chat ref node/content not found"); return
@@ -627,7 +627,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 0, content: .source(pdf.id))
         let projection = Projection(wikiID: WikiID(rawValue: "bm-source-\(UUID().uuidString)"), databaseURL: url)
 
-        let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id)
+        let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id.rawValue)
         guard let node = projection.node(for: id),
               let bytes = projection.contents(for: id) else {
             Issue.record("bookmark source ref node/content not found"); return

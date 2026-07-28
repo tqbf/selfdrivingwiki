@@ -49,11 +49,11 @@ struct BookmarksMultiSelectMenuTests {
         case .chatRef:
             content = .chat(ChatID(rawValue: targetID))
         }
-        return BookmarkNode(id: id, parentID: nil, position: 0, content: content)
+        return BookmarkNode(id: BookmarkID(rawValue: id), parentID: nil, position: 0, content: content)
     }
 
     private func folder(_ id: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: nil, position: 0, content: .folder(label: "Folder \(id)"))
+        BookmarkNode(id: BookmarkID(rawValue: id), parentID: nil, position: 0, content: .folder(label: "Folder \(id)"))
     }
 
     /// Calls `menuFor` on the VC and returns the non-separator item titles.
@@ -202,7 +202,7 @@ struct BookmarksMultiSelectMenuTests {
         let vc = makeVC(nodes: nodes)
         let outline = vc.outlineView!
 
-        var deletedIDs: [String] = []
+        var deletedIDs: [BookmarkID] = []
         vc.callbacks = BookmarksCallbacks(
             onOpen: { _ in }, onOpenBackground: { _ in },
             onGoToOriginal: { _ in },
@@ -222,7 +222,7 @@ struct BookmarksMultiSelectMenuTests {
         _ = vc.perform(deleteItem.action, with: deleteItem)
 
         #expect(deletedIDs.count == 3)
-        #expect(Set(deletedIDs) == Set(["n1", "n2", "n3"]))
+        #expect(Set(deletedIDs) == Set(["n1", "n2", "n3"].map(BookmarkID.init(rawValue:))))
     }
 
     @Test func openCallbackReceivesOnlyOpenableSelections() {
