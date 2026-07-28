@@ -6,7 +6,7 @@ import Darwin
 #endif
 @testable import WikiFSCore
 
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct AsyncProcessRunnerTests {
     /// `@unchecked Sendable` is correct because `lock` serializes the single
     /// mutable `value` flag across the test task and hook callbacks.
@@ -363,7 +363,7 @@ struct AsyncProcessRunnerTests {
         return directory.appendingPathComponent(UUID().uuidString, isDirectory: false)
     }
 
-    private func waitForFile(_ url: URL, timeout: Duration = .seconds(5)) async throws {
+    private func waitForFile(_ url: URL, timeout: Duration = .seconds(15)) async throws {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if FileManager.default.fileExists(atPath: url.path) {

@@ -244,7 +244,7 @@ struct AddressBarView: View {
             // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .milliseconds(200))
             if Task.isCancelled { return }
-            results = store.searchOmnibox(query: trimmed)
+            results = await store.searchOmnibox(query: trimmed)
         }
     }
 
