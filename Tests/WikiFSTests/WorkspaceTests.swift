@@ -416,7 +416,10 @@ struct WorkspaceTests {
         #expect(conflicts.first?.pageID == page.id)
         #expect(conflicts.first?.baseVersionID != nil)
         #expect(conflicts.first?.mainVersionID != nil)
-        #expect(conflicts.first?.wsVersionID != nil)
+        guard case .pageVersion = conflicts.first?.workspaceTarget else {
+            Issue.record("expected a page-version workspace conflict target")
+            return
+        }
     }
 
     @Test func resolveConflictThenRetryMergeSucceeds() throws {

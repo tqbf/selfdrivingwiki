@@ -186,7 +186,7 @@ public enum PageCommand {
                 }
             }
             if let id, let stagedBody = try store.workspacePageBody(workspaceID: workspace, pageID: id) {
-                var headVersionID: String?
+                var headVersionID: PageVersionID?
                 do {
                     headVersionID = try store.workspacePageVersion(workspaceID: workspace, pageID: id)
                 } catch {
@@ -200,7 +200,7 @@ public enum PageCommand {
                     }
                 }
                 if json {
-                    let row = PageGetJSON(body_markdown: stagedBody, head_version_id: headVersionID)
+                    let row = PageGetJSON(body_markdown: stagedBody, head_version_id: headVersionID?.rawValue)
                     let encoder = JSONEncoder()
                     encoder.outputFormatting = [.sortedKeys]
                     let data = try encoder.encode(row)
@@ -221,7 +221,7 @@ public enum PageCommand {
 
         if json {
             // JSON mode: emit body_markdown + head_version_id as one JSON object.
-            let row = PageGetJSON(body_markdown: page.bodyMarkdown, head_version_id: headVersionID)
+            let row = PageGetJSON(body_markdown: page.bodyMarkdown, head_version_id: headVersionID?.rawValue)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(row)
@@ -292,14 +292,15 @@ public enum PageCommand {
             let resultID = try store.workspaceWritePage(
                 workspaceID: workspace, pageID: pageID, title: title, body: fixed,
                 author: author)
-            return Result(output: resultID, didCommit: true)
+            return Result(output: resultID?.rawValue ?? "", didCommit: true)
         }
 
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
         //    the in-app editor, so the link graph stays consistent across both
         //    writers.
+        let expectedHeadVersionID = expectHead.map(PageVersionID.init(rawValue:))
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
-                                             expectedHeadVersionID: expectHead, author: author)
+                                             expectedHeadVersionID: expectedHeadVersionID, author: author)
         return Result(output: outcome.id.rawValue, didCommit: true)
     }
 
@@ -356,9 +357,9 @@ public enum PageCommand {
             return Result(output: "(no version history)", didCommit: false)
         }
         let lines = versions.enumerated().map { (i, v) in
-            let parent = v.parentID ?? "—"
+            let parent = v.parentID?.rawValue ?? "—"
             let date = ISO8601DateFormatter().string(from: v.savedAt)
-            return "\(i)\t\(v.id)\t\(date)\t\(v.title)\t\(v.blobHash.prefix(12))\t\(parent.prefix(12))"
+            return "\(i)\t\(v.id.rawValue)\t\(date)\t\(v.title)\t\(v.blobHash.prefix(12))\t\(parent.prefix(12))"
         }
         return Result(output: lines.joined(separator: "\n"), didCommit: false)
     }
@@ -369,7 +370,8 @@ public enum PageCommand {
         _ selector: Selector, versionID: String, in store: WikiStore
     ) throws -> Result {
         let id = try resolve(selector, in: store)
-        try store.revertPage(pageID: id, to: versionID)
+        let typedVersionID = PageVersionID(rawValue: versionID)
+        try store.revertPage(pageID: id, to: typedVersionID)
         return Result(output: "reverted \(id.rawValue) to \(versionID)", didCommit: true)
     }
 
@@ -426,8 +428,8 @@ public enum PageCommand {
                 let savedAt = ISO8601DateFormatter().string(from: entry.savedAt)
                 // seq<TAB>activity<TAB>agent<TAB>agent_kind<TAB>date<TAB>title<TAB>version_id<TAB>blob_hash
                 let hash = entry.blobHash?.prefix(12) ?? "—"
-                let parent = history[i].parentID?.prefix(12) ?? "—"
-                lines.append("\(i)\t\(entry.activityKind)\t\(entry.agentName)\t\(entry.agentKind)\t\(savedAt)\t\(entry.title)\t\(entry.versionID.prefix(12))\t\(hash)\t\(parent)")
+                let parent = history[i].parentID?.rawValue.prefix(12) ?? "—"
+                lines.append("\(i)\t\(entry.activityKind)\t\(entry.agentName)\t\(entry.agentKind)\t\(savedAt)\t\(entry.title)\t\(entry.versionID.rawValue.prefix(12))\t\(hash)\t\(parent)")
             }
         }
 
@@ -448,8 +450,8 @@ public enum PageCommand {
         }
     }
 
-    private static func headVersionDiagnostic(_ headVersionID: String?) -> String? {
+    private static func headVersionDiagnostic(_ headVersionID: PageVersionID?) -> String? {
         guard let headVersionID else { return nil }
-        return "head_version_id: \(headVersionID)\n"
+        return "head_version_id: \(headVersionID.rawValue)\n"
     }
 }

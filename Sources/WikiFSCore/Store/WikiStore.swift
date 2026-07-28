@@ -420,14 +420,14 @@ public protocol WikiStore: Sendable {
     /// the new version's id.
     func appendPageVersion(
         pageID: PageID, title: String, body: String,
-        expectedHeadVersionID: String?,
+        expectedHeadVersionID: PageVersionID?,
         lastEditedBy: String?
-    ) throws -> String
+    ) throws -> PageVersionID
 
     /// Resolve the active page-content version id (ref → version_id, or
     /// MAX(id) if no ref row exists — the default-active rule). Returns nil if
     /// the page has no versions (shouldn't happen post-migration).
-    func pageHeadVersionID(pageID: PageID) throws -> String?
+    func pageHeadVersionID(pageID: PageID) throws -> PageVersionID?
 
     /// The full version chain for a page, ordered by ULID (chain order).
     func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary]
@@ -462,12 +462,12 @@ public protocol WikiStore: Sendable {
     /// blobs` join). Returns `nil` when no row matches. READ-ONLY: routes
     /// through `dbWriter.read` and emits no `ResourceChangeEvent`. Used by the
     /// Versions window to view/diff a historical version without restoring it.
-    func pageVersionBody(versionID: String) throws -> String?
+    func pageVersionBody(versionID: PageVersionID) throws -> String?
 
     /// Revert a page to a specific version: repoint the `page-content` ref to
     /// `versionID` and update the denormalized `pages.body_markdown` from the
     /// version's blob. Emits a `.page .updated` change event.
-    func revertPage(pageID: PageID, to versionID: String) throws
+    func revertPage(pageID: PageID, to versionID: PageVersionID) throws
 
     /// Restore a page to a previous version by **appending a new version node**
     /// (mirrors `revertProcessedMarkdown` for sources). The new row reuses the
@@ -476,7 +476,7 @@ public protocol WikiStore: Sendable {
     /// becomes the new HEAD (ref repointed to the NEW node). History is never
     /// mutated. Returns the new version's id. Emits a `.page .updated` event.
     @discardableResult
-    func restorePage(pageID: PageID, to versionID: String) throws -> String
+    func restorePage(pageID: PageID, to versionID: PageVersionID) throws -> PageVersionID
 
     // MARK: - Workspaces (W1, PR #312)
 
@@ -500,11 +500,11 @@ public protocol WikiStore: Sendable {
     func workspaceWritePage(
         workspaceID: String, pageID: PageID, title: String, body: String,
         author: String?
-    ) throws -> String
+    ) throws -> PageVersionID?
 
     /// Resolve the workspace's current version id for a page (overlay read).
     /// Returns nil if the workspace hasn't touched this page.
-    func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> String?
+    func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> PageVersionID?
 
     /// Overlay read for the workspace's staged page body (Phase 7). Returns the
     /// body the agent would see if it read the page from within this workspace —

@@ -8,7 +8,7 @@ extension PageOrigin {
     /// ``ProvenancePanel`` (DRY with ``SourceOrigin``).
     var provenanceEntry: ProvenanceEntry {
         ProvenanceEntry(
-            versionID: versionID,
+            versionID: .page(versionID),
             agentName: agentName,
             agentKind: agentKind,
             activityKind: activityKind,
@@ -27,7 +27,7 @@ extension SourceOrigin {
     /// `PageOrigin.savedAt`).
     var provenanceEntry: ProvenanceEntry {
         ProvenanceEntry(
-            versionID: versionID.rawValue,
+            versionID: .source(versionID),
             agentName: agentName,
             agentKind: agentKind,
             activityKind: activityKind,

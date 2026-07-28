@@ -367,7 +367,7 @@ public final class WikiStoreModel {
     /// editor. Used as the CAS expectation when saving (W0, PR #312): if another
     /// writer committed a new version after the editor loaded, the save throws
     /// `PageConflictError` instead of silently clobbering.
-    private var loadedPageHeadVersionID: String?
+    private var loadedPageHeadVersionID: PageVersionID?
     /// What the drafts currently hold, so a flush saves the RIGHT document even
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
@@ -1426,7 +1426,7 @@ public final class WikiStoreModel {
         } catch let error as PageConflictError {
             // W0 (PR #312): a concurrent writer committed a new version. Surface
             // it so the user knows to re-load and merge their changes.
-            DebugLog.store("WikiStoreModel.save: PageConflictError — pageID=\(error.pageID.rawValue) expected=\(error.expectedVersionID) actual=\(error.actualVersionID ?? "nil")")
+            DebugLog.store("WikiStoreModel.save: PageConflictError — pageID=\(error.pageID.rawValue) expected=\(error.expectedVersionID) actual=\(error.actualVersionID?.rawValue ?? "nil")")
             storeError = StoreError(
                 title: "Page Was Updated",
                 message: "Another writer updated this page since you started editing. Re-load the page and merge your changes.")
@@ -2838,7 +2838,7 @@ public final class WikiStoreModel {
     /// when no version matches (or the read fails). READ-ONLY — emits nothing.
     /// Used by the Versions window to view/diff a historical version without
     /// restoring it (the read-side counterpart of the `revertPage` body join).
-    public func pageVersionBody(for versionID: String) -> String? {
+    public func pageVersionBody(for versionID: PageVersionID) -> String? {
         DebugLog.trying("pageVersionBody", operation: { try store.pageVersionBody(versionID: versionID) })
     }
 
@@ -2852,7 +2852,7 @@ public final class WikiStoreModel {
     /// a button; a failure is non-fatal) — matches the `setActiveMarkdown`
     /// wrapper posture. Returns the new version id, or `nil` on failure.
     @discardableResult
-    public func restorePage(for id: PageID, to versionID: String) -> String? {
+    public func restorePage(for id: PageID, to versionID: PageVersionID) -> PageVersionID? {
         DebugLog.trying("restorePage", operation: { try store.restorePage(pageID: id, to: versionID) })
     }
 

@@ -6,6 +6,11 @@ import Testing
 /// compiler level, rather than only observing runtime behavior.
 struct IdentifierBoundaryTypecheckTests {
 
+    private struct BuildProducts {
+        let debugDirectory: URL
+        let modulesDirectory: URL
+    }
+
     private struct CompilerResult {
         let status: Int32
         let output: String
@@ -24,25 +29,51 @@ struct IdentifierBoundaryTypecheckTests {
             .appendingPathComponent(name)
     }
 
-    private func modulesDirectory() throws -> URL {
+    private func buildProducts(for fixtureName: String) throws -> BuildProducts {
         let buildDirectory = repositoryRoot().appendingPathComponent(".build")
-        let candidates = try FileManager.default.contentsOfDirectory(
-            at: buildDirectory,
-            includingPropertiesForKeys: [.isDirectoryKey]
+        let fileManager = FileManager.default
+        let requiredModules = try requiredFixtureModules(fixtureName)
+        let enumerator = try #require(
+            fileManager.enumerator(
+                at: buildDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
         )
-        let modules = candidates
-            .map { $0.appendingPathComponent("debug/Modules") }
-            .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("WikiFSTypes.swiftmodule").path) }
+        var candidates: [BuildProducts] = []
 
+        for case let candidate as URL in enumerator
+        where candidate.lastPathComponent == "Modules"
+            && candidate.deletingLastPathComponent().lastPathComponent == "debug" {
+            guard requiredModules.allSatisfy({
+                fileManager.fileExists(atPath: candidate.appendingPathComponent("\($0).swiftmodule").path)
+            }) else {
+                continue
+            }
+            candidates.append(
+                BuildProducts(
+                    debugDirectory: candidate.deletingLastPathComponent(),
+                    modulesDirectory: candidate
+                )
+            )
+        }
+
+        let sortedCandidates = candidates.sorted { lhs, rhs in
+            candidateSortKey(lhs) < candidateSortKey(rhs)
+        }
         return try #require(
-            modules.first,
-            "SwiftPM did not build WikiFSTypes before the typecheck fixture ran."
+            sortedCandidates.first,
+            """
+            SwiftPM did not build the modules required by \(fixtureName).
+            Required: \(requiredModules.sorted().joined(separator: ", "))
+            Looked under: \(buildDirectory.path)
+            """
         )
     }
 
     private func runTypecheck(_ fixtureName: String) throws -> CompilerResult {
         let root = repositoryRoot()
-        let modules = try modulesDirectory()
+        let buildProducts = try buildProducts(for: fixtureName)
         let scratchDirectory = root
             .appendingPathComponent("tmp/identifier-boundary-typecheck-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
@@ -58,11 +89,12 @@ struct IdentifierBoundaryTypecheckTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var arguments = [
             "swiftc", "-typecheck",
-            "-I", modules.path,
+            "-I", buildProducts.debugDirectory.path,
+            "-I", buildProducts.modulesDirectory.path,
             "-module-cache-path", scratchDirectory.path,
             fixtureURL(fixtureName).path,
         ]
-        arguments.insert(contentsOf: compilerSearchArguments(root: root), at: 4)
+        arguments.insert(contentsOf: compilerSearchArguments(root: root, buildProducts: buildProducts), at: 4)
         process.arguments = arguments
         process.currentDirectoryURL = root
 
@@ -79,11 +111,43 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    private func compilerSearchArguments(root: URL) -> [String] {
+    private func requiredFixtureModules(_ fixtureName: String) throws -> Set<String> {
+        let source = try String(contentsOf: fixtureURL(fixtureName), encoding: .utf8)
+        let importedModules = source
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("import ") else {
+                    return nil
+                }
+                let importedModule = trimmed
+                    .dropFirst("import ".count)
+                    .split(whereSeparator: \.isWhitespace)
+                    .last
+                guard let importedModule else {
+                    return nil
+                }
+                return String(importedModule)
+            }
+            .filter { $0.hasPrefix("Wiki") }
+
+        return Set(importedModules)
+    }
+
+    private func candidateSortKey(_ candidate: BuildProducts) -> (Int, Int, String) {
+        let path = candidate.modulesDirectory.path
+        let isAuxiliary = path.contains("/index-build/") || path.contains("/analyze/")
+        return (isAuxiliary ? 1 : 0, path.count, path)
+    }
+
+    private func compilerSearchArguments(root: URL, buildProducts: BuildProducts) -> [String] {
         var arguments: [String] = []
         let fileManager = FileManager.default
 
         let candidateDirectories = [
+            buildProducts.debugDirectory.appendingPathComponent("GRDB.build/include"),
+            buildProducts.debugDirectory.appendingPathComponent("TantivyFFI.build/include"),
+            buildProducts.debugDirectory.appendingPathComponent("TantivySwift.build/include"),
             root.appendingPathComponent("Sources/CSQLite"),
             root.appendingPathComponent(".build/checkouts/GRDB.swift/Sources/GRDBSQLite"),
             root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/macos-arm64_x86_64/Headers"),

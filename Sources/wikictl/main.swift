@@ -121,7 +121,7 @@ func run() async -> Int32 {
     } catch let conflict as PageConflictError {
         // Phase 1: CAS conflict — the page was edited after the caller read it.
         // Exit code 3 signals the agent to re-read, reapply, and retry once.
-        let actual = conflict.actualVersionID ?? "(none)"
+        let actual = conflict.actualVersionID?.rawValue ?? "(none)"
         let message = """
         wikictl: CAS conflict on page \(conflict.pageID.rawValue) — \
         expected head \(conflict.expectedVersionID), \
