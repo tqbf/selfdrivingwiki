@@ -362,7 +362,7 @@ public enum ArgumentParser {
                   !raw.isEmpty else {
                 throw Failure.usage("source set-active: --version <smv-id> is required")
             }
-            return .source(.setActive(selector, versionID: PageID(rawValue: raw)))
+            return .source(.setActive(selector, versionID: SourceMarkdownVersionID(rawValue: raw)))
 
         case "info":
             return .source(.info(try options.requireSourceSelector()))

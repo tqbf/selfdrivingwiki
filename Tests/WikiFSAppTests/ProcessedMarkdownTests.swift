@@ -304,7 +304,7 @@ struct ProcessedMarkdownTests {
     @Test func readSeamsReturnSafeDefaultsForPreV8DB() throws {
         let url = try tempV7DatabaseURL()
         let store = try GRDBWikiStore(databaseURL: url)
-        let arbitraryID = PageID(rawValue: "01J00000000000000000000000")
+        let arbitraryID = SourceID(rawValue: "01J00000000000000000000000")
         // Read seams must return safe defaults (nil / false / []) without
         // crashing even though file_markdown_versions doesn't exist.
         #expect(try store.processedMarkdownHead(sourceID: arbitraryID) == nil)
@@ -507,7 +507,27 @@ struct ProcessedMarkdownTests {
         #expect(head?.id == version.id)
         #expect(head?.sourceVersionID == activeVersion?.id)
         let names = try store.processedMarkdownAgentNames(sourceID: pdf.id)
-        #expect(names[version.id.rawValue] == "claude")
+        #expect(names[version.id] == "claude")
+    }
+
+    @Test func agentNamesUseMarkdownVersionIDKeys() throws {
+        let store = try tempStore()
+        let source = try seedSource(in: store)
+        let version = try store.recordMarkdownExtraction(
+            sourceID: source.id,
+            content: "# extracted",
+            backend: .anthropic,
+            sourceVersionID: nil,
+            note: nil,
+            modelVersion: nil
+        )
+
+        let names = try store.processedMarkdownAgentNames(sourceID: source.id)
+        let key = try #require(names.keys.first)
+
+        #expect(key == version.id)
+        #expect(key.rawValue == version.id.rawValue)
+        #expect(names[key] == "claude")
     }
 
     /// AC.8 (unit) — reExtractMarkdown appends a coexisting alternative via the

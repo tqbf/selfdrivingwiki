@@ -214,7 +214,7 @@ struct SourceVersionStoreTests {
         #expect(history.first?.versionID == sourceVersion.id)
         #expect(markdown.sourceVersionID == sourceVersion.id)
         #expect(markdownHead.sourceVersionID == sourceVersion.id)
-        #expect(agentNames[markdown.id.rawValue] == "claude")
+        #expect(agentNames[markdown.id] == "claude")
         #expect(store.scalarText(
             "SELECT source_version_id FROM source_markdown_versions WHERE id = '\(markdown.id.rawValue)';"
         ) == sourceVersion.id.rawValue)

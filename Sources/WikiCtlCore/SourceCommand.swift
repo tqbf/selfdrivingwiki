@@ -44,7 +44,7 @@ public enum SourceCommand {
         case editMarkdown(Selector, content: BodySource)
         case rename(Selector, to: String)
         case search(query: String, limit: Int)
-        case setActive(Selector, versionID: PageID)
+        case setActive(Selector, versionID: SourceMarkdownVersionID)
         case info(Selector)
         case refresh(Selector)
     }
@@ -298,7 +298,7 @@ public enum SourceCommand {
     /// markdown chain or the version doesn't belong to it. Commits — the caller
     /// posts the Darwin notification on `didCommit`.
     private static func setActive(
-        _ selector: Selector, versionID: PageID, in store: WikiStore
+        _ selector: Selector, versionID: SourceMarkdownVersionID, in store: WikiStore
     ) throws -> Result {
         let id = try resolve(selector, in: store)
         guard try store.hasProcessedMarkdown(sourceID: id) else {

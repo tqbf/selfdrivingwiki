@@ -2251,13 +2251,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// The derived-markdown chain (`[smvID]`) for `sourceID`, ULID-asc =
     /// chronological (index 0 = v1). Locked variant of
     /// `SQLiteWikiStore.derivedVersionIDs` — runs against the given `db`.
-    private func derivedVersionIDsLocked(sourceID: SourceID, in db: Database) throws -> [PageID] {
+    private func derivedVersionIDsLocked(sourceID: SourceID, in db: Database) throws -> [SourceMarkdownVersionID] {
         let rows = try String.fetchAll(
             db,
             sql: "SELECT id FROM source_markdown_versions WHERE file_id = ? ORDER BY id ASC;",
             arguments: [sourceID.rawValue]
         )
-        return rows.map { PageID(rawValue: $0) }
+        return rows.map { SourceMarkdownVersionID(rawValue: $0) }
     }
 
     /// Resolve an `@vN` ordinal (1-based) to the concrete smv id for
@@ -2265,7 +2265,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `SQLiteWikiStore.resolveVersionPin` — runs against the given `db`.
     private func resolveVersionPin(
         _ pin: String, sourceID: SourceID, in db: Database
-    ) throws -> PageID? {
+    ) throws -> SourceMarkdownVersionID? {
         guard let ordinal = Int(pin), ordinal >= 1 else { return nil }
         let ids = try derivedVersionIDsLocked(sourceID: sourceID, in: db)
         let idx = ordinal - 1
@@ -3848,7 +3848,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func processedMarkdownVersion(id: PageID) throws -> SourceMarkdownVersion? {
+    public func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(
                 db,
@@ -3865,18 +3865,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func sourceDerivedChains() throws -> [SourceID: [PageID]] {
+    public func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]] {
         do {
             return try dbWriter.read { db in
                 let rows = try Row.fetchAll(db, sql: """
                 SELECT file_id, id FROM source_markdown_versions ORDER BY file_id ASC, id ASC;
                 """)
-                var chains: [SourceID: [PageID]] = [:]
+                var chains: [SourceID: [SourceMarkdownVersionID]] = [:]
                 for row in rows {
                     let sourceID: String = row["file_id"]
                     let smvID: String = row["id"]
                     chains[SourceID(rawValue: sourceID), default: []]
-                        .append(PageID(rawValue: smvID))
+                        .append(SourceMarkdownVersionID(rawValue: smvID))
                 }
                 return chains
             }
@@ -4100,7 +4100,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String] {
+    public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT smv.id, a.name
@@ -4109,11 +4109,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             LEFT JOIN agents a ON a.id = act.agent_id
             WHERE smv.file_id = ?;
             """, arguments: [sourceID.rawValue])
-            var out: [String: String] = [:]
+            var out: [SourceMarkdownVersionID: String] = [:]
             for row in rows {
                 let smvID: String = row["id"]
                 let name: String? = row["name"]
-                if let name { out[smvID] = name }
+                if let name { out[SourceMarkdownVersionID(rawValue: smvID)] = name }
             }
             return out
         }
@@ -4123,19 +4123,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative] {
         try dbWriter.read { db in
             // Resolve the active HEAD id (default-active rule).
-            let headID: String?
+            let headID: SourceMarkdownVersionID?
             if let vid = try String.fetchOne(
                 db,
                 sql: "SELECT version_id FROM refs WHERE kind = 'source-derived' AND owner_id = ?;",
                 arguments: [sourceID.rawValue]
             ) {
-                headID = vid
+                headID = SourceMarkdownVersionID(rawValue: vid)
             } else {
                 headID = try String.fetchOne(
                     db,
                     sql: "SELECT id FROM source_markdown_versions WHERE file_id = ? ORDER BY id DESC LIMIT 1;",
                     arguments: [sourceID.rawValue]
-                )
+                ).map(SourceMarkdownVersionID.init(rawValue:))
             }
 
             let rows = try Row.fetchAll(db, sql: """
@@ -4159,7 +4159,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     agentName: agentName,
                     modelVersion: modelVersion,
                     charCount: version.content.count,
-                    isActive: headID.map { $0 == version.id.rawValue } ?? false
+                    isActive: headID.map { $0 == version.id } ?? false
                 )
             }
         }
@@ -4174,7 +4174,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let version: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
             let parentID = try self.processedMarkdownHead(sourceID: sourceID, on: db)?.id
             let now = Date()
             // CAS the body: hash → INSERT OR IGNORE blob.
@@ -4207,7 +4207,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `processedMarkdownHead` — it re-enters `dbWriter.read` and deadlocks).
 
 
-    public func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion {
+    public func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion {
         let result: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -4223,7 +4223,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 """,
                 arguments: [versionID.rawValue, sourceID.rawValue]
             ) else {
-                throw WikiStoreError.notFound(versionID)
+                throw WikiStoreError.sourceMarkdownVersionNotFound(versionID)
             }
             let targetVersion = Self.readMarkdownVersion(from: targetRow)
             guard let targetBlobHash = targetVersion.blobHash else {
@@ -4240,7 +4240,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             // Append a new row reusing the target's blob_hash (INSERT OR IGNORE on
             // the existing hash is a no-op — zero new blob bytes), then repoint.
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
             let parentID = try self.processedMarkdownHead(sourceID: sourceID, on: db)?.id
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -4254,7 +4254,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             revertNote, nowTS,
                             targetVersion.activityID, targetVersion.sourceVersionID?.rawValue,
                             targetBlobHash, targetVersion.mimeType])
-            try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id.rawValue, now: nowTS, on: db)
+            try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id, now: nowTS, on: db)
 
             // FTS refresh inline (pure SQL).
             self.upsertSourceSearch(sourceID: sourceID, body: targetVersion.content, on: db)
@@ -4285,7 +4285,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
-            let id = PageID(rawValue: ULID.generate())
+            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
             let parentID = try self.processedMarkdownHead(sourceID: sourceID, on: db)?.id
             let now = Date()
             let nowTS = now.timeIntervalSince1970
@@ -4342,7 +4342,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws {
+    public func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -4353,10 +4353,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 arguments: [versionID.rawValue, sourceID.rawValue]
             ) ?? 0
             guard exists == 1 else {
-                throw WikiStoreError.notFound(versionID)
+                throw WikiStoreError.sourceMarkdownVersionNotFound(versionID)
             }
             try self.upsertMarkdownDerivedRef(
-                sourceID: sourceID, versionID: versionID.rawValue,
+                sourceID: sourceID, versionID: versionID,
                 now: Date().timeIntervalSince1970, on: db)
         }
         // Post-commit: refresh the search indexes for the newly-active body.
@@ -7035,9 +7035,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let mimeType: String = row["mime_type"]
         let technique: String? = row["technique"]
         return SourceMarkdownVersion(
-            id: PageID(rawValue: row["id"]),
+            id: SourceMarkdownVersionID(rawValue: row["id"]),
             sourceID: SourceID(rawValue: row["file_id"]),
-            parentID: parentID.map { PageID(rawValue: $0) },
+            parentID: parentID.map(SourceMarkdownVersionID.init(rawValue:)),
             content: content,
             origin: SourceMarkdownOrigin(rawValue: originRaw) ?? .extraction,
             note: note,
@@ -7120,12 +7120,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// The `version_id` of the `source-derived` ref for `sourceID`, or nil.
     /// Mirrors `SQLiteWikiStore.markdownDerivedRef`.
-    private func markdownDerivedRef(sourceID: SourceID, on db: Database) throws -> String? {
+    private func markdownDerivedRef(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersionID? {
         try String.fetchOne(
             db,
             sql: "SELECT version_id FROM refs WHERE kind = 'source-derived' AND owner_id = ?;",
             arguments: [sourceID.rawValue]
-        )
+        ).map(SourceMarkdownVersionID.init(rawValue:))
     }
 
     /// The current `generation` of the `source-derived` ref, or nil.
@@ -7151,7 +7151,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Mirrors `SQLiteWikiStore.upsertMarkdownDerivedRef`.
     /// CONTRACT: caller is inside `mutate`.
     private func upsertMarkdownDerivedRef(
-        sourceID: SourceID, versionID: String, now: Double, on db: Database
+        sourceID: SourceID, versionID: SourceMarkdownVersionID, now: Double, on db: Database
     ) throws {
         let prevGeneration = try markdownDerivedGeneration(sourceID: sourceID, on: db)
         let nextGeneration = (prevGeneration ?? 0) + 1
@@ -7162,7 +7162,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version_id = excluded.version_id,
             generation = excluded.generation,
             updated_at = excluded.updated_at;
-        """, arguments: [sourceID.rawValue, versionID, Int64(nextGeneration), now])
+        """, arguments: [sourceID.rawValue, versionID.rawValue, Int64(nextGeneration), now])
     }
 
 
@@ -7253,9 +7253,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private func appendProcessedMarkdownInline(
         sourceID: SourceID, content: String,
         origin: SourceMarkdownOrigin, note: String?, technique: String?,
-        parentID: PageID?, db: Database
+        parentID: SourceMarkdownVersionID?, db: Database
     ) throws -> SourceMarkdownVersion {
-        let id = PageID(rawValue: ULID.generate())
+        let id = SourceMarkdownVersionID(rawValue: ULID.generate())
         let now = Date()
         let blobHash = try self.storeMarkdownBlob(content, on: db)
         try db.execute(sql: """
@@ -8164,7 +8164,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Returns the resolved version id, or nil when the edge has no pin (NULL)
     /// or doesn't exist. Mirrors `SQLiteWikiStore.sourceLinkPin`.
     public func sourceLinkPin(from pageID: PageID, to sourceID: SourceID,
-                              role: WikiLinkParser.LinkRole = .cite) throws -> PageID? {
+                              role: WikiLinkParser.LinkRole = .cite) throws -> SourceMarkdownVersionID? {
         try dbWriter.read { db in
             let row = try Row.fetchOne(
                 db,
@@ -8177,7 +8177,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             guard let row else { return nil }
             // Distinguish NULL (no pin) from a TEXT value.
             let value: String? = row["pinned_version_id"]
-            return value.map { PageID(rawValue: $0) }
+            return value.map(SourceMarkdownVersionID.init(rawValue:))
         }
     }
 
@@ -8220,7 +8220,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func processedMarkdownProducer(versionID: PageID) throws -> SourceMarkdownProducer? {
+    public func processedMarkdownProducer(versionID: SourceMarkdownVersionID) throws -> SourceMarkdownProducer? {
         try dbWriter.read { db in
             let row = try Row.fetchOne(
                 db,

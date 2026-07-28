@@ -38,8 +38,18 @@ struct BookmarksMultiSelectMenuTests {
 
     private func leaf(_ id: String, kind: BookmarkNodeKind = .pageRef,
                       targetID: String = "target") -> BookmarkNode {
-        BookmarkNode(id: id, parentID: nil, position: 0, kind: kind,
-                     label: nil, targetID: PageID(rawValue: targetID))
+        let content: BookmarkNode.Content
+        switch kind {
+        case .folder:
+            content = .folder(label: "Folder \(id)")
+        case .pageRef:
+            content = .page(PageID(rawValue: targetID))
+        case .sourceRef:
+            content = .source(SourceID(rawValue: targetID))
+        case .chatRef:
+            content = .chat(ChatID(rawValue: targetID))
+        }
+        return BookmarkNode(id: id, parentID: nil, position: 0, content: content)
     }
 
     private func folder(_ id: String) -> BookmarkNode {

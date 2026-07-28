@@ -28,16 +28,16 @@ Sources/WikiFSCore/Store/WikiStore.swift	sourceID: SourceID, data: Data, mimeTyp
 Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
 Sources/WikiFSCore/Store/WikiStore.swift	func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool
 Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
-Sources/WikiFSCore/Store/WikiStore.swift	func sourceDerivedChains() throws -> [SourceID: [PageID]]
+Sources/WikiFSCore/Store/WikiStore.swift	func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
 Sources/WikiFSCore/Store/WikiStore.swift	func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor]
 Sources/WikiFSCore/Store/WikiStore.swift	func hasImageSiblings(sourceID: SourceID) throws -> Bool
 Sources/WikiFSCore/Store/WikiStore.swift	func siblingImageResolvers() throws -> [SourceID: [String: SourceID]]
-Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String]
+Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
 Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
 Sources/WikiFSCore/Store/WikiStore.swift	func appendProcessedMarkdown(sourceID: SourceID, content: String,
-Sources/WikiFSCore/Store/WikiStore.swift	func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion
+Sources/WikiFSCore/Store/WikiStore.swift	func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
 Sources/WikiFSCore/Store/WikiStore.swift	sourceID: SourceID, content: String, backend: ExtractionBackend,
-Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws
+Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func storeSourceChunks(id: SourceID, chunks: [Data]) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func getSource(id: SourceID) throws -> SourceSummary
@@ -52,14 +52,14 @@ Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func markSourceIngested(id: 
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceDerivedChains() throws -> [SourceID: [PageID]]
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func hasImageSiblings(sourceID: SourceID) throws -> Bool
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func siblingImageResolvers() throws -> [SourceID: [String: SourceID]]
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String]
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion
-Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func storeSourceChunks(id: SourceID, chunks: [Data]) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
@@ -78,21 +78,21 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceEditHistory(for 
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func isSourceRefreshable(for id: SourceID) -> Bool
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func hasProcessedMarkdown(for sourceID: SourceID) -> Bool
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownHistory(for sourceID: SourceID) -> [SourceMarkdownVersion]
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceDerivedChains() -> [SourceID: [PageID]]
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func embedDescriptors() -> [SourceID: SourceEmbedDescriptor]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func siblingImageResolvers() -> [SourceID: [String: SourceID]]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func saveProcessedMarkdown(for sourceID: SourceID, content: String) -> SourceMarkdownVersion?
 Sources/WikiFSCore/Store/WikiStoreModel.swift	        for sourceID: SourceID, content: String,
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setActiveMarkdown(for sourceID: SourceID, to versionID: PageID)
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAgentNames(for sourceID: SourceID) -> [String: String]
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func addSourceRef(parentID: String?, sourceID: SourceID, position: Int? = nil)
 Sources/WikiFSCore/Core/QueueTypes.swift	public var sourceIDs: [SourceID]
 Sources/WikiFSCore/Core/WikiSelection.swift	case source(SourceID)
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceIDToName: [SourceID: String]
-Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceDerivedChain: [SourceID: [PageID]]
+Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]]
 Sources/WikiFSCore/Core/WikiRenderContext.swift	public let siblingMaps: [SourceID: [String: SourceID]]
-Sources/WikiFSCore/Core/WikiRenderContext.swift	public var pinnedExtractionID: (SourceID, Int) -> PageID?
+Sources/WikiFSCore/Core/WikiRenderContext.swift	public var pinnedExtractionID: (SourceID, Int) -> SourceMarkdownVersionID?
 Sources/WikiFSCore/Core/FilenameEscaping.swift	public static func byIDSourceFilename(sourceID: SourceID, ext: String) -> String
 Sources/WikiFSCore/Core/FilenameEscaping.swift	public static func byNameSourceFilename(filename: String, ext: String, sourceID: SourceID) -> String
 Sources/WikiFSCore/Core/BookmarkNode.swift	case source(SourceID)

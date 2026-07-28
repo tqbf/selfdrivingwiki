@@ -97,7 +97,7 @@ public enum WikiLinkMarkdown {
         isResolved: (String, ParsedLink.LinkType) -> Bool = { _, _ in true },
         embedInfo: ((String) -> SourceEmbedInfo?)? = nil,
         displayName: (String, ParsedLink.LinkType) -> String? = { _, _ in nil },
-        pinnedExtractionID: ((SourceID, Int) -> PageID?)? = nil
+        pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)? = nil
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
@@ -248,7 +248,7 @@ public enum WikiLinkMarkdown {
                 // — the quote is then present in the rendered DOM and the
                 // highlighter finds it. A pinned link WITHOUT a fragment opens
                 // HEAD (the chosen scope): no `&pin=`. Embeds are excluded above.
-                let pinID: PageID? = (kind == .source && pin != nil && fragment != nil)
+                let pinID: SourceMarkdownVersionID? = (kind == .source && pin != nil && fragment != nil)
                     ? pin.flatMap { Int($0) }.flatMap { pinnedExtractionID?(sourceID, $0) }
                     : nil
                 out += markdownLink(display: display, target: display, kind: kind,
@@ -461,7 +461,7 @@ public enum WikiLinkMarkdown {
     /// when absent (a non-quote pinned link, or a legacy URL). Phase 6: the click
     /// router forwards this to `selectSource(pinnedExtractionID:)` so the
     /// destination loads the pinned extraction the quote was written against.
-    public static func pin(from url: URL) -> PageID? {
+    public static func pin(from url: URL) -> SourceMarkdownVersionID? {
         guard url.scheme == scheme,
               let host = url.host,
               host == sourceHost,
@@ -469,7 +469,7 @@ public enum WikiLinkMarkdown {
               let pinString = components.queryItems?.first(where: { $0.name == "pin" })?.value,
               !pinString.isEmpty
         else { return nil }
-        return PageID(rawValue: pinString)
+        return SourceMarkdownVersionID(rawValue: pinString)
     }
 
     /// Return the URL-decoded fragment from a `wiki://` URL, or nil. Used by the
@@ -513,7 +513,7 @@ public enum WikiLinkMarkdown {
                                      resolved: Bool,
                                      fragment: String? = nil,
                                      id: String? = nil,
-                                     pinID: PageID? = nil) -> String {
+                                     pinID: SourceMarkdownVersionID? = nil) -> String {
         let host: String
         if resolved {
             host = kind == .source ? sourceHost : (kind == .chat ? chatHost : resolvedHost)

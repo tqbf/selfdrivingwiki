@@ -255,7 +255,7 @@ struct CLITantivyLegResolverTests {
                         store: pageStore,
                         query: "ownership",
                         limit: 5)
-                    return SearchOutcome(kind: .page, id: leg?.first.map(SearchOutcomeID.page))
+                    return SearchOutcome(kind: .page, id: leg?.first.map { SearchOutcomeID.page($0.id) })
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveSourceLeg(
@@ -270,7 +270,7 @@ struct CLITantivyLegResolverTests {
                         store: sourceStore,
                         query: "Concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .source, id: leg?.first.map(SearchOutcomeID.source))
+                    return SearchOutcome(kind: .source, id: leg?.first.map { SearchOutcomeID.source($0.id) })
                 }
                 group.addTask {
                     _ = await CLITantivyLegResolver.resolveChatLeg(
@@ -285,7 +285,7 @@ struct CLITantivyLegResolverTests {
                         store: chatStore,
                         query: "concurrent",
                         limit: 5)
-                    return SearchOutcome(kind: .chat, id: leg?.first.map(SearchOutcomeID.chat))
+                    return SearchOutcome(kind: .chat, id: leg?.first.map { SearchOutcomeID.chat($0.id) })
                 }
             }
 
@@ -297,15 +297,15 @@ struct CLITantivyLegResolverTests {
         }
 
         #expect(outcomes.count == 9)
-        let pageHits = outcomes.filter { $0.kind == .page }
-        let sourceHits = outcomes.filter { $0.kind == .source }
-        let chatHits = outcomes.filter { $0.kind == .chat }
+        let pageHits = outcomes.filter { $0.kind == SearchKind.page }
+        let sourceHits = outcomes.filter { $0.kind == SearchKind.source }
+        let chatHits = outcomes.filter { $0.kind == SearchKind.chat }
         #expect(pageHits.count == 3)
         #expect(sourceHits.count == 3)
         #expect(chatHits.count == 3)
-        #expect(pageHits.allSatisfy { $0.id == .page(page.id) }, "pageHits: \(pageHits)")
-        #expect(sourceHits.allSatisfy { $0.id == .source(source.id) }, "sourceHits: \(sourceHits)")
-        #expect(chatHits.allSatisfy { $0.id == .chat(chat.id) }, "chatHits: \(chatHits)")
+        #expect(pageHits.allSatisfy { $0.id == SearchOutcomeID.page(page.id) }, "pageHits: \(pageHits)")
+        #expect(sourceHits.allSatisfy { $0.id == SearchOutcomeID.source(source.id) }, "sourceHits: \(sourceHits)")
+        #expect(chatHits.allSatisfy { $0.id == SearchOutcomeID.chat(chat.id) }, "chatHits: \(chatHits)")
     }
 
     @Test func sameWikiConcurrentDistinctRequestsDoNotShareWrongTask() async throws {
@@ -353,7 +353,7 @@ struct CLITantivyLegResolverTests {
             }
             return ids.enumerated().map { offset, id in
                 TantivyShadowSearchResult(
-                    documentID: key.kind.documentID(for: id.rawValue),
+                    documentID: key.kind.documentID(for: id),
                     kind: key.kind,
                     title: "sentinel-\(offset)",
                     score: Float(ids.count - offset))

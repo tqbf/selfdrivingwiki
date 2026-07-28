@@ -1024,7 +1024,7 @@ struct WikiCtlCommandTests {
         let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         #expect(throws: SourceCommand.Failure.self) {
             try SourceCommand.run(
-                .setActive(.id(pdf.id), versionID: PageID(rawValue: "01NOPE")),
+                .setActive(.id(pdf.id), versionID: SourceMarkdownVersionID(rawValue: "01NOPE")),
                 in: store, cwd: "/tmp")
         }
     }

@@ -26,7 +26,7 @@ public struct ExtractionAlternative: Identifiable, Hashable, Sendable {
     /// `true` when this version is the source's active HEAD (ref→else-MAX).
     public let isActive: Bool
 
-    public var id: PageID { version.id }
+    public var id: SourceMarkdownVersionID { version.id }
 
     public init(
         version: SourceMarkdownVersion,

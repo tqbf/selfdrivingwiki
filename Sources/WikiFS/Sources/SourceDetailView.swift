@@ -1667,7 +1667,7 @@ struct SourceDetailView: View {
                 let history = store.processedMarkdownHistory(for: file.id)
                 let headID = headVersion?.id.rawValue
                 ForEach(history) { version in
-                    let agent = names[version.id.rawValue] ?? version.origin.rawValue
+                    let agent = names[version.id] ?? version.origin.rawValue
                     Button {
                         store.setActiveMarkdown(for: file.id, to: version.id)
                         headVersion = store.processedMarkdownHead(for: file)
@@ -1765,7 +1765,7 @@ struct SourceDetailView: View {
             // Label = the active alternative's producer ("Legacy", "Claude
             // (Anthropic)", or "Edited"), no origin verb and no manual chevron —
             // `.borderlessButton` draws its own disclosure arrow.
-            Label(Self.activeAlternativeLabel(head: head, agent: names[head.id.rawValue]),
+            Label(Self.activeAlternativeLabel(head: head, agent: names[head.id]),
                   systemImage: "doc.on.doc")
         }
         .menuStyle(.borderlessButton)

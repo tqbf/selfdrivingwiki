@@ -251,7 +251,7 @@ struct SourceVersionIDPersistenceTests {
         #expect(origin.agentName == "website")
         #expect(origin.activityKind == "fetch")
         #expect(origin.plan == "https://example.com/legacy")
-        #expect(markdownHead.id == PageID(rawValue: legacyMarkdownVersionID))
+        #expect(markdownHead.id == SourceMarkdownVersionID(rawValue: legacyMarkdownVersionID))
         #expect(markdownHead.sourceVersionID == SourceVersionID(rawValue: legacyVersionV2))
         #expect(reopened.pragmaValue("user_version") == preSourceVersionIDRefactorSchemaVersion)
     }

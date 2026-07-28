@@ -54,7 +54,7 @@ import WikiFSTypes
 
     private func stubHead(content: String = "# Extracted markdown") -> SourceMarkdownVersion {
         SourceMarkdownVersion(
-            id: PageID(rawValue: "01J00000000000000000000HD"),
+            id: SourceMarkdownVersionID(rawValue: "01J00000000000000000000HD"),
             sourceID: sourceID,
             parentID: nil,
             content: content,
@@ -221,7 +221,7 @@ import WikiFSTypes
         // (e.g., an extraction corruption went through). `data(using: .utf8)`
         // returns nil → the seam falls back to raw bytes (no reuse).
         let head = SourceMarkdownVersion(
-            id: PageID(rawValue: "01J00000000000000000000HD"),
+            id: SourceMarkdownVersionID(rawValue: "01J00000000000000000000HD"),
             sourceID: sourceID,
             parentID: nil,
             content: String(decoding: [0xFF, 0xFE, 0x00, 0x01], as: UTF8.self),  // lossy:,rare but possible

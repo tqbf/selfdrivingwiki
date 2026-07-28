@@ -76,7 +76,7 @@ struct ProjectionTests {
         )
 
         let head = SourceMarkdownVersion(
-            id: PageID(rawValue: headID),
+            id: SourceMarkdownVersionID(rawValue: headID),
             sourceID: SourceID(rawValue: sourceID),
             parentID: nil,
             content: "# Processed Report\n\nThis is the extracted markdown.",
@@ -141,7 +141,7 @@ struct ProjectionTests {
         )
 
         let head = SourceMarkdownVersion(
-            id: PageID(rawValue: headID),
+            id: SourceMarkdownVersionID(rawValue: headID),
             sourceID: SourceID(rawValue: sourceID),
             parentID: nil,
             content: "Extracted content from Trip Report.",

@@ -807,7 +807,7 @@ public final class WikiStoreModel {
     @discardableResult
     public func selectSource(byID id: SourceID, anchor: String? = nil,
                              openInNewTab: Bool = false,
-                             pinnedExtractionID: PageID? = nil) -> Bool {
+                             pinnedExtractionID: SourceMarkdownVersionID? = nil) -> Bool {
         guard sources.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
@@ -913,13 +913,13 @@ public final class WikiStoreModel {
     /// `SourceDetailView` so it loads the pinned extraction the quote was written
     /// against. Tagged with the target `WikiSelection` and set-once/consume-once
     /// — mirrors `pendingScrollAnchor`.
-    public private(set) var pendingPinnedExtraction: (selection: WikiSelection, versionID: PageID)?
+    public private(set) var pendingPinnedExtraction: (selection: WikiSelection, versionID: SourceMarkdownVersionID)?
 
     /// Atomically consume the pending pinned-extraction id if `selection`
     /// matches. Returns the smv id once and clears the state; nil if the
     /// selection doesn't match or there is no pending pin. Mirrors
     /// `consumePendingScrollAnchor`.
-    public func consumePendingPinnedExtraction(for selection: WikiSelection?) -> PageID? {
+    public func consumePendingPinnedExtraction(for selection: WikiSelection?) -> SourceMarkdownVersionID? {
         guard let pending = pendingPinnedExtraction,
               let sel = selection,
               pending.selection == sel else { return nil }
@@ -2994,14 +2994,14 @@ public final class WikiStoreModel {
     /// the blob-decoded version, or `nil` when no row matches. Used by the
     /// pinned-extraction viewer to load the exact extraction a quote was written
     /// against.
-    public func processedMarkdownVersion(for id: PageID) -> SourceMarkdownVersion? {
+    public func processedMarkdownVersion(for id: SourceMarkdownVersionID) -> SourceMarkdownVersion? {
         DebugLog.trying("processedMarkdownVersion", operation: { try store.processedMarkdownVersion(id: id) }) ?? nil
     }
 
     /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
     /// per source. Phase 6: the render precompute builds the `sourceID → [smvID]`
     /// map so `linkified` can resolve `@vN` per occurrence.
-    public func sourceDerivedChains() -> [SourceID: [PageID]] {
+    public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]] {
         DebugLog.trying("sourceDerivedChains", operation: { try store.sourceDerivedChains() }) ?? [:]
     }
 
@@ -3557,13 +3557,13 @@ public final class WikiStoreModel {
 
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
-    public func setActiveMarkdown(for sourceID: SourceID, to versionID: PageID) {
+    public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID) {
         DebugLog.trying("setActiveMarkdown", operation: { try store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
     }
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
-    public func processedMarkdownAgentNames(for sourceID: SourceID) -> [String: String] {
+    public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String] {
         DebugLog.trying("processedMarkdownAgentNames", operation: { try store.processedMarkdownAgentNames(sourceID: sourceID) }) ?? [:]
     }
 

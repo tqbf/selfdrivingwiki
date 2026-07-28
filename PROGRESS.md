@@ -1,5 +1,55 @@
 # Progress log
 
+## 2026-07-28 — SourceMarkdownVersionID separation (#956)
+
+**Scope.** This branch adds a public `SourceMarkdownVersionID` namespace for
+`source_markdown_versions.id` and `source_markdown_versions.parent_id`. It also
+types `source-derived` refs and `source_links.pinned_version_id` in Swift while
+preserving SQLite schema/text, `PRAGMA user_version`, queue JSON, File Provider
+identifiers, wiki-link `@vN`, CLI text, and staged or agent-facing raw-string
+contracts.
+
+**Documentation checkpoint.**
+- Added [`plans/source-markdown-version-id-separation.md`](plans/source-markdown-version-id-separation.md)
+  as the design and implementation record.
+- Added the plan to `PLAN.md`.
+- Extended `DocumentationContractTests` so the markdown-version namespace,
+  no-migration rule, raw-string boundaries, `source-derived` / source-link-pin
+  typing, and recorded verification evidence cannot silently disappear.
+
+**What landed so far.**
+- Added `Sources/WikiFSTypes/SourceMarkdownVersionID.swift` as the public
+  markdown-version namespace with primitive-string `Codable` compatibility.
+- Converted core production seams to `SourceMarkdownVersionID`, including
+  `SourceMarkdownVersion.id` / `parentID`, `ExtractionAlternative.id`,
+  `WikiStore` / `GRDBWikiStore` / `WikiStoreModel` processed-markdown APIs,
+  `WikiRenderContext.sourceDerivedChain`, pending pinned extraction, CLI
+  `source set-active`, and source-link pin reads.
+- Added structural guardrails:
+  `SourceMarkdownVersionAPISignatureManifestTests`,
+  `SourceMarkdownVersionIDPersistenceTests`, and expanded
+  `IdentifierBoundaryTypecheckTests` coverage for rejected page/source/chat/
+  source-version calls into markdown-version APIs.
+- Added store-level error coverage proving unknown markdown-version targets
+  throw `sourceMarkdownVersionNotFound(SourceMarkdownVersionID)` while missing
+  pages still throw `notFound(PageID)`.
+
+**Verification.**
+- `make keychain` — passed.
+- `make version` — passed.
+- `make prompts` — passed.
+- `swift build --build-tests` — passed on the final tree.
+- Focused markdown-version boundary verification:
+  `swift test --filter 'IdentifierBoundaryTypecheckTests|SourceMarkdownVersionAPISignatureManifestTests|Phase6PinningPureTests|Phase6PinningStoreTests|Phase6PinningModelTests|WikiRenderContextTests|SourceMarkdownVersionIDPersistenceTests|DocumentationContractTests|WikiCtlCommandTests'`
+  — passed.
+- Focused app and external-contract verification:
+  `WIKIFS_APP_TESTS=1 swift test --filter 'ProcessedMarkdownTests|ProjectionTests|ProjectionTreeTests|WikiReaderRoutingTests|ChatWebViewLinkifyTests|AgentTranscriptRenderContextTests|DocumentationContractTests|WikiCtlCommandTests'`
+  — 268 tests in 11 suites passed.
+- `swift test` — 2,574 tests in 204 suites passed on Tuesday, July 28, 2026,
+  after 151.807 seconds.
+- `make lint` — 0 violations in 381 files; no new bare `try?`.
+- `git diff --check` — clean.
+
 ## 2026-07-27 — SourceVersionID separation (#955)
 
 **Scope.** This branch adds a public `SourceVersionID` namespace for

@@ -110,7 +110,7 @@ import Foundation
         note: String? = nil
     ) -> SourceMarkdownVersion {
         SourceMarkdownVersion(
-            id: PageID(rawValue: "01SMV"),
+            id: SourceMarkdownVersionID(rawValue: "01SMV"),
             sourceID: SourceID(rawValue: "01SRC"),
             parentID: nil,
             content: "# Extracted Content\n\nSome text.",

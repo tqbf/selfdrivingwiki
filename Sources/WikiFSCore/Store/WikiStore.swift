@@ -10,6 +10,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case chatNotFound(ChatID)
     case sourceNotFound(SourceID)
     case sourceVersionNotFound(SourceVersionID)
+    case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
     case invalidBookmarkRow(id: String, reason: String)
     case unexpected(String)
     /// Thrown by `addSource` when the incoming bytes are byte-identical to an
@@ -26,6 +27,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .chatNotFound(let id): return "Page not found: \(id.rawValue)"
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
         case .sourceVersionNotFound(let id): return "Source version not found: \(id.rawValue)"
+        case .sourceMarkdownVersionNotFound(let id): return "Source markdown version not found: \(id.rawValue)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
@@ -322,13 +324,13 @@ public protocol WikiStore: Sendable {
     /// the blob-decoded `SourceMarkdownVersion`, or `nil` when no row matches.
     /// Used by the pinned-extraction viewer to load the exact extraction a quote
     /// was written against.
-    func processedMarkdownVersion(id: PageID) throws -> SourceMarkdownVersion?
+    func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion?
 
     /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
     /// per source (chronological; index 0 = v1). Phase 6: the render precompute
     /// builds the `sourceID → [smvID]` map in one query so `linkified` can
     /// resolve `@vN` per occurrence.
-    func sourceDerivedChains() throws -> [SourceID: [PageID]]
+    func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
 
     /// Embed descriptors for every **byteless** source, batched in one query
     /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version →
@@ -371,7 +373,7 @@ public protocol WikiStore: Sendable {
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
-    func processedMarkdownAgentNames(sourceID: SourceID) throws -> [String: String]
+    func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
 
     /// All extraction alternatives for a source, newest first, each bundled
     /// with its recoverable provenance (backend display name, model version,
@@ -390,7 +392,7 @@ public protocol WikiStore: Sendable {
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult
-    func revertProcessedMarkdown(sourceID: SourceID, to versionID: PageID) throws -> SourceMarkdownVersion
+    func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
 
     /// Record a provenance-carrying extraction alternative (§4.5, §4.7): create
     /// the backend's Agent + an `extract` Activity + a CAS'd markdown row in one
@@ -406,7 +408,7 @@ public protocol WikiStore: Sendable {
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Used by the alternatives UI,
     /// `wikictl source set-active`, and revert.
-    func setActiveMarkdown(sourceID: SourceID, to versionID: PageID) throws
+    func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
 
     // MARK: - Page versions (W0, PR #312)
 

@@ -135,7 +135,9 @@ struct Phase6PinningPureTests {
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
             displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
-            pinnedExtractionID: { src, ord in src == sourceID && ord == 3 ? PageID(rawValue: pinID) : nil })
+            pinnedExtractionID: { src, ord in
+                src == sourceID && ord == 3 ? SourceMarkdownVersionID(rawValue: pinID) : nil
+            })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(out.contains("&pin=\(pinID)"))
     }
@@ -147,7 +149,7 @@ struct Phase6PinningPureTests {
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
             displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
-            pinnedExtractionID: { _, _ in PageID(rawValue: pinID) })
+            pinnedExtractionID: { _, _ in SourceMarkdownVersionID(rawValue: pinID) })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(!out.contains("&pin="))
     }

@@ -185,8 +185,8 @@ struct AgentTranscriptRenderContextTests {
     /// source "Paper.pdf" renamed to "My Paper" with a 3-deep `@vN` chain.
     private func makeFixture() throws -> (model: WikiStoreModel,
                                           homeID: PageID,
-                                          paperID: PageID,
-                                          v2ID: PageID) {
+                                          paperID: SourceID,
+                                          v2ID: SourceMarkdownVersionID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let home = try store.createPage(title: "Home")

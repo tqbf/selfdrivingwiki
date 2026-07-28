@@ -87,7 +87,7 @@ import WikiFSTypes
     /// is exactly `nil` vs `non-nil`.
     private func stubHead() -> SourceMarkdownVersion {
         SourceMarkdownVersion(
-            id: PageID(rawValue: "01J00000000000000000000HD"),
+            id: SourceMarkdownVersionID(rawValue: "01J00000000000000000000HD"),
             sourceID: SourceID(rawValue: "01J00000000000000000000FX"),
             parentID: nil,
             content: "# Extracted markdown placeholder",
