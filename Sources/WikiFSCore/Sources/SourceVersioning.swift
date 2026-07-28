@@ -123,19 +123,19 @@ public enum RefKind: String, Sendable {
 /// A summary of one page version in the append-only chain (W0, PR #312).
 /// Mirrors `SourceVersion` but for page bodies.
 public struct PageVersionSummary: Equatable, Sendable {
-    public let id: String
+    public let id: PageVersionID
     public let pageID: PageID
     /// The previous version's id; nil for the root version.
-    public let parentID: String?
+    public let parentID: PageVersionID?
     /// Non-nil when this version is a merge commit (W2+; nil in W0).
-    public let mergeParentID: String?
+    public let mergeParentID: PageVersionID?
     public let blobHash: String
     public let title: String
     public let activityID: String?
     public let savedAt: Date
 
-    public init(id: String, pageID: PageID, parentID: String?,
-                mergeParentID: String?, blobHash: String, title: String,
+    public init(id: PageVersionID, pageID: PageID, parentID: PageVersionID?,
+                mergeParentID: PageVersionID?, blobHash: String, title: String,
                 activityID: String?, savedAt: Date) {
         self.id = id
         self.pageID = pageID
@@ -154,10 +154,10 @@ public struct PageVersionSummary: Equatable, Sendable {
 /// caller can re-load and retry (W0, PR #312).
 public struct PageConflictError: Error, Equatable {
     public let pageID: PageID
-    public let expectedVersionID: String
-    public let actualVersionID: String?
+    public let expectedVersionID: PageVersionID
+    public let actualVersionID: PageVersionID?
 
-    public init(pageID: PageID, expectedVersionID: String, actualVersionID: String?) {
+    public init(pageID: PageID, expectedVersionID: PageVersionID, actualVersionID: PageVersionID?) {
         self.pageID = pageID
         self.expectedVersionID = expectedVersionID
         self.actualVersionID = actualVersionID
@@ -256,14 +256,14 @@ public struct WorkspaceSummary: Equatable, Sendable {
 public struct WorkspaceRef: Equatable, Sendable {
     public let workspaceID: String
     public let ownerID: PageID
-    public let baseVersionID: String?
-    public let versionID: String?
+    public let baseVersionID: PageVersionID?
+    public let versionID: PageVersionID?
     public let blobHash: String?
     public let title: String?
     public let updatedAt: Date
 
-    public init(workspaceID: String, ownerID: PageID, baseVersionID: String?,
-                versionID: String?, blobHash: String?, title: String?,
+    public init(workspaceID: String, ownerID: PageID, baseVersionID: PageVersionID?,
+                versionID: PageVersionID?, blobHash: String?, title: String?,
                 updatedAt: Date) {
         self.workspaceID = workspaceID
         self.ownerID = ownerID
@@ -279,20 +279,32 @@ public struct WorkspaceRef: Equatable, Sendable {
 /// `conflicted` (W3, PR #312). Carries the three version ids needed for
 /// review (base/ours=main/theirs=workspace) and resolution.
 public struct WorkspaceConflict: Equatable, Sendable {
+    public enum Target: Equatable, Sendable {
+        case pageVersion(PageVersionID)
+        case stagedBlob(String)
+
+        public var rawValue: String {
+            switch self {
+            case .pageVersion(let id): id.rawValue
+            case .stagedBlob(let hash): hash
+            }
+        }
+    }
+
     public let workspaceID: String
     public let pageID: PageID
-    public let baseVersionID: String?
-    public let mainVersionID: String?
-    public let wsVersionID: String
+    public let baseVersionID: PageVersionID?
+    public let mainVersionID: PageVersionID?
+    public let workspaceTarget: Target
     public let createdAt: Date
 
-    public init(workspaceID: String, pageID: PageID, baseVersionID: String?,
-                mainVersionID: String?, wsVersionID: String, createdAt: Date) {
+    public init(workspaceID: String, pageID: PageID, baseVersionID: PageVersionID?,
+                mainVersionID: PageVersionID?, workspaceTarget: Target, createdAt: Date) {
         self.workspaceID = workspaceID
         self.pageID = pageID
         self.baseVersionID = baseVersionID
         self.mainVersionID = mainVersionID
-        self.wsVersionID = wsVersionID
+        self.workspaceTarget = workspaceTarget
         self.createdAt = createdAt
     }
 }

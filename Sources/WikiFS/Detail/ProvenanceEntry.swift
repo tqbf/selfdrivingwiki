@@ -10,8 +10,22 @@ import Foundation
 /// agent label, and clickable-row behavior are identical for pages and
 /// sources — only the store accessors + origin types differ, and those are
 /// resolved by the caller before constructing a `ProvenanceEntry`.
+import WikiFSTypes
+
 public struct ProvenanceEntry: Sendable, Equatable, Identifiable {
-    public let versionID: String
+    public enum VersionID: Sendable, Equatable, Hashable {
+        case page(PageVersionID)
+        case source(SourceVersionID)
+
+        public var rawValue: String {
+            switch self {
+            case .page(let id): return id.rawValue
+            case .source(let id): return id.rawValue
+            }
+        }
+    }
+
+    public let versionID: VersionID
     public let agentName: String
     /// The agent's structured kind (`chat` / `agent` / `human` / `model` /
     /// `software`). Used by the agent label to pick the right icon.
@@ -25,10 +39,10 @@ public struct ProvenanceEntry: Sendable, Equatable, Identifiable {
     public let runTitle: String?
     public let savedAt: Date
 
-    public var id: String { versionID }
+    public var id: String { versionID.rawValue }
 
     public init(
-        versionID: String,
+        versionID: VersionID,
         agentName: String,
         agentKind: String,
         activityKind: String,

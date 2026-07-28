@@ -604,7 +604,7 @@ struct PageVersionTests {
         SELECT a.name FROM page_versions pv
         JOIN activities act ON act.id = pv.activity_id
         JOIN agents a ON a.id = act.agent_id
-        WHERE pv.id = '\(head)';
+        WHERE pv.id = '\(head.rawValue)';
         """)
         #expect(agentName == "chat:01JTESTCHAT00000003",
                 "HEAD activity agent should be the chat (got \(agentName))")
@@ -613,7 +613,7 @@ struct PageVersionTests {
         SELECT a.kind FROM page_versions pv
         JOIN activities act ON act.id = pv.activity_id
         JOIN agents a ON a.id = act.agent_id
-        WHERE pv.id = '\(head)';
+        WHERE pv.id = '\(head.rawValue)';
         """)
         #expect(agentKind == "chat", "HEAD activity agent kind is 'chat'")
     }
@@ -639,7 +639,7 @@ struct PageVersionTests {
         SELECT a.name FROM page_versions pv
         JOIN activities act ON act.id = pv.activity_id
         JOIN agents a ON a.id = act.agent_id
-        WHERE pv.id = '\(head)';
+        WHERE pv.id = '\(head.rawValue)';
         """)
         #expect(agentName == "legacy-import",
                 "nil author degrades to legacy-import (got \(agentName))")
@@ -696,7 +696,7 @@ struct PageVersionTests {
     /// AC.1 — `pageVersionBody` returns nil for an unknown version id (no row).
     @Test func pageVersionBodyReturnsNilForUnknownID() throws {
         let store = try tempStore()
-        #expect(try store.pageVersionBody(versionID: "01JNONEXISTENT00000") == nil)
+        #expect(try store.pageVersionBody(versionID: PageVersionID(rawValue: "01JNONEXISTENT00000")) == nil)
     }
 
     /// AC.2 — the `WikiStoreModel.pageVersionBody(for:)` wrapper returns the
@@ -711,7 +711,7 @@ struct PageVersionTests {
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)!
         #expect(model.pageVersionBody(for: head) == "via model")
-        #expect(model.pageVersionBody(for: "01JBOGUS00000000000") == nil)
+        #expect(model.pageVersionBody(for: PageVersionID(rawValue: "01JBOGUS00000000000")) == nil)
     }
 
     // MARK: - #817: restorePage (append-only restore)
@@ -771,7 +771,7 @@ struct PageVersionTests {
         let activityKind = store.scalarText("""
         SELECT act.kind FROM page_versions pv
         JOIN activities act ON act.id = pv.activity_id
-        WHERE pv.id = '\(newNode)';
+        WHERE pv.id = '\(newNode.rawValue)';
         """)
         #expect(activityKind == "restore",
                 "restore node's activity kind is 'restore' (got \(activityKind))")

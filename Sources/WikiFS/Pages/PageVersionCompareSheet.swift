@@ -79,15 +79,15 @@ struct PageVersionCompareSheet: View {
     @State private var history: [PageOrigin] = []
     /// The active HEAD version id — drives the "Current" marker. Reloaded after
     /// a restore so the marker moves to the restored version.
-    @State private var headID: String?
+    @State private var headID: PageVersionID?
     /// Lazily-loaded bodies keyed by version id (`pageVersionBody` reads). A
     /// version's body is fetched on first assign to Base/Compare and cached.
-    @State private var bodies: [String: String] = [:]
-    @State private var leftID: String?
-    @State private var rightID: String?
+    @State private var bodies: [PageVersionID: String] = [:]
+    @State private var leftID: PageVersionID?
+    @State private var rightID: PageVersionID?
     @State private var showDiff = false
     /// The version id pending a restore confirmation (non-nil → alert shown).
-    @State private var restoreTarget: String?
+    @State private var restoreTarget: PageVersionID?
 
     private enum CompareMode: String, CaseIterable {
         case rendered = "Rendered"
@@ -181,7 +181,7 @@ struct PageVersionCompareSheet: View {
     /// A `Base ▾` / `Compare ▾` picker (mirrors `ExtractionCompareSheet`'s
     /// `paneMenu`). The colored dot ties the pane to its diff side.
     private func paneMenu(title: String, tint: Color,
-                          selection: Binding<String?>,
+                          selection: Binding<PageVersionID?>,
                           current: PageOrigin?) -> some View {
         Menu {
             ForEach(history, id: \.versionID) { origin in
@@ -373,7 +373,7 @@ struct PageVersionCompareSheet: View {
     }
 
     /// Resolve the cached body for a version id (empty string when not loaded).
-    private func body(for versionID: String?) -> String {
+    private func body(for versionID: PageVersionID?) -> String {
         guard let id = versionID else { return "" }
         return bodies[id] ?? ""
     }
@@ -381,7 +381,7 @@ struct PageVersionCompareSheet: View {
     /// A stable key for the pair of currently-needed bodies, so `.task(id:)`
     /// re-fires exactly when Base/Compare changes (not on every render).
     private var neededBodyKey: String {
-        "\(leftID ?? "")\u{0}\(rightID ?? "")"
+        "\(leftID?.rawValue ?? "")\u{0}\(rightID?.rawValue ?? "")"
     }
 
     // MARK: - Labels
@@ -436,7 +436,7 @@ struct PageVersionCompareSheet: View {
         }
     }
 
-    private func confirmRestore(_ versionID: String) {
+    private func confirmRestore(_ versionID: PageVersionID) {
         store.restorePage(for: pageID, to: versionID)
         // Reload so the new restore node appears at the top of the list with the
         // "Current" marker, and the head-derived Base default updates. Bodies

@@ -69,7 +69,7 @@ struct IngestIsolationTests {
         let newPageID = PageID(rawValue: ULID.generate())
         let resultID = try store.workspaceWritePage(
             workspaceID: wsID, pageID: newPageID, title: "New Page", body: "new content")
-        #expect(!resultID.isEmpty)
+        #expect(resultID == nil)
 
         // The page does NOT exist on main — getPage should fail.
         #expect(throws: (any Error).self) {

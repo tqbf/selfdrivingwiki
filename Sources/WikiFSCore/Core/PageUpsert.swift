@@ -50,7 +50,7 @@ public enum PageUpsert {
         id: PageID?,
         title: String,
         body: String,
-        expectedHeadVersionID: String? = nil,
+        expectedHeadVersionID: PageVersionID? = nil,
         author: String? = nil
     ) throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
@@ -93,7 +93,7 @@ public enum PageUpsert {
         id: PageID?,
         title: String,
         body: String,
-        expectedHeadVersionID: String?,
+        expectedHeadVersionID: PageVersionID?,
         author: String? = nil
     ) throws -> Outcome {
         if let id {

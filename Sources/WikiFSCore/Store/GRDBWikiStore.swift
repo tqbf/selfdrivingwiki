@@ -4371,9 +4371,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func appendPageVersion(
         pageID: PageID, title: String, body: String,
-        expectedHeadVersionID: String?,
+        expectedHeadVersionID: PageVersionID?,
         lastEditedBy: String? = nil
-    ) throws -> String {
+    ) throws -> PageVersionID {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
@@ -4441,11 +4441,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `updatePage` MUST NOT call public `appendPageVersion` (would double-emit
     /// AND re-enter); both call THIS instead.
     private func appendPageVersionLocked(
-        db: Database, pageID: PageID, head: String?,
+        db: Database, pageID: PageID, head: PageVersionID?,
         title: String, slug: String,
         body: String, bodyData: Data, hash: String,
         lastEditedBy: String?, now: Date, nowTS: Double
-    ) throws -> String {
+    ) throws -> PageVersionID {
         // No-op guard: identical body AND title = no real change. Skip the
         // version-append and the `pages` UPDATE (the ref's generation is
         // unchanged too). The mirror already reflects the head. `wikictl`'s
@@ -4459,7 +4459,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 FROM page_versions pv
                 JOIN pages p ON p.id = pv.page_id
                 WHERE pv.id = ?;
-                """, arguments: [head])
+                """, arguments: [head.rawValue])
         {
             let headHash: String? = headRow["blob_hash"]
             let headTitle: String? = headRow["title"]
@@ -4506,7 +4506,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try db.execute(sql: """
         INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
         VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-        """, arguments: [versionID, pageID.rawValue, head, hash, title, activityID, nowTS])
+        """, arguments: [versionID, pageID.rawValue, head?.rawValue, hash, title, activityID, nowTS])
 
         // 5. Update the denormalized pages mirror.
         try db.execute(sql: """
@@ -4527,11 +4527,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             updated_at = excluded.updated_at;
         """, arguments: [pageID.rawValue, versionID, nowTS])
 
-        return versionID
+        return PageVersionID(rawValue: versionID)
     }
 
 
-    public func pageHeadVersionID(pageID: PageID) throws -> String? {
+    public func pageHeadVersionID(pageID: PageID) throws -> PageVersionID? {
         try dbWriter.read { db in
             // ref → version_id, or MAX(id) if no ref (default-active rule).
             if let vid = try String.fetchOne(
@@ -4539,13 +4539,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: "SELECT version_id FROM refs WHERE kind = 'page-content' AND owner_id = ?;",
                 arguments: [pageID.rawValue]
             ) {
-                return vid
+                return PageVersionID(rawValue: vid)
             }
             return try String.fetchOne(
                 db,
                 sql: "SELECT MAX(id) FROM page_versions WHERE page_id = ?;",
                 arguments: [pageID.rawValue]
-            )
+            ).map(PageVersionID.init(rawValue:))
         }
     }
 
@@ -4559,10 +4559,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [pageID.rawValue])
             return rows.map { row in
                 PageVersionSummary(
-                    id: row["id"],
+                    id: PageVersionID(rawValue: row["id"]),
                     pageID: PageID(rawValue: row["page_id"]),
-                    parentID: row["parent_id"],
-                    mergeParentID: row["merge_parent_id"],
+                    parentID: (row["parent_id"] as String?).map(PageVersionID.init(rawValue:)),
+                    mergeParentID: (row["merge_parent_id"] as String?).map(PageVersionID.init(rawValue:)),
                     blobHash: row["blob_hash"],
                     title: row["title"],
                     activityID: row["activity_id"],
@@ -4689,7 +4689,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // somehow null). `String?` decodes both cases; `?? default` degrades.
         // Position 8 is the `runTitle` subquery (#745) — NULL for non-chat
         // agents or when the chat has been deleted.
-        let versionID: String = (row[0] as String?) ?? ""
+        let versionID = PageVersionID(rawValue: (row[0] as String?) ?? "")
         let title: String = (row[1] as String?) ?? ""
         let blobHash: String? = row[2]
         let agentName: String? = row[3]
@@ -4725,7 +4725,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// READ-ONLY: routes through `dbWriter.read`, so this is safe off-main via
     /// `WikiReadPool` and emits no `ResourceChangeEvent`. Used by the Versions
     /// window to view/diff a historical version without restoring it.
-    public func pageVersionBody(versionID: String) throws -> String? {
+    public func pageVersionBody(versionID: PageVersionID) throws -> String? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(
                 db,
@@ -4735,14 +4735,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 JOIN blobs b ON b.hash = pv.blob_hash
                 WHERE pv.id = ?;
                 """,
-                arguments: [versionID]
+                arguments: [versionID.rawValue]
             ) else { return nil }
             let bodyData: Data = row["content"]
             return String(data: bodyData, encoding: .utf8) ?? ""
         }
     }
 
-    public func revertPage(pageID: PageID, to versionID: String) throws {
+    public func revertPage(pageID: PageID, to versionID: PageVersionID) throws {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
@@ -4752,8 +4752,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             FROM page_versions pv
             JOIN blobs b ON b.hash = pv.blob_hash
             WHERE pv.id = ? AND pv.page_id = ?;
-            """, arguments: [versionID, pageID.rawValue]) else {
-                throw WikiStoreError.unexpected("version \(versionID) not found for page \(pageID.rawValue)")
+            """, arguments: [versionID.rawValue, pageID.rawValue]) else {
+                throw WikiStoreError.unexpected("version \(versionID.rawValue) not found for page \(pageID.rawValue)")
             }
             let title: String = row["title"]
             let bodyData: Data = row["content"]
@@ -4779,7 +4779,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 version_id = excluded.version_id,
                 generation = generation + 1,
                 updated_at = excluded.updated_at;
-            """, arguments: [pageID.rawValue, versionID, now])
+            """, arguments: [pageID.rawValue, versionID.rawValue, now])
         }
     }
 
@@ -4793,7 +4793,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `page-content` ref is repointed to it); history is never mutated. Emits a
     /// `.page .updated` `ResourceChangeEvent` via `mutate()`.
     @discardableResult
-    public func restorePage(pageID: PageID, to versionID: String) throws -> String {
+    public func restorePage(pageID: PageID, to versionID: PageVersionID) throws -> PageVersionID {
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
@@ -4803,8 +4803,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             FROM page_versions pv
             JOIN blobs b ON b.hash = pv.blob_hash
             WHERE pv.id = ? AND pv.page_id = ?;
-            """, arguments: [versionID, pageID.rawValue]) else {
-                throw WikiStoreError.unexpected("restore target \(versionID) not found for page \(pageID.rawValue)")
+            """, arguments: [versionID.rawValue, pageID.rawValue]) else {
+                throw WikiStoreError.unexpected("restore target \(versionID.rawValue) not found for page \(pageID.rawValue)")
             }
             let targetBlobHash: String = row["blob_hash"]
             let targetTitle: String = row["title"]
@@ -4834,7 +4834,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
             VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [newVersionID, pageID.rawValue, head, targetBlobHash,
+            """, arguments: [newVersionID, pageID.rawValue, head?.rawValue, targetBlobHash,
                             sanitizedTitle, activityID, nowTS])
 
             // 5. Update the denormalized pages mirror (fires the FTS5 trigger —
@@ -4859,7 +4859,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 updated_at = excluded.updated_at;
             """, arguments: [pageID.rawValue, newVersionID, nowTS])
 
-            return newVersionID
+            return PageVersionID(rawValue: newVersionID)
         }
     }
 
@@ -4949,8 +4949,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return WorkspaceRef(
                     workspaceID: row["workspace_id"],
                     ownerID: PageID(rawValue: row["owner_id"]),
-                    baseVersionID: row["base_version_id"],
-                    versionID: row["version_id"],
+                    baseVersionID: (row["base_version_id"] as String?).map(PageVersionID.init(rawValue:)),
+                    versionID: (row["version_id"] as String?).map(PageVersionID.init(rawValue:)),
                     blobHash: blobHash,
                     title: title,
                     updatedAt: Date(timeIntervalSince1970: row["updated_at"]))
@@ -4962,7 +4962,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func workspaceWritePage(
         workspaceID: String, pageID: PageID, title: String, body: String,
         author: String? = nil
-    ) throws -> String {
+    ) throws -> PageVersionID? {
         try mutate(event: { _ in nil }) { db in
             let title = WikiNameRules.sanitized(title)
             let bodyData = Data(body.utf8)
@@ -5006,7 +5006,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 UPDATE workspaces SET updated_at = ? WHERE id = ?;
                 """, arguments: [nowTS, workspaceID])
 
-                return hash
+                // Created pages have no page-version row until merge.
+                return nil
             }
 
             // Existing page: append page_versions row + UPSERT workspace_refs.
@@ -5033,12 +5034,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
             VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, pageID.rawValue, parent, hash, title, activityID, nowTS])
+            """, arguments: [versionID, pageID.rawValue, parent?.rawValue, hash, title, activityID, nowTS])
 
             // UPSERT workspace_refs. On first touch, record base_version_id = main head.
             // On subsequent touches, keep the original base (NULL = no-op in ON CONFLICT).
             let hasWsRef = wsHead != nil
-            let baseToRecord: String? = hasWsRef ? nil : mainHead
+            let baseToRecord: PageVersionID? = hasWsRef ? nil : mainHead
 
             try db.execute(sql: """
             INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
@@ -5048,18 +5049,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 blob_hash = NULL,
                 title = NULL,
                 updated_at = excluded.updated_at;
-            """, arguments: [workspaceID, pageID.rawValue, baseToRecord, versionID, nowTS])
+            """, arguments: [workspaceID, pageID.rawValue, baseToRecord?.rawValue, versionID, nowTS])
 
-            try db.execute(sql: """
-            UPDATE workspaces SET updated_at = ? WHERE id = ?;
-            """, arguments: [nowTS, workspaceID])
+            try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;", arguments: [nowTS, workspaceID])
 
-            return versionID
+            return PageVersionID(rawValue: versionID)
+
         }
     }
 
 
-    public func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> String? {
+    public func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> PageVersionID? {
         try dbWriter.read { db in
             try Self.workspacePageVersionLocked(workspaceID: workspaceID, pageID: pageID, on: db)
         }
@@ -5115,7 +5115,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func workspaceMerge(workspaceID: String) throws -> [String] {
-        var conflicts: [(pageID: String, base: String?, wsVersion: String, mainVersion: String?)] = []
+        var conflicts: [(pageID: String, base: PageVersionID?, workspaceTarget: WorkspaceConflict.Target, mainVersion: PageVersionID?)] = []
+        var hasWikiIndexConflict = false
         var mergedPageIDs: [String] = []
         do {
             try mutate(event: { _ in nil }) { db in
@@ -5132,8 +5133,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
                 for ref in refs {
                     let pageIDStr: String = ref["owner_id"]
-                    let base: String? = ref["base_version_id"]
-                    let wsVersion: String? = ref["version_id"]
+                    let base = (ref["base_version_id"] as String?).map(PageVersionID.init(rawValue:))
+                    let wsVersion = (ref["version_id"] as String?).map(PageVersionID.init(rawValue:))
                     let blobHash: String? = ref["blob_hash"]
                     // title is nullable (staging INSERTs use NULL).
                     let title: String? = ref["title"]
@@ -5152,35 +5153,46 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             db, sql: "SELECT 1 FROM refs WHERE kind = 'page-content' AND owner_id = ?;",
                             arguments: [pageIDStr]) != nil
                         if mainRefExists {
-                            conflicts.append((pageIDStr, nil, stagedHash, mainHead))
+                            if let mainHead {
+                                conflicts.append((pageIDStr, nil, .stagedBlob(stagedHash), mainHead))
+                            }
                             continue
                         }
                         try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title ?? "")
                         mergedPageIDs.append(pageIDStr)
                     } else if base == nil {
                         // Old-style created page (pre-v35: version_id set, base nil).
+                        guard let wsVersion else {
+                            throw WikiStoreError.unexpected("workspaceMerge: missing workspace version for \(pageIDStr)")
+                        }
                         let mainRefExists = try Int.fetchOne(
                             db, sql: "SELECT 1 FROM refs WHERE kind = 'page-content' AND owner_id = ?;",
                             arguments: [pageIDStr]) != nil
                         if mainRefExists {
-                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))
+                            conflicts.append((pageIDStr, base, .pageVersion(wsVersion), mainHead))
                             continue
                         }
-                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion!)
+                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion)
                         mergedPageIDs.append(pageIDStr)
                     } else if mainHead == base {
-                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion!)
+                        guard let wsVersion else {
+                            throw WikiStoreError.unexpected("workspaceMerge: missing workspace version for \(pageIDStr)")
+                        }
+                        try self.fastForwardPage(db: db, pageID: pageID, versionID: wsVersion)
                         mergedPageIDs.append(pageIDStr)
                     } else {
                         // Divergence — attempt diff3 merge (W2).
+                        guard let base, let mainHead, let wsVersion else {
+                            throw WikiStoreError.unexpected("workspaceMerge: incomplete version chain for \(pageIDStr)")
+                        }
                         let mergeResult = try self.diff3MergePage(
-                            db: db, pageID: pageID, baseVersionID: base!,
-                            mainVersionID: mainHead!, wsVersionID: wsVersion!)
+                            db: db, pageID: pageID, baseVersionID: base,
+                            mainVersionID: mainHead, wsVersionID: wsVersion)
                         switch mergeResult {
                         case .merged:
                             mergedPageIDs.append(pageIDStr)
                         case .conflict:
-                            conflicts.append((pageIDStr, base, wsVersion!, mainHead))
+                            conflicts.append((pageIDStr, base, .pageVersion(wsVersion), mainHead))
                         }
                     }
                 }
@@ -5210,14 +5222,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                                 version = wiki_index.version + 1;
                             """, arguments: [mergedText, Date().timeIntervalSince1970])
                         case .conflict:
-                            conflicts.append(("wiki_index", baseIdx, theirs, ours))
+                            hasWikiIndexConflict = true
                         }
                     }
                 }
 
                 // 3. If any conflicts, abort the transaction.
-                if !conflicts.isEmpty {
-                    throw WikiStoreError.unexpected("workspace \(workspaceID) merge: \(conflicts.count) conflict(s)")
+                if !conflicts.isEmpty || hasWikiIndexConflict {
+                    let conflictCount = conflicts.count + (hasWikiIndexConflict ? 1 : 0)
+                    throw WikiStoreError.unexpected("workspace \(workspaceID) merge: \(conflictCount) conflict(s)")
                 }
 
                 // 4. All fast-forwarded → mark 'merged' (.merging → .merged).
@@ -5227,11 +5240,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
         } catch {
             // Only park if there were actual conflicts (not a different error).
-            if !conflicts.isEmpty {
-                let descriptions = conflicts.map { c in
-                    "\(c.pageID): base=\(c.base ?? "nil") ws=\(c.wsVersion) main=\(c.mainVersion ?? "nil")"
-                }.joined(separator: "; ")
-                DebugLog.store("workspaceMerge: \(conflicts.count) conflict(s) — \(descriptions)")
+            if !conflicts.isEmpty || hasWikiIndexConflict {
+                var descriptions = conflicts.map { c in
+                    "\(c.pageID): base=\(c.base?.rawValue ?? "nil") ws=\(c.workspaceTarget.rawValue) main=\(c.mainVersion?.rawValue ?? "nil")"
+                }
+                if hasWikiIndexConflict { descriptions.append("wiki-index") }
+                DebugLog.store("workspaceMerge: \(descriptions.count) conflict(s) — \(descriptions.joined(separator: "; "))")
                 // Park in a separate transaction.
                 try mutate(event: { _ in nil }) { db in
                     let nowTS = Date().timeIntervalSince1970
@@ -5250,7 +5264,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                         try db.execute(sql: """
                         INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
                         VALUES (?, ?, ?, ?, ?, ?);
-                        """, arguments: [workspaceID, c.pageID, c.base, c.mainVersion, c.wsVersion, nowTS])
+                        """, arguments: [workspaceID, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.workspaceTarget.rawValue, nowTS])
                     }
                 }
                 return []
@@ -5292,7 +5306,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     public func workspaceRefresh(workspaceID: String) throws {
-        var conflicts: [(pageID: String, base: String?, wsVersion: String, mainVersion: String?)] = []
+        var conflicts: [(pageID: String, base: PageVersionID?, wsVersion: PageVersionID, mainVersion: PageVersionID?)] = []
         do {
             try mutate(event: { _ in nil }) { db in
                 // Guard: must be open.
@@ -5310,8 +5324,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
                 for ref in refs {
                     let pageIDStr: String = ref["owner_id"]
-                    let base: String? = ref["base_version_id"]
-                    let wsVersion: String? = ref["version_id"]
+                    let base = (ref["base_version_id"] as String?).map(PageVersionID.init(rawValue:))
+                    let wsVersion = (ref["version_id"] as String?).map(PageVersionID.init(rawValue:))
                     let pageID = PageID(rawValue: pageIDStr)
 
                     let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
@@ -5352,16 +5366,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     """, arguments: [activityID, agentID, nowTS, nowTS])
 
                     // Fetch the title from the workspace version.
+                    guard let wsVersion else {
+                        throw WikiStoreError.unexpected("workspaceRefresh: missing workspace version for \(pageIDStr)")
+                    }
                     guard let title: String = try String.fetchOne(
                         db, sql: "SELECT title FROM page_versions WHERE id = ?;",
-                        arguments: [wsVersion!]
+                        arguments: [wsVersion.rawValue]
                     ) else { continue }
 
                     let newVersionID = ULID.generate()
                     try db.execute(sql: """
                     INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                    """, arguments: [newVersionID, pageID.rawValue, mainHead, wsVersion!,
+                    """, arguments: [newVersionID, pageID.rawValue, mainHead?.rawValue, wsVersion.rawValue,
                                      hash, title, activityID, nowTS])
 
                     // Update the workspace_ref: new version + new base.
@@ -5369,7 +5386,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     UPDATE workspace_refs
                     SET base_version_id = ?, version_id = ?, updated_at = ?
                     WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-                    """, arguments: [mainHead, newVersionID, nowTS, workspaceID, pageIDStr])
+                    """, arguments: [mainHead?.rawValue, newVersionID, nowTS, workspaceID, pageIDStr])
                 }
 
                 if !conflicts.isEmpty {
@@ -5395,7 +5412,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                         try db.execute(sql: """
                         INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
                         VALUES (?, ?, ?, ?, ?, ?);
-                        """, arguments: [workspaceID, c.pageID, c.base, c.mainVersion, c.wsVersion, nowTS])
+                        """, arguments: [workspaceID, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.wsVersion.rawValue, nowTS])
                     }
                 }
                 return
@@ -5408,16 +5425,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func workspaceConflicts(workspaceID: String) throws -> [WorkspaceConflict] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
-            SELECT workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at
-            FROM workspace_conflicts WHERE workspace_id = ?;
+            SELECT wc.workspace_id, wc.page_id, wc.base_version_id,
+                   wc.main_version_id, wc.ws_version_id, wc.created_at,
+                   wr.version_id AS current_workspace_version_id
+            FROM workspace_conflicts wc
+            LEFT JOIN workspace_refs wr
+              ON wr.workspace_id = wc.workspace_id
+             AND wr.kind = 'page-content'
+             AND wr.owner_id = wc.page_id
+            WHERE wc.workspace_id = ?;
             """, arguments: [workspaceID])
             return rows.map { row in
-                WorkspaceConflict(
+                let rawTarget: String = row["ws_version_id"]
+                let currentWorkspaceVersionID: String? = row["current_workspace_version_id"]
+                let target: WorkspaceConflict.Target = currentWorkspaceVersionID == nil
+                    ? .stagedBlob(rawTarget)
+                    : .pageVersion(PageVersionID(rawValue: rawTarget))
+                return WorkspaceConflict(
                     workspaceID: row["workspace_id"],
                     pageID: PageID(rawValue: row["page_id"]),
-                    baseVersionID: row["base_version_id"],
-                    mainVersionID: row["main_version_id"],
-                    wsVersionID: row["ws_version_id"],
+                    baseVersionID: (row["base_version_id"] as String?).map(PageVersionID.init(rawValue:)),
+                    mainVersionID: (row["main_version_id"] as String?).map(PageVersionID.init(rawValue:)),
+                    workspaceTarget: target,
                     createdAt: Date(timeIntervalSince1970: row["created_at"]))
             }
         }
@@ -5455,7 +5484,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if let wsHead {
                 title = try String.fetchOne(
                     db, sql: "SELECT title FROM page_versions WHERE id = ?;",
-                    arguments: [wsHead]) ?? ""
+                    arguments: [wsHead.rawValue]) ?? ""
             } else {
                 // Created-page staging: title lives in workspace_refs.title.
                 title = try String.fetchOne(
@@ -5481,7 +5510,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
             VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, pageID.rawValue, wsHead, hash, title, activityID, nowTS])
+            """, arguments: [versionID, pageID.rawValue, wsHead?.rawValue, hash, title, activityID, nowTS])
 
             // 4. Update workspace_ref to point at the resolved version.
             let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
@@ -5489,7 +5518,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE workspace_refs
             SET version_id = ?, base_version_id = ?, blob_hash = NULL, title = NULL, updated_at = ?
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-            """, arguments: [versionID, mainHead, nowTS, workspaceID, pageID.rawValue])
+            """, arguments: [versionID, mainHead?.rawValue, nowTS, workspaceID, pageID.rawValue])
 
             // 5. Delete the conflict row for this page.
             try db.execute(sql: """
@@ -7277,14 +7306,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Static version of `pageHeadVersionIDLocked` that operates on a `Database`
     /// handle (usable inside `mutate`/`read` bodies). Mirrors
     /// `SQLiteWikiStore.pageHeadVersionIDLocked`.
-    private static func pageHeadVersionIDLocked(pageID: PageID, on db: Database) throws -> String? {
+    private static func pageHeadVersionIDLocked(pageID: PageID, on db: Database) throws -> PageVersionID? {
         // Try the explicit ref first.
         if let vid = try String.fetchOne(
             db,
             sql: "SELECT version_id FROM refs WHERE kind = 'page-content' AND owner_id = ?;",
             arguments: [pageID.rawValue]
         ) {
-            return vid
+            return PageVersionID(rawValue: vid)
         }
         // No ref → default-active = MAX(id) for this page.
         DebugLog.store("pageHeadVersionIDLocked: MAX(id) fallback for page \(pageID.rawValue) — no page-content ref found (should not happen after v34 migration)")
@@ -7292,7 +7321,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             db,
             sql: "SELECT id FROM page_versions WHERE page_id = ? ORDER BY id DESC LIMIT 1;",
             arguments: [pageID.rawValue]
-        )
+        ).map(PageVersionID.init(rawValue:))
     }
 
     /// Internal: resolve the workspace's current version for a page.
@@ -7305,7 +7334,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// a created page (version_id is NULL — content lives in blob_hash).
     private static func workspacePageVersionLocked(
         workspaceID: String, pageID: PageID, on db: Database
-    ) throws -> String? {
+    ) throws -> PageVersionID? {
         try String.fetchOne(
             db,
             sql: """
@@ -7313,7 +7342,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
             """,
             arguments: [workspaceID, pageID.rawValue]
-        )
+        ).map(PageVersionID.init(rawValue:))
         // NOTE: SQLiteWikiStore returns nil when version_id column is NULL.
         // GRDB's String.fetchOne returns nil for both "no row" and "NULL value",
         // which matches the desired behavior exactly.
@@ -7323,12 +7352,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     /// Fetch the body text of a page version from its blob.
-    private func fetchVersionBody(db: Database, versionID: String) throws -> String {
+    private func fetchVersionBody(db: Database, versionID: PageVersionID) throws -> String {
         guard let row = try Row.fetchOne(db, sql: """
         SELECT b.content FROM page_versions pv
         JOIN blobs b ON b.hash = pv.blob_hash
         WHERE pv.id = ?;
-        """, arguments: [versionID]) else {
+        """, arguments: [versionID.rawValue]) else {
             throw WikiStoreError.unexpected("version \(versionID) not found")
         }
         let data: Data = row["content"]
@@ -7362,10 +7391,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// 4. No workspace_refs row references the head.
     /// 5. Blind-write guard: pages.body_markdown matches the head blob.
     private func tryAmendPageVersion(
-        db: Database, pageID: PageID, head: String?, title: String, slug: String,
+        db: Database, pageID: PageID, head: PageVersionID?, title: String, slug: String,
         body: String, bodyData: Data, hash: String,
         lastEditedBy: String?, now: Date, nowTS: Double
-    ) throws -> String? {
+    ) throws -> PageVersionID? {
         // Need a head to amend.
         guard let head else { return nil }
 
@@ -7379,7 +7408,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // 2. Within the coalescing window.
         guard let savedAt = try Double.fetchOne(
             db, sql: "SELECT saved_at FROM page_versions WHERE id = ?;",
-            arguments: [head]
+            arguments: [head.rawValue]
         ) else { return nil }
         let elapsed = nowTS - savedAt
         guard elapsed >= 0 && elapsed <= Self.amendCoalescingWindow else { return nil }
@@ -7387,14 +7416,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // 3. Head has no children.
         let childCount = try Int.fetchOne(
             db, sql: "SELECT COUNT(*) FROM page_versions WHERE parent_id = ? OR merge_parent_id = ?;",
-            arguments: [head, head]
+            arguments: [head.rawValue, head.rawValue]
         ) ?? 0
         guard childCount == 0 else { return nil }
 
         // 4. No workspace_refs row references the head.
         let wsCount = try Int.fetchOne(
             db, sql: "SELECT COUNT(*) FROM workspace_refs WHERE version_id = ? OR base_version_id = ?;",
-            arguments: [head, head]
+            arguments: [head.rawValue, head.rawValue]
         ) ?? 0
         guard wsCount == 0 else { return nil }
 
@@ -7403,7 +7432,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         SELECT b.content FROM page_versions pv
         JOIN blobs b ON b.hash = pv.blob_hash
         WHERE pv.id = ?;
-        """, arguments: [head]) else { return nil }
+        """, arguments: [head.rawValue]) else { return nil }
         let headBlobData: Data = headBlobRow["content"]
         guard let mirrorBody = try String.fetchOne(
             db, sql: "SELECT body_markdown FROM pages WHERE id = ?;",
@@ -7422,7 +7451,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Update the head version's blob_hash + title in place.
         try db.execute(sql: """
         UPDATE page_versions SET blob_hash = ?, title = ? WHERE id = ?;
-        """, arguments: [hash, title, head])
+        """, arguments: [hash, title, head.rawValue])
 
         // Update the denormalized pages mirror.
         try db.execute(sql: """
@@ -7441,7 +7470,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version_id = excluded.version_id,
             generation = generation + 1,
             updated_at = excluded.updated_at;
-        """, arguments: [pageID.rawValue, head, nowTS])
+        """, arguments: [pageID.rawValue, head.rawValue, nowTS])
 
         return head
     }
@@ -7476,15 +7505,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Fast-forward an existing page: repoint the main page-content ref to the
     /// workspace's version + update the pages mirror from the version's blob.
     private func fastForwardPage(
-        db: Database, pageID: PageID, versionID: String
+        db: Database, pageID: PageID, versionID: PageVersionID
     ) throws {
         guard let row = try Row.fetchOne(db, sql: """
         SELECT pv.blob_hash, pv.title, b.content
         FROM page_versions pv
         JOIN blobs b ON b.hash = pv.blob_hash
         WHERE pv.id = ? AND pv.page_id = ?;
-        """, arguments: [versionID, pageID.rawValue]) else {
-            throw WikiStoreError.unexpected("workspaceMerge: version \(versionID) not found for page \(pageID.rawValue)")
+        """, arguments: [versionID.rawValue, pageID.rawValue]) else {
+            throw WikiStoreError.unexpected("workspaceMerge: version \(versionID.rawValue) not found for page \(pageID.rawValue)")
         }
         let title: String = row["title"]
         let bodyData: Data = row["content"]
@@ -7509,7 +7538,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version_id = excluded.version_id,
             generation = generation + 1,
             updated_at = excluded.updated_at;
-        """, arguments: [pageID.rawValue, versionID, now])
+        """, arguments: [pageID.rawValue, versionID.rawValue, now])
     }
 
     /// Mint a created page at merge time (v35 staged-page path). Creates the
@@ -7585,8 +7614,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// creates a merge version + updates mirror + ref + regenerates links. If
     /// conflict, returns .conflict (caller parks).
     private func diff3MergePage(
-        db: Database, pageID: PageID, baseVersionID: String,
-        mainVersionID: String, wsVersionID: String
+        db: Database, pageID: PageID, baseVersionID: PageVersionID,
+        mainVersionID: PageVersionID, wsVersionID: PageVersionID
     ) throws -> Diff3MergeResult {
         // Fetch the three blobs.
         let baseText = try self.fetchVersionBody(db: db, versionID: baseVersionID)
@@ -7623,7 +7652,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // Fetch the title from theirs (workspace version).
         let title = try String.fetchOne(
             db, sql: "SELECT title FROM page_versions WHERE id = ?;",
-            arguments: [wsVersionID]
+            arguments: [wsVersionID.rawValue]
         ) ?? ""
 
         // Merge version (two parents).
@@ -7631,7 +7660,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try db.execute(sql: """
         INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, arguments: [versionID, pageID.rawValue, mainVersionID, wsVersionID,
+        """, arguments: [versionID, pageID.rawValue, mainVersionID.rawValue, wsVersionID.rawValue,
                          hash, title, activityID, nowTS])
 
         // Update the pages mirror.

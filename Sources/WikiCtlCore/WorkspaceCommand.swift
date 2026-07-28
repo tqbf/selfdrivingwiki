@@ -80,8 +80,8 @@ public enum WorkspaceCommand {
             lines.append("(no pages)")
         } else {
             for ref in refs {
-                let base = ref.baseVersionID ?? "—"
-                let head = ref.versionID?.prefix(12) ?? "blob:\(ref.blobHash?.prefix(8) ?? "?")"
+                let base = ref.baseVersionID?.rawValue ?? "—"
+                let head = ref.versionID?.rawValue.prefix(12) ?? "blob:\(ref.blobHash?.prefix(8) ?? "?")"
                 lines.append("  \(ref.ownerID.rawValue)\tbase=\(base.prefix(12))\thead=\(head)\t\(ref.title ?? "")")
             }
         }
@@ -122,9 +122,9 @@ public enum WorkspaceCommand {
         }
         let lines = conflicts.map { c in
             let page = c.pageID.rawValue
-            let base = c.baseVersionID ?? "—" 
-            let main = c.mainVersionID ?? "—"
-            let ws = c.wsVersionID
+            let base = c.baseVersionID?.rawValue ?? "—"
+            let main = c.mainVersionID?.rawValue ?? "—"
+            let ws = c.workspaceTarget.rawValue
             return "\(page)\tbase=\(base.prefix(12))\tmain=\(main.prefix(12))\tws=\(ws.prefix(12))"
         }
         return Result(output: lines.joined(separator: "\n"), didCommit: false)

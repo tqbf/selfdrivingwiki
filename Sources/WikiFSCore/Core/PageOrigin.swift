@@ -18,7 +18,7 @@ import Foundation
 /// unknown authors degrade to `"software"` (the legacy-import agent).
 public struct PageOrigin: Sendable, Equatable {
     /// The page-version row id (the ULID of the `page_versions` row).
-    public let versionID: String
+    public let versionID: PageVersionID
     /// The version's title snapshotted at save time.
     public let title: String
     /// SHA-256 hex of the version's body blob (the CAS key). Useful for
@@ -54,7 +54,7 @@ public struct PageOrigin: Sendable, Equatable {
     public let savedAt: Date
 
     public init(
-        versionID: String,
+        versionID: PageVersionID,
         title: String,
         blobHash: String?,
         agentName: String,

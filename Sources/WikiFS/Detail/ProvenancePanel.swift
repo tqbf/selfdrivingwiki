@@ -122,7 +122,7 @@ struct ProvenancePanel: View {
         }
 
         Button {
-            copyToPasteboard(entry.versionID)
+            copyToPasteboard(entry.versionID.rawValue)
         } label: {
             Label("Copy Version ID", systemImage: "number")
         }
