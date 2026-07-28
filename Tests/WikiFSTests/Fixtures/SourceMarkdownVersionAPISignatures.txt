@@ -1,0 +1,83 @@
+# Source markdown-version API signature manifest
+#
+# Format: <entry-key><TAB><typed|surface><TAB><repository-relative Swift path><TAB><required source fragment>
+source-markdown-version.id	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let id: SourceMarkdownVersionID
+source-markdown-version.parent-id	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	public let parentID: SourceMarkdownVersionID?
+source-markdown-version.init	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	id: SourceMarkdownVersionID,
+extraction-alternative.id	typed	Sources/WikiFSCore/Integrations/ExtractionAlternative.swift	public var id: SourceMarkdownVersionID { version.id }
+wiki-store.error	typed	Sources/WikiFSCore/Store/WikiStore.swift	case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
+wiki-store.select-active-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
+wiki-store.processed-markdown-head	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
+wiki-store.processed-markdown-history	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
+wiki-store.processed-markdown-version	typed	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion?
+wiki-store.source-derived-chains	typed	Sources/WikiFSCore/Store/WikiStore.swift	func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
+wiki-store.processed-markdown-agent-names	typed	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
+wiki-store.processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
+wiki-store.append-processed-markdown	surface	Sources/WikiFSCore/Store/WikiStore.swift	func appendProcessedMarkdown(sourceID: SourceID, content: String,
+wiki-store.revert-processed-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
+wiki-store.record-markdown-extraction	surface	Sources/WikiFSCore/Store/WikiStore.swift	func recordMarkdownExtraction(
+wiki-store.set-active-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
+grdb.private-derived-version-ids	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func derivedVersionIDsLocked(sourceID: SourceID, in db: Database) throws -> [SourceMarkdownVersionID] {
+grdb.private-derived-version-id-by-ordinal	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceMarkdownVersionID? {
+grdb.public-processed-markdown-head	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion? {
+grdb.public-processed-markdown-history	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion] {
+grdb.public-processed-markdown-version	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion? {
+grdb.public-source-derived-chains	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]] {
+grdb.public-processed-markdown-agent-names	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String] {
+grdb.public-processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative] {
+grdb.public-processed-markdown-alternatives.active-head	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let headID: SourceMarkdownVersionID?
+grdb.public-replace-links	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws {
+grdb.private-resolve-version-pin	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceMarkdownVersionID? {
+grdb.public-append-processed-markdown	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func appendProcessedMarkdown(
+grdb.public-append-processed-markdown.writer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let id = SourceMarkdownVersionID(rawValue: ULID.generate())
+grdb.public-revert-processed-markdown	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion {
+grdb.public-record-markdown-extraction	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func recordMarkdownExtraction(
+grdb.public-set-active-markdown	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws {
+grdb.read-markdown-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private static func readMarkdownVersion(from row: Row) -> SourceMarkdownVersion {
+grdb.read-markdown-version.decode-id	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	id: SourceMarkdownVersionID(rawValue: row["id"]),
+grdb.private-markdown-derived-ref	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func markdownDerivedRef(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersionID? {
+grdb.private-upsert-markdown-derived-ref	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceID: SourceID, versionID: SourceMarkdownVersionID, now: Double, on db: Database
+grdb.private-processed-markdown-head	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func processedMarkdownHead(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersion? {
+grdb.private-append-processed-markdown-inline	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	parentID: SourceMarkdownVersionID?, db: Database
+grdb.private-live-insert-markdown-version	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let id = SourceMarkdownVersionID(rawValue: ULID.generate())
+grdb.public-source-link-pin	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	role: WikiLinkParser.LinkRole = .cite) throws -> SourceMarkdownVersionID? {
+grdb.public-processed-markdown-producer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownProducer(versionID: SourceMarkdownVersionID) throws -> SourceMarkdownProducer? {
+grdb.public-processed-markdown-heads-by-source	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+model.processed-markdown-head	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
+model.processed-markdown-history	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownHistory(for sourceID: SourceID) -> [SourceMarkdownVersion] {
+model.processed-markdown-version	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownVersion(for id: SourceMarkdownVersionID) -> SourceMarkdownVersion? {
+model.source-derived-chains	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]] {
+model.select-source-by-id	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	pinnedExtractionID: SourceMarkdownVersionID? = nil) -> Bool {
+model.pending-pinned-extraction	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public private(set) var pendingPinnedExtraction: (selection: WikiSelection, versionID: SourceMarkdownVersionID)?
+model.consume-pending-pinned-extraction	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func consumePendingPinnedExtraction(for selection: WikiSelection?) -> SourceMarkdownVersionID? {
+model.save-processed-markdown	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func saveProcessedMarkdown(for sourceID: SourceID, content: String) -> SourceMarkdownVersion? {
+model.set-active-markdown	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID) {
+model.seed-pdf-markdown	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func seedPdfMarkdown(
+model.processed-markdown-agent-names	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String] {
+model.re-extract-markdown	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func reExtractMarkdown(
+model.processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative] {
+cli.source-command.cat-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+cli.source-command.export-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+file-provider.projection.cached-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try openReadStore()?.processedMarkdownHeadsBySource() })) ?? [:]
+file-provider.projection.make-link-maps-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+wikid.daemon-ingestion-provider.processed-markdown-head	surface	Sources/wikid/DaemonQueueIngestionProvider.swift	let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: source.id) })
+extraction-compare.left-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var leftID: SourceMarkdownVersionID?
+extraction-compare.right-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var rightID: SourceMarkdownVersionID?
+extraction-compare.selection-binding	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	selection: Binding<SourceMarkdownVersionID?>,
+extraction-compare.set-active	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	private func setActive(to versionID: SourceMarkdownVersionID) {
+extraction-compare.refresh-alternatives	surface	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	let fresh = store.processedMarkdownAlternatives(for: sourceID)
+source-detail.consume-pinned-extraction	surface	Sources/WikiFS/Sources/SourceDetailView.swift	if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+source-detail.pending-pin-on-change	surface	Sources/WikiFS/Sources/SourceDetailView.swift	if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+source-detail.has-multiple-extractions	surface	Sources/WikiFS/Sources/SourceDetailView.swift	store.processedMarkdownHistory(for: file.id).count >= 2
+source-detail.history-menu	surface	Sources/WikiFS/Sources/SourceDetailView.swift	let history = store.processedMarkdownHistory(for: file.id)
+source-detail.nominate-active	surface	Sources/WikiFS/Sources/SourceDetailView.swift	store.setActiveMarkdown(for: file.id, to: version.id)
+reader-markdown.pinned-extraction-id	typed	Sources/WikiFS/Reader/ReaderMarkdown.swift	pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)? = nil
+wiki-reader.on-wikilink-pinned-route	surface	Sources/WikiFS/Reader/WikiReaderView.swift	if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
+wiki-reader.context-pinned-extraction-id	typed	Sources/WikiFS/Reader/WikiReaderView.swift	let pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)?
+render-context.source-derived-chain	typed	Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]]
+render-context.pinned-extraction-id	typed	Sources/WikiFSCore/Core/WikiRenderContext.swift	public var pinnedExtractionID: (SourceID, Int) -> SourceMarkdownVersionID? {
+cli.source-command.set-active	typed	Sources/WikiCtlCore/SourceCommand.swift	case setActive(Selector, versionID: SourceMarkdownVersionID)
+cli.source-command.run-set-active	typed	Sources/WikiCtlCore/SourceCommand.swift	_ selector: Selector, versionID: SourceMarkdownVersionID, in store: WikiStore
+cli.argument-parser.source-set-active	typed	Sources/WikiCtlCore/ArgumentParser.swift	return .source(.setActive(selector, versionID: SourceMarkdownVersionID(rawValue: raw)))
+links.pin-from-url	typed	Sources/WikiFSLinks/WikiLinkMarkdown.swift	public static func pin(from url: URL) -> SourceMarkdownVersionID? {
+links.linkified.pin-id	typed	Sources/WikiFSLinks/WikiLinkMarkdown.swift	let pinID: SourceMarkdownVersionID? = (kind == .source && pin != nil && fragment != nil)

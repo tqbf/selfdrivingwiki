@@ -216,7 +216,34 @@ struct IdentifierBoundaryTypecheckTests {
         let result = try runTypecheck("markdown-version-id-to-source-version-api.swift")
         #expect(result.status != 0, "SourceMarkdownVersion.id unexpectedly typechecked at a SourceVersionID API boundary.")
         #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
+            result.output.contains("cannot convert value of type 'SourceMarkdownVersionID' to expected argument type 'SourceVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func pageIDIsRejectedByProcessedMarkdownVersionAPI() throws {
+        let result = try runTypecheck("page-id-to-processed-markdown-version-api.swift")
+        #expect(result.status != 0, "PageID unexpectedly typechecked at processedMarkdownVersion(id:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceMarkdownVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func sourceIDIsRejectedByProcessedMarkdownVersionAPI() throws {
+        let result = try runTypecheck("source-id-to-processed-markdown-version-api.swift")
+        #expect(result.status != 0, "SourceID unexpectedly typechecked at processedMarkdownVersion(id:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceMarkdownVersionID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func chatIDIsRejectedByProcessedMarkdownVersionAPI() throws {
+        let result = try runTypecheck("chat-id-to-processed-markdown-version-api.swift")
+        #expect(result.status != 0, "ChatID unexpectedly typechecked at processedMarkdownVersion(id:).")
+        #expect(
+            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceMarkdownVersionID'"),
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }
@@ -234,7 +261,7 @@ struct IdentifierBoundaryTypecheckTests {
         let result = try runTypecheck("source-version-id-to-processed-markdown-version-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at processedMarkdownVersion(id:).")
         #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }
@@ -243,7 +270,7 @@ struct IdentifierBoundaryTypecheckTests {
         let result = try runTypecheck("source-version-id-to-set-active-markdown-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at setActiveMarkdown(sourceID:to:).")
         #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }

@@ -16,7 +16,7 @@ enum ReaderMarkdown {
         isResolved: (String, ParsedLink.LinkType) -> Bool,
         embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)? = nil,
         displayName: (String, ParsedLink.LinkType) -> String? = { _, _ in nil },
-        pinnedExtractionID: ((SourceID, Int) -> PageID?)? = nil
+        pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)? = nil
     ) -> String {
         let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)
         let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown,

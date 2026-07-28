@@ -4,7 +4,7 @@ import WikiFSTypes
 func markdownVersionIDIsRejectedBySourceVersionAPI(
     store: GRDBWikiStore,
     sourceID: SourceID,
-    markdownVersion: SourceMarkdownVersion
+    markdownVersionID: SourceMarkdownVersionID
 ) throws {
-    try store.rollbackSourceContent(sourceID: sourceID, to: markdownVersion.id)
+    try store.rollbackSourceContent(sourceID: sourceID, to: markdownVersionID)
 }

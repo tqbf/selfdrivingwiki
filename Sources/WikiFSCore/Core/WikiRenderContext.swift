@@ -73,7 +73,7 @@ public struct WikiRenderContext: Sendable {
     // `sourceID` → ULID-asc `[smvID]` (chronological; index 0 = v1). Built once
     // so `linkified` can resolve an `@vN` ordinal per occurrence without
     // per-link SQL.
-    public let sourceDerivedChain: [SourceID: [PageID]]
+    public let sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]]
 
     // MARK: - Phase 4 sibling-image resolver maps
     //
@@ -102,7 +102,7 @@ public struct WikiRenderContext: Sendable {
         chatIDToName: [ChatID: String],
         uniqueLooseKeys: Set<String>,
         embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo],
-        sourceDerivedChain: [SourceID: [PageID]],
+        sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]],
         siblingMaps: [SourceID: [String: SourceID]],
         blobScheme: String
     ) {
@@ -276,10 +276,11 @@ public struct WikiRenderContext: Sendable {
         }
     }
 
-    /// `(sourceID, ordinal) -> PageID?`: Phase 6 `@vN` pin resolution. Resolves a
+    /// `(sourceID, ordinal) -> SourceMarkdownVersionID?`: Phase 6 `@vN` pin
+    /// resolution. Resolves a
     /// 1-based ordinal into the source's ULID-asc chain. Out-of-range → `nil`
     /// (the link opens HEAD).
-    public var pinnedExtractionID: (SourceID, Int) -> PageID? {
+    public var pinnedExtractionID: (SourceID, Int) -> SourceMarkdownVersionID? {
         { sourceID, ordinal in
             guard let chain = sourceDerivedChain[sourceID],
                   ordinal >= 1 else { return nil }

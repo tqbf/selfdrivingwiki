@@ -16,7 +16,7 @@ struct Phase6PinningModelTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, SourceID, PageID) {
+    private func makeModel() throws -> (WikiStoreModel, SourceID, SourceMarkdownVersionID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))

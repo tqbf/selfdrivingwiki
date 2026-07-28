@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// Guards the durable documentation claims for the PageID and SourceID boundary.
+/// Guards the durable documentation claims for the identifier-boundary docs.
 struct DocumentationContractTests {
     private static let planPath = "plans/page-source-id-separation.md"
     private static let progressHeading = "## 2026-07-27 — PageID and SourceID type separation"
@@ -27,6 +27,15 @@ struct DocumentationContractTests {
         "Raw-string boundaries:",
         "Ref polymorphism:",
         "Deferred markdown-version namespace:",
+    ]
+    private static let sourceMarkdownVersionPlanPath = "plans/source-markdown-version-id-separation.md"
+    private static let sourceMarkdownVersionProgressHeading = "## 2026-07-28 — SourceMarkdownVersionID separation (#956)"
+    private static let requiredSourceMarkdownVersionPlanMarkers = [
+        "Identifier boundary:",
+        "No-migration decision:",
+        "Raw-string boundaries:",
+        "Polymorphic refs and source-link pins:",
+        "Rejected cross-namespace calls:",
     ]
 
     @Test func pageSourceIDPlanIsIndexedAndComplete() throws {
@@ -93,6 +102,40 @@ struct DocumentationContractTests {
         for marker in Self.requiredSourceVersionPlanMarkers {
             #expect(plan.contains(marker), "missing source-version documentation marker: \(marker)")
         }
+    }
+
+    @Test func sourceMarkdownVersionIDBoundaryIsDocumented() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let plan = try String(
+            contentsOf: root.appendingPathComponent(Self.sourceMarkdownVersionPlanPath),
+            encoding: .utf8
+        )
+
+        for marker in Self.requiredSourceMarkdownVersionPlanMarkers {
+            #expect(plan.contains(marker), "missing source-markdown-version documentation marker: \(marker)")
+        }
+    }
+
+    @Test func planIndexesSourceMarkdownVersionIDDocument() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let index = try String(
+            contentsOf: root.appendingPathComponent("PLAN.md"),
+            encoding: .utf8
+        )
+
+        #expect(index.contains("[`\(Self.sourceMarkdownVersionPlanPath)`](\(Self.sourceMarkdownVersionPlanPath))"))
+    }
+
+    @Test func progressRecordsSourceMarkdownVersionIDVerification() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let progress = try String(
+            contentsOf: root.appendingPathComponent("PROGRESS.md"),
+            encoding: .utf8
+        )
+
+        #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
+        #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
+        #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
     }
 
     private static func locateRepositoryRoot() -> URL? {

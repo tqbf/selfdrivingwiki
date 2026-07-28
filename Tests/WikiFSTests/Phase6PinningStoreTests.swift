@@ -151,7 +151,62 @@ struct Phase6PinningStoreTests {
 
     @Test func processedMarkdownVersionNilForUnknownID() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let resolved = try store.processedMarkdownVersion(id: PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZZ"))
+        let resolved = try store.processedMarkdownVersion(
+            id: SourceMarkdownVersionID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZZ")
+        )
         #expect(resolved == nil)
+    }
+
+    @Test func revertProcessedMarkdownMissingVersionThrowsTypedError() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
+        let missing = SourceMarkdownVersionID(rawValue: "01JMISSINGSOURCEVERSION0000")
+
+        do {
+            _ = try store.revertProcessedMarkdown(sourceID: source.id, to: missing)
+            Issue.record("expected revertProcessedMarkdown to throw sourceMarkdownVersionNotFound")
+        } catch let error as WikiStoreError {
+            switch error {
+            case .sourceMarkdownVersionNotFound(let missingID):
+                #expect(missingID == missing)
+            default:
+                Issue.record("unexpected revertProcessedMarkdown error: \(error)")
+            }
+        }
+    }
+
+    @Test func setActiveMarkdownMissingVersionThrowsTypedError() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
+        let missing = SourceMarkdownVersionID(rawValue: "01JMISSINGSOURCEVERSION0000")
+
+        do {
+            try store.setActiveMarkdown(sourceID: source.id, to: missing)
+            Issue.record("expected setActiveMarkdown to throw sourceMarkdownVersionNotFound")
+        } catch let error as WikiStoreError {
+            switch error {
+            case .sourceMarkdownVersionNotFound(let missingID):
+                #expect(missingID == missing)
+            default:
+                Issue.record("unexpected setActiveMarkdown error: \(error)")
+            }
+        }
+    }
+
+    @Test func missingPageFailureStillUsesPageIDNamespace() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let missing = PageID(rawValue: "01JMISSINGPAGE0000000000000")
+
+        do {
+            _ = try store.getPage(id: missing)
+            Issue.record("expected getPage to throw notFound(PageID)")
+        } catch let error as WikiStoreError {
+            switch error {
+            case .notFound(let missingID):
+                #expect(missingID == missing)
+            default:
+                Issue.record("unexpected getPage error: \(error)")
+            }
+        }
     }
 }

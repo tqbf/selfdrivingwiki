@@ -64,8 +64,8 @@ struct ExtractionCompareSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var alternatives: [ExtractionAlternative] = []
-    @State private var leftID: PageID?
-    @State private var rightID: PageID?
+    @State private var leftID: SourceMarkdownVersionID?
+    @State private var rightID: SourceMarkdownVersionID?
     @State private var showDiff = false
 
     init(store: WikiStoreModel, sourceID: SourceID, filename: String, startInDiff: Bool = false) {
@@ -144,7 +144,7 @@ struct ExtractionCompareSheet: View {
     /// the more discoverable header-dropdown idiom; the colored dot ties the pane
     /// to its diff side (base = red/removed, compare = green/added).
     private func paneMenu(title: String, tint: Color,
-                          selection: Binding<PageID?>,
+                          selection: Binding<SourceMarkdownVersionID?>,
                           current: ExtractionAlternative?) -> some View {
         Menu {
             ForEach(alternatives) { alt in
@@ -338,7 +338,7 @@ struct ExtractionCompareSheet: View {
 
     // MARK: - Actions
 
-    private func setActive(to versionID: PageID) {
+    private func setActive(to versionID: SourceMarkdownVersionID) {
         store.setActiveMarkdown(for: sourceID, to: versionID)
         refresh(assignDefaults: false)
     }

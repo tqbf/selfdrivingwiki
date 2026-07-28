@@ -135,7 +135,9 @@ struct Phase6PinningPureTests {
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
             displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
-            pinnedExtractionID: { src, ord in src == sourceID && ord == 3 ? PageID(rawValue: pinID) : nil })
+            pinnedExtractionID: { src, ord in
+                src == sourceID && ord == 3 ? SourceMarkdownVersionID(rawValue: pinID) : nil
+            })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(out.contains("&pin=\(pinID)"))
     }
@@ -147,7 +149,7 @@ struct Phase6PinningPureTests {
         let out = WikiLinkMarkdown.linkified(body,
             isResolved: { _, _ in true },
             displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
-            pinnedExtractionID: { _, _ in PageID(rawValue: pinID) })
+            pinnedExtractionID: { _, _ in SourceMarkdownVersionID(rawValue: pinID) })
         #expect(out.contains("wiki://source?id=\(paperID)&title="))
         #expect(!out.contains("&pin="))
     }
@@ -161,5 +163,25 @@ struct Phase6PinningPureTests {
             displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
             pinnedExtractionID: { _, _ in nil })
         #expect(!out.contains("&pin="))
+    }
+
+    @Test func canonicalAndRenderedPinnedLinkTextStayExact() throws {
+        let sourceID = SourceID(rawValue: paperID)
+        let body = #"[[source:Video@v3#"a quote"|Paper]]"#
+        let (resolvePage, resolveSource) = resolvers(sources: ["Video": paperID])
+        let canonical = try #require(
+            try WikiLinkRewriter.canonicalize(in: body, resolvePage: resolvePage, resolveSource: resolveSource)
+        )
+        #expect(canonical == #"[[source:\#(paperID)@v3#"a quote"|Paper]]"#)
+
+        let rendered = WikiLinkMarkdown.linkified(
+            canonical,
+            isResolved: { _, _ in true },
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
+            pinnedExtractionID: { src, ordinal in
+                src == sourceID && ordinal == 3 ? SourceMarkdownVersionID(rawValue: pinID) : nil
+            }
+        )
+        #expect(rendered == #"[Paper](wiki://source?id=\#(paperID)&title=Paper&pin=\#(pinID)#%22a%20quote%22)"#)
     }
 }

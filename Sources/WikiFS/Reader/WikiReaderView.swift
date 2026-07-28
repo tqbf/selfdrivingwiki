@@ -333,7 +333,7 @@ enum WikiLinkRoute: Equatable, Sendable {
     /// the canonical ULID when present; nil for legacy `?title=`-only links.
     /// `pin` is the pinned-extraction smv id when the URL carried `&pin=` (Phase 6:
     /// a pinned quote link); nil otherwise (opens HEAD).
-    case source(title: String, id: SourceID?, fragment: String?, pin: PageID?)
+    case source(title: String, id: SourceID?, fragment: String?, pin: SourceMarkdownVersionID?)
     /// Resolved chat link — navigate to a persisted chat. `id` is the
     /// canonical ULID when the URL carried `?id=`; nil for legacy `?title=`-only
     /// links, which resolve by `title` as the transition fallback. `fragment`
@@ -1084,7 +1084,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let isResolved: (String, ParsedLink.LinkType) -> Bool
                 let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
                 let displayName: (String, ParsedLink.LinkType) -> String?
-                let pinnedExtractionID: ((SourceID, Int) -> PageID?)?
+                let pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)?
                 if let context {
                     isResolved = context.isResolved
                     embedInfo = context.embedInfo

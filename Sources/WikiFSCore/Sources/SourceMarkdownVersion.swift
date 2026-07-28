@@ -27,11 +27,11 @@ public enum SourceMarkdownOrigin: String, Sendable, CaseIterable {
 public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     /// ULID — sorts chronologically, so MAX(id) for a given source is the head
     /// (absent a `source-derived` ref; see the default-active rule).
-    public let id: PageID
+    public let id: SourceMarkdownVersionID
     /// The source this version belongs to.
     public let sourceID: SourceID
     /// Previous version's id; nil for v1 (the lineage root).
-    public let parentID: PageID?
+    public let parentID: SourceMarkdownVersionID?
     /// Full markdown text of this version — ALWAYS the fully-resolved body. For
     /// CAS'd rows (v21+) this is the blob-decoded text; callers must never read
     /// `blobHash` to obtain body text. The empty string only appears transiently
@@ -60,9 +60,9 @@ public struct SourceMarkdownVersion: Identifiable, Hashable, Sendable {
     public let technique: String?
 
     public init(
-        id: PageID,
+        id: SourceMarkdownVersionID,
         sourceID: SourceID,
-        parentID: PageID?,
+        parentID: SourceMarkdownVersionID?,
         content: String,
         origin: SourceMarkdownOrigin,
         note: String?,

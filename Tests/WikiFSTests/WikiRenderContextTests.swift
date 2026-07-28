@@ -30,9 +30,9 @@ struct WikiRenderContextTests {
                                           model: WikiStoreModel,
                                           homeID: PageID,
                                           paperID: SourceID,
-                                          v1ID: PageID,
-                                          v2ID: PageID,
-                                          v3ID: PageID,
+                                          v1ID: SourceMarkdownVersionID,
+                                          v2ID: SourceMarkdownVersionID,
+                                          v3ID: SourceMarkdownVersionID,
                                           ytID: SourceID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)

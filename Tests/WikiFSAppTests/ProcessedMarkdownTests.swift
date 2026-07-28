@@ -220,13 +220,18 @@ struct ProcessedMarkdownTests {
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "original", origin: .extraction, note: nil)
         usleep(2000)
-        _ = try store.appendProcessedMarkdown(
+        let v2 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "edit", origin: .user, note: nil)
         usleep(2000)
         let v3 = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
         #expect(v3.content == "original")
         #expect(v3.origin == .revert)
-        #expect(v3.parentID != nil)  // parent is the previous head
+        #expect(v3.id != v1.id)
+        #expect(v3.parentID == v2.id)
+        #expect(v3.note == "revert to \(v1.id.rawValue)")
+        #expect(store.scalarText(
+            "SELECT id || '|' || parent_id || '|' || origin || '|' || note || '|' || blob_hash FROM source_markdown_versions WHERE id = '\(v3.id.rawValue)';"
+        ) == "\(v3.id.rawValue)|\(v2.id.rawValue)|revert|revert to \(v1.id.rawValue)|\(v1.blobHash ?? "")")
         // v1 is untouched
         let history = try store.processedMarkdownHistory(sourceID: file.id)
         #expect(history[2].content == "original")  // v1 still there
@@ -304,7 +309,7 @@ struct ProcessedMarkdownTests {
     @Test func readSeamsReturnSafeDefaultsForPreV8DB() throws {
         let url = try tempV7DatabaseURL()
         let store = try GRDBWikiStore(databaseURL: url)
-        let arbitraryID = PageID(rawValue: "01J00000000000000000000000")
+        let arbitraryID = SourceID(rawValue: "01J00000000000000000000000")
         // Read seams must return safe defaults (nil / false / []) without
         // crashing even though file_markdown_versions doesn't exist.
         #expect(try store.processedMarkdownHead(sourceID: arbitraryID) == nil)
@@ -489,6 +494,9 @@ struct ProcessedMarkdownTests {
         try store.setActiveMarkdown(sourceID: file.id, to: first.id)
         let tokenAfter = try store.changeToken()
         #expect(tokenBefore != tokenAfter)
+        #expect(store.scalarText(
+            "SELECT version_id FROM refs WHERE kind = 'source-derived' AND owner_id = '\(file.id.rawValue)';"
+        ) == first.id.rawValue)
         #expect(try store.processedMarkdownHead(sourceID: file.id)?.id == first.id)
         #expect(try store.processedMarkdownHead(sourceID: file.id)?.content == "first")
     }
@@ -507,7 +515,27 @@ struct ProcessedMarkdownTests {
         #expect(head?.id == version.id)
         #expect(head?.sourceVersionID == activeVersion?.id)
         let names = try store.processedMarkdownAgentNames(sourceID: pdf.id)
-        #expect(names[version.id.rawValue] == "claude")
+        #expect(names[version.id] == "claude")
+    }
+
+    @Test func agentNamesUseMarkdownVersionIDKeys() throws {
+        let store = try tempStore()
+        let source = try seedSource(in: store)
+        let version = try store.recordMarkdownExtraction(
+            sourceID: source.id,
+            content: "# extracted",
+            backend: .anthropic,
+            sourceVersionID: nil,
+            note: nil,
+            modelVersion: nil
+        )
+
+        let names = try store.processedMarkdownAgentNames(sourceID: source.id)
+        let key = try #require(names.keys.first)
+
+        #expect(key == version.id)
+        #expect(key.rawValue == version.id.rawValue)
+        #expect(names[key] == "claude")
     }
 
     /// AC.8 (unit) — reExtractMarkdown appends a coexisting alternative via the
