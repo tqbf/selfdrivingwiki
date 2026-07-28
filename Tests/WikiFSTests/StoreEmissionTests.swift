@@ -441,7 +441,7 @@ struct StoreEmissionTests {
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .created)
-        #expect(events.last?.id == node.id)
+        #expect(events.last?.id == node.id.rawValue)
     }
 
     @Test func updateBookmarkNodeEmitsBookmarkUpdated() async throws {
@@ -452,7 +452,7 @@ struct StoreEmissionTests {
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .updated)
-        #expect(events.last?.id == node.id)
+        #expect(events.last?.id == node.id.rawValue)
     }
 
     @Test func deleteBookmarkNodeEmitsBookmarkDeleted() async throws {
@@ -463,7 +463,7 @@ struct StoreEmissionTests {
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .deleted)
-        #expect(events.last?.id == node.id)
+        #expect(events.last?.id == node.id.rawValue)
     }
 
     @Test func moveBookmarkNodeEmitsBookmarkUpdated() async throws {
@@ -474,7 +474,7 @@ struct StoreEmissionTests {
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .bookmark)
         #expect(events.last?.change == .updated)
-        #expect(events.last?.id == node.id)
+        #expect(events.last?.id == node.id.rawValue)
     }
 
     // MARK: - Chats (#119)

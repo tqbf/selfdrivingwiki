@@ -28,12 +28,12 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
     var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
     var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
-    var onEdit: (@MainActor @Sendable (String) -> Void)
-    var onDelete: (@MainActor @Sendable ([String]) -> Void)
-    var onAddPage: (@MainActor @Sendable (String?) -> Void)
-    var onAddSource: (@MainActor @Sendable (String?) -> Void)
+    var onEdit: (@MainActor @Sendable (BookmarkID) -> Void)
+    var onDelete: (@MainActor @Sendable ([BookmarkID]) -> Void)
+    var onAddPage: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onAddSource: (@MainActor @Sendable (BookmarkID?) -> Void)
     var onNewFolder: (@MainActor @Sendable () -> Void)
-    var onNewSubfolder: (@MainActor @Sendable (String) -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (BookmarkID) -> Void)
 
     func makeNSViewController(context: Context) -> BookmarksOutlineViewController {
         let vc = BookmarksOutlineViewController()
@@ -76,12 +76,12 @@ struct BookmarksCallbacks {
     var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
     var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
     var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
-    var onEdit: (@MainActor @Sendable (String) -> Void)
-    var onDelete: (@MainActor @Sendable ([String]) -> Void)
-    var onAddPage: (@MainActor @Sendable (String?) -> Void)
-    var onAddSource: (@MainActor @Sendable (String?) -> Void)
+    var onEdit: (@MainActor @Sendable (BookmarkID) -> Void)
+    var onDelete: (@MainActor @Sendable ([BookmarkID]) -> Void)
+    var onAddPage: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onAddSource: (@MainActor @Sendable (BookmarkID?) -> Void)
     var onNewFolder: (@MainActor @Sendable () -> Void)
-    var onNewSubfolder: (@MainActor @Sendable (String) -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (BookmarkID) -> Void)
 }
 
 /// Carries the right-clicked node + the effective selection (all selected if
@@ -121,7 +121,7 @@ final class BookmarksOutlineViewController: NSViewController {
 
     /// Cached parent→children map (key `nil` = root). Rebuilt once per reload
     /// so data-source callbacks are O(1) lookups instead of O(n) filters.
-    private var childrenMap: [String?: [BookmarkNode]] = [:]
+    private var childrenMap: [BookmarkID?: [BookmarkNode]] = [:]
 
     /// Tracks whether the initial expand-all has run. After that, reloads
     /// preserve the user's expand/collapse choices instead of force-expanding.
@@ -235,13 +235,13 @@ final class BookmarksOutlineViewController: NSViewController {
 
     /// Compact per-node signature covering all rendering-relevant fields.
     private func nodeSignature(_ nodes: [BookmarkNode]) -> String {
-        nodes.map { "\($0.id)|\($0.parentID ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetRawValue ?? "")" }
+        nodes.map { "\($0.id)|\($0.parentID?.rawValue ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetRawValue ?? "")" }
             .joined(separator: "\n")
     }
 
     // MARK: - Helpers
 
-    private func children(of parentID: String?) -> [BookmarkNode] {
+    private func children(of parentID: BookmarkID?) -> [BookmarkNode] {
         childrenMap[parentID] ?? []
     }
 
@@ -333,12 +333,12 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             payloads = [SidebarDragPayload(kind: .chat, id: id.rawValue)]
         }
         DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) payloadCount=\(payloads.count)")
-        return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id)
+        return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id.rawValue)
     }
 
     /// Recursively collects the resolved page/source/chat target for every leaf
     /// reachable under `folderID`, walking into nested subfolders too.
-    private func leafPayloads(under folderID: String) -> [SidebarDragPayload] {
+    private func leafPayloads(under folderID: BookmarkID) -> [SidebarDragPayload] {
         children(of: folderID).flatMap { child -> [SidebarDragPayload] in
             switch child.content {
             case .folder: return leafPayloads(under: child.id)
@@ -422,7 +422,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     /// chain — used to refuse moving a folder into itself or one of its own
     /// descendants (would create a cycle). Walks the in-memory children map
     /// (already built for the outline), so it reflects the visible tree.
-    private func isDescendant(_ ancestorID: String, of id: String) -> Bool {
+    private func isDescendant(_ ancestorID: BookmarkID, of id: BookmarkID) -> Bool {
         if ancestorID == id { return true }
         return children(of: id).contains { isDescendant(ancestorID, of: $0.id) }
     }
@@ -434,7 +434,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
     private func acceptSidebarPayloadDrop(_ list: SidebarDragPayloadList,
                                           onto item: Any?, atIndex index: Int,
                                           store: WikiStoreModel) -> Bool {
-        let parentID: String?
+        let parentID: BookmarkID?
         let basePosition: Int
         if let folder = item as? BookmarkNode, folder.kind == .folder {
             parentID = folder.id
@@ -456,7 +456,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             case .chat:
                 store.addChatRef(parentID: parentID, chatID: ChatID(rawValue: payload.id), position: position)
             }
-            DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID ?? "root") position=\(position)")
+            DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID?.rawValue ?? "root") position=\(position)")
             position += 1
         }
         return true
@@ -501,7 +501,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         // Resolve parent + insertion index. `index == -1` (NSOutlineViewDropOnItemIndex)
         // means "drop on the item", so append inside it (or, for a leaf, at the
         // leaf's own slot); `index >= 0` means "insert between siblings".
-        let parentID: String?
+        let parentID: BookmarkID?
         let position: Int
         if let folder = item as? BookmarkNode, folder.kind == .folder {
             parentID = folder.id
@@ -526,7 +526,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             // the drop so a chat wiki-link drag is a no-op rather than a crash.
             return false
         }
-        DebugLog.tabs("[drop] wiki-link bookmark created: kind=\(kind) title=\"\(title)\" parentID=\(parentID ?? "root") position=\(position)")
+        DebugLog.tabs("[drop] wiki-link bookmark created: kind=\(kind) title=\"\(title)\" parentID=\(parentID?.rawValue ?? "root") position=\(position)")
         return true
     }
 
@@ -534,7 +534,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      validateDrop info: NSDraggingInfo,
                      proposedItem item: Any?,
                      proposedChildIndex index: Int) -> NSDragOperation {
-        DebugLog.tabs("BookmarksOutlineView.validateDrop: mask=\(info.draggingSourceOperationMask.rawValue) item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
+        DebugLog.tabs("BookmarksOutlineView.validateDrop: mask=\(info.draggingSourceOperationMask.rawValue) item=\((item as? BookmarkNode)?.id.rawValue ?? "root") index=\(index)")
         // Wiki-link drop: a `wiki://page?title=…` / `wiki://source?title=…`
         // anchor dragged out of rendered page/source content (issue #169). The
         // default WKWebView link drag vends the href as `.url`/`.string`; accept
@@ -561,7 +561,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             // [] here gives the right no-drop cursor affordance.
             if let folder = item as? BookmarkNode, folder.kind == .folder {
                 for id in Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard) {
-                    if isDescendant(folder.id, of: id) { return [] }
+                    if isDescendant(folder.id, of: BookmarkID(rawValue: id)) { return [] }
                 }
                 return .move
             }
@@ -590,7 +590,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                      acceptDrop info: NSDraggingInfo,
                      item: Any?,
                      childIndex index: Int) -> Bool {
-        DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id ?? "root") index=\(index)")
+        DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id.rawValue ?? "root") index=\(index)")
         guard let store else { return false }
 
         // Wiki-link drop → create a bookmark pointing at the link's target
@@ -610,10 +610,10 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         // external sidebar drags (no bookmark-node-id type) fall through to
         // the sidebar-payload branch below.
         if Self.isOutlineInternalDrag(info.draggingPasteboard) {
-            let draggedIDs = Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard)
+            let draggedIDs = Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard).map { BookmarkID(rawValue: $0) }
             guard !draggedIDs.isEmpty else { return false }
 
-            func moveAll(toParentID parentID: String?, startingAt position: Int) -> Bool {
+            func moveAll(toParentID parentID: BookmarkID?, startingAt position: Int) -> Bool {
                 var position = position
                 var succeeded = true
                 for id in draggedIDs {
@@ -909,7 +909,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
 
     /// Shared deletion seam for both the context-menu "Delete" action and the
     /// keyboard Delete/Backspace path (`deleteSelection`).
-    private func deleteNodes(_ ids: [String]) {
+    private func deleteNodes(_ ids: [BookmarkID]) {
         guard !ids.isEmpty else { return }
         callbacks?.onDelete(ids)
     }

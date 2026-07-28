@@ -17,7 +17,7 @@ public struct BookmarkTreeItem: Identifiable, Hashable, Sendable {
     /// open a tab. Double-click or context-menu "Open" navigates instead.
     /// This keeps bookmarks and tabs fully independent.
     public var selection: WikiSelection? {
-        .bookmark(node.id)
+        .bookmark(node.id.rawValue)
     }
 
     /// The `WikiSelection` to open when the user double-clicks or uses "Open".
@@ -46,12 +46,12 @@ public struct BookmarkTreeItem: Identifiable, Hashable, Sendable {
 /// always expandable. Page/source refs are leaves (`children = nil`).
 public func buildBookmarkTree(nodes: [BookmarkNode]) -> [BookmarkTreeItem] {
     // Group nodes by parentID (nil = root).
-    var childrenByParent: [String?: [BookmarkNode]] = [:]
+    var childrenByParent: [BookmarkID?: [BookmarkNode]] = [:]
     for node in nodes {
         childrenByParent[node.parentID, default: []].append(node)
     }
 
-    func buildChildren(of parentID: String?) -> [BookmarkTreeItem] {
+    func buildChildren(of parentID: BookmarkID?) -> [BookmarkTreeItem] {
         let siblings = (childrenByParent[parentID] ?? []).sorted { $0.position < $1.position }
         return siblings.map { buildItem(from: $0) }
     }
@@ -61,10 +61,10 @@ public func buildBookmarkTree(nodes: [BookmarkNode]) -> [BookmarkTreeItem] {
         case .folder:
             // Always expandable — empty array when no children.
             let children = buildChildren(of: node.id)
-            return BookmarkTreeItem(id: node.id, node: node, children: children)
+            return BookmarkTreeItem(id: node.id.rawValue, node: node, children: children)
         case .page, .source, .chat:
             // Leaf — no disclosure triangle.
-            return BookmarkTreeItem(id: node.id, node: node, children: nil)
+            return BookmarkTreeItem(id: node.id.rawValue, node: node, children: nil)
         }
     }
 

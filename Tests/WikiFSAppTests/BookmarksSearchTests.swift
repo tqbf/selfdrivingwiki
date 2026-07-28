@@ -12,15 +12,15 @@ import WikiFSCore
     // MARK: - Helpers
 
     private func folder(_ id: String, parent: String? = nil, label: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, content: .folder(label: label))
+        BookmarkNode(id: BookmarkID(rawValue: id), parentID: parent.map(BookmarkID.init(rawValue:)), position: 0, content: .folder(label: label))
     }
 
     private func pageRef(_ id: String, parent: String?, target: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, content: .page(PageID(rawValue: target)))
+        BookmarkNode(id: BookmarkID(rawValue: id), parentID: parent.map(BookmarkID.init(rawValue:)), position: 0, content: .page(PageID(rawValue: target)))
     }
 
     private func sourceRef(_ id: String, parent: String?, target: String) -> BookmarkNode {
-        BookmarkNode(id: id, parentID: parent, position: 0, content: .source(SourceID(rawValue: target)))
+        BookmarkNode(id: BookmarkID(rawValue: id), parentID: parent.map(BookmarkID.init(rawValue:)), position: 0, content: .source(SourceID(rawValue: target)))
     }
 
     /// A trivial title resolver: maps the raw target to the title,
@@ -61,7 +61,7 @@ import WikiFSCore
         let nodes = [folder("a", label: "Reading List")]
         let result = BookmarksContainerView.filterNodes(nodes, query: "reading", resolveTitle: Self.resolver)
         #expect(result.count == 1)
-        #expect(result[0].id == "a")
+        #expect(result[0].id.rawValue == "a")
     }
 
     // MARK: - Ref title matching
@@ -74,8 +74,8 @@ import WikiFSCore
         let result = BookmarksContainerView.filterNodes(nodes, query: "mars", resolveTitle: Self.resolver)
         // Match + ancestor folder
         #expect(result.count == 2)
-        #expect(result.contains { $0.id == "p" })
-        #expect(result.contains { $0.id == "f" })
+        #expect(result.contains { $0.id.rawValue == "p" })
+        #expect(result.contains { $0.id.rawValue == "f" })
     }
 
     @Test func matchesSourceRefTitle() {
@@ -84,7 +84,7 @@ import WikiFSCore
         ]
         let result = BookmarksContainerView.filterNodes(nodes, query: "nasa", resolveTitle: Self.resolver)
         #expect(result.count == 1)
-        #expect(result[0].id == "s")
+        #expect(result[0].id.rawValue == "s")
     }
 
     // MARK: - Ancestor expansion
@@ -99,7 +99,7 @@ import WikiFSCore
         let result = BookmarksContainerView.filterNodes(nodes, query: "hidden", resolveTitle: Self.resolver)
         // Matching node + 3 ancestor folders
         #expect(result.count == 4)
-        #expect(Set(result.map(\.id)) == Set(["p", "leaf", "mid", "root"]))
+        #expect(Set(result.map { $0.id.rawValue }) == Set(["p", "leaf", "mid", "root"]))
     }
 
     @Test func nonMatchingSiblingIsExcluded() {
@@ -111,7 +111,7 @@ import WikiFSCore
         let result = BookmarksContainerView.filterNodes(nodes, query: "mars", resolveTitle: Self.resolver)
         // Folder + matching page, but NOT the non-matching sibling
         #expect(result.count == 2)
-        #expect(Set(result.map(\.id)) == Set(["f", "p1"]))
+        #expect(Set(result.map { $0.id.rawValue }) == Set(["f", "p1"]))
     }
 
     // MARK: - Multiple matches
@@ -124,7 +124,7 @@ import WikiFSCore
         ]
         let result = BookmarksContainerView.filterNodes(nodes, query: "research", resolveTitle: Self.resolver)
         #expect(result.count == 2)
-        #expect(Set(result.map(\.id)) == Set(["f1", "f2"]))
+        #expect(Set(result.map { $0.id.rawValue }) == Set(["f1", "f2"]))
     }
 }
 #endif

@@ -2,6 +2,7 @@
 import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
+import WikiFSCore
 
 /// Tests for `BookmarkTargetPickerSheet.parentID(forSelection:)` — the
 /// `BookmarkFolderSelection` → parentID mapping. Root and a deselected picker
@@ -14,7 +15,7 @@ import Testing
     }
 
     @Test func folderSelectionMapsToItsID() {
-        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder("01HZXAMPLE000FOLDER")) == "01HZXAMPLE000FOLDER")
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder(BookmarkID(rawValue: "01HZXAMPLE000FOLDER"))) == BookmarkID(rawValue: "01HZXAMPLE000FOLDER"))
     }
 
     @Test func nilSelectionMapsToNil() {
@@ -27,7 +28,7 @@ import Testing
         // folder whose id happens to spell the old sentinel. This is the bug
         // class the enum exists to close.
         #expect(BookmarkTargetPickerSheet.parentID(forSelection: .root) == nil)
-        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder("__bookmarks_root__")) == "__bookmarks_root__")
+        #expect(BookmarkTargetPickerSheet.parentID(forSelection: .folder(BookmarkID(rawValue: "__bookmarks_root__"))) == BookmarkID(rawValue: "__bookmarks_root__"))
     }
 }
 #endif

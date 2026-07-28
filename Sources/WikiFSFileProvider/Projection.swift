@@ -997,10 +997,10 @@ struct Projection {
     /// Map a `BookmarkNode` to its File Provider identifier (kind-dispatched).
     static func bookmarkID(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
         switch node.kind {
-        case .folder:      return Identity.bookmarkFolder(node.id)
-        case .pageRef:     return Identity.bookmarkPageRef(node.id)
-        case .sourceRef:   return Identity.bookmarkSourceRef(node.id)
-        case .chatRef:     return Identity.bookmarkChatRef(node.id)
+        case .folder:      return Identity.bookmarkFolder(node.id.rawValue)
+        case .pageRef:     return Identity.bookmarkPageRef(node.id.rawValue)
+        case .sourceRef:   return Identity.bookmarkSourceRef(node.id.rawValue)
+        case .chatRef:     return Identity.bookmarkChatRef(node.id.rawValue)
         }
     }
 
@@ -1008,7 +1008,7 @@ struct Projection {
     /// the `bookmarks` folder; nested → the parent's folder identifier).
     static func bookmarkParent(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
         if let parentID = node.parentID {
-            return Identity.bookmarkFolder(parentID)
+            return Identity.bookmarkFolder(parentID.rawValue)
         }
         return Identity.bookmarks
     }
@@ -1027,7 +1027,7 @@ struct Projection {
     /// corrupted parent cycle can't loop forever.
     private func bookmarkBaseDir(for node: BookmarkNode,
                                  in nodes: [BookmarkNode]) -> [String] {
-        var byID: [String: BookmarkNode] = [:]
+        var byID: [BookmarkID: BookmarkNode] = [:]
         byID.reserveCapacity(nodes.count)
         for n in nodes { byID[n.id] = n }
 
@@ -1108,19 +1108,19 @@ struct Projection {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
               let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
-              let node = nodes.first(where: { $0.id == ulid }) else { return nil }
+              let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         return bookmarkNodeItem(for: node, in: store, maps: cachedLinkMaps(), allNodes: nodes)
     }
 
     /// Enumerate the children of a bookmark container (the topLevel folder or a
     /// nested folder). Leaf identifiers return `[]`.
     private func bookmarkChildren(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
-        let parentID: String?
+        let parentID: BookmarkID?
         if container == Identity.bookmarks {
             parentID = nil
         } else if container.rawValue.hasPrefix(Identity.bookmarkFolderPrefix),
                   let ulid = Identity.bookmarkULID(from: container) {
-            parentID = ulid
+            parentID = BookmarkID(rawValue: ulid)
         } else {
             return []
         }
@@ -1139,7 +1139,7 @@ struct Projection {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
               let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
-              let node = nodes.first(where: { $0.id == ulid }) else { return nil }
+              let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         switch node.content {
         case .folder:
             return nil

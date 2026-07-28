@@ -53,8 +53,8 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
         }
     }
 
-    public let id: String
-    public var parentID: String?
+    public let id: BookmarkID
+    public var parentID: BookmarkID?
     public var position: Int
     public var content: Content
     /// When the node was first created (issue #242). Epoch default lets
@@ -66,8 +66,8 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
     public var updatedAt: Date
 
     public init(
-        id: String,
-        parentID: String?,
+        id: BookmarkID,
+        parentID: BookmarkID?,
         position: Int,
         content: Content,
         createdAt: Date = Date(timeIntervalSince1970: 0),
@@ -93,26 +93,26 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
     /// Reconstruct the tagged content from one complete persisted row tuple.
     /// This is internal because callers must create typed `Content` directly.
     internal static func content(
-        bookmarkID: String,
+        bookmarkID: BookmarkID,
         kindRawValue: String,
         label: String?,
         targetRawValue: String?
     ) throws -> Content {
         guard let kind = BookmarkNodeKind(rawValue: kindRawValue) else {
-            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "unknown kind '\(kindRawValue)'")
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "unknown kind '\(kindRawValue)'")
         }
         switch kind {
         case .folder:
             guard targetRawValue == nil else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "folder has target_id")
+                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "folder has target_id")
             }
             guard let label, !label.isEmpty else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "folder requires a non-empty label")
+                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "folder requires a non-empty label")
             }
             return .folder(label: label)
         case .pageRef:
             guard label == nil else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "page reference has label")
+                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "page reference has label")
             }
             let targetRawValue = try requiredTargetRawValue(
                 bookmarkID: bookmarkID,
@@ -122,7 +122,7 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
             return .page(PageID(rawValue: targetRawValue))
         case .sourceRef:
             guard label == nil else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "source reference has label")
+                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "source reference has label")
             }
             let targetRawValue = try requiredTargetRawValue(
                 bookmarkID: bookmarkID,
@@ -132,7 +132,7 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
             return .source(SourceID(rawValue: targetRawValue))
         case .chatRef:
             guard label == nil else {
-                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "chat reference has label")
+                throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "chat reference has label")
             }
             let targetRawValue = try requiredTargetRawValue(
                 bookmarkID: bookmarkID,
@@ -144,15 +144,15 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
     }
 
     private static func requiredTargetRawValue(
-        bookmarkID: String,
+        bookmarkID: BookmarkID,
         targetRawValue: String?,
         referenceName: String
     ) throws -> String {
         guard let targetRawValue else {
-            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "\(referenceName) requires target_id")
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "\(referenceName) requires target_id")
         }
         guard targetRawValue.isEmpty == false else {
-            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID, reason: "\(referenceName) requires a non-empty target_id")
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "\(referenceName) requires a non-empty target_id")
         }
         return targetRawValue
     }
@@ -169,8 +169,8 @@ public struct BookmarkNode: Identifiable, Hashable, Sendable {
     ///     (typically `store.bookmarkNodes`).
     /// - Returns: The joined path, or an empty string if the id isn't found or
     ///   has no label.
-    public static func displayPath(id: String, in nodes: [BookmarkNode]) -> String {
-        var byID: [String: BookmarkNode] = [:]
+    public static func displayPath(id: BookmarkID, in nodes: [BookmarkNode]) -> String {
+        var byID: [BookmarkID: BookmarkNode] = [:]
         byID.reserveCapacity(nodes.count)
         for node in nodes { byID[node.id] = node }
 

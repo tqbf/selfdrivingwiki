@@ -66,7 +66,7 @@ import Foundation
         let store = try tempStore()
         let parent = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Parent"))
         let result = try BookmarkCommand.run(
-            .createFolder(parentID: parent.id, name: "Child"), in: store
+            .createFolder(parentID: parent.id.rawValue, name: "Child"), in: store
         )
         #expect(result.didCommit == true)
         let nodes = try store.listBookmarkNodes()
@@ -118,7 +118,7 @@ import Foundation
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Old"))
         let result = try BookmarkCommand.run(
-            .rename(id: node.id, to: "New"), in: store
+            .rename(id: node.id.rawValue, to: "New"), in: store
         )
         #expect(result.didCommit == true)
         #expect(result.output.contains("New"))
@@ -131,7 +131,7 @@ import Foundation
     @Test func deleteCommits() throws {
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "ToDelete"))
-        let result = try BookmarkCommand.run(.delete(id: node.id), in: store)
+        let result = try BookmarkCommand.run(.delete(id: node.id.rawValue), in: store)
         #expect(result.didCommit == true)
         let nodes = try store.listBookmarkNodes()
         #expect(nodes.isEmpty)
@@ -143,7 +143,7 @@ import Foundation
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Movable"))
         let result = try BookmarkCommand.run(
-            .move(id: node.id, toParentID: nil, position: 5), in: store
+            .move(id: node.id.rawValue, toParentID: nil, position: 5), in: store
         )
         #expect(result.didCommit == true)
     }

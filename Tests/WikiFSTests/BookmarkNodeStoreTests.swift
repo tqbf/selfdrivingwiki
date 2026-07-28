@@ -64,7 +64,7 @@ import SQLite3
         let page = try store.createPage(title: "Page")
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(page.id))
         #expect(node.content == .page(page.id))
-        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id)';") == "page_ref|NULL|\(page.id.rawValue)")
+        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id.rawValue)';") == "page_ref|NULL|\(page.id.rawValue)")
     }
 
     @Test func sourceTargetRoundTrips() throws {
@@ -72,7 +72,7 @@ import SQLite3
         let source = try store.addSource(filename: "source.txt", data: Data("source".utf8))
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .source(source.id))
         #expect(node.content == .source(source.id))
-        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id)';") == "source_ref|NULL|\(source.id.rawValue)")
+        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id.rawValue)';") == "source_ref|NULL|\(source.id.rawValue)")
     }
 
     @Test func chatTargetRoundTrips() throws {
@@ -80,14 +80,14 @@ import SQLite3
         let chat = try store.createChat(kind: .edit, title: "Chat")
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .chat(chat.id))
         #expect(node.content == .chat(chat.id))
-        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id)';") == "chat_ref|NULL|\(chat.id.rawValue)")
+        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(node.id.rawValue)';") == "chat_ref|NULL|\(chat.id.rawValue)")
     }
 
     @Test func folderRoundTrips() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Folder"))
         #expect(node.content == .folder(label: "Folder"))
-        #expect(store.scalarText("SELECT kind || '|' || label || '|' || COALESCE(target_id, 'NULL') FROM bookmark_nodes WHERE id = '\(node.id)';") == "folder|Folder|NULL")
+        #expect(store.scalarText("SELECT kind || '|' || label || '|' || COALESCE(target_id, 'NULL') FROM bookmark_nodes WHERE id = '\(node.id.rawValue)';") == "folder|Folder|NULL")
     }
 
     @Test func emptyFolderContentIsRejectedBeforeWrite() throws {

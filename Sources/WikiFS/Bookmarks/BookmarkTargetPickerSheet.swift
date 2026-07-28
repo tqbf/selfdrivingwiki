@@ -60,7 +60,7 @@ enum BookmarkFolderSelection: Hashable {
     /// The bookmarks root (`parentID == nil`) — top-level destination.
     case root
     /// A real bookmark folder, by its `BookmarkNode.id`.
-    case folder(String)
+    case folder(BookmarkID)
 }
 
 struct BookmarkTargetPickerSheet: View {
@@ -68,7 +68,7 @@ struct BookmarkTargetPickerSheet: View {
     let targets: BookmarkTargetPickerContext.Targets
     /// Receives the chosen destination folder id (`nil` = bookmarks root).
     /// Main-actor: the caller touches the @MainActor WikiStoreModel.
-    let onConfirm: (@MainActor @Sendable (String?) -> Void)
+    let onConfirm: (@MainActor @Sendable (BookmarkID?) -> Void)
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""
@@ -80,7 +80,7 @@ struct BookmarkTargetPickerSheet: View {
     /// Converts the selection to the `parentID` value expected by `onConfirm`
     /// — the root and a deselected picker both map to `nil` (top level).
     /// Exposed for testing (#243).
-    static func parentID(forSelection selection: BookmarkFolderSelection?) -> String? {
+    static func parentID(forSelection selection: BookmarkFolderSelection?) -> BookmarkID? {
         guard let selection else { return nil }
         switch selection {
         case .root: return nil
@@ -141,7 +141,7 @@ struct BookmarkTargetPickerSheet: View {
                 .keyboardShortcut(.cancelAction)
                 Button("Add") {
                     let parentID = Self.parentID(forSelection: selection)
-                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID ?? "nil"), \(targets.count) items")
+                    DebugLog.tabs("BookmarkTargetPickerSheet: Add — parentID=\(parentID?.rawValue ?? "nil"), \(targets.count) items")
                     onConfirm(parentID)
                     dismiss()
                 }
