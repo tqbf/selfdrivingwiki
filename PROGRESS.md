@@ -40,6 +40,20 @@ contracts.
   identifiers and parents stay exact raw strings; pinned wiki-link text,
   transclusion pin routing, CLI `source set-active` text, and source-scoped
   store emissions are each pinned by named tests.
+- PR #962 Paseo audit follow-up at commit `f8c8ceb` is now fixed on this
+  branch:
+  the markdown-version API manifest explicitly enumerates every active
+  processed-markdown HEAD seam (`WikiStore.processedMarkdownHead(sourceID:)`,
+  GRDB public/private HEAD readers, `processedMarkdownHeadsBySource()`, and
+  `WikiStoreModel.processedMarkdownHead(for:)`), with a dedicated guard that
+  fails if any of those keys drop out of either the expected set or the fixture.
+- Added recorder-based `StoreEmissionTests` coverage for the unknown-target
+  markdown mutators. `revertProcessedMarkdown(sourceID:to:)` and
+  `setActiveMarkdown(sourceID:to:)` with unknown `SourceMarkdownVersionID`
+  values now prove all three required postconditions together: the call throws
+  `WikiStoreError.sourceMarkdownVersionNotFound`, emits no
+  `ResourceChangeEvent`, and leaves the prior active HEAD unchanged in both the
+  direct head read and the batch HEAD projection.
 
 **Verification.**
 - `make keychain` — passed.
@@ -60,6 +74,21 @@ contracts.
 - Final recovery verification on the current tree:
   `swift test`
   — 2,579 tests in 204 suites passed.
+  `make lint`
+  — passed with 0 violations in 381 files.
+  `git diff --check`
+  — clean.
+- Paseo audit fix verification on Tuesday, July 28, 2026:
+  `swift test --filter 'SourceMarkdownVersionAPISignatureManifestTests|Phase6PinningStoreTests|StoreEmissionTests'`
+  — 52 tests in 3 suites passed.
+  `make prompts`
+  — passed.
+  `swift build --build-tests`
+  — passed.
+  `swift test`
+  — started and ran past the requested 10-minute allowance, then was confirmed
+  blocked in `swiftpm-testing-helper` (PID 92754, `STAT S`, `0.0%` CPU) with
+  no further output; interrupted after notifying the blocker.
   `make lint`
   — passed with 0 violations in 381 files.
   `git diff --check`

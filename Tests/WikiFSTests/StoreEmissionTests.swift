@@ -40,6 +40,14 @@ struct StoreEmissionTests {
         recorder.clear()
     }
 
+    /// Confirm the async bus stayed silent after a synchronous no-op/throwing
+    /// mutation path. A real emit queues a `Task { @MainActor in … }`, so a few
+    /// deterministic main-actor flushes are enough to surface it.
+    private func assertNoEventsDelivered(_ recorder: Recorder) async {
+        for _ in 0..<3 { await flushBusDeliveries() }
+        #expect(recorder.snapshot.isEmpty)
+    }
+
     /// Fresh in-memory store + per-wiki bus + spy subscriber.
     private func makeHarness() throws -> (GRDBWikiStore, WikiEventBus, Recorder) {
         let store = try TestStoreFactory.inMemory()
@@ -326,6 +334,76 @@ struct StoreEmissionTests {
         events = try await awaitEvents(rec)
         #expect(events.last?.id == source.id.rawValue)
         #expect(events.last?.id != appended.id.rawValue)
+    }
+
+    @Test func revertProcessedMarkdownUnknownVersionEmitsNothingAndKeepsHeadUnchanged() async throws {
+        let (store, _, rec) = try makeHarness()
+        let source = try addSeedSource(store)
+        let first = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "v1", origin: .extraction, note: nil)
+        _ = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "v2", origin: .extraction, note: nil)
+        try store.setActiveMarkdown(sourceID: source.id, to: first.id)
+        try await drain(rec)
+
+        let previousHead = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        let previousBatchHead = try #require(try store.processedMarkdownHeadsBySource()[source.id.rawValue])
+        let missing = SourceMarkdownVersionID(rawValue: "01JUNKNOWNMARKDOWNVERSION000")
+
+        do {
+            _ = try store.revertProcessedMarkdown(sourceID: source.id, to: missing)
+            Issue.record("expected revertProcessedMarkdown to throw sourceMarkdownVersionNotFound")
+        } catch let error as WikiStoreError {
+            switch error {
+            case .sourceMarkdownVersionNotFound(let missingID):
+                #expect(missingID == missing)
+            default:
+                Issue.record("unexpected revertProcessedMarkdown error: \(error)")
+            }
+        }
+
+        await assertNoEventsDelivered(rec)
+        let headAfter = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        let batchHeadAfter = try #require(try store.processedMarkdownHeadsBySource()[source.id.rawValue])
+        #expect(headAfter.id == previousHead.id)
+        #expect(headAfter.content == previousHead.content)
+        #expect(batchHeadAfter.id == previousBatchHead.id)
+    }
+
+    @Test func setActiveMarkdownUnknownVersionEmitsNothingAndKeepsHeadUnchanged() async throws {
+        let (store, _, rec) = try makeHarness()
+        let source = try addSeedSource(store)
+        let first = try store.recordMarkdownExtraction(
+            sourceID: source.id, content: "v1", backend: .anthropic,
+            sourceVersionID: nil, note: nil, modelVersion: "x")
+        _ = try store.recordMarkdownExtraction(
+            sourceID: source.id, content: "v2", backend: .anthropic,
+            sourceVersionID: nil, note: nil, modelVersion: "x")
+        try store.setActiveMarkdown(sourceID: source.id, to: first.id)
+        try await drain(rec)
+
+        let previousHead = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        let previousBatchHead = try #require(try store.processedMarkdownHeadsBySource()[source.id.rawValue])
+        let missing = SourceMarkdownVersionID(rawValue: "01JUNKNOWNMARKDOWNVERSION001")
+
+        do {
+            try store.setActiveMarkdown(sourceID: source.id, to: missing)
+            Issue.record("expected setActiveMarkdown to throw sourceMarkdownVersionNotFound")
+        } catch let error as WikiStoreError {
+            switch error {
+            case .sourceMarkdownVersionNotFound(let missingID):
+                #expect(missingID == missing)
+            default:
+                Issue.record("unexpected setActiveMarkdown error: \(error)")
+            }
+        }
+
+        await assertNoEventsDelivered(rec)
+        let headAfter = try #require(try store.processedMarkdownHead(sourceID: source.id))
+        let batchHeadAfter = try #require(try store.processedMarkdownHeadsBySource()[source.id.rawValue])
+        #expect(headAfter.id == previousHead.id)
+        #expect(headAfter.content == previousHead.content)
+        #expect(batchHeadAfter.id == previousBatchHead.id)
     }
 
     // MARK: - Singletons + log

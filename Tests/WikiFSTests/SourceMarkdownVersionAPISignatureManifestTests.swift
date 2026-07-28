@@ -68,15 +68,20 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
     ]
 
     private let surfaceEntries: Set<String> = [
+        "wiki-store.processed-markdown-head",
         "wiki-store.processed-markdown-history",
         "wiki-store.processed-markdown-alternatives",
         "wiki-store.append-processed-markdown",
         "wiki-store.record-markdown-extraction",
+        "grdb.public-processed-markdown-head",
         "grdb.public-processed-markdown-history",
         "grdb.public-processed-markdown-alternatives",
         "grdb.public-append-processed-markdown",
         "grdb.public-record-markdown-extraction",
         "grdb.public-replace-links",
+        "grdb.private-processed-markdown-head",
+        "grdb.public-processed-markdown-heads-by-source",
+        "model.processed-markdown-head",
         "model.processed-markdown-history",
         "model.save-processed-markdown",
         "model.seed-pdf-markdown",
@@ -91,11 +96,24 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "wiki-reader.on-wikilink-pinned-route",
     ]
 
+    private let markdownHeadEntries: Set<String> = [
+        "wiki-store.processed-markdown-head",
+        "grdb.public-processed-markdown-head",
+        "grdb.private-processed-markdown-head",
+        "grdb.public-processed-markdown-heads-by-source",
+        "model.processed-markdown-head",
+    ]
+
     private let reviewCriticalEntries: Set<String> = [
+        "wiki-store.processed-markdown-head",
         "wiki-store.processed-markdown-history",
         "wiki-store.processed-markdown-alternatives",
         "wiki-store.append-processed-markdown",
         "wiki-store.record-markdown-extraction",
+        "grdb.public-processed-markdown-head",
+        "grdb.private-processed-markdown-head",
+        "grdb.public-processed-markdown-heads-by-source",
+        "model.processed-markdown-head",
         "model.processed-markdown-history",
         "model.save-processed-markdown",
         "model.re-extract-markdown",
@@ -176,6 +194,8 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         #expect(entries.isEmpty == false, "source-markdown-version API signature manifest must not be empty")
         #expect(entries.count == expectedEntryKeys.count, "source-markdown-version manifest must not duplicate or omit reviewed entries")
         #expect(Set(entries.map(\.key)) == expectedEntryKeys, "source-markdown-version manifest must enumerate the full reviewed surface set")
+        #expect(markdownHeadEntries.isSubset(of: expectedEntryKeys), "markdown HEAD seams must stay explicitly enumerated in the expected key set")
+        #expect(markdownHeadEntries.isSubset(of: Set(entries.map(\.key))), "markdown HEAD seams must stay explicitly enumerated in the fixture")
         #expect(reviewCriticalEntries.isSubset(of: expectedEntryKeys), "review-critical source-markdown-version seams must stay explicitly enumerated in the expected key set")
         #expect(reviewCriticalEntries.isSubset(of: Set(entries.map(\.key))), "review-critical source-markdown-version seams must stay explicitly enumerated in the fixture")
 

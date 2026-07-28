@@ -7,6 +7,7 @@ source-markdown-version.init	typed	Sources/WikiFSCore/Sources/SourceMarkdownVers
 extraction-alternative.id	typed	Sources/WikiFSCore/Integrations/ExtractionAlternative.swift	public var id: SourceMarkdownVersionID { version.id }
 wiki-store.error	typed	Sources/WikiFSCore/Store/WikiStore.swift	case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
 wiki-store.select-active-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
+wiki-store.processed-markdown-head	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
 wiki-store.processed-markdown-history	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
 wiki-store.processed-markdown-version	typed	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion?
 wiki-store.source-derived-chains	typed	Sources/WikiFSCore/Store/WikiStore.swift	func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
@@ -18,6 +19,7 @@ wiki-store.record-markdown-extraction	surface	Sources/WikiFSCore/Store/WikiStore
 wiki-store.set-active-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
 grdb.private-derived-version-ids	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func derivedVersionIDsLocked(sourceID: SourceID, in db: Database) throws -> [SourceMarkdownVersionID] {
 grdb.private-derived-version-id-by-ordinal	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceMarkdownVersionID? {
+grdb.public-processed-markdown-head	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion? {
 grdb.public-processed-markdown-history	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion] {
 grdb.public-processed-markdown-version	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion? {
 grdb.public-source-derived-chains	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]] {
@@ -35,10 +37,13 @@ grdb.read-markdown-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	
 grdb.read-markdown-version.decode-id	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	id: SourceMarkdownVersionID(rawValue: row["id"]),
 grdb.private-markdown-derived-ref	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func markdownDerivedRef(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersionID? {
 grdb.private-upsert-markdown-derived-ref	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	sourceID: SourceID, versionID: SourceMarkdownVersionID, now: Double, on db: Database
+grdb.private-processed-markdown-head	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func processedMarkdownHead(sourceID: SourceID, on db: Database) throws -> SourceMarkdownVersion? {
 grdb.private-append-processed-markdown-inline	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	parentID: SourceMarkdownVersionID?, db: Database
 grdb.private-live-insert-markdown-version	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let id = SourceMarkdownVersionID(rawValue: ULID.generate())
 grdb.public-source-link-pin	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	role: WikiLinkParser.LinkRole = .cite) throws -> SourceMarkdownVersionID? {
 grdb.public-processed-markdown-producer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownProducer(versionID: SourceMarkdownVersionID) throws -> SourceMarkdownProducer? {
+grdb.public-processed-markdown-heads-by-source	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func processedMarkdownHeadsBySource() throws -> [String: SourceMarkdownVersion] {
+model.processed-markdown-head	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
 model.processed-markdown-history	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownHistory(for sourceID: SourceID) -> [SourceMarkdownVersion] {
 model.processed-markdown-version	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownVersion(for id: SourceMarkdownVersionID) -> SourceMarkdownVersion? {
 model.source-derived-chains	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]] {
