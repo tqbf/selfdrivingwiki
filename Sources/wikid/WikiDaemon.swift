@@ -218,9 +218,8 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
-    func deleteWiki(id: String) -> Bool {
+    func deleteWiki(id wikiID: WikiID) -> Bool {
         queue.sync { () -> Bool in
-            let wikiID = WikiID(rawValue: id)
             // Close the held store if open
             openStores.removeValue(forKey: wikiID)
 
@@ -239,11 +238,10 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
-    func renameWiki(id: String, name: String) -> Bool {
+    func renameWiki(id wikiID: WikiID, name: String) -> Bool {
         queue.sync { () -> Bool in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return false }
-            let wikiID = WikiID(rawValue: id)
             guard registry.descriptor(id: wikiID) != nil else { return false }
             registry.rename(id: wikiID, to: trimmed)
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })

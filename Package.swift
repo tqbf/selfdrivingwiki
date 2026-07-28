@@ -396,7 +396,7 @@ let package = Package(
         // the end drops it from the manifest on Linux.
         .executableTarget(
             name: "WikiFSFileProvider",
-            dependencies: ["WikiFSCore"],
+            dependencies: ["WikiFSCore", "WikiFSTypes"],
             path: "Sources/WikiFSFileProvider",
             swiftSettings: [.unsafeFlags(["-warnings-as-errors"])],
             linkerSettings: [

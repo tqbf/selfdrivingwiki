@@ -25,7 +25,7 @@ struct Projection {
 
     /// The wiki this projection serves: the ULID from the FP domain identifier.
     /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
-    let wikiID: String
+    let wikiID: WikiID
 
     /// Optional override for the wiki DB URL. Production (the File Provider
     /// extension) leaves this `nil` and resolves the wiki's DB via
@@ -36,7 +36,7 @@ struct Projection {
     let databaseURL: URL?
 
     /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
-    init(wikiID: String, databaseURL: URL? = nil) {
+    init(wikiID: WikiID, databaseURL: URL? = nil) {
         self.wikiID = wikiID
         self.databaseURL = databaseURL
     }
@@ -311,7 +311,7 @@ struct Projection {
     /// collide.
     private func indexData(for id: NSFileProviderItemIdentifier) -> Data? {
         guard let index = Self.generatedIndexes.first(where: { $0.id == id }) else { return nil }
-        return Self.indexCache.data(forKey: "\(wikiID)/\(id.rawValue)", token: changeToken()) {
+        return Self.indexCache.data(forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()) {
             index.generate(self)
         }
     }
@@ -342,7 +342,7 @@ struct Projection {
     /// single-threaded — one File Provider callback).
     final class ReadScope: @unchecked Sendable {
         private let databaseURL: URL?
-        private let wikiID: String
+        private let wikiID: WikiID
         private let lock = NSLock()
         private var cachedStore: GRDBWikiStore?
         private var cachedToken: String?
@@ -363,7 +363,7 @@ struct Projection {
         /// `cachedLinkMaps`.
         private var cachedHeads: [String: SourceMarkdownVersion]?
 
-        init(databaseURL: URL?, wikiID: String) {
+        init(databaseURL: URL?, wikiID: WikiID) {
             self.databaseURL = databaseURL
             self.wikiID = wikiID
         }
@@ -372,9 +372,9 @@ struct Projection {
         var store: GRDBWikiStore? {
             lock.lock(); defer { lock.unlock() }
             if cachedStore == nil {
-                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
+                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
                 if let url, FileManager.default.fileExists(atPath: url.path) {
-                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
+                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
                     cachedStore = DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
                 }
             }
@@ -432,9 +432,9 @@ struct Projection {
     /// container/DB is unavailable.
     private func openReadStore() -> GRDBWikiStore? {
         if let scope = readStoreHolder { return scope.store }
-        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID)
+        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID) thread=\(Thread.current)")
+        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
         return DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
     }
 
@@ -1711,7 +1711,7 @@ struct Projection {
         in store: GRDBWikiStore
     ) -> Data? {
         Self.chatContentCache.data(
-            forKey: "\(wikiID)/\(id.rawValue)", token: changeToken()
+            forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()
         ) {
             let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
             let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)

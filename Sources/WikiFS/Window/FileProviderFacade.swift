@@ -204,7 +204,7 @@ final class FileProviderFacade: ChangeSignaler {
     /// retry loop keeps trying.
     private func isDomainRegistered(id: WikiID) async -> Bool {
         let domainIDs = await domainService.domains().map(\.id)
-        return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id.rawValue)
+        return DomainRegistrationPolicy.isRegistered(domainIDs: domainIDs, wikiID: id)
     }
 
     /// Nudge the freshly-registered domain's root + working-set enumerator so the

@@ -55,7 +55,7 @@ public enum DomainRegistrationPolicy {
     /// Whether `wikiID` is present in a daemon-reported list of domain
     /// identifiers. Factored out so the caller's `domains()` → identifier mapping
     /// has one tested home (an exact match on the raw ULID identifier).
-    public static func isRegistered(domainIDs: [String], wikiID: String) -> Bool {
-        domainIDs.contains(wikiID)
+    public static func isRegistered(domainIDs: [String], wikiID: WikiID) -> Bool {
+        domainIDs.contains(wikiID.rawValue)
     }
 }
