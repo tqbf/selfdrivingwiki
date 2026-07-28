@@ -259,7 +259,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
             provider: provider,
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,
-            selectedModelId: selectedModelId,
+            selectedModelId: selectedModelId?.rawValue,
             containerDirectory: containerDirectory)
     }
 }

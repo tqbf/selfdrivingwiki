@@ -189,7 +189,7 @@ public final class ChatDaemonCoordinator {
     ) async throws -> ChatID {
         try await client.startChat(ChatStartRequest(
             wikiID: wikiID, firstMessage: firstMessage,
-            providerId: providerId?.rawValue, modelId: modelId?.rawValue))
+            providerId: providerId, modelId: modelId))
     }
 
     /// Continue a persisted chat with a new user turn.

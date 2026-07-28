@@ -8,10 +8,10 @@ enum StageProviderSelectionState: Equatable {
     case pinnedMissing(id: String)
 
     static func resolve(config: AgentProvidersConfig, stageKey: String) -> StageProviderSelectionState {
-        guard let pinnedID = config.stageProviderIds[stageKey], !pinnedID.isEmpty else {
+        guard let providerID = config.stageProviderIds[stageKey], !providerID.rawValue.isEmpty else {
             return .inherited
         }
-        let providerID = ProviderID(rawValue: pinnedID)
+        let pinnedID = providerID.rawValue
         guard let provider = config.provider(id: providerID) else {
             return .pinnedMissing(id: pinnedID)
         }
@@ -85,7 +85,7 @@ struct StageProviderModelPicker: View {
     /// model id the stage will actually use, so the user can see the effective
     /// resolution at a glance.
     private var fallbackLabel: String {
-        config.selectedModelId(forProvider: resolvedProvider.id) ?? "default"
+        config.selectedModelId(forProvider: resolvedProvider.id)?.rawValue ?? "default"
     }
 
     /// The Summary tab's provider pin is load-bearing: a non-empty but
@@ -165,7 +165,7 @@ struct StageProviderModelPicker: View {
                 } else {
                     Text("Same as provider (\(fallbackLabel))").tag("")
                     ForEach(resolvedModels, id: \.modelId) { model in
-                        Text(model.displayLabel).tag(model.modelId)
+                        Text(model.displayLabel).tag(model.modelId.rawValue)
                     }
                 }
             }
@@ -205,10 +205,10 @@ struct StageProviderModelPicker: View {
     /// model override when the provider changes — §2.2.3), then persists.
     private var providerBinding: Binding<String> {
         Binding(
-            get: { config.stageProviderIds[stageKey] ?? "" },
+            get: { config.stageProviderIds[stageKey]?.rawValue ?? "" },
             set: { newID in
                 let updated = config.settingStageProvider(
-                    newID.isEmpty ? nil : newID,
+                    newID.isEmpty ? nil : ProviderID(rawValue: newID),
                     forStage: stageKey)
                 save(updated)
             })
@@ -218,10 +218,10 @@ struct StageProviderModelPicker: View {
     /// through `settingIngestStageModel(_:forStage:)`, then persists.
     private var modelBinding: Binding<String> {
         Binding(
-            get: { config.ingestStageModelIds[stageKey] ?? "" },
+            get: { config.ingestStageModelIds[stageKey]?.rawValue ?? "" },
             set: { newID in
                 let updated = config.settingIngestStageModel(
-                    newID.isEmpty ? nil : newID,
+                    newID.isEmpty ? nil : ModelID(rawValue: newID),
                     forStage: stageKey)
                 save(updated)
             })

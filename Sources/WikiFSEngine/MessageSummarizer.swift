@@ -43,7 +43,7 @@ public enum MessageSummarizer {
     /// vs Model — never use `provider(forStage: "summarizer")` for this
     /// decision (see the invariant in this type's doc comment).
     public static func mode(for config: AgentProvidersConfig) -> Mode {
-        let pin = config.stageProviderIds["summarizer"] ?? ""
+        let pin = config.stageProviderIds["summarizer"]?.rawValue ?? ""
         return pin.isEmpty ? .defaultTruncation : .model
     }
 
@@ -204,8 +204,8 @@ public enum MessageSummarizer {
         // plan §5.1 invariant). This method is only called after the caller has
         // confirmed model mode, but the guard is here too for defense in depth.
         guard let pinnedId = config.stageProviderIds["summarizer"],
-              !pinnedId.isEmpty,
-              let provider = config.provider(id: ProviderID(rawValue: pinnedId)),
+              !pinnedId.rawValue.isEmpty,
+              let provider = config.provider(id: pinnedId),
               provider.enabled else {
             return nil
         }
@@ -225,7 +225,7 @@ public enum MessageSummarizer {
             provider: provider,
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,
-            selectedModelId: selectedModelId)
+            selectedModelId: selectedModelId?.rawValue)
 
         return BackendProfile(
             providerHints: hints,

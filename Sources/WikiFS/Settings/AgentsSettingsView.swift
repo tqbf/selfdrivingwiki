@@ -248,7 +248,7 @@ struct AgentsSettingsView: View {
     nonisolated static func modelWarning(for provider: AgentProvider, in config: AgentProvidersConfig) -> String? {
         guard provider.enabled else { return nil }
         let modelId = config.selectedModelId(forProvider: provider.id)
-        if let modelId, !modelId.isEmpty { return nil }
+        if let modelId, !modelId.rawValue.isEmpty { return nil }
         let models = config.cachedModels(forProvider: provider.id)
         if models.isEmpty {
             return "No model captured yet — chat with this provider once to discover models."
@@ -263,9 +263,9 @@ struct AgentsSettingsView: View {
     nonisolated static func modelStatus(for provider: AgentProvider, in config: AgentProvidersConfig) -> ModelStatus {
         guard provider.enabled else { return .disabled }
         if let modelId = config.selectedModelId(forProvider: provider.id),
-           !modelId.isEmpty {
+           !modelId.rawValue.isEmpty {
             let name = config.cachedModels(forProvider: provider.id)
-                .first(where: { $0.modelId == modelId })?.name ?? modelId
+                .first(where: { $0.modelId == modelId })?.name ?? modelId.rawValue
             return .selected(name: name)
         }
         let models = config.cachedModels(forProvider: provider.id)
@@ -519,10 +519,10 @@ private struct ProviderDetailPane: View {
 
     private var modelBinding: Binding<String> {
         Binding(
-            get: { config.selectedModelId(forProvider: provider.id) ?? "" },
+            get: { config.selectedModelId(forProvider: provider.id)?.rawValue ?? "" },
             set: { newID in
                 saveConfig(config.settingSelectedModel(
-                    newID.isEmpty ? nil : newID,
+                    newID.isEmpty ? nil : ModelID(rawValue: newID),
                     forProvider: provider.id))
             })
     }

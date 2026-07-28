@@ -18,10 +18,10 @@ public struct ChatStartRequest: Codable, Sendable {
     /// BEFORE the chat existed (a `.draft` session has no `chats` row yet to
     /// write it to). `nil` = no override. Seeds `ChatSummary.modelProviderId`/
     /// `.modelId` at creation (`DaemonChatHost.startChat`).
-    public let providerId: String?
-    public let modelId: String?
+    public let providerId: ProviderID?
+    public let modelId: ModelID?
 
-    public init(wikiID: WikiID, firstMessage: String, providerId: String? = nil, modelId: String? = nil) {
+    public init(wikiID: WikiID, firstMessage: String, providerId: ProviderID? = nil, modelId: ModelID? = nil) {
         self.wikiID = wikiID
         self.firstMessage = firstMessage
         self.providerId = providerId
