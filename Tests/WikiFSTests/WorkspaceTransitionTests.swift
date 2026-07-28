@@ -171,7 +171,7 @@ struct WorkspaceTransitionTests {
     // MARK: - Helpers
 
     /// A workspace parked at `.conflicted` (conflict-merge setup, no resolve).
-    private func readyConflictedWorkspace(store: GRDBWikiStore) throws -> String {
+    private func readyConflictedWorkspace(store: GRDBWikiStore) throws -> WorkspaceID {
         let page = try store.createPage(title: "Page")
         _ = try store.appendPageVersion(
             pageID: page.id, title: "Page", body: "line1\nline2",
@@ -189,7 +189,7 @@ struct WorkspaceTransitionTests {
     }
 
     /// A workspace at `.merged` (fast-forward merge completes cleanly).
-    private func readyMergedWorkspace(store: GRDBWikiStore) throws -> String {
+    private func readyMergedWorkspace(store: GRDBWikiStore) throws -> WorkspaceID {
         let page = try store.createPage(title: "Merged Page")
         _ = try store.appendPageVersion(
             pageID: page.id, title: "Merged Page", body: "v1",

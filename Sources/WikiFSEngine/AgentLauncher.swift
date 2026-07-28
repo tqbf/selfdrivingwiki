@@ -1081,7 +1081,7 @@ public final class AgentLauncher {
         systemPrompt: String,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<SourceID> = [],
-        workspaceID: String? = nil,
+        workspaceID: WorkspaceID? = nil,
         queueItemID: QueueItem.ID? = nil,
         queueStore: QueueStore? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
@@ -1361,8 +1361,8 @@ public final class AgentLauncher {
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
                 selectedModelId: resolvedStageModelId)
-        if let wsID = workspaceID {
-            providerHints[HintKey.env("WIKI_WORKSPACE")] = wsID
+        if let workspaceID {
+            providerHints[HintKey.env("WIKI_WORKSPACE")] = workspaceID.rawValue
         }
         // #397: inject the author provenance into the child env so agent-written
         // pages carry created_by/last_edited_by "for free" — no agent action needed.

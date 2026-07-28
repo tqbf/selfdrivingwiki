@@ -272,14 +272,14 @@ public final class WikiStoreModel {
     /// Create a workspace (delegates to the store). Used by
     /// `AgentOperationRunner` when `workspacesEnabled` is on.
     @discardableResult
-    public func createWorkspace(name: String?, activityID: String?) throws -> String {
+    public func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID {
         try store.createWorkspace(name: name, activityID: activityID)
     }
 
     /// Merge a workspace into main (delegates to the store). Used by
     /// `AgentOperationRunner` to auto-merge after an isolated ingest.
     @discardableResult
-    public func workspaceMerge(workspaceID: String) throws -> [String] {
+    public func workspaceMerge(workspaceID: WorkspaceID) throws -> [String] {
         try store.workspaceMerge(workspaceID: workspaceID)
     }
 

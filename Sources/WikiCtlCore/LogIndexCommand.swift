@@ -51,7 +51,7 @@ public enum LogIndexCommand {
                     baseVersion = WikiIndex.defaultBody
                 }
                 try store.setWorkspaceIndexBody(
-                    workspaceID: workspace, indexBody: body, indexBaseVersion: baseVersion)
+                    workspaceID: WorkspaceID(rawValue: workspace), indexBody: body, indexBaseVersion: baseVersion)
                 return PageCommand.Result(output: "", didCommit: true)
             }
             try store.updateWikiIndex(body: body)

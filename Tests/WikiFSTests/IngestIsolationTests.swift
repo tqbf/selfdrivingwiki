@@ -175,7 +175,7 @@ struct IngestIsolationTests {
 
         // page get with --workspace returns the staged version.
         let result = try PageCommand.run(
-            .get(.id(page.id), json: false, workspace: wsID),
+            .get(.id(page.id), json: false, workspace: wsID.rawValue),
             in: store)
         #expect(result.output == "staged")
         #expect(result.didCommit == false)
@@ -193,7 +193,7 @@ struct IngestIsolationTests {
 
         // page add --workspace writes to the workspace, not main.
         let result = try PageCommand.run(
-            .add(id: page.id, title: "Target", body: .inline("ws edit"), workspace: wsID),
+            .add(id: page.id, title: "Target", body: .inline("ws edit"), workspace: wsID.rawValue),
             in: store)
         #expect(result.didCommit == true)
 

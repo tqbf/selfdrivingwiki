@@ -4864,14 +4864,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func createWorkspace(name: String?, activityID: String?) throws -> String {
-        let id = ULID.generate()
+    public func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID {
+        let id = WorkspaceID(rawValue: ULID.generate())
         let now = Date().timeIntervalSince1970
         try mutate(event: { _ in nil }) { db in
             try db.execute(sql: """
             INSERT INTO workspaces (id, name, status, activity_id, created_at, updated_at)
             VALUES (?, ?, 'open', ?, ?, ?);
-            """, arguments: [id, name, activityID, now, now])
+            """, arguments: [id.rawValue, name, activityID, now, now])
         }
         return id
     }
@@ -4894,14 +4894,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `.open`, because `mutate()` rolls the step-1 `'merging'` write back when
     /// the closure throws on conflict). See `plans/workspace-status-fsm.md`.
     private func transitionWorkspace(
-        on db: Database, id: String,
+        on db: Database, id: WorkspaceID,
         to: WorkspaceStatus, allowedFrom: Set<WorkspaceStatus>
     ) throws {
         let currentRaw = try String.fetchOne(
             db, sql: "SELECT status FROM workspaces WHERE id = ?;",
-            arguments: [id]
+            arguments: [id.rawValue]
         )
-        guard let currentRaw else { throw WorkspaceError.notFound(id) }
+        guard let currentRaw else { throw WorkspaceError.notFound(id.rawValue) }
         guard let current = WorkspaceStatus(rawValue: currentRaw) else {
             throw WorkspaceError.invalidStateTransition(from: nil, to: to)
         }
@@ -4910,21 +4910,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
         try db.execute(
             sql: "UPDATE workspaces SET status = ?, updated_at = ? WHERE id = ?;",
-            arguments: [to.rawValue, Date().timeIntervalSince1970, id]
+            arguments: [to.rawValue, Date().timeIntervalSince1970, id.rawValue]
         )
     }
 
-    public func workspaceSummary(id: String) throws -> WorkspaceSummary? {
+    public func workspaceSummary(id: WorkspaceID) throws -> WorkspaceSummary? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(db, sql: """
             SELECT id, name, status, activity_id, created_at, updated_at
             FROM workspaces WHERE id = ?;
-            """, arguments: [id]) else { return nil }
+            """, arguments: [id.rawValue]) else { return nil }
             let name: String? = row["name"]
             let statusRaw: String = row["status"]
             let activityID: String? = row["activity_id"]
             return WorkspaceSummary(
-                id: row["id"],
+                id: WorkspaceID(rawValue: row["id"]),
                 name: name,
                 status: WorkspaceStatus(rawValue: statusRaw) ?? .open,
                 activityID: activityID,
@@ -4934,12 +4934,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func workspaceRefs(workspaceID: String) throws -> [WorkspaceRef] {
+    public func workspaceRefs(workspaceID: WorkspaceID) throws -> [WorkspaceRef] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT workspace_id, owner_id, base_version_id, version_id, blob_hash, title, updated_at
             FROM workspace_refs WHERE workspace_id = ?;
-            """, arguments: [workspaceID])
+            """, arguments: [workspaceID.rawValue])
             return rows.map { row in
                 // blob_hash and title are nullable (INSERTs use NULL for refs
                 // without a blob/title). Decode as String? explicitly so GRDB
@@ -4947,7 +4947,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let blobHash: String? = row["blob_hash"]
                 let title: String? = row["title"]
                 return WorkspaceRef(
-                    workspaceID: row["workspace_id"],
+                    workspaceID: WorkspaceID(rawValue: row["workspace_id"]),
                     ownerID: PageID(rawValue: row["owner_id"]),
                     baseVersionID: (row["base_version_id"] as String?).map(PageVersionID.init(rawValue:)),
                     versionID: (row["version_id"] as String?).map(PageVersionID.init(rawValue:)),
@@ -4960,7 +4960,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func workspaceWritePage(
-        workspaceID: String, pageID: PageID, title: String, body: String,
+        workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
         author: String? = nil
     ) throws -> PageVersionID? {
         try mutate(event: { _ in nil }) { db in
@@ -4974,7 +4974,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // Guard: workspace must be 'open'.
             guard let statusRaw = try String.fetchOne(
                 db, sql: "SELECT status FROM workspaces WHERE id = ?;",
-                arguments: [workspaceID]
+                arguments: [workspaceID.rawValue]
             ), WorkspaceStatus(rawValue: statusRaw) == .open else {
                 throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
             }
@@ -5000,11 +5000,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     blob_hash = excluded.blob_hash,
                     title = excluded.title,
                     updated_at = excluded.updated_at;
-                """, arguments: [workspaceID, pageID.rawValue, hash, title, nowTS])
+                """, arguments: [workspaceID.rawValue, pageID.rawValue, hash, title, nowTS])
 
                 try db.execute(sql: """
                 UPDATE workspaces SET updated_at = ? WHERE id = ?;
-                """, arguments: [nowTS, workspaceID])
+                """, arguments: [nowTS, workspaceID.rawValue])
 
                 // Created pages have no page-version row until merge.
                 return nil
@@ -5049,9 +5049,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 blob_hash = NULL,
                 title = NULL,
                 updated_at = excluded.updated_at;
-            """, arguments: [workspaceID, pageID.rawValue, baseToRecord?.rawValue, versionID, nowTS])
+            """, arguments: [workspaceID.rawValue, pageID.rawValue, baseToRecord?.rawValue, versionID, nowTS])
 
-            try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;", arguments: [nowTS, workspaceID])
+            try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;", arguments: [nowTS, workspaceID.rawValue])
 
             return PageVersionID(rawValue: versionID)
 
@@ -5059,19 +5059,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> PageVersionID? {
+    public func workspacePageVersion(workspaceID: WorkspaceID, pageID: PageID) throws -> PageVersionID? {
         try dbWriter.read { db in
             try Self.workspacePageVersionLocked(workspaceID: workspaceID, pageID: pageID, on: db)
         }
     }
 
 
-    public func workspacePageBody(workspaceID: String, pageID: PageID) throws -> String? {
+    public func workspacePageBody(workspaceID: WorkspaceID, pageID: PageID) throws -> String? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(db, sql: """
             SELECT version_id, blob_hash FROM workspace_refs
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-            """, arguments: [workspaceID, pageID.rawValue]) else { return nil }
+            """, arguments: [workspaceID.rawValue, pageID.rawValue]) else { return nil }
 
             let versionID = (row["version_id"] as String?).map(PageVersionID.init(rawValue:))
             let blobHash: String? = row["blob_hash"]
@@ -5102,19 +5102,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func setWorkspaceIndexBody(
-        workspaceID: String, indexBody: String, indexBaseVersion: String
+        workspaceID: WorkspaceID, indexBody: String, indexBaseVersion: String
     ) throws {
         try mutate(event: { _ in nil }) { db in
             try db.execute(sql: """
             UPDATE workspaces SET index_body = ?, index_base_version = ?, updated_at = ?
             WHERE id = ?;
             """, arguments: [indexBody, indexBaseVersion,
-                             Date().timeIntervalSince1970, workspaceID])
+                             Date().timeIntervalSince1970, workspaceID.rawValue])
         }
     }
 
 
-    public func workspaceMerge(workspaceID: String) throws -> [String] {
+    public func workspaceMerge(workspaceID: WorkspaceID) throws -> [String] {
         var conflicts: [(pageID: String, base: PageVersionID?, workspaceTarget: WorkspaceConflict.Target, mainVersion: PageVersionID?)] = []
         var hasWikiIndexConflict = false
         var mergedPageIDs: [String] = []
@@ -5129,7 +5129,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let refs = try Row.fetchAll(db, sql: """
                 SELECT owner_id, base_version_id, version_id, blob_hash, title
                 FROM workspace_refs WHERE workspace_id = ?;
-                """, arguments: [workspaceID])
+                """, arguments: [workspaceID.rawValue])
 
                 for ref in refs {
                     let pageIDStr: String = ref["owner_id"]
@@ -5200,7 +5200,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 // 2b. Wiki-index line-set three-way merge (Phase 6).
                 if let idxRow = try Row.fetchOne(db, sql: """
                 SELECT index_body, index_base_version FROM workspaces WHERE id = ?;
-                """, arguments: [workspaceID]) {
+                """, arguments: [workspaceID.rawValue]) {
                     if let theirs: String = idxRow["index_body"] {
                         let baseIdx: String = idxRow["index_base_version"] ?? ""
                         let ours: String
@@ -5258,13 +5258,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
                     try db.execute(sql: """
                     DELETE FROM workspace_conflicts WHERE workspace_id = ?;
-                    """, arguments: [workspaceID])
+                    """, arguments: [workspaceID.rawValue])
 
                     for c in conflicts {
                         try db.execute(sql: """
                         INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
                         VALUES (?, ?, ?, ?, ?, ?);
-                        """, arguments: [workspaceID, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.workspaceTarget.rawValue, nowTS])
+                        """, arguments: [workspaceID.rawValue, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.workspaceTarget.rawValue, nowTS])
                     }
                 }
                 return []
@@ -5294,25 +5294,25 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func abandonWorkspace(id: String) throws {
+    public func abandonWorkspace(id: WorkspaceID) throws {
         try mutate(event: { _ in nil }) { db in
             try self.transitionWorkspace(
                 on: db, id: id, to: .abandoned,
                 allowedFrom: [.open, .merging, .conflicted]
             )
             try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
-                           arguments: [id])
+                           arguments: [id.rawValue])
         }
     }
 
-    public func workspaceRefresh(workspaceID: String) throws {
+    public func workspaceRefresh(workspaceID: WorkspaceID) throws {
         var conflicts: [(pageID: String, base: PageVersionID?, wsVersion: PageVersionID, mainVersion: PageVersionID?)] = []
         do {
             try mutate(event: { _ in nil }) { db in
                 // Guard: must be open.
                 guard let statusRaw = try String.fetchOne(
                     db, sql: "SELECT status FROM workspaces WHERE id = ?;",
-                    arguments: [workspaceID]
+                    arguments: [workspaceID.rawValue]
                 ), WorkspaceStatus(rawValue: statusRaw) == .open else {
                     throw WikiStoreError.unexpected("workspace \(workspaceID) is not open")
                 }
@@ -5320,7 +5320,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let refs = try Row.fetchAll(db, sql: """
                 SELECT owner_id, base_version_id, version_id
                 FROM workspace_refs WHERE workspace_id = ?;
-                """, arguments: [workspaceID])
+                """, arguments: [workspaceID.rawValue])
 
                 for ref in refs {
                     let pageIDStr: String = ref["owner_id"]
@@ -5386,7 +5386,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     UPDATE workspace_refs
                     SET base_version_id = ?, version_id = ?, updated_at = ?
                     WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-                    """, arguments: [mainHead?.rawValue, newVersionID, nowTS, workspaceID, pageIDStr])
+                    """, arguments: [mainHead?.rawValue, newVersionID, nowTS, workspaceID.rawValue, pageIDStr])
                 }
 
                 if !conflicts.isEmpty {
@@ -5406,13 +5406,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
                     try db.execute(sql: """
                     DELETE FROM workspace_conflicts WHERE workspace_id = ?;
-                    """, arguments: [workspaceID])
+                    """, arguments: [workspaceID.rawValue])
 
                     for c in conflicts {
                         try db.execute(sql: """
                         INSERT INTO workspace_conflicts (workspace_id, page_id, base_version_id, main_version_id, ws_version_id, created_at)
                         VALUES (?, ?, ?, ?, ?, ?);
-                        """, arguments: [workspaceID, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.wsVersion.rawValue, nowTS])
+                        """, arguments: [workspaceID.rawValue, c.pageID, c.base?.rawValue, c.mainVersion?.rawValue, c.wsVersion.rawValue, nowTS])
                     }
                 }
                 return
@@ -5422,7 +5422,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    public func workspaceConflicts(workspaceID: String) throws -> [WorkspaceConflict] {
+    public func workspaceConflicts(workspaceID: WorkspaceID) throws -> [WorkspaceConflict] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT wc.workspace_id, wc.page_id, wc.base_version_id,
@@ -5434,7 +5434,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
              AND wr.kind = 'page-content'
              AND wr.owner_id = wc.page_id
             WHERE wc.workspace_id = ?;
-            """, arguments: [workspaceID])
+            """, arguments: [workspaceID.rawValue])
             return rows.map { row in
                 let rawTarget: String = row["ws_version_id"]
                 let currentWorkspaceVersionID: String? = row["current_workspace_version_id"]
@@ -5442,7 +5442,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     ? .stagedBlob(rawTarget)
                     : .pageVersion(PageVersionID(rawValue: rawTarget))
                 return WorkspaceConflict(
-                    workspaceID: row["workspace_id"],
+                    workspaceID: WorkspaceID(rawValue: row["workspace_id"]),
                     pageID: PageID(rawValue: row["page_id"]),
                     baseVersionID: (row["base_version_id"] as String?).map(PageVersionID.init(rawValue:)),
                     mainVersionID: (row["main_version_id"] as String?).map(PageVersionID.init(rawValue:)),
@@ -5454,7 +5454,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func workspaceResolveConflict(
-        workspaceID: String, pageID: PageID, body: String
+        workspaceID: WorkspaceID, pageID: PageID, body: String
     ) throws {
         try mutate(event: { _ in nil }) { db in
             let bodyData = Data(body.utf8)
@@ -5491,7 +5491,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     db, sql: """
                     SELECT title FROM workspace_refs
                     WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-                    """, arguments: [workspaceID, pageID.rawValue]) ?? ""
+                    """, arguments: [workspaceID.rawValue, pageID.rawValue]) ?? ""
             }
 
             // 3a. For created-page conflicts, the page may not exist on main yet.
@@ -5518,17 +5518,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             UPDATE workspace_refs
             SET version_id = ?, base_version_id = ?, blob_hash = NULL, title = NULL, updated_at = ?
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-            """, arguments: [versionID, mainHead?.rawValue, nowTS, workspaceID, pageID.rawValue])
+            """, arguments: [versionID, mainHead?.rawValue, nowTS, workspaceID.rawValue, pageID.rawValue])
 
             // 5. Delete the conflict row for this page.
             try db.execute(sql: """
             DELETE FROM workspace_conflicts WHERE workspace_id = ? AND page_id = ?;
-            """, arguments: [workspaceID, pageID.rawValue])
+            """, arguments: [workspaceID.rawValue, pageID.rawValue])
         }
     }
 
 
-    public func workspaceRetryMerge(workspaceID: String) throws {
+    public func workspaceRetryMerge(workspaceID: WorkspaceID) throws {
         try mutate(event: { _ in nil }) { db in
             try self.transitionWorkspace(
                 on: db, id: workspaceID, to: .open, allowedFrom: [.conflicted]
@@ -5553,11 +5553,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // Delete refs + conflicts, then mark abandoned (mirrors
             // SQLiteWikiStore.reapStaleWorkspaces — the refs are the staging
             // rows, which must not survive a reap).
-            for id in staleIDs {
+            for rawID in staleIDs {
+                let id = WorkspaceID(rawValue: rawID)
                 try db.execute(sql: "DELETE FROM workspace_refs WHERE workspace_id = ?;",
-                               arguments: [id])
+                               arguments: [id.rawValue])
                 try db.execute(sql: "DELETE FROM workspace_conflicts WHERE workspace_id = ?;",
-                               arguments: [id])
+                               arguments: [id.rawValue])
                 // staleIDs are all '.open' (the SELECT filters on status='open'),
                 // so the transition is .open → .abandoned.
                 try self.transitionWorkspace(
@@ -7333,7 +7334,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// Returns nil if the page has no workspace_ref or if the page is staged as
     /// a created page (version_id is NULL — content lives in blob_hash).
     private static func workspacePageVersionLocked(
-        workspaceID: String, pageID: PageID, on db: Database
+        workspaceID: WorkspaceID, pageID: PageID, on db: Database
     ) throws -> PageVersionID? {
         try String.fetchOne(
             db,
@@ -7341,7 +7342,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             SELECT version_id FROM workspace_refs
             WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
             """,
-            arguments: [workspaceID, pageID.rawValue]
+            arguments: [workspaceID.rawValue, pageID.rawValue]
         ).map(PageVersionID.init(rawValue:))
         // NOTE: SQLiteWikiStore returns nil when version_id column is NULL.
         // GRDB's String.fetchOne returns nil for both "no row" and "NULL value",

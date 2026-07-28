@@ -225,14 +225,14 @@ public enum WorkspaceError: Error, Equatable, CustomStringConvertible, Localized
 
 /// A summary of one workspace (W1, PR #312).
 public struct WorkspaceSummary: Equatable, Sendable {
-    public let id: String
+    public let id: WorkspaceID
     public let name: String?
     public let status: WorkspaceStatus
     public let activityID: String?
     public let createdAt: Date
     public let updatedAt: Date
 
-    public init(id: String, name: String?, status: WorkspaceStatus,
+    public init(id: WorkspaceID, name: String?, status: WorkspaceStatus,
                 activityID: String?, createdAt: Date, updatedAt: Date) {
         self.id = id
         self.name = name
@@ -254,7 +254,7 @@ public struct WorkspaceSummary: Equatable, Sendable {
 /// - **Created page**: `versionID` is nil (no `pages` row on main yet), and
 ///   `blobHash` + `title` carry the staged content. The page is minted at merge.
 public struct WorkspaceRef: Equatable, Sendable {
-    public let workspaceID: String
+    public let workspaceID: WorkspaceID
     public let ownerID: PageID
     public let baseVersionID: PageVersionID?
     public let versionID: PageVersionID?
@@ -262,7 +262,7 @@ public struct WorkspaceRef: Equatable, Sendable {
     public let title: String?
     public let updatedAt: Date
 
-    public init(workspaceID: String, ownerID: PageID, baseVersionID: PageVersionID?,
+    public init(workspaceID: WorkspaceID, ownerID: PageID, baseVersionID: PageVersionID?,
                 versionID: PageVersionID?, blobHash: String?, title: String?,
                 updatedAt: Date) {
         self.workspaceID = workspaceID
@@ -291,14 +291,14 @@ public struct WorkspaceConflict: Equatable, Sendable {
         }
     }
 
-    public let workspaceID: String
+    public let workspaceID: WorkspaceID
     public let pageID: PageID
     public let baseVersionID: PageVersionID?
     public let mainVersionID: PageVersionID?
     public let workspaceTarget: Target
     public let createdAt: Date
 
-    public init(workspaceID: String, pageID: PageID, baseVersionID: PageVersionID?,
+    public init(workspaceID: WorkspaceID, pageID: PageID, baseVersionID: PageVersionID?,
                 mainVersionID: PageVersionID?, workspaceTarget: Target, createdAt: Date) {
         self.workspaceID = workspaceID
         self.pageID = pageID
