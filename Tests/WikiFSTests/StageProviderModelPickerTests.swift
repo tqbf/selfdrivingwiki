@@ -32,16 +32,16 @@ struct StageProviderModelPickerTests {
             ],
             providerModels: [
                 "alpha": [
-                    CachedModelInfo(modelId: "a-1", name: "A One", description: nil),
-                    CachedModelInfo(modelId: "a-2", name: "A Two", description: nil),
+                    CachedModelInfo(modelId: ModelID(rawValue: "a-1"), name: "A One", description: nil),
+                    CachedModelInfo(modelId: ModelID(rawValue: "a-2"), name: "A Two", description: nil),
                 ],
                 "beta": [
-                    CachedModelInfo(modelId: "b-1", name: "B One", description: nil),
+                    CachedModelInfo(modelId: ModelID(rawValue: "b-1"), name: "B One", description: nil),
                 ]
             ],
             selectedModelIds: [
-                "alpha": "a-1",
-                "beta": "b-1",
+                "alpha": ModelID(rawValue: "a-1"),
+                "beta": ModelID(rawValue: "b-1"),
             ])
     }
 
@@ -65,7 +65,7 @@ struct StageProviderModelPickerTests {
     // MARK: - Provider resolution: enabled pin → that provider
 
     @Test func providerForStageWithEnabledPinReturnsPinned() {
-        let config = fixture.settingStageProvider("beta", forStage: "chat")
+        let config = fixture.settingStageProvider(ProviderID(rawValue: "beta"), forStage: "chat")
         #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "beta"))
     }
 
@@ -75,7 +75,7 @@ struct StageProviderModelPickerTests {
         // gamma is disabled — a pin to it MUST fall back to the global default
         // (the launcher never selects a disabled provider). This is the
         // critical guard against routing to a provider that can't spawn.
-        let config = fixture.settingStageProvider("gamma", forStage: "lint")
+        let config = fixture.settingStageProvider(ProviderID(rawValue: "gamma"), forStage: "lint")
         #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "alpha"))
     }
 
@@ -85,22 +85,22 @@ struct StageProviderModelPickerTests {
         let config = fixture
         // No model override for chat → the chat stage's resolved provider's
         // selectedModelId. Default provider is alpha → "a-1".
-        #expect(config.modelId(forStage: "chat") == "a-1")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "a-1"))
     }
 
     @Test func modelForStageWithProviderPinUsesThatProvidersSelectedModel() {
         // Pin chat to beta → the fallback is beta's selectedModelId ("b-1").
-        let config = fixture.settingStageProvider("beta", forStage: "chat")
-        #expect(config.modelId(forStage: "chat") == "b-1")
+        let config = fixture.settingStageProvider(ProviderID(rawValue: "beta"), forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "b-1"))
     }
 
     @Test func modelForStageOverrideWinsOverProviderFallback() {
         // A stage model override takes precedence over the provider's
         // selectedModelId.
         let config = fixture
-            .settingStageProvider("beta", forStage: "chat")
-            .settingIngestStageModel("b-1", forStage: "chat")
-        #expect(config.modelId(forStage: "chat") == "b-1")
+            .settingStageProvider(ProviderID(rawValue: "beta"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "b-1"), forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "b-1"))
     }
 
     @Test func modelForStageReturnsNilWhenProviderHasNoSelection() {
@@ -116,7 +116,7 @@ struct StageProviderModelPickerTests {
     @Test func cachedModelsFollowResolvedProvider() {
         // The model dropdown reads `cachedModels(forProvider: resolvedProvider.id)`.
         // With no pin → alpha's catalog; pin chat to beta → beta's catalog.
-        let pinned = fixture.settingStageProvider("beta", forStage: "chat")
+        let pinned = fixture.settingStageProvider(ProviderID(rawValue: "beta"), forStage: "chat")
         #expect(fixture.cachedModels(forProvider: fixture.provider(forStage: "chat").id).count == 2)
         #expect(pinned.cachedModels(forProvider: pinned.provider(forStage: "chat").id).count == 1)
     }
@@ -126,8 +126,8 @@ struct StageProviderModelPickerTests {
     @Test func stagesAreIndependent() {
         // Chat pinned to beta, lint pinned to default, planner pinned to beta.
         let config = fixture
-            .settingStageProvider("beta", forStage: "chat")
-            .settingStageProvider("beta", forStage: "planner")
+            .settingStageProvider(ProviderID(rawValue: "beta"), forStage: "chat")
+            .settingStageProvider(ProviderID(rawValue: "beta"), forStage: "planner")
         #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "beta"))
         #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "alpha"))
         #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "beta"))

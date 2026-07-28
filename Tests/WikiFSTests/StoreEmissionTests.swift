@@ -566,7 +566,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
-        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        try store.updateChatModelOverride(id: chat.id, providerId: ProviderID(rawValue: "acme"), modelId: ModelID(rawValue: "acme-1"))
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)
         #expect(events.last?.change == .updated)

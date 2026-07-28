@@ -329,12 +329,12 @@ import SQLite3
     @Test func createChatSeedsModelOverride() throws {
         let store = try tempStore()
         let chat = try store.createChat(
-            kind: .edit, title: "Test", modelProviderId: "acme", modelId: "acme-1")
-        #expect(chat.modelProviderId == "acme")
-        #expect(chat.modelId == "acme-1")
+            kind: .edit, title: "Test", modelProviderId: ProviderID(rawValue: "acme"), modelId: ModelID(rawValue: "acme-1"))
+        #expect(chat.modelProviderId == ProviderID(rawValue: "acme"))
+        #expect(chat.modelId == ModelID(rawValue: "acme-1"))
         let fetched = try store.getChat(id: chat.id)
-        #expect(fetched.modelProviderId == "acme")
-        #expect(fetched.modelId == "acme-1")
+        #expect(fetched.modelProviderId == ProviderID(rawValue: "acme"))
+        #expect(fetched.modelId == ModelID(rawValue: "acme-1"))
     }
 
     /// `createChat(kind:title:)` (no override args) leaves both columns nil —
@@ -355,10 +355,10 @@ import SQLite3
         #expect(try store.getChat(id: chat.id).modelProviderId == nil)
 
         // Write.
-        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        try store.updateChatModelOverride(id: chat.id, providerId: ProviderID(rawValue: "acme"), modelId: ModelID(rawValue: "acme-1"))
         let written = try store.getChat(id: chat.id)
-        #expect(written.modelProviderId == "acme")
-        #expect(written.modelId == "acme-1")
+        #expect(written.modelProviderId == ProviderID(rawValue: "acme"))
+        #expect(written.modelId == ModelID(rawValue: "acme-1"))
 
         // Clear (providerId: nil clears both columns — a lone modelId with no
         // providerId is not representable).
@@ -372,10 +372,10 @@ import SQLite3
     @Test func listChatsIncludesModelOverride() throws {
         let store = try tempStore()
         let chat = try store.createChat(kind: .edit, title: "Test")
-        try store.updateChatModelOverride(id: chat.id, providerId: "acme", modelId: "acme-1")
+        try store.updateChatModelOverride(id: chat.id, providerId: ProviderID(rawValue: "acme"), modelId: ModelID(rawValue: "acme-1"))
         let listed = try store.listChats()
-        #expect(listed.first(where: { $0.id == chat.id })?.modelProviderId == "acme")
-        #expect(listed.first(where: { $0.id == chat.id })?.modelId == "acme-1")
+        #expect(listed.first(where: { $0.id == chat.id })?.modelProviderId == ProviderID(rawValue: "acme"))
+        #expect(listed.first(where: { $0.id == chat.id })?.modelId == ModelID(rawValue: "acme-1"))
     }
 
     /// Migration v44→v45: a DB at v44 without the two columns gets them added,

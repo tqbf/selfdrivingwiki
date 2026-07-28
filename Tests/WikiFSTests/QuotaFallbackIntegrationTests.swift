@@ -38,7 +38,7 @@ struct QuotaFallbackIntegrationTests {
         launcher.resolveSelectedProvider = { providers.first ?? .claudeAcpDefault }
         let config = AgentProvidersConfig(
             providers: providers,
-            selectedModelIds: Dictionary(uniqueKeysWithValues: providers.map { ($0.id.rawValue, "fake-model") }))
+            selectedModelIds: Dictionary(uniqueKeysWithValues: providers.map { ($0.id.rawValue, ModelID(rawValue: "fake-model")) }))
         do {
             try config.save(to: tempDir)
         } catch {

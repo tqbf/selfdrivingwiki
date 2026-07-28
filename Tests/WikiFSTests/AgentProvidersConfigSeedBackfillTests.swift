@@ -18,7 +18,7 @@ struct AgentProvidersConfigSeedBackfillTests {
         // A fresh install seeds "sonnet" for the claude-acp default provider
         // so the launcher doesn't immediately refuse spawn on day one.
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
     }
 
     @Test func seedDoesNotSeedModelsForNonDefaultProviders() {
@@ -27,7 +27,7 @@ struct AgentProvidersConfigSeedBackfillTests {
         // the actual diagnosed-bug state (default provider with no model) is
         // still reachable for them (the user opts in explicitly).
         let config = AgentProvidersConfig.seed(discovered: [])
-        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
         // Providers other than claude-acp don't exist in the seed at all
         // (#663: the seed was reduced to `[claudeAcpDefault]`), so their
         // `selectedModelId` is nil by definition — pin it for the contract.
@@ -51,17 +51,17 @@ struct AgentProvidersConfigSeedBackfillTests {
             selectedModelIds: [:])
         try preGuard.save(to: tmp)
         let backfilled = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(backfilled.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
+        #expect(backfilled.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
 
         // Case 2: a claude-acp-default config with a user-chosen model. The
         // backfill MUST NOT overwrite the user's explicit pick.
         try FileManager.default.removeItem(at: tmp.appendingPathComponent(AgentProvidersConfig.fileName))
         let withPick = AgentProvidersConfig(
             providers: [.claudeAcpDefault],
-            selectedModelIds: ["claude-acp": "opus"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "opus")])
         try withPick.save(to: tmp)
         let preserved = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(preserved.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "opus")
+        #expect(preserved.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "opus"))
     }
 
     @Test func loadOrSeedDoesNotBackfillWhenDefaultIsNotClaudeAcp() throws {
@@ -151,19 +151,19 @@ struct AgentProvidersConfigSeedBackfillTests {
                     command: ["acme", "acp"], env: [:],
                     enabled: true, isDefault: false),
             ],
-            selectedModelIds: ["claude-acp": "sonnet", "acme": "acme-1"],
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet"), "acme": ModelID(rawValue: "acme-1")],
             stageProviderIds: [
-                "chat": "acme",
-                "lint": "claude-acp",
-                "planner": "acme",
+                "chat": ProviderID(rawValue: "acme"),
+                "lint": ProviderID(rawValue: "claude-acp"),
+                "planner": ProviderID(rawValue: "acme"),
             ])
         try original.save(to: tmp)
 
         let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
         // The pins survive the loadOrSeed reconstruction.
-        #expect(loaded.stageProviderIds["chat"] == "acme")
-        #expect(loaded.stageProviderIds["lint"] == "claude-acp")
-        #expect(loaded.stageProviderIds["planner"] == "acme")
+        #expect(loaded.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+        #expect(loaded.stageProviderIds["lint"] == ProviderID(rawValue: "claude-acp"))
+        #expect(loaded.stageProviderIds["planner"] == ProviderID(rawValue: "acme"))
         // And they resolve correctly.
         #expect(loaded.provider(forStage: "chat").id == ProviderID(rawValue: "acme"))
         #expect(loaded.provider(forStage: "lint").id == ProviderID(rawValue: "claude-acp"))
@@ -173,10 +173,10 @@ struct AgentProvidersConfigSeedBackfillTests {
         // The new field round-trips through Codable (encode → decode).
         let original = AgentProvidersConfig(
             providers: [.claudeAcpDefault],
-            selectedModelIds: ["claude-acp": "sonnet"],
-            stageProviderIds: ["chat": "claude-acp", "lint": "custom"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")],
+            stageProviderIds: ["chat": ProviderID(rawValue: "claude-acp"), "lint": ProviderID(rawValue: "custom")])
         let encoded = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(AgentProvidersConfig.self, from: encoded)
-        #expect(decoded.stageProviderIds == ["chat": "claude-acp", "lint": "custom"])
+        #expect(decoded.stageProviderIds == ["chat": ProviderID(rawValue: "claude-acp"), "lint": ProviderID(rawValue: "custom")])
     }
 }
