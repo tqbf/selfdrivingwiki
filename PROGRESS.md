@@ -56,6 +56,18 @@ contracts.
   direct head read and the batch HEAD projection.
 
 **Verification.**
+- Final manifest follow-up for the exact-head Paseo audit of PR #962 at commit
+  `091caae`:
+  added the remaining live processed-markdown HEAD consumers to
+  `SourceMarkdownVersionAPISignatures.txt`,
+  `SourceMarkdownVersionAPISignatureManifestTests.expectedEntryKeys`, and a
+  dedicated active-HEAD consumer guard without weakening the manifest or the
+  earlier audit-fix claims. The newly enumerated surfaces are the two
+  `WikiCtlCore/SourceCommand.swift` `--markdown` HEAD reads (`cat` / `export`),
+  both live `WikiFSFileProvider/Projection.swift`
+  `processedMarkdownHeadsBySource()` batched reads (`cachedHeadsBySource()` and
+  `makeLinkMaps()`), and
+  `wikid/DaemonQueueIngestionProvider.swift`'s ingest staging HEAD read.
 - `make keychain` — passed.
 - `make version` — passed.
 - Focused core boundary verification:
@@ -91,6 +103,17 @@ contracts.
   no further output; interrupted after notifying the blocker.
   `make lint`
   — passed with 0 violations in 381 files.
+  `git diff --check`
+  — clean.
+- Final manifest-only follow-up verification on Tuesday, July 28, 2026:
+  `swift test --filter SourceMarkdownVersionAPISignatureManifestTests`
+  — 2 tests in 1 suite passed.
+  `swift build --build-tests`
+  — passed.
+  `swift test --filter WikiCtlCommandTests`
+  — 115 tests in 1 suite passed.
+  `WIKIFS_APP_TESTS=1 swift test --filter ProjectionTests`
+  — 13 tests in 2 suites passed.
   `git diff --check`
   — clean.
 

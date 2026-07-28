@@ -56,6 +56,11 @@ model.seed-pdf-markdown	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	pu
 model.processed-markdown-agent-names	typed	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String] {
 model.re-extract-markdown	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func reExtractMarkdown(
 model.processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/WikiStoreModel.swift	public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative] {
+cli.source-command.cat-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+cli.source-command.export-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+file-provider.projection.cached-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try openReadStore()?.processedMarkdownHeadsBySource() })) ?? [:]
+file-provider.projection.make-link-maps-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+wikid.daemon-ingestion-provider.processed-markdown-head	surface	Sources/wikid/DaemonQueueIngestionProvider.swift	let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: source.id) })
 extraction-compare.left-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var leftID: SourceMarkdownVersionID?
 extraction-compare.right-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var rightID: SourceMarkdownVersionID?
 extraction-compare.selection-binding	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	selection: Binding<SourceMarkdownVersionID?>,

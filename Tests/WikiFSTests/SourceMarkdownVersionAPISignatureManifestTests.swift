@@ -87,6 +87,11 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "model.seed-pdf-markdown",
         "model.re-extract-markdown",
         "model.processed-markdown-alternatives",
+        "cli.source-command.cat-markdown-head",
+        "cli.source-command.export-markdown-head",
+        "file-provider.projection.cached-heads-by-source",
+        "file-provider.projection.make-link-maps-heads-by-source",
+        "wikid.daemon-ingestion-provider.processed-markdown-head",
         "source-detail.consume-pinned-extraction",
         "source-detail.pending-pin-on-change",
         "source-detail.has-multiple-extractions",
@@ -102,6 +107,14 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "grdb.private-processed-markdown-head",
         "grdb.public-processed-markdown-heads-by-source",
         "model.processed-markdown-head",
+    ]
+
+    private let activeHeadConsumerEntries: Set<String> = [
+        "cli.source-command.cat-markdown-head",
+        "cli.source-command.export-markdown-head",
+        "file-provider.projection.cached-heads-by-source",
+        "file-provider.projection.make-link-maps-heads-by-source",
+        "wikid.daemon-ingestion-provider.processed-markdown-head",
     ]
 
     private let reviewCriticalEntries: Set<String> = [
@@ -196,6 +209,8 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         #expect(Set(entries.map(\.key)) == expectedEntryKeys, "source-markdown-version manifest must enumerate the full reviewed surface set")
         #expect(markdownHeadEntries.isSubset(of: expectedEntryKeys), "markdown HEAD seams must stay explicitly enumerated in the expected key set")
         #expect(markdownHeadEntries.isSubset(of: Set(entries.map(\.key))), "markdown HEAD seams must stay explicitly enumerated in the fixture")
+        #expect(activeHeadConsumerEntries.isSubset(of: expectedEntryKeys), "active markdown HEAD consumers must stay explicitly enumerated in the expected key set")
+        #expect(activeHeadConsumerEntries.isSubset(of: Set(entries.map(\.key))), "active markdown HEAD consumers must stay explicitly enumerated in the fixture")
         #expect(reviewCriticalEntries.isSubset(of: expectedEntryKeys), "review-critical source-markdown-version seams must stay explicitly enumerated in the expected key set")
         #expect(reviewCriticalEntries.isSubset(of: Set(entries.map(\.key))), "review-critical source-markdown-version seams must stay explicitly enumerated in the fixture")
 
