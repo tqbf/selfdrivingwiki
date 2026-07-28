@@ -22,7 +22,7 @@ struct WorkspaceTests {
     @Test func createWorkspaceReturnsID() throws {
         let store = try tempStore()
         let id = try store.createWorkspace(name: "test", activityID: nil)
-        #expect(!id.isEmpty)
+        #expect(!id.rawValue.isEmpty)
         let summary = try store.workspaceSummary(id: id)
         #expect(summary != nil)
         #expect(summary?.status == .open)
@@ -31,7 +31,7 @@ struct WorkspaceTests {
 
     @Test func workspaceSummaryReturnsNilForMissing() throws {
         let store = try tempStore()
-        let summary = try store.workspaceSummary(id: "nonexistent")
+        let summary = try store.workspaceSummary(id: WorkspaceID(rawValue: "nonexistent"))
         #expect(summary == nil)
     }
 

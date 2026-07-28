@@ -538,7 +538,7 @@ public enum AgentOperationRunner {
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String,
         ingestingSourceIDs: Set<SourceID> = [],
-        workspaceID: String? = nil,
+        workspaceID: WorkspaceID? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
         switch request {

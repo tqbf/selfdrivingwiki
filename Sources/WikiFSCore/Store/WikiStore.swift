@@ -482,13 +482,13 @@ public protocol WikiStore: Sendable {
 
     /// Create a durable, named workspace for a speculative ingestion branch.
     /// Returns the new workspace's id. The workspace starts in `open` status.
-    func createWorkspace(name: String?, activityID: String?) throws -> String
+    func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID
 
     /// Read the workspace's current status + metadata.
-    func workspaceSummary(id: String) throws -> WorkspaceSummary?
+    func workspaceSummary(id: WorkspaceID) throws -> WorkspaceSummary?
 
     /// List all page-overlay refs in a workspace (the write set).
-    func workspaceRefs(workspaceID: String) throws -> [WorkspaceRef]
+    func workspaceRefs(workspaceID: WorkspaceID) throws -> [WorkspaceRef]
 
     /// Write a page version into the workspace's overlay: append a
     /// `page_versions` row + UPSERT the `workspace_refs` row (recording
@@ -498,25 +498,25 @@ public protocol WikiStore: Sendable {
     /// (#763: `agent:ingest` / `chat:<id>` / `user`) into the workspace
     /// version's activity — nil degrades to the shared `legacy-import` agent.
     func workspaceWritePage(
-        workspaceID: String, pageID: PageID, title: String, body: String,
+        workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
         author: String?
     ) throws -> PageVersionID?
 
     /// Resolve the workspace's current version id for a page (overlay read).
     /// Returns nil if the workspace hasn't touched this page.
-    func workspacePageVersion(workspaceID: String, pageID: PageID) throws -> PageVersionID?
+    func workspacePageVersion(workspaceID: WorkspaceID, pageID: PageID) throws -> PageVersionID?
 
     /// Overlay read for the workspace's staged page body (Phase 7). Returns the
     /// body the agent would see if it read the page from within this workspace —
     /// either the workspace's version blob (existing page) or the staged blob
     /// (created page). Returns nil if the workspace hasn't touched this page,
     /// so the caller falls through to the main version.
-    func workspacePageBody(workspaceID: String, pageID: PageID) throws -> String?
+    func workspacePageBody(workspaceID: WorkspaceID, pageID: PageID) throws -> String?
 
     /// Stage wiki-index changes into the workspace (`index_body` +
     /// `index_base_version`). Phase 7: routed from `index set --workspace`.
     func setWorkspaceIndexBody(
-        workspaceID: String, indexBody: String, indexBaseVersion: String
+        workspaceID: WorkspaceID, indexBody: String, indexBaseVersion: String
     ) throws
 
     /// Attempt a fast-forward-only merge. For each workspace_ref: if main head
@@ -529,30 +529,30 @@ public protocol WikiStore: Sendable {
     /// transaction commits, those pages are re-embedded and an ingest-
     /// completion log entry is appended — both best-effort.
     @discardableResult
-    func workspaceMerge(workspaceID: String) throws -> [String]
+    func workspaceMerge(workspaceID: WorkspaceID) throws -> [String]
 
     /// Abandon a workspace: set status to `abandoned` + delete its
     /// `workspace_refs`. Orphaned versions/blobs fall to lazy GC.
-    func abandonWorkspace(id: String) throws
+    func abandonWorkspace(id: WorkspaceID) throws
 
     /// Refresh (re-base) a workspace against current main: for each
     /// workspace_ref, run diff3 against the new main head. If clean, update
     /// `base_version_id` to current main_head. If conflict, park.
-    func workspaceRefresh(workspaceID: String) throws
+    func workspaceRefresh(workspaceID: WorkspaceID) throws
 
     /// List persisted conflict details for a parked workspace (W3).
-    func workspaceConflicts(workspaceID: String) throws -> [WorkspaceConflict]
+    func workspaceConflicts(workspaceID: WorkspaceID) throws -> [WorkspaceConflict]
 
     /// Resolve a conflict: write the resolved body as a new workspace
     /// version for the page + delete the conflict row (W3). After resolving
     /// all conflicts, call `workspaceRetryMerge`.
     func workspaceResolveConflict(
-        workspaceID: String, pageID: PageID, body: String
+        workspaceID: WorkspaceID, pageID: PageID, body: String
     ) throws
 
     /// Set a conflicted workspace back to `open` and attempt merge again
     /// (W3). Resolves remaining conflicts (or parks again).
-    func workspaceRetryMerge(workspaceID: String) throws
+    func workspaceRetryMerge(workspaceID: WorkspaceID) throws
 
     /// Reap stale open workspaces: mark any workspace with status `open`
     /// whose `updated_at` is older than the TTL as `abandoned` (W4, PR #312).

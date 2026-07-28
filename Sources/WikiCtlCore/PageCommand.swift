@@ -185,10 +185,10 @@ public enum PageCommand {
                     id = nil
                 }
             }
-            if let id, let stagedBody = try store.workspacePageBody(workspaceID: workspace, pageID: id) {
+            if let id, let stagedBody = try store.workspacePageBody(workspaceID: WorkspaceID(rawValue: workspace), pageID: id) {
                 var headVersionID: PageVersionID?
                 do {
-                    headVersionID = try store.workspacePageVersion(workspaceID: workspace, pageID: id)
+                    headVersionID = try store.workspacePageVersion(workspaceID: WorkspaceID(rawValue: workspace), pageID: id)
                 } catch {
                     DebugLog.store("page get: workspacePageVersion failed — \(error)")
                 }
@@ -290,7 +290,7 @@ public enum PageCommand {
                 }
             }
             let resultID = try store.workspaceWritePage(
-                workspaceID: workspace, pageID: pageID, title: title, body: fixed,
+                workspaceID: WorkspaceID(rawValue: workspace), pageID: pageID, title: title, body: fixed,
                 author: author)
             return Result(output: resultID?.rawValue ?? "", didCommit: true)
         }

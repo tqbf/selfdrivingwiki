@@ -418,7 +418,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         queueItemID: QueueItem.ID,
         changeSignaler: any ChangeSignaler,
         ingestingSourceIDs: Set<SourceID>,
-        workspaceID: String? = nil,
+        workspaceID: WorkspaceID? = nil,
         onWorkspaceMerge: (@MainActor () -> Void)? = nil,
         onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
