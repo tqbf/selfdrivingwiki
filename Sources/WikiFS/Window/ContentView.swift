@@ -290,6 +290,9 @@ struct ContentView: View {
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
             ToolbarItem(placement: .automatic) {
+                WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+            }
+            ToolbarItem(placement: .automatic) {
                 if rightInspector.isAvailable {
                     Button {
                         rightInspector.toggle()

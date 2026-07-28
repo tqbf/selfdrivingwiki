@@ -71,17 +71,6 @@ struct SidebarView: View {
             Divider()
             bookmarksOrList
         }
-        // Wiki switcher pinned to the sidebar's bottom bar — like Xcode's
-        // navigator footer or Finder's status bar. It collapses with the
-        // sidebar when the leading panel toggle hides it, leaving the toolbar
-        // to hold only the nav cluster + omnibox.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Divider()
-            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.bar)
-        }
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,
                                          ideal: PageEditorMetrics.sidebarIdealWidth)
