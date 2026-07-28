@@ -61,7 +61,7 @@ struct EnumeratorDeletionTests {
         let s1 = try store.addSource(filename: "a.txt", data: Data("aaa".utf8), mimeType: "text/plain")
         let s2 = try store.addSource(filename: "b.txt", data: Data("bbb".utf8), mimeType: "text/plain")
         let s3 = try store.addSource(filename: "c.txt", data: Data("ccc".utf8), mimeType: "text/plain")
-        let projection = Projection(wikiID: "enum-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "enum-\(UUID().uuidString)"), databaseURL: url)
         return Seeded(projection: projection, store: store, sources: [s1, s2, s3])
     }
 

@@ -263,17 +263,17 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     // MARK: - Store lifecycle
 
     /// Open (or confirm open) the store for a wiki.
-    public func openStore(wikiID: String) async throws -> Bool {
+    public func openStore(wikiID: WikiID) async throws -> Bool {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
-            proxy.openStore(wikiID: wikiID) { success in
+            proxy.openStore(wikiID: wikiID.rawValue) { success in
                 cont.resume(returning: success)
             }
         }
     }
 
     /// Close the daemon's held-open store for a wiki.
-    public func closeStore(wikiID: String) async {
+    public func closeStore(wikiID: WikiID) async {
         let proxy: WikiDaemonProtocol
         do {
             proxy = try daemonProxy()
@@ -282,17 +282,17 @@ public final class WikiDaemonConnection: @unchecked Sendable {
             return
         }
         await withCheckedContinuation { cont in
-            proxy.closeStore(wikiID: wikiID) {
+            proxy.closeStore(wikiID: wikiID.rawValue) {
                 cont.resume()
             }
         }
     }
 
     /// The current changeToken for a wiki.
-    public func changeToken(wikiID: String) async throws -> String {
+    public func changeToken(wikiID: WikiID) async throws -> String {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
-            proxy.changeToken(wikiID: wikiID) { token in
+            proxy.changeToken(wikiID: wikiID.rawValue) { token in
                 cont.resume(returning: token)
             }
         }

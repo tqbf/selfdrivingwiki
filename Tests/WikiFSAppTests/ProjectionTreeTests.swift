@@ -49,7 +49,7 @@ struct ProjectionTreeTests {
         let textSource = try store.addSource(
             filename: "notes.txt", data: Data("plain text".utf8), mimeType: "text/plain")
         let pages = try store.listAllPagesOrderedByID()   // ULID order
-        let projection = Projection(wikiID: "proj-tree-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "proj-tree-\(UUID().uuidString)"), databaseURL: url)
         return Seeded(projection: projection, store: store, pages: pages,
                       textSource: textSource, pdfSource: pdfSource)
     }
@@ -118,7 +118,7 @@ struct ProjectionTreeTests {
             id: src.id, title: "Home",
             body: "See [[page:\(target.id.rawValue)|the target]] and "
                 + "[[source:\(pdf.id.rawValue)|the paper]].")
-        let projection = Projection(wikiID: "links-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "links-\(UUID().uuidString)"), databaseURL: url)
 
         let id = Projection.Identity.pageByTitle(src.id.rawValue)
         guard let node = projection.node(for: id),
@@ -214,7 +214,7 @@ struct ProjectionTreeTests {
             originalPath: "assets/pic.png", sourceURL: URL(string: "https://example.com/pic.png")!,
             activityID: activityID, role: .media)
 
-        let projection = Projection(wikiID: "snapshot-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "snapshot-\(UUID().uuidString)"), databaseURL: url)
 
         // Verify by-name view: node size must match served content.
         let id = Projection.Identity.sourceByName(mdSource.id.rawValue)
@@ -246,7 +246,7 @@ struct ProjectionTreeTests {
         let textSource = try store.addSource(
             filename: "lonely.md", data: originalData, mimeType: "text/markdown")
 
-        let projection = Projection(wikiID: "no-image-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "no-image-\(UUID().uuidString)"), databaseURL: url)
 
         // By-name view.
         let id = Projection.Identity.sourceByName(textSource.id.rawValue)
@@ -422,7 +422,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 2, content: .source(pdfSource.id))
         let nestedNode = try store.createBookmarkNode(
             parentID: folderNode.id, position: 0, content: .folder(label: "Papers"))
-        let projection = Projection(wikiID: "proj-bm-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "proj-bm-\(UUID().uuidString)"), databaseURL: url)
         return Bookmarked(projection: projection, store: store, pages: pages,
                           pdfSource: pdfSource, folderNode: folderNode, nestedNode: nestedNode,
                           pageRefNode: pageRefNode, sourceRefNode: sourceRefNode)
@@ -535,7 +535,7 @@ struct ProjectionTreeTests {
             body: "See [[page:\(target.id.rawValue)|t]].")
         let pageRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .page(home.id))
-        let projection = Projection(wikiID: "bm-links-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "bm-links-\(UUID().uuidString)"), databaseURL: url)
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
         guard let node = projection.node(for: id),
@@ -570,7 +570,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 0, content: .folder(label: "Research"))
         let pageRefNode = try store.createBookmarkNode(
             parentID: folder.id, position: 0, content: .page(home.id))
-        let projection = Projection(wikiID: "bm-nested-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "bm-nested-\(UUID().uuidString)"), databaseURL: url)
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id)
         guard let node = projection.node(for: id),
@@ -599,7 +599,7 @@ struct ProjectionTreeTests {
                      .assistantText("Sure.")])
         let chatRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .chat(chat.id))
-        let projection = Projection(wikiID: "bm-chat-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "bm-chat-\(UUID().uuidString)"), databaseURL: url)
 
         let id = Projection.Identity.bookmarkChatRef(chatRefNode.id)
         guard let node = projection.node(for: id),
@@ -625,7 +625,7 @@ struct ProjectionTreeTests {
             filename: "doc.pdf", data: pdfBytes, mimeType: "application/pdf")
         let sourceRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .source(pdf.id))
-        let projection = Projection(wikiID: "bm-source-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "bm-source-\(UUID().uuidString)"), databaseURL: url)
 
         let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id)
         guard let node = projection.node(for: id),
@@ -661,7 +661,7 @@ struct ProjectionTreeTests {
             chatID: first.id, events: [.userText("Hello"), .assistantText("Hi there")])
         _ = try store.createChat(kind: .edit, title: "Second Chat")
         let chats = try store.listAllChatsOrderedByID()   // ULID (creation) order
-        let projection = Projection(wikiID: "proj-chat-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "proj-chat-\(UUID().uuidString)"), databaseURL: url)
         return Chatted(projection: projection, store: store, chats: chats)
     }
 
@@ -731,7 +731,7 @@ struct ProjectionTreeTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-chat-empty-\(UUID().uuidString).sqlite")
         let store = try GRDBWikiStore(databaseURL: url)
-        let projection = Projection(wikiID: "proj-chat-empty-\(UUID().uuidString)", databaseURL: url)
+        let projection = Projection(wikiID: WikiID(rawValue: "proj-chat-empty-\(UUID().uuidString)"), databaseURL: url)
         _ = store  // seed nothing
         let names = projection.children(of: .rootContainer).map(\.name)
         #expect(names.contains("chats"))
