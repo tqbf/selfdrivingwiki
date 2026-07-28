@@ -1,5 +1,13 @@
 # Progress log
 
+## 2026-07-28 — Fixed source provenance test type mismatch
+
+Updated `SourceVersionProjectionTests` to compare the tagged
+`ProvenanceEntry.VersionID.source(SourceVersionID)` value directly, while
+retaining a separate raw-value compatibility assertion.
+
+**Verification.** `WIKIFS_APP_TESTS=1 swift test --filter SourceVersionProjectionTests` passed (1 test). `swift build` and `git diff --check` passed.
+
 ## 2026-07-28 — Omnibox lexical search fix (#971)
 
 The omnibox previously called the synchronous no-BM25 search wrappers. Since
