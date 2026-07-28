@@ -48,7 +48,7 @@ enum StageProviderSelectionState: Equatable {
 ///   in the provider dropdown. Defaults to `"Default"` (inherit the global
 ///   default provider). **Stage-specific semantic for `"summarizer"`**: an empty
 ///   pin means "no model — truncation" (NOT "inherit the global provider"), so
-///   the Summary tab passes `"Default (first few sentences)"` to convey the
+///   the Summary tab passes `"No AI (first few sentences)"` to convey the
 ///   actual behavior (`plans/chat-summary.md` §5.2).
 ///
 /// The provider dropdown includes a **"Default"** first option (sentinel `""` =
@@ -66,6 +66,12 @@ struct StageProviderModelPicker: View {
 
     private var selectionState: StageProviderSelectionState {
         StageProviderSelectionState.resolve(config: config, stageKey: stageKey)
+    }
+
+    /// Summary's inherited provider is the explicit no-model mode: summaries
+    /// are produced by truncating locally.
+    private var isNoProviderSummary: Bool {
+        stageKey == "summarizer" && selectionState == .inherited
     }
 
     /// The effective provider for this stage (pinned when set + enabled, else
@@ -159,18 +165,20 @@ struct StageProviderModelPicker: View {
                 }
             }
 
-            Picker("\(label) Model", selection: modelBinding) {
-                if shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty {
-                    Text(modelPickerPlaceholder).tag("")
-                } else {
-                    Text("Same as provider (\(fallbackLabel))").tag("")
-                    ForEach(resolvedModels, id: \.modelId) { model in
-                        Text(model.displayLabel).tag(model.modelId)
+            if !isNoProviderSummary {
+                Picker("\(label) Model", selection: modelBinding) {
+                    if shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty {
+                        Text(modelPickerPlaceholder).tag("")
+                    } else {
+                        Text("Same as provider (\(fallbackLabel))").tag("")
+                        ForEach(resolvedModels, id: \.modelId) { model in
+                            Text(model.displayLabel).tag(model.modelId)
+                        }
                     }
                 }
+                .disabled(shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty)
+                .help(modelPickerHelpText)
             }
-            .disabled(shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty)
-            .help(modelPickerHelpText)
 
             if let unavailableProviderMessage {
                 Text(unavailableProviderMessage)

@@ -112,11 +112,11 @@ struct OperationsSettingsView: View {
                     config: $config,
                     containerDirectory: containerDirectory,
                     label: "Summary",
-                    defaultOptionLabel: "Default (first few sentences)")
+                    defaultOptionLabel: "No AI (first few sentences)")
             } header: {
                 Text("Message Summary")
             } footer: {
-                Text("“Default (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
+                Text("“No AI (first few sentences)” is free truncation — no model call. Pin a provider + model to summarize each assistant message with an LLM (computed once, cached).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
