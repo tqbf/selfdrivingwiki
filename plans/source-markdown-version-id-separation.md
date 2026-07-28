@@ -24,10 +24,11 @@ boundary.
 
 ### Raw-string boundaries:
 
-Queue payload JSON, File Provider identifiers and paths, wiki-link `@vN`
-syntax, CLI input and output, staged filenames, and agent-facing manifests stay
-raw strings at their boundaries. The nominal type is constructed only inside
-typed Swift APIs.
+Queue payload JSON and agent-facing manifests intentionally carry no
+Markdown-version identifier field; their existing raw `sourceIDs`-only shape
+stays unchanged. File Provider identifiers and paths, wiki-link `@vN` syntax,
+CLI input and output, and staged filenames stay raw strings at their
+boundaries. The nominal type is constructed only inside typed Swift APIs.
 
 ### Polymorphic refs and source-link pins:
 
@@ -184,8 +185,8 @@ Do not change SQLite tables, columns, schema versions, refs, raw ULID text, queu
 | AC.7 | `Phase6PinningModelTests.pinnedExtractionRetainsMarkdownVersionID`, updated compare/history/nomination/producer/revert tests in `ProcessedMarkdownTests` and store suites |
 | AC.8 | New `IdentifierBoundaryTypecheckTests` cases for page, source, chat, and source-version rejection, plus inverse source-version rejection |
 | AC.9 | `SourceMarkdownVersionAPISignatureManifestTests.allMarkdownVersionSignaturesUseSourceMarkdownVersionID`, `SourceMarkdownVersionAPISignatureManifestTests.liveWritersGenerateTypedIDsAdjacentToRuntimeInserts` |
-| AC.10 | `SourceMarkdownVersionIDPersistenceTests.schemaUserVersionAndRawIDsAreUnchanged`; `QueueRestartTests.markdownVersionIDJSONRoundTripsUnchanged`; `QueueEventEnvelopeTests.markdownVersionIDUsesLegacyRawString`; `WikiLinkCanonicalizerTests.markdownVersionPinSyntaxIsUnchanged`; `Phase6PinningPureTests.versionOrdinalRendersUnchanged`; `ProjectionTests.markdownVersionItemIdentifiersAndPathsAreUnchanged`; `WikiCtlCommandTests.sourceSetActiveRawInputAndOutputAreUnchanged`; `AgentStagingTests.markdownVersionManifestUsesLegacyRawString` |
-| AC.11 | Focused suites: `SourceMarkdownVersionIDTests`, `SourceMarkdownVersionIDPersistenceTests`, `IdentifierBoundaryTypecheckTests`, `SourceMarkdownVersionAPISignatureManifestTests`, `Phase6PinningPureTests`, `Phase6PinningStoreTests`, `Phase6PinningModelTests`, `WikiRenderContextTests`, `ProcessedMarkdownTests`, `StoreEmissionTests`, `QueueRestartTests`, `QueueEventEnvelopeTests`, `WikiCtlCommandTests`, `ProjectionTests`, `AgentStagingTests`, and transclusion suites |
+| AC.10 | `SourceMarkdownVersionIDPersistenceTests.schemaUserVersionAndRawIDsAreUnchanged`; `QueueRestartTests.restartPreservesLegacyQueueJSONWithoutMarkdownVersionFields`; `QueueEventEnvelopeTests.queueEventEnvelopeJSONIntentionallyCarriesNoMarkdownVersionField`; `Phase6PinningPureTests.canonicalAndRenderedPinnedLinkTextStayExact`; `ProjectionTests.sourceMarkdownByIDRoundTrip`; `ProjectionTests.sourceMarkdownNodeByIDFilenameIsULIDDotMD`; `WikiCtlCommandTests.parsesSourceSetActiveVersionIDAsExactRawString`; `WikiCtlCommandTests.sourceIDInputAndOutputRemainRawStrings`; `ModelsConfigRecordTests.writeProducesSortedPrettyJSONWithExpectedTopLevelKeys` |
+| AC.11 | Focused suites: `SourceMarkdownVersionIDTests`, `SourceMarkdownVersionIDPersistenceTests`, `IdentifierBoundaryTypecheckTests`, `SourceMarkdownVersionAPISignatureManifestTests`, `Phase6PinningPureTests`, `Phase6PinningStoreTests`, `Phase6PinningModelTests`, `WikiRenderContextTests`, `ProcessedMarkdownTests`, `StoreEmissionTests`, `QueueRestartTests`, `QueueEventEnvelopeTests`, `WikiCtlCommandTests`, `ProjectionTests`, `ModelsConfigRecordTests`, and `TransclusionEmbedTests` |
 | AC.12 | `make prompts`; `swift build --build-tests`; `swift test`; `make lint`; `git diff --check`; PR CI |
 | AC.13 | `DocumentationContractTests.sourceMarkdownVersionIDBoundaryIsDocumented`, `DocumentationContractTests.planIndexesSourceMarkdownVersionIDDocument`, `DocumentationContractTests.progressRecordsSourceMarkdownVersionIDVerification` |
 

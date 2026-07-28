@@ -1015,6 +1015,11 @@ struct WikiCtlCommandTests {
         let result = try SourceCommand.run(
             .setActive(.id(pdf.id), versionID: first.id), in: store, cwd: "/tmp")
         #expect(result.didCommit)
+        guard case .text(let output) = result.payload else {
+            Issue.record("expected text payload")
+            return
+        }
+        #expect(output == "Set active markdown to \(first.id.rawValue).")
         #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.id == first.id)
         #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "first version")
     }
@@ -1027,6 +1032,20 @@ struct WikiCtlCommandTests {
                 .setActive(.id(pdf.id), versionID: SourceMarkdownVersionID(rawValue: "01NOPE")),
                 in: store, cwd: "/tmp")
         }
+    }
+
+    @Test func parsesSourceSetActiveVersionIDAsExactRawString() throws {
+        let rawVersionID = "01JSMVMDVER00000000000042"
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "set-active", "--id", "01ABC", "--version", rawVersionID],
+            env: noEnv
+        )
+
+        #expect(
+            invocation.command
+                == .source(.setActive(.id(SourceID(rawValue: "01ABC")),
+                                      versionID: SourceMarkdownVersionID(rawValue: rawVersionID)))
+        )
     }
 
     // MARK: - source info (Phase 3a)

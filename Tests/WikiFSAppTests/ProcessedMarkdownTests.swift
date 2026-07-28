@@ -220,13 +220,18 @@ struct ProcessedMarkdownTests {
         let v1 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "original", origin: .extraction, note: nil)
         usleep(2000)
-        _ = try store.appendProcessedMarkdown(
+        let v2 = try store.appendProcessedMarkdown(
             sourceID: file.id, content: "edit", origin: .user, note: nil)
         usleep(2000)
         let v3 = try store.revertProcessedMarkdown(sourceID: file.id, to: v1.id)
         #expect(v3.content == "original")
         #expect(v3.origin == .revert)
-        #expect(v3.parentID != nil)  // parent is the previous head
+        #expect(v3.id != v1.id)
+        #expect(v3.parentID == v2.id)
+        #expect(v3.note == "revert to \(v1.id.rawValue)")
+        #expect(store.scalarText(
+            "SELECT id || '|' || parent_id || '|' || origin || '|' || note || '|' || blob_hash FROM source_markdown_versions WHERE id = '\(v3.id.rawValue)';"
+        ) == "\(v3.id.rawValue)|\(v2.id.rawValue)|revert|revert to \(v1.id.rawValue)|\(v1.blobHash ?? "")")
         // v1 is untouched
         let history = try store.processedMarkdownHistory(sourceID: file.id)
         #expect(history[2].content == "original")  // v1 still there
@@ -489,6 +494,9 @@ struct ProcessedMarkdownTests {
         try store.setActiveMarkdown(sourceID: file.id, to: first.id)
         let tokenAfter = try store.changeToken()
         #expect(tokenBefore != tokenAfter)
+        #expect(store.scalarText(
+            "SELECT version_id FROM refs WHERE kind = 'source-derived' AND owner_id = '\(file.id.rawValue)';"
+        ) == first.id.rawValue)
         #expect(try store.processedMarkdownHead(sourceID: file.id)?.id == first.id)
         #expect(try store.processedMarkdownHead(sourceID: file.id)?.content == "first")
     }

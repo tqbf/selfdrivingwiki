@@ -51,6 +51,19 @@ struct QueueEventEnvelopeTests {
         #expect(try normalizedJSONString(from: legacyObject) == normalizedJSONString(from: reencodedObject))
     }
 
+    @Test func queueEventEnvelopeJSONIntentionallyCarriesNoMarkdownVersionField() throws {
+        let item = makeItem()
+        let event = QueueEvent.enqueued(item)
+        let envelope = try #require(QueueEventEnvelope(from: event))
+        let data = try JSONEncoder().encode(envelope)
+        let raw = try #require(String(data: data, encoding: .utf8))
+
+        #expect(raw.contains(#""sourceIDs":["src1"]"#))
+        #expect(!raw.contains("SourceMarkdownVersionID"))
+        #expect(!raw.contains("markdownVersion"))
+        #expect(!raw.contains(#""pin""#))
+    }
+
     @Test func failedEventRoundTrip() throws {
         let item = makeItem()
         let event = QueueEvent.failed(item, error: "something went wrong")

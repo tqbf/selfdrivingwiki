@@ -178,6 +178,10 @@ struct ModelsConfigRecordTests {
         // `thinkingEffort` is `nil` here → key omitted (encodeIfPresent behavior
         // is the synthesized default for optional Codable properties).
         #expect(raw.contains("\"thinkingEffort\"") == false)
+        // This manifest intentionally carries source identities only; markdown
+        // version ids stay inside typed Swift APIs and do not cross this boundary.
+        #expect(raw.contains("SourceMarkdownVersionID") == false)
+        #expect(raw.contains("markdownVersion") == false)
     }
 
     // MARK: - forward-compat phases (semantic contract)

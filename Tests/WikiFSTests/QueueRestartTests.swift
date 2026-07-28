@@ -54,4 +54,35 @@ struct QueueRestartTests {
         let recovered = try #require(try reopened.getItem(itemID))
         #expect(recovered.payload.sourceIDs == [SourceID(rawValue: "LEGACY-SOURCE-ID")])
     }
+
+    @Test func restartPreservesLegacyQueueJSONWithoutMarkdownVersionFields() throws {
+        let databaseURL = try temporaryDatabaseURL()
+        let itemID: QueueItem.ID
+        do {
+            let store = try QueueStore(databaseURL: databaseURL)
+            itemID = try store.enqueue(
+                QueueItemRequest(
+                    queue: .extraction,
+                    wikiID: WikiID(rawValue: "legacy-wiki"),
+                    payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "new-source")])
+                )
+            ).id
+            store.close()
+        }
+
+        let legacyPayload = #"{"sourceIDs":["LEGACY-SOURCE-ID"]}"#
+        try execute(
+            "UPDATE queue_items SET payload = '\(legacyPayload)' WHERE id = '\(itemID.rawValue)';",
+            at: databaseURL
+        )
+
+        let reopened = try QueueStore(databaseURL: databaseURL)
+        let recovered = try #require(try reopened.getItem(itemID))
+        let reencoded = try JSONEncoder().encode(recovered.payload)
+        let raw = try #require(String(data: reencoded, encoding: .utf8))
+
+        #expect(raw == legacyPayload)
+        #expect(!raw.contains("SourceMarkdownVersionID"))
+        #expect(!raw.contains("markdownVersion"))
+    }
 }

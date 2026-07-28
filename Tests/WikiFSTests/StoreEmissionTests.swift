@@ -309,6 +309,25 @@ struct StoreEmissionTests {
         #expect(events.last?.id == s.id.rawValue)
     }
 
+    @Test func markdownVersionMutatorsKeepEmissionIDsSourceScoped() async throws {
+        let (store, _, rec) = try makeHarness()
+        let source = try addSeedSource(store)
+        let appended = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "v1", origin: .extraction, note: nil)
+        try await drain(rec)
+
+        try store.setActiveMarkdown(sourceID: source.id, to: appended.id)
+        var events = try await awaitEvents(rec)
+        #expect(events.last?.id == source.id.rawValue)
+        #expect(events.last?.id != appended.id.rawValue)
+
+        try await drain(rec)
+        _ = try store.revertProcessedMarkdown(sourceID: source.id, to: appended.id)
+        events = try await awaitEvents(rec)
+        #expect(events.last?.id == source.id.rawValue)
+        #expect(events.last?.id != appended.id.rawValue)
+    }
+
     // MARK: - Singletons + log
 
     @Test func updateSystemPromptIsNoOpAndEmitsNothing() async throws {

@@ -164,4 +164,24 @@ struct Phase6PinningPureTests {
             pinnedExtractionID: { _, _ in nil })
         #expect(!out.contains("&pin="))
     }
+
+    @Test func canonicalAndRenderedPinnedLinkTextStayExact() throws {
+        let sourceID = SourceID(rawValue: paperID)
+        let body = #"[[source:Video@v3#"a quote"|Paper]]"#
+        let (resolvePage, resolveSource) = resolvers(sources: ["Video": paperID])
+        let canonical = try #require(
+            try WikiLinkRewriter.canonicalize(in: body, resolvePage: resolvePage, resolveSource: resolveSource)
+        )
+        #expect(canonical == #"[[source:\#(paperID)@v3#"a quote"|Paper]]"#)
+
+        let rendered = WikiLinkMarkdown.linkified(
+            canonical,
+            isResolved: { _, _ in true },
+            displayName: { id, kind in kind == .source && id == sourceID.rawValue ? "Paper" : nil },
+            pinnedExtractionID: { src, ordinal in
+                src == sourceID && ordinal == 3 ? SourceMarkdownVersionID(rawValue: pinID) : nil
+            }
+        )
+        #expect(rendered == #"[Paper](wiki://source?id=\#(paperID)&title=Paper&pin=\#(pinID)#%22a%20quote%22)"#)
+    }
 }

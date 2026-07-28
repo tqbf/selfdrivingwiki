@@ -15,12 +15,13 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         let signature: String
     }
 
-    private let expectedEntryKeys: Set<String> = [
+    private let typeEntries: Set<String> = [
         "source-markdown-version.id",
         "source-markdown-version.parent-id",
         "source-markdown-version.init",
         "extraction-alternative.id",
         "wiki-store.error",
+        "wiki-store.select-active-markdown",
         "wiki-store.processed-markdown-version",
         "wiki-store.source-derived-chains",
         "wiki-store.processed-markdown-agent-names",
@@ -32,6 +33,7 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "grdb.public-source-derived-chains",
         "grdb.public-processed-markdown-agent-names",
         "grdb.public-processed-markdown-alternatives.active-head",
+        "grdb.private-resolve-version-pin",
         "grdb.public-append-processed-markdown.writer",
         "grdb.public-revert-processed-markdown",
         "grdb.public-set-active-markdown",
@@ -45,10 +47,17 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "grdb.public-processed-markdown-producer",
         "model.processed-markdown-version",
         "model.source-derived-chains",
+        "model.select-source-by-id",
         "model.pending-pinned-extraction",
         "model.consume-pending-pinned-extraction",
         "model.set-active-markdown",
         "model.processed-markdown-agent-names",
+        "extraction-compare.left-id",
+        "extraction-compare.right-id",
+        "extraction-compare.selection-binding",
+        "extraction-compare.set-active",
+        "reader-markdown.pinned-extraction-id",
+        "wiki-reader.context-pinned-extraction-id",
         "render-context.source-derived-chain",
         "render-context.pinned-extraction-id",
         "cli.source-command.set-active",
@@ -57,6 +66,63 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "links.pin-from-url",
         "links.linkified.pin-id",
     ]
+
+    private let surfaceEntries: Set<String> = [
+        "wiki-store.processed-markdown-history",
+        "wiki-store.processed-markdown-alternatives",
+        "wiki-store.append-processed-markdown",
+        "wiki-store.record-markdown-extraction",
+        "grdb.public-processed-markdown-history",
+        "grdb.public-processed-markdown-alternatives",
+        "grdb.public-append-processed-markdown",
+        "grdb.public-record-markdown-extraction",
+        "grdb.public-replace-links",
+        "model.processed-markdown-history",
+        "model.save-processed-markdown",
+        "model.seed-pdf-markdown",
+        "model.re-extract-markdown",
+        "model.processed-markdown-alternatives",
+        "source-detail.consume-pinned-extraction",
+        "source-detail.pending-pin-on-change",
+        "source-detail.has-multiple-extractions",
+        "source-detail.history-menu",
+        "source-detail.nominate-active",
+        "extraction-compare.refresh-alternatives",
+        "wiki-reader.on-wikilink-pinned-route",
+    ]
+
+    private let reviewCriticalEntries: Set<String> = [
+        "wiki-store.processed-markdown-history",
+        "wiki-store.processed-markdown-alternatives",
+        "wiki-store.append-processed-markdown",
+        "wiki-store.record-markdown-extraction",
+        "model.processed-markdown-history",
+        "model.save-processed-markdown",
+        "model.re-extract-markdown",
+        "model.processed-markdown-alternatives",
+        "model.select-source-by-id",
+        "model.set-active-markdown",
+        "extraction-compare.left-id",
+        "extraction-compare.right-id",
+        "extraction-compare.selection-binding",
+        "extraction-compare.set-active",
+        "source-detail.consume-pinned-extraction",
+        "source-detail.pending-pin-on-change",
+        "source-detail.history-menu",
+        "source-detail.nominate-active",
+        "reader-markdown.pinned-extraction-id",
+        "wiki-reader.context-pinned-extraction-id",
+        "wiki-reader.on-wikilink-pinned-route",
+        "grdb.private-derived-version-id-by-ordinal",
+        "grdb.private-resolve-version-pin",
+        "grdb.public-source-link-pin",
+        "links.pin-from-url",
+        "links.linkified.pin-id",
+    ]
+
+    private var expectedEntryKeys: Set<String> {
+        typeEntries.union(surfaceEntries)
+    }
 
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
@@ -108,7 +174,10 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         let root = repositoryRoot()
         let entries = try manifestEntries()
         #expect(entries.isEmpty == false, "source-markdown-version API signature manifest must not be empty")
+        #expect(entries.count == expectedEntryKeys.count, "source-markdown-version manifest must not duplicate or omit reviewed entries")
         #expect(Set(entries.map(\.key)) == expectedEntryKeys, "source-markdown-version manifest must enumerate the full reviewed surface set")
+        #expect(reviewCriticalEntries.isSubset(of: expectedEntryKeys), "review-critical source-markdown-version seams must stay explicitly enumerated in the expected key set")
+        #expect(reviewCriticalEntries.isSubset(of: Set(entries.map(\.key))), "review-critical source-markdown-version seams must stay explicitly enumerated in the fixture")
 
         for entry in entries {
             if entry.kind == .typed {

@@ -322,6 +322,38 @@ struct TransclusionEmbedTests {
         #expect(html.contains("The body."))
     }
 
+    @Test func renderEmbedBodyPreservesPinnedSourceLinkAcrossTransclusion() throws {
+        let store = try TestStoreFactory.inMemory()
+        let source = try store.addSource(filename: "Paper.pdf", data: Data("%PDF".utf8), mimeType: "application/pdf")
+        _ = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "first", origin: .extraction, note: nil)
+        let v2 = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "second", origin: .extraction, note: nil)
+        let page = try store.createPage(title: "Outer")
+        try store.updatePage(
+            id: page.id,
+            title: "Outer",
+            body: #"See [[source:\#(source.id.rawValue)@v2#"quoted"|Paper]]."#
+        )
+        let context = WikiRenderContext(
+            pageTitles: ["outer"],
+            pageIDToName: [page.id: "Outer"],
+            sourceNames: ["paper.pdf"],
+            sourceIDToName: [source.id: "Paper.pdf"],
+            chatTitles: [],
+            chatIDToName: [:],
+            uniqueLooseKeys: [],
+            embedMap: [:],
+            sourceDerivedChain: [source.id: [SourceMarkdownVersionID(rawValue: "unused-v1"), v2.id]],
+            siblingMaps: [:],
+            blobScheme: WikiLinkMarkdown.blobScheme
+        )
+
+        let html = try TransclusionEmbedder.renderEmbedBody(
+            store: store, target: .page(page.id), context: context)
+        #expect(html.contains("pin=\(v2.id.rawValue)"))
+    }
+
     @Test func renderEmbedBodySourceFallsBackToRawText() throws {
         let store = try TestStoreFactory.inMemory()
         let text = Data("Plain text body.".utf8)

@@ -16,6 +16,7 @@ struct ProjectionTests {
         let ulid = "01KV6EAH410NWC9K9ZM44DNMXT"
         let id = Projection.Identity.sourceMarkdownByID(ulid)
         let extracted = Projection.Identity.sourceMarkdownULID(from: id)
+        #expect(id.rawValue == "source-markdown-by-id:\(ulid)")
         #expect(extracted == ulid)
     }
 
@@ -23,6 +24,7 @@ struct ProjectionTests {
         let ulid = "01KV6EAH410NWC9K9ZM44DNMXT"
         let id = Projection.Identity.sourceMarkdownByName(ulid)
         let extracted = Projection.Identity.sourceMarkdownULID(from: id)
+        #expect(id.rawValue == "source-markdown-by-name:\(ulid)")
         #expect(extracted == ulid)
     }
 
@@ -92,6 +94,9 @@ struct ProjectionTests {
         #expect(node.name == "01KV6EAH410NWC9K9ZM44DNMXT.md")
         // parent is sourcesByID
         #expect(node.parent == Projection.Identity.sourcesByID)
+        let item = WikiFSItem(node: node)
+        #expect(item.itemIdentifier == identifier)
+        #expect(item.parentItemIdentifier == Projection.Identity.sourcesByID)
         // contentVersion is Data(head.id.rawValue.utf8)
         #expect(node.contentVersion == Data(headID.utf8))
         // metadataVersion is also Data(head.id.rawValue.utf8)
@@ -159,6 +164,9 @@ struct ProjectionTests {
         #expect(node.name == expectedName)
         // parent is sourcesByName
         #expect(node.parent == Projection.Identity.sourcesByName)
+        let item = WikiFSItem(node: node)
+        #expect(item.itemIdentifier == identifier)
+        #expect(item.parentItemIdentifier == Projection.Identity.sourcesByName)
         // contentVersion is Data(head.id.rawValue.utf8)
         #expect(node.contentVersion == Data(headID.utf8))
         // metadataVersion is also Data(head.id.rawValue.utf8)

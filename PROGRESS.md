@@ -33,22 +33,37 @@ contracts.
 - Added store-level error coverage proving unknown markdown-version targets
   throw `sourceMarkdownVersionNotFound(SourceMarkdownVersionID)` while missing
   pages still throw `notFound(PageID)`.
+- Expanded the reviewed boundary coverage so the load-bearing seams are now
+  explicit and executable: the markdown-version signature manifest includes the
+  compare/history/nomination/render adapters; queue JSON and agent manifests
+  prove they intentionally carry no markdown-version field; File Provider item
+  identifiers and parents stay exact raw strings; pinned wiki-link text,
+  transclusion pin routing, CLI `source set-active` text, and source-scoped
+  store emissions are each pinned by named tests.
 
 **Verification.**
 - `make keychain` — passed.
 - `make version` — passed.
-- `make prompts` — passed.
-- `swift build --build-tests` — passed on the final tree.
-- Focused markdown-version boundary verification:
-  `swift test --filter 'IdentifierBoundaryTypecheckTests|SourceMarkdownVersionAPISignatureManifestTests|Phase6PinningPureTests|Phase6PinningStoreTests|Phase6PinningModelTests|WikiRenderContextTests|SourceMarkdownVersionIDPersistenceTests|DocumentationContractTests|WikiCtlCommandTests'`
-  — passed.
-- Focused app and external-contract verification:
-  `WIKIFS_APP_TESTS=1 swift test --filter 'ProcessedMarkdownTests|ProjectionTests|ProjectionTreeTests|WikiReaderRoutingTests|ChatWebViewLinkifyTests|AgentTranscriptRenderContextTests|DocumentationContractTests|WikiCtlCommandTests'`
-  — 268 tests in 11 suites passed.
-- `swift test` — 2,574 tests in 204 suites passed on Tuesday, July 28, 2026,
-  after 151.807 seconds.
-- `make lint` — 0 violations in 381 files; no new bare `try?`.
-- `git diff --check` — clean.
+- Focused core boundary verification:
+  `swift test --filter 'SourceMarkdownVersionAPISignatureManifestTests|QueueEventEnvelopeTests|QueueRestartTests|WikiCtlCommandTests|Phase6PinningPureTests|ModelsConfigRecordTests'`
+  — 153 tests in 6 suites passed.
+- Focused app-side boundary verification:
+  `WIKIFS_APP_TESTS=1 swift test --filter 'ProjectionTests|ProcessedMarkdownTests|TransclusionEmbedTests'`
+  — 96 tests in 6 suites passed.
+- Focused emission verification:
+  `swift test --filter 'StoreEmissionTests'`
+  — 37 tests in 1 suite passed.
+- Handoff verification before recovery:
+  `make prompts`
+  `swift build --build-tests`
+  — both passed in the prior fix-agent session for this same worktree.
+- Final recovery verification on the current tree:
+  `swift test`
+  — 2,579 tests in 204 suites passed.
+  `make lint`
+  — passed with 0 violations in 381 files.
+  `git diff --check`
+  — clean.
 
 ## 2026-07-27 — SourceVersionID separation (#955)
 
