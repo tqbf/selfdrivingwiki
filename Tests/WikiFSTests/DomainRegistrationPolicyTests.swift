@@ -12,20 +12,20 @@ struct DomainRegistrationPolicyTests {
     // MARK: - isRegistered
 
     @Test func registeredWhenIDPresent() {
-        #expect(DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "B", "C"], wikiID: "B"))
+        #expect(DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "B", "C"], wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func notRegisteredWhenIDAbsent() {
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "C"], wikiID: "B"))
+        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "C"], wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func notRegisteredAgainstEmptyList() {
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: [], wikiID: "B"))
+        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: [], wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func matchIsExactNotPrefix() {
         // ULIDs share prefixes; a partial match must NOT count as registered.
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["01ABCDEF"], wikiID: "01AB"))
+        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["01ABCDEF"], wikiID: WikiID(rawValue: "01AB")))
     }
 
     // MARK: - decide

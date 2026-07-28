@@ -222,20 +222,20 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     }
 
     /// Delete a wiki by ID.
-    public func deleteWiki(id: String) async throws -> Bool {
+    public func deleteWiki(id: WikiID) async throws -> Bool {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
-            proxy.deleteWiki(id: id) { success in
+            proxy.deleteWiki(id: id.rawValue) { success in
                 cont.resume(returning: success)
             }
         }
     }
 
     /// Rename a wiki (display name only).
-    public func renameWiki(id: String, name: String) async throws -> Bool {
+    public func renameWiki(id: WikiID, name: String) async throws -> Bool {
         let proxy = try daemonProxy()
         return try await withCheckedThrowingContinuation { cont in
-            proxy.renameWiki(id: id, name: name) { success in
+            proxy.renameWiki(id: id.rawValue, name: name) { success in
                 cont.resume(returning: success)
             }
         }

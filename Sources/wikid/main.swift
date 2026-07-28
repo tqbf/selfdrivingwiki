@@ -83,11 +83,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func deleteWiki(id: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.deleteWiki(id: id))
+        reply(daemon.deleteWiki(id: WikiID(rawValue: id)))
     }
 
     func renameWiki(id: String, name: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.renameWiki(id: id, name: name))
+        reply(daemon.renameWiki(id: WikiID(rawValue: id), name: name))
     }
 
     func resolveWiki(selector: String, reply: @escaping (Data?) -> Void) {
@@ -607,11 +607,11 @@ while let line = readLine() {
         }
     case "deleteWiki":
         let idStr = params["id"] as? String ?? ""
-        result = daemon.deleteWiki(id: idStr)
+        result = daemon.deleteWiki(id: WikiID(rawValue: idStr))
     case "renameWiki":
         let idStr = params["id"] as? String ?? ""
         let name = params["name"] as? String ?? ""
-        result = daemon.renameWiki(id: idStr, name: name)
+        result = daemon.renameWiki(id: WikiID(rawValue: idStr), name: name)
     case "resolveWiki":
         let selector = params["selector"] as? String ?? ""
         if let data = daemon.resolveWiki(selector: selector) {

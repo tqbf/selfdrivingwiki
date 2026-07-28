@@ -347,17 +347,18 @@ func runWikiCreate(name: String) async -> Int32 {
 
 func runWikiDelete(id: String) async -> Int32 {
     do {
+        let wikiID = WikiID(rawValue: id)
         let resolver = try WikiResolver.appGroupContainer()
         let container = resolver.containerDirectory
         var registry = WikiRegistry.load(from: container)
-        guard let descriptor = registry.descriptor(id: WikiID(rawValue: id)) else {
+        guard let descriptor = registry.descriptor(id: wikiID) else {
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
             return 1
         }
 
         // Remove from the registry first, then drop the DB files (main + WAL
         // sidecars). Mirrors WikiDaemon.deleteWiki.
-        registry.remove(id: WikiID(rawValue: id))
+        registry.remove(id: wikiID)
         try registry.save(to: container)
 
         let dbURL = resolver.databaseURL(for: descriptor)
@@ -381,12 +382,13 @@ func runWikiRename(id: String, name: String) async -> Int32 {
             FileHandle.standardError.write(Data("wikictl: wiki rename requires a non-empty name\n".utf8))
             return 1
         }
+        let wikiID = WikiID(rawValue: id)
         var registry = WikiRegistry.load(from: container)
-        guard registry.descriptor(id: WikiID(rawValue: id)) != nil else {
+        guard registry.descriptor(id: wikiID) != nil else {
             FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
             return 1
         }
-        registry.rename(id: WikiID(rawValue: id), to: trimmed)
+        registry.rename(id: wikiID, to: trimmed)
         try registry.save(to: container)
         return 0
     } catch {

@@ -158,7 +158,7 @@ struct WikiDaemonTests {
         let data = try #require(daemon.createWiki(name: "Delete Me"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        let success = daemon.deleteWiki(id: descriptor.id.rawValue)
+        let success = daemon.deleteWiki(id: descriptor.id)
         #expect(success)
 
         let registry = WikiRegistry.load(from: dir)
@@ -173,7 +173,7 @@ struct WikiDaemonTests {
         let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
         #expect(FileManager.default.fileExists(atPath: dbURL.path))
 
-        _ = daemon.deleteWiki(id: descriptor.id.rawValue)
+        _ = daemon.deleteWiki(id: descriptor.id)
         #expect(!FileManager.default.fileExists(atPath: dbURL.path))
         #expect(!FileManager.default.fileExists(atPath: dbURL.path + "-wal"))
         #expect(!FileManager.default.fileExists(atPath: dbURL.path + "-shm"))
@@ -187,7 +187,7 @@ struct WikiDaemonTests {
         let data = try #require(daemon.createWiki(name: "Old Name"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        let success = daemon.renameWiki(id: descriptor.id.rawValue, name: "New Name")
+        let success = daemon.renameWiki(id: descriptor.id, name: "New Name")
         #expect(success)
 
         let resolveData = try #require(daemon.resolveWiki(selector: descriptor.id.rawValue))
@@ -202,14 +202,14 @@ struct WikiDaemonTests {
         let data = try #require(daemon.createWiki(name: "Test"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        let success = daemon.renameWiki(id: descriptor.id.rawValue, name: "   ")
+        let success = daemon.renameWiki(id: descriptor.id, name: "   ")
         #expect(!success)
     }
 
     @Test func renameWikiReturnsFalseForUnknownID() {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
-        let success = daemon.renameWiki(id: "nonexistent", name: "Whatever")
+        let success = daemon.renameWiki(id: WikiID(rawValue: "nonexistent"), name: "Whatever")
         #expect(!success)
     }
 
@@ -330,7 +330,7 @@ struct WikiDaemonTests {
         #expect(!tokenB.isEmpty)
 
         // Deleting A doesn't affect B
-        _ = daemon.deleteWiki(id: a.id.rawValue)
+        _ = daemon.deleteWiki(id: a.id)
         #expect(daemon.openStore(wikiID: b.id))
     }
 }
