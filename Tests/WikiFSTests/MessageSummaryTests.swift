@@ -292,6 +292,21 @@ struct MessageSummaryTests {
         #expect(profile == nil)
     }
 
+    @Test func resolveProfile_disabledPinnedProviderReturnsNilWithoutRewritingPin() {
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
+        ]).settingStageProvider("gemini", forStage: "summarizer")
+
+        let profile = MessageSummarizer.resolveProfile(
+            config: config,
+            credentialStore: InMemoryACPCredentialStore(),
+            resolveCommand: { _ in ["/usr/bin/true"] })
+
+        #expect(config.stageProviderIds["summarizer"] == "gemini")
+        #expect(profile == nil)
+    }
+
     // MARK: - Store round-trip (AC.1 + AC.6, integration)
 
     @Test func freshDB_isAtSchemaVersion44() throws {

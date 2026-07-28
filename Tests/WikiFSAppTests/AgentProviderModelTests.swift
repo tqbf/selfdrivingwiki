@@ -141,6 +141,40 @@ import ACPModel
         #expect(loaded.provider(id: ProviderID(rawValue: "gemini"))?.env == ["FOO": "bar"])
     }
 
+    @Test func summarizerStageProviderPersistsAcrossReload() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-providers-summarizer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let original = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+        ])
+        .settingStageProvider("gemini", forStage: "summarizer")
+
+        try original.save(to: tmp)
+
+        let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
+        #expect(reloaded.stageProviderIds["summarizer"] == "gemini")
+        #expect(reloaded.provider(forStage: "summarizer").id == ProviderID(rawValue: "gemini"))
+    }
+
+    @Test func summarizerStageProviderSurvivesDefaultProviderChange() {
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
+            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
+            AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
+        ])
+        .settingStageProvider("gemini", forStage: "summarizer")
+
+        let switched = config.settingDefault(id: ProviderID(rawValue: "hermes"))
+
+        #expect(switched.defaultProvider.id == ProviderID(rawValue: "hermes"))
+        #expect(switched.stageProviderIds["summarizer"] == "gemini")
+        #expect(switched.provider(forStage: "summarizer").id == ProviderID(rawValue: "gemini"))
+    }
+
     // MARK: - AC.3 (#663): hermes/opencode IDs round-trip after static removal
 
     /// After #663 (deletion of `.hermesDefault`/`.opencodeDefault`), the
