@@ -587,37 +587,37 @@ public enum ArgumentParser {
             return .workspace(.create(name: name))
 
         case "status":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace status: --id is required")
             }
             return .workspace(.status(id: id))
 
         case "abandon":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace abandon: --id is required")
             }
             return .workspace(.abandon(id: id))
 
         case "merge":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace merge: --id is required")
             }
             return .workspace(.merge(id: id))
 
         case "refresh":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace refresh: --id is required")
             }
             return .workspace(.refresh(id: id))
 
         case "conflicts":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace conflicts: --id is required")
             }
             return .workspace(.conflicts(id: id))
 
         case "resolve":
-            guard let id = options.value("--id"),
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }),
                   let pageID = options.value("--page").map({ PageID(rawValue: $0) }),
                   let bodyFile = options.value("--body-file") else {
                 throw Failure.usage("workspace resolve: --id, --page, and --body-file are required")
@@ -625,7 +625,7 @@ public enum ArgumentParser {
             return .workspace(.resolve(id: id, pageID: pageID, bodyFile: bodyFile))
 
         case "retry":
-            guard let id = options.value("--id") else {
+            guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
                 throw Failure.usage("workspace retry: --id is required")
             }
             return .workspace(.retry(id: id))
