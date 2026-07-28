@@ -18,13 +18,13 @@ public enum WorkspaceCommand {
 
     public enum Action: Equatable {
         case create(name: String?)
-        case status(id: String)
-        case abandon(id: String)
-        case merge(id: String)
-        case refresh(id: String)
-        case conflicts(id: String)
-        case resolve(id: String, pageID: PageID, bodyFile: String)
-        case retry(id: String)
+        case status(id: WorkspaceID)
+        case abandon(id: WorkspaceID)
+        case merge(id: WorkspaceID)
+        case refresh(id: WorkspaceID)
+        case conflicts(id: WorkspaceID)
+        case resolve(id: WorkspaceID, pageID: PageID, bodyFile: String)
+        case retry(id: WorkspaceID)
         case reap(ttl: TimeInterval)
     }
 
@@ -70,13 +70,12 @@ public enum WorkspaceCommand {
 
     // MARK: - status
 
-    private static func status(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        guard let ws = try store.workspaceSummary(id: workspaceID) else {
-            throw Failure.message("workspace \(id) not found")
+    private static func status(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        guard let ws = try store.workspaceSummary(id: id) else {
+            throw Failure.message("workspace \(id.rawValue) not found")
         }
         var lines = ["\(ws.id)\t\(ws.status.rawValue)\t\(ws.name ?? "")"]
-        let refs = try store.workspaceRefs(workspaceID: workspaceID)
+        let refs = try store.workspaceRefs(workspaceID: id)
         if refs.isEmpty {
             lines.append("(no pages)")
         } else {
@@ -91,37 +90,33 @@ public enum WorkspaceCommand {
 
     // MARK: - abandon
 
-    private static func abandon(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        try store.abandonWorkspace(id: workspaceID)
-        return Result(output: "abandoned \(id)", didCommit: true)
+    private static func abandon(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        try store.abandonWorkspace(id: id)
+        return Result(output: "abandoned \(id.rawValue)", didCommit: true)
     }
 
     // MARK: - merge
 
-    private static func merge(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        try store.workspaceMerge(workspaceID: workspaceID)
-        let ws = try store.workspaceSummary(id: workspaceID)
+    private static func merge(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        try store.workspaceMerge(workspaceID: id)
+        let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
-        return Result(output: "merge: \(id) → \(status)", didCommit: true)
+        return Result(output: "merge: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - refresh
 
-    private static func refresh(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        try store.workspaceRefresh(workspaceID: workspaceID)
-        let ws = try store.workspaceSummary(id: workspaceID)
+    private static func refresh(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        try store.workspaceRefresh(workspaceID: id)
+        let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
-        return Result(output: "refresh: \(id) → \(status)", didCommit: true)
+        return Result(output: "refresh: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - conflicts
 
-    private static func conflicts(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        let conflicts = try store.workspaceConflicts(workspaceID: workspaceID)
+    private static func conflicts(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        let conflicts = try store.workspaceConflicts(workspaceID: id)
         if conflicts.isEmpty {
             return Result(output: "(no conflicts)", didCommit: false)
         }
@@ -138,27 +133,25 @@ public enum WorkspaceCommand {
     // MARK: - resolve
 
     private static func resolve(
-        id: String, pageID: PageID, bodyFile: String, in store: WikiStore
+        id: WorkspaceID, pageID: PageID, bodyFile: String, in store: WikiStore
     ) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
         let body: String
         if bodyFile == "-" {
             body = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
         } else {
             body = try String(contentsOfFile: bodyFile, encoding: .utf8)
         }
-        try store.workspaceResolveConflict(workspaceID: workspaceID, pageID: pageID, body: body)
-        return Result(output: "resolved \(pageID.rawValue) in \(id)", didCommit: true)
+        try store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: body)
+        return Result(output: "resolved \(pageID.rawValue) in \(id.rawValue)", didCommit: true)
     }
 
     // MARK: - retry
 
-    private static func retry(id: String, in store: WikiStore) throws -> Result {
-        let workspaceID = WorkspaceID(rawValue: id)
-        try store.workspaceRetryMerge(workspaceID: workspaceID)
-        let ws = try store.workspaceSummary(id: workspaceID)
+    private static func retry(id: WorkspaceID, in store: WikiStore) throws -> Result {
+        try store.workspaceRetryMerge(workspaceID: id)
+        let ws = try store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
-        return Result(output: "retry: \(id) → \(status)", didCommit: true)
+        return Result(output: "retry: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - reap
