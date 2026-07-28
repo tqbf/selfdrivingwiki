@@ -611,7 +611,7 @@ becomes a thin proxy to the daemon's queue rather than a local `Process`-spawner
 ## Documentation Strategy
 
 - **`PLAN.md`** — add `plans/multi-window-ui.md` to the documentation index.
-- **`PROGRESS.md`** — add an entry documenting the multi-window implementation.
+- **`progress/`** — add an entry documenting the multi-window implementation.
 - **`plans/multi-wiki-daemon.md` §7** — update Phase 2b items to ✅ shipped.
 - **`README.md`** — if needed, update the multi-wiki section to mention
   multi-window support.

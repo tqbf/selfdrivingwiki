@@ -4,7 +4,8 @@ import Testing
 /// Guards the durable documentation claims for the identifier-boundary docs.
 struct DocumentationContractTests {
     private static let planPath = "plans/page-source-id-separation.md"
-    private static let progressHeading = "## 2026-07-27 — PageID and SourceID type separation"
+    private static let progressDirectoryPath = "progress"
+    private static let progressHeading = "# 2026-07-27 — PageID and SourceID type separation"
     private static let requiredPlanMarkers = [
         "Identifier boundary:",
         "No-migration decision:",
@@ -12,7 +13,7 @@ struct DocumentationContractTests {
         "Deferred identifier work:",
     ]
     private static let chatPlanPath = "plans/chat-id-separation.md"
-    private static let chatProgressHeading = "## 2026-07-27 — ChatID namespace separation (#954)"
+    private static let chatProgressHeading = "# 2026-07-27 — ChatID namespace separation (#954)"
     private static let requiredChatPlanMarkers = [
         "Introduce a public `ChatID` namespace for persisted chat entities",
         "Do not alter SQLite schema versions, tables, columns, indexes, foreign keys, or stored ULID text.",
@@ -20,7 +21,7 @@ struct DocumentationContractTests {
         "A non-empty chat API signature manifest passes and the final audit finds no persisted chat entity API still typed as `PageID` or an untagged internal `String`.",
     ]
     private static let sourceVersionPlanPath = "plans/source-version-id-separation.md"
-    private static let sourceVersionProgressHeading = "## 2026-07-27 — SourceVersionID separation (#955)"
+    private static let sourceVersionProgressHeading = "# 2026-07-27 — SourceVersionID separation (#955)"
     private static let requiredSourceVersionPlanMarkers = [
         "Identifier boundary:",
         "No-migration decision:",
@@ -29,7 +30,7 @@ struct DocumentationContractTests {
         "Deferred markdown-version namespace:",
     ]
     private static let sourceMarkdownVersionPlanPath = "plans/source-markdown-version-id-separation.md"
-    private static let sourceMarkdownVersionProgressHeading = "## 2026-07-28 — SourceMarkdownVersionID separation (#956)"
+    private static let sourceMarkdownVersionProgressHeading = "# 2026-07-28 — SourceMarkdownVersionID separation (#956)"
     private static let requiredSourceMarkdownVersionPlanMarkers = [
         "Identifier boundary:",
         "No-migration decision:",
@@ -48,10 +49,7 @@ struct DocumentationContractTests {
             contentsOf: root.appendingPathComponent("PLAN.md"),
             encoding: .utf8
         )
-        let progress = try String(
-            contentsOf: root.appendingPathComponent("PROGRESS.md"),
-            encoding: .utf8
-        )
+        let progress = try Self.readProgressEntries(from: root)
 
         #expect(index.contains("[`\(Self.planPath)`](\(Self.planPath))"))
         #expect(progress.contains(Self.progressHeading))
@@ -70,10 +68,7 @@ struct DocumentationContractTests {
             contentsOf: root.appendingPathComponent("PLAN.md"),
             encoding: .utf8
         )
-        let progress = try String(
-            contentsOf: root.appendingPathComponent("PROGRESS.md"),
-            encoding: .utf8
-        )
+        let progress = try Self.readProgressEntries(from: root)
 
         #expect(index.contains("[`\(Self.chatPlanPath)`](\(Self.chatPlanPath))"))
         #expect(progress.contains(Self.chatProgressHeading))
@@ -92,10 +87,7 @@ struct DocumentationContractTests {
             contentsOf: root.appendingPathComponent("PLAN.md"),
             encoding: .utf8
         )
-        let progress = try String(
-            contentsOf: root.appendingPathComponent("PROGRESS.md"),
-            encoding: .utf8
-        )
+        let progress = try Self.readProgressEntries(from: root)
 
         #expect(index.contains("[`\(Self.sourceVersionPlanPath)`](\(Self.sourceVersionPlanPath))"))
         #expect(progress.contains(Self.sourceVersionProgressHeading))
@@ -128,14 +120,39 @@ struct DocumentationContractTests {
 
     @Test func progressRecordsSourceMarkdownVersionIDVerification() throws {
         let root = try #require(Self.locateRepositoryRoot())
-        let progress = try String(
-            contentsOf: root.appendingPathComponent("PROGRESS.md"),
-            encoding: .utf8
-        )
+        let progress = try Self.readProgressEntries(from: root)
 
         #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
         #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
+    }
+
+    @Test func progressEntriesFollowTemplate() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let entries = try Self.progressEntries(from: root)
+        try #require(entries.isEmpty == false, "expected at least one progress entry")
+
+        for entry in entries {
+            #expect(
+                entry.contents.hasPrefix("---\n"),
+                "missing YAML front matter: \(entry.url.lastPathComponent)"
+            )
+            guard let frontMatterEnd = entry.contents.range(of: "\n---\n") else {
+                Issue.record("missing YAML front matter terminator: \(entry.url.lastPathComponent)")
+                continue
+            }
+
+            let frontMatter = String(entry.contents[..<frontMatterEnd.lowerBound])
+            for field in ["timestamp:", "title:", "branch:", "status:"] {
+                #expect(
+                    frontMatter.contains("\n\(field)"),
+                    "missing YAML field '\(field)': \(entry.url.lastPathComponent)"
+                )
+            }
+            #expect(entry.contents.contains("\n# "), "missing title heading: \(entry.url.lastPathComponent)")
+            #expect(entry.contents.contains("\n## Progress\n"), "missing progress heading: \(entry.url.lastPathComponent)")
+            #expect(entry.contents.contains("\n## Verification\n"), "missing verification heading: \(entry.url.lastPathComponent)")
+        }
     }
 
     private static func locateRepositoryRoot() -> URL? {
@@ -149,5 +166,38 @@ struct DocumentationContractTests {
             directory = directory.deletingLastPathComponent()
         }
         return nil
+    }
+
+    private static func readProgressEntries(from root: URL) throws -> String {
+        try progressEntries(from: root)
+            .map(\.contents)
+            .joined(separator: "\n\n")
+    }
+
+    private static func progressEntries(from root: URL) throws -> [ProgressEntry] {
+        let progressDirectory = root.appendingPathComponent(progressDirectoryPath)
+        let entryURLs = try FileManager.default.contentsOfDirectory(
+            at: progressDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        let markdownEntries = try entryURLs.filter { entryURL in
+            guard
+                entryURL.pathExtension == "md",
+                entryURL.lastPathComponent != "README.md",
+                entryURL.lastPathComponent != "TEMPLATE.md"
+            else {
+                return false
+            }
+            return try entryURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+        }
+        return try markdownEntries
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { ProgressEntry(url: $0, contents: try String(contentsOf: $0, encoding: .utf8)) }
+    }
+
+    private struct ProgressEntry {
+        let url: URL
+        let contents: String
     }
 }

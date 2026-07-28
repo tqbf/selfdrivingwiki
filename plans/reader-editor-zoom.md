@@ -96,7 +96,7 @@ Zoom survives app relaunch (persisted). Existing tests unchanged and green.
 
 All three steps' criteria met; `swift build` and `swift test` green with no
 regressions; reader and editor zoom independently via keyboard only, persist
-across launches, and `1.0` reproduces current appearance exactly. `PROGRESS.md`
+across launches, and `1.0` reproduces current appearance exactly. `progress/`
 updated and `PLAN.md` index references this plan per `CLAUDE.md`.
 
 ## Out of scope / notes

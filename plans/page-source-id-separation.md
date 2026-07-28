@@ -149,7 +149,7 @@ The active test sources record the identifier characterization contract. The rec
 
 1. Keep this document as the design and implementation record. Explain namespaces, unchanged persistence formats, changed APIs, and deferred identifier types.
 2. Add this document to `PLAN.md`.
-3. Record phases, decisions, and exact verification results in `PROGRESS.md`.
+3. Record phases, decisions, and exact verification results in `progress/`.
 4. Use STE-flavored prose for the plan, progress entry, and pull request text.
 5. After automated tests pass, run the repository review process. If no repository guidance exists, use a general-purpose reviewer.
 6. Fix or explicitly rebut every review finding. Repeat review after a critical finding until no critical finding remains.
@@ -205,7 +205,7 @@ After implementation and automated verification, review the full diff for source
 
 This document must record the old shared `PageID` problem, the new namespaces, invalid compile-time calls, intentionally mixed tagged enums, unchanged SQLite and JSON, raw-string boundaries, the rule for source version IDs, deferred `ChatID`, `SourceVersionID`, and `SourceMarkdownVersionID` work, and final verification evidence.
 
-Add this document to `PLAN.md`. Add phase progress and test results to `PROGRESS.md`. Do not change user-facing documentation because visible behavior and external formats do not change.
+Add this document to `PLAN.md`. Add phase progress and test results to `progress/`. Do not change user-facing documentation because visible behavior and external formats do not change.
 
 ## Risks, blockers, and decisions
 

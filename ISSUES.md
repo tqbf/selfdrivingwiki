@@ -69,7 +69,7 @@ we remember the option exists.
 means abandoning the replicated model, which is the whole point of this POC.
 
 Recorded 2026-06-15 (system-prompt live-mount gate). Originally observed in the
-Phase 2/3 caveats in `PROGRESS.md`.
+Phase 2/3 caveats in `progress/`.
 
 ## Heavily-churned File Provider domain replica can wedge
 

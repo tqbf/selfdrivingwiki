@@ -243,5 +243,5 @@ Then push a PR. **Do not merge to `main`** (per `CLAUDE.md`).
 
 - `plans/zotero-integration.md` — the original Zotero integration plan (the
   ingest seam, config, credential store, picker UI).
-- `PROGRESS.md` § "2026-06-17 — Zotero integration" — what shipped and how.
+- `progress/` § "2026-06-17 — Zotero integration" — what shipped and how.
 - `CLAUDE.md` — PR/merge rules, test commands.

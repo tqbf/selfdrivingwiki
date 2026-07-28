@@ -206,5 +206,5 @@ bytes don't fit that. Two clean options — **pick option A**:
 - A live Query run answers a footnote-backed question (text source AND a PDF
   source) **without** the File Provider mount mounted/enabled. This is the gate
   that proves the dependency is gone.
-- Update `PROGRESS.md` (newest-first entry) and link this doc from `PLAN.md`'s
+- Update `progress/` (newest-first entry) and link this doc from `PLAN.md`'s
   documentation index.

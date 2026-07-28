@@ -741,7 +741,7 @@ Phase 2 is where the #358 design doc's §1–§10 become the plan of record.
 - [ ] Run full test suite. **Gate: AC10.**
 - [ ] Update `PLAN.md` doc index (§this plan).
 - [ ] Update `architecture-roadmap.md` §4 (record the resolved fork).
-- [ ] Update `PROGRESS.md`.
+- [ ] Update `progress/`.
 
 ---
 
