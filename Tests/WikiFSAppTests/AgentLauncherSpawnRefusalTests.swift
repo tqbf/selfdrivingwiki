@@ -135,7 +135,7 @@ import WikiFSCore
         opencodeDefault.isDefault = true
         let configWithModel = AgentProvidersConfig(
             providers: [opencodeDefault],
-            selectedModelIds: ["opencode": "glm-4.7"])
+            selectedModelIds: ["opencode": ModelID(rawValue: "glm-4.7")])
         try configWithModel.save(to: tmp)
 
         let launcher = AgentLauncher()
@@ -149,8 +149,8 @@ import WikiFSCore
         // Pin the chat path's guard input contract — what
         // `startInteractiveQuery` actually feeds into `SpawnModelGuard.validate`.
         #expect(provider.id == ProviderID(rawValue: "opencode"))
-        #expect(modelId == "glm-4.7")
-        #expect(SpawnModelGuard.validate(provider: provider, modelId: modelId) == nil)
+        #expect(modelId?.rawValue == "glm-4.7")
+        #expect(SpawnModelGuard.validate(provider: provider, modelId: modelId?.rawValue) == nil)
     }
 }
 #endif

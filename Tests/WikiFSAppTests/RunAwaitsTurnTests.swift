@@ -57,7 +57,7 @@ struct RunAwaitsTurnTests {
                     isDefault: true
                 )
             ],
-            selectedModelIds: ["fake": "fake-model"])
+            selectedModelIds: ["fake": ModelID(rawValue: "fake-model")])
         try? providerConfig.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir
