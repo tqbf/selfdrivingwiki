@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 45)
+        #expect(GRDBWikiStore.schemaVersion == 46)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -292,11 +292,12 @@ import SQLite3
         """, nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
 
-        // Open via GRDBWikiStore — triggers the migration ladder (v42→v43→v44→v45).
+        // Open via GRDBWikiStore — triggers the migration ladder
+        // (v42→v43→v44→v45→v46).
         let store = try GRDBWikiStore(databaseURL: url)
 
-        // After the full ladder, version is 45 and every migration step ran.
-        #expect(store.pragmaValue("user_version") == "45")
+        // After the full ladder, version is 46 and every migration step ran.
+        #expect(store.pragmaValue("user_version") == "46")
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -316,7 +317,7 @@ import SQLite3
     /// A fresh schema has the `model_provider_id`/`model_id` columns on `chats`.
     @Test func freshSchemaHasChatModelOverrideColumns() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 45)
+        #expect(GRDBWikiStore.schemaVersion == 46)
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
@@ -405,9 +406,9 @@ import SQLite3
         sqlite3_close(raw)
         raw = nil
 
-        // Open via GRDBWikiStore — triggers the v44→v45 migration step.
+        // Open via GRDBWikiStore — triggers the v44→v45→v46 migration steps.
         let store = try GRDBWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "45")
+        #expect(store.pragmaValue("user_version") == "46")
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
@@ -415,9 +416,10 @@ import SQLite3
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_id';")
         #expect(hasModelCol == "1")
 
-        // The pre-existing row reads back nil for both — no backfill.
-        let existing = try store.getChat(id: ChatID(rawValue: "existing-chat"))
-        #expect(existing.modelProviderId == nil)
-        #expect(existing.modelId == nil)
+        // Phase 2's v46 step is destructive for chat-owned data, so the
+        // pre-existing chat row is intentionally gone after the full ladder.
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.getChat(id: ChatID(rawValue: "existing-chat"))
+        }
     }
 }

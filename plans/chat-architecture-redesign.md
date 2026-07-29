@@ -8,16 +8,16 @@ Issue: #982
 
 State: In progress
 
-Scope of this branch: Phase 0 and Phase 1 only
+Scope of this branch: Phase 0, Phase 1, and Phase 2
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
 submission, queuing, lifecycle, permissions, cancellation, recovery,
 persistence, and client synchronization.
 
-This branch does not implement schema v46, daemon-controller replacement, XPC
-wire replacement, client sync replacement, or UI decomposition. This branch
-builds the foundation for that work.
+This branch implements the Phase 0/1 foundation plus the Phase 2 persistence
+rebuild. It does not implement daemon-controller replacement, XPC wire
+replacement, client sync replacement, or UI decomposition.
 
 ## Problem
 
@@ -182,7 +182,15 @@ Phase 0 deliverables:
 Schema v46 rebuilds the chat subsystem. It deletes old chat data and recreates
 typed chat tables. It preserves non-chat wiki data.
 
-This phase is out of scope for this branch.
+Phase 2 deliverables:
+
+- schema v46 destructive rebuild for chat-owned tables only
+- durable queued-turn persistence with typed lifecycle metadata
+- atomic turn claim and provider-submission boundaries
+- typed transcript persistence with compatibility projection to `AgentEvent`
+- cursor-based transcript paging and checkpoints
+- Tantivy rebuild invalidation marker for chat-owned search reset
+- store and migration coverage for the destructive reset boundary
 
 ### Phase 3: Move lifecycle ownership into per-chat daemon controllers
 
@@ -571,7 +579,7 @@ Before and during implementation:
 
 ## Branch scope for this PR
 
-This PR implements only the foundation work:
+This PR implements the foundation and persistence work:
 
 - this design record and the `PLAN.md` index entry
 - strong Foundation-only chat identifiers
@@ -586,12 +594,16 @@ This PR implements only the foundation work:
 - orthogonal session, turn, attention, capability, command, update, snapshot,
   and replay-buffer value types
 - pure reducer and state-machine logic
-- tests for AC.1, AC.3, and AC.15
+- schema v46 destructive chat-subsystem rebuild that preserves non-chat data
+- durable queued-turn persistence with typed claim / submission / terminal
+  boundaries
+- typed transcript persistence, compatibility projection, cursor paging, and
+  checkpoints
+- Tantivy rebuild marker invalidation for destructive chat search resets
+- tests for AC.1, AC.3, AC.4, AC.5, AC.9, AC.13, AC.14, and AC.15
 
 Out of scope for this PR:
 
-- schema v46
-- store migration
 - daemon controller replacement
 - XPC wire redesign
 - client synchronization migration

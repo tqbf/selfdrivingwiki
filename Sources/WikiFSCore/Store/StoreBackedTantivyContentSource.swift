@@ -17,8 +17,9 @@ import WikiFSSearch
 /// **Phase 1 shadow index** (plans/tantivy-search-sidecar.md §2.3): the index
 /// reflects only the *active* state — pages' current `bodyMarkdown`, sources'
 /// processed-markdown HEAD, chats' concatenated message plain text.
-final public class StoreBackedTantivyContentSource: TantivyContentSource {
+final public class StoreBackedTantivyContentSource: TantivyContentSource, TantivyRebuildMarkerSource {
     private let store: WikiStore
+    private static let rebuildMarkerKey = "tantivy.rebuild.required"
 
     public init(store: WikiStore) {
         self.store = store
@@ -159,6 +160,23 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource {
             ))
         }
         return snapshots
+    }
+
+    public func requiresTantivyRebuild() async -> Bool {
+        do {
+            return try store.getMetadata(Self.rebuildMarkerKey) == "1"
+        } catch {
+            DebugLog.store("StoreBackedTantivyContentSource: rebuild marker read failed: \(error)")
+            return false
+        }
+    }
+
+    public func clearTantivyRebuildRequirement() async {
+        do {
+            try store.setMetadata(Self.rebuildMarkerKey, value: "0")
+        } catch {
+            DebugLog.store("StoreBackedTantivyContentSource: rebuild marker clear failed: \(error)")
+        }
     }
 
     // MARK: - Private

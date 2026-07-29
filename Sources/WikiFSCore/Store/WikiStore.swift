@@ -743,6 +743,78 @@ public protocol WikiStore: Sendable {
     /// in-progress. Sets `is_draft=0` for all draft rows belonging to `chatID`.
     func finalizeStaleDrafts(forChat chatID: ChatID) throws
 
+    /// Persist durable Phase 2 turns for daemon-owned claiming/recovery. The
+    /// `commandID` boundary is idempotent per chat: re-enqueueing the same
+    /// submission returns the existing row rather than duplicating it.
+    @discardableResult
+    func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) throws -> PersistedChatTurn
+
+    /// Durable turn rows in ordinal order for a chat.
+    func listPersistedChatTurns(chatID: ChatID) throws -> [PersistedChatTurn]
+
+    /// Edit a queued durable turn in place, preserving `turnID` / `commandID`.
+    @discardableResult
+    func editPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        userText: String,
+        contextReferences: [ChatContextReference],
+        editedAt: Date
+    ) throws -> PersistedChatTurn
+
+    /// Remove a durable queued turn before it is claimed. Returns whether a row
+    /// was removed.
+    @discardableResult
+    func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> Bool
+
+    /// Atomically claim the oldest currently-queued turn for provider
+    /// submission. Returns nil when no queued turn remains.
+    @discardableResult
+    func claimNextPersistedChatTurn(
+        chatID: ChatID,
+        claimID: ChatTurnClaimID,
+        claimedAt: Date
+    ) throws -> PersistedChatTurn?
+
+    /// Record the at-most-once boundary where a claimed turn is handed to the
+    /// provider/runtime.
+    @discardableResult
+    func markPersistedChatTurnProviderSubmitted(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        providerSessionID: AcpSessionID?,
+        submittedAt: Date
+    ) throws -> PersistedChatTurn
+
+    /// Mark a claimed or submitted durable turn terminal.
+    @discardableResult
+    func finishPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        state: ChatTurnPersistenceState,
+        terminalMessage: String?
+    ) throws -> PersistedChatTurn
+
+    /// Persist typed transcript rows while also maintaining the current
+    /// renderer compatibility projection.
+    @discardableResult
+    func appendChatTranscriptItems(
+        chatID: ChatID,
+        items: [ChatTranscriptItem]
+    ) throws -> [PersistedChatTranscriptItem]
+
+    /// Cursor-page authoritative typed transcript history.
+    func readChatTranscriptPage(
+        chatID: ChatID,
+        after cursor: ChatTranscriptCursor?,
+        limit: Int
+    ) throws -> ChatTranscriptPage
+
+    /// Current high-water transcript cursor for a chat (`0` when empty).
+    func chatTranscriptCheckpoint(chatID: ChatID) throws -> ChatTranscriptCursor
+
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
     func listAllChatsOrderedByID() throws -> [ChatSummary]

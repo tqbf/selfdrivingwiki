@@ -608,6 +608,70 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    @Test func enqueuePersistedChatTurnEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try await drain(rec)
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func claimPersistedChatTurnEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try await drain(rec)
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func appendChatTranscriptItemsEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        try await drain(rec)
+        _ = try store.appendChatTranscriptItems(chatID: chat.id, items: [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "message-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                role: .assistant,
+                text: "Hello",
+                createdAt: Date(timeIntervalSince1970: 1)
+            ))
+        ])
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
     // MARK: - Nil-bus store (wikictl path)
 
     @Test func nilBusStoreEmitsSilently() throws {
