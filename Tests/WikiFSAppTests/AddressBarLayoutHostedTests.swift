@@ -10,8 +10,7 @@ import Testing
 /// renders the width `OmniboxLayout` computes. `OmniboxLayoutTests` only proves the
 /// pure math is right; it can't catch the field silently growing past its cap or an
 /// implicit spacing eating into the frame. Render the actual `AddressBarView` (which
-/// is now *only* the field — the nav cluster is a separate `.navigation` item) and
-/// read its rendered width back.
+/// is the field itself) and read its rendered width back.
 ///
 /// `NSHostingController.view.fittingSize` is used rather than a real `NSToolbar`
 /// (which needs an on-screen window with a toolbar). Since the field carries an
@@ -34,7 +33,7 @@ struct AddressBarLayoutHostedTests {
     }
 
     /// Hosts the real `AddressBarView` at a fixed `detailWidth` and returns its
-    /// rendered width — the width NSToolbar would center as the `.principal` item.
+    /// rendered width — the width NSToolbar centers as the `.principal` item.
     private func renderedWidth(detailWidth: CGFloat, sidebarVisible: Bool = true) async throws -> CGFloat {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
@@ -72,8 +71,8 @@ struct AddressBarLayoutHostedTests {
         #expect(abs(rendered - OmniboxLayout.fieldWidth(detailWidth: 700, sidebarVisible: true)) < 1)
     }
 
-    /// Past the readability cap the pill freezes: a wider window adds side margin,
-    /// not field width, so the rendered width stops moving.
+    /// Past the readability cap the pill freezes: a wider window leaves extra
+    /// toolbar room outside the field, so the rendered width stops moving.
     @Test func renderedWidthFreezesAtTheCap() async throws {
         let m = OmniboxLayout.Metrics.default
         // Both points are past the cap (region - margins exceeds maxWidth).
