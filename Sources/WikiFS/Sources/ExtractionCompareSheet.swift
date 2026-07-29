@@ -160,9 +160,12 @@ struct ExtractionCompareSheet: View {
         } label: {
             HStack(spacing: 6) {
                 Circle().fill(tint).frame(width: 7, height: 7)
-                (Text("\(title): ").foregroundStyle(.secondary)
-                    + Text(current?.backendDisplayName ?? "—").fontWeight(.medium))
-                    .lineLimit(1).truncationMode(.middle)
+                Text(title + ": ")
+                    .foregroundStyle(.secondary)
+                Text(current?.backendDisplayName ?? "—")
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             .font(.callout)
             .frame(maxWidth: 220, alignment: .leading)
@@ -231,10 +234,12 @@ struct ExtractionCompareSheet: View {
                 Spacer(minLength: 4)
                 assignmentTag(alt)
             }
-            (Text(alt.version.createdAt, style: .date)
-                + Text("  ·  \(alt.charCount, format: .number) chars"))
-                .font(.caption).monospacedDigit()
-                .foregroundStyle(.secondary)
+            HStack(spacing: 0) {
+                Text(alt.version.createdAt, style: .date)
+                Text("  ·  \(alt.charCount, format: .number) chars")
+            }
+            .font(.caption).monospacedDigit()
+            .foregroundStyle(.secondary)
             if let model = alt.modelVersion {
                 Text(model).font(.caption2).foregroundStyle(.tertiary)
                     .lineLimit(1).truncationMode(.middle)
