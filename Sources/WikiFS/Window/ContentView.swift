@@ -266,20 +266,12 @@ struct ContentView: View {
         // Hidden buttons for keyboard shortcuts.
         .background { keyboardShortcutButtons }
         // The toolbar is declared on the DETAIL column (not the split-view root)
-        // on purpose: a `.principal` item on the root centers across the whole
-        // window and overlaps the open sidebar, which makes NSToolbar dump the
-        // whole group into the `»` overflow. Declared here it centers within the
-        // detail region, so it survives the sidebar opening.
+        // on purpose: a centered `.principal` item then centers within the detail
+        // region rather than across the whole split-view window.
         .toolbar {
-            // Safari layout: the Back/Forward/Home cluster is pinned flush-left
-            // (`.navigation`) and the omnibox field is centered (`.principal`).
-            // Splitting them into two items lets NSToolbar center the field
-            // independently of the fixed-width nav cluster. The field is sized to
-            // a fraction of the detail region (`OmniboxLayout.fieldWidth`) with
-            // margins on each side, so it never fills the region edge-to-edge —
-            // the condition that used to tip the whole group into the `»`
-            // overflow. The empty title space is reclaimed by hiding the window
-            // title (`.toolbar(removing: .title)` below).
+            // Centered layout: Back/Forward/Home stays flush-left, the omnibox is
+            // a smaller `.principal` item, and the right controls stay together
+            // after a flexible spacer.
             ToolbarItem(placement: .navigation) {
                 OmniboxNavButtons(store: store, homePageID: activeHomePageID)
             }
@@ -289,18 +281,16 @@ struct ContentView: View {
                                sidebarVisible: columnVisibility != .detailOnly,
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
-            ToolbarItem(placement: .automatic) {
+            ToolbarSpacer(.flexible)
+            ToolbarItemGroup(placement: .automatic) {
                 WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-            }
-            ToolbarItem(placement: .automatic) {
-                if rightInspector.isAvailable {
-                    Button {
-                        rightInspector.toggle()
-                    } label: {
-                        Image(systemName: "sidebar.right")
-                    }
-                    .help(rightInspector.isPresented ? "Hide Inspector" : "Show Inspector")
+                Button {
+                    rightInspector.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
                 }
+                .disabled(!rightInspector.isAvailable)
+                .help(rightInspectorHelp)
             }
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
@@ -331,6 +321,11 @@ struct ContentView: View {
         )
         .frame(maxWidth: .infinity)
         .swipeNavigation(store: store)
+    }
+
+    private var rightInspectorHelp: String {
+        guard rightInspector.isAvailable else { return "No Inspector Available" }
+        return rightInspector.isPresented ? "Hide Inspector" : "Show Inspector"
     }
 
     private func runIngest(sourceID: SourceID) {

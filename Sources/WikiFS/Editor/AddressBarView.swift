@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 import WikiFSCore
 
-/// A Safari-style omnibox that lives in the window's **toolbar** as a centered
-/// `.principal` item, replacing the window title. Serves two roles depending on
-/// focus state — no explicit mode switch required:
+/// A Safari-style omnibox that lives in the window's **toolbar** as a compact
+/// centered `.principal` item. Serves two roles depending on focus state — no
+/// explicit mode switch required:
 ///
 /// 1. **Idle (not focused):** shows the active page's wikilink (`[[Page Title]]`)
 ///    as the field's text — the "where am I" indicator, like a browser URL bar.
@@ -16,24 +16,22 @@ import WikiFSCore
 /// SwiftUI `TextField` can't take first responder inside an `NSToolbar` item —
 /// and the suggestions live in a non-activating child panel.
 ///
-/// The Back/Forward/Home nav cluster is a *separate* `.navigation` toolbar item
-/// (`OmniboxNavButtons`), flush-left like Safari's; this view is only the
-/// centered field. Its width comes from `OmniboxLayout.fieldWidth(detailWidth:)`
-/// — a fraction of the detail region with margins on each side — and NSToolbar
-/// centers it. Nothing here predicts NSToolbar's insets, so the field can no
-/// longer tip the toolbar into the `»` overflow.
+/// The Back/Forward/Home nav cluster lives in a separate `.navigation` toolbar
+/// item. This field's width comes from
+/// `OmniboxLayout.fieldWidth(detailWidth:)`, leaving room for fixed toolbar
+/// chrome so the centered item stays out of overflow.
 struct AddressBarView: View {
     @Bindable var store: WikiStoreModel
     @Binding var isFocused: Bool
     /// The width of the detail column (the region the toolbar spans), measured by a
     /// `GeometryReader` in `ContentView`. This shrinks when the left sidebar opens
     /// and is unaffected by the right transcript panel — exactly the omnibox's
-    /// usable toolbar span. Drives the centered pill's width (see `OmniboxLayout`).
+    /// usable toolbar span. Drives the centered pill's width (see
+    /// `OmniboxLayout`).
     var detailWidth: CGFloat
-    /// Whether the left sidebar is shown. Selects the side margin the centered pill
-    /// keeps: with the sidebar hidden the field centers across the whole window and
-    /// must reserve more room to clear the traffic-light + toggle chrome on its
-    /// left (see `OmniboxLayout.Metrics.sideMarginClosed`).
+    /// Whether the left sidebar is shown. Selects the side margin the centered
+    /// pill keeps; with the sidebar hidden the toolbar row also has to account
+    /// for traffic lights and the system sidebar toggle.
     var sidebarVisible: Bool
 
     @State private var queryText = ""
@@ -57,12 +55,9 @@ struct AddressBarView: View {
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
-        // The omnibox is the toolbar's `.principal` item — NSToolbar centers it in
-        // the detail region. This view is *only* the field; the Back/Forward/Home
-        // cluster is a separate flush-left `.navigation` item (`OmniboxNavButtons`).
-        // The field's width comes from `OmniboxLayout.fieldWidth(detailWidth:)` — a
-        // fraction of the detail region with margins on each side — so it never
-        // fills the region edge-to-edge and can't tip the toolbar into overflow.
+        // The field's width comes from `OmniboxLayout.fieldWidth(detailWidth:)`.
+        // It sits in `.principal` and uses a compact cap so fixed toolbar chrome
+        // can keep its slots.
         omniboxField
             // Cmd-L flips `isFocused`; turn that into a focus request for the field.
             .onChange(of: isFocused) { _, focused in
@@ -216,9 +211,8 @@ struct AddressBarView: View {
     }
 
     /// The omnibox field's width, from the measured detail-region width. The
-    /// centered-pill arithmetic lives in `OmniboxLayout` so it can be unit-tested;
-    /// here we only supply the measurement. NSToolbar centers the `.principal`
-    /// item, so there's no leading/trailing position math to do.
+    /// centered toolbar arithmetic lives in `OmniboxLayout` so it can be
+    /// unit-tested; here we only supply the measurement.
     private var fieldWidth: CGFloat {
         OmniboxLayout.fieldWidth(detailWidth: detailWidth, sidebarVisible: sidebarVisible)
     }
@@ -358,15 +352,11 @@ struct AddressBarView: View {
 
 // MARK: - Nav buttons
 
-/// The Back / Forward (+ Home when the active wiki has one configured) cluster,
-/// a *separate* flush-left `.navigation` toolbar item from the centered omnibox
-/// field (`AddressBarView`) — the Safari layout: nav pinned to the leading edge,
-/// URL field centered. Kept its own item (not folded into the field) so NSToolbar
-/// can center the principal field independently of this fixed-width cluster.
+/// The Back / Forward / Home cluster shown at the leading edge of the toolbar.
 struct OmniboxNavButtons: View {
     @Bindable var store: WikiStoreModel
-    /// The active wiki's configured home page (issue #280). `nil` hides the Home
-    /// button — there's nowhere to navigate to yet.
+    /// The active wiki's configured home page (issue #280). `nil` disables the
+    /// Home button, but the button stays visible so the toolbar layout is stable.
     var homePageID: PageID?
 
     var body: some View {
@@ -381,8 +371,10 @@ struct OmniboxNavButtons: View {
             }
             .keyboardShortcut("]", modifiers: .command)
 
-            if let homePageID {
-                navButton("house", help: "Go to home page", enabled: true) {
+            navButton("house",
+                      help: homePageID == nil ? "No home page set" : "Go to home page",
+                      enabled: homePageID != nil) {
+                if let homePageID {
                     _ = store.selectPage(byID: homePageID)
                 }
             }

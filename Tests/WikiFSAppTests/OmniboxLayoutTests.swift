@@ -4,23 +4,23 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Sizing behavior of the centered toolbar omnibox. Uses a fixed `Metrics` so the
-/// thresholds are exact and independent of any future retuning. Centering itself
-/// is NSToolbar's job (the field is a `.principal` item); these tests cover only
-/// the pill's *width* as the detail region grows, and that the width leaves a
-/// large enough margin to clear the leading chrome in each sidebar state.
+/// Sizing behavior of the compact centered toolbar omnibox. Uses a fixed
+/// `Metrics` so the thresholds are exact and independent of any future retuning.
+/// These tests cover only the pill's *width* as the detail region grows, and
+/// that the width leaves enough room for surrounding toolbar chrome.
 @Suite struct OmniboxLayoutTests {
-    // sideMarginOpen 150, sideMarginClosed 290, min 240, max 820.
+    // sideMarginOpen 220, sideMarginClosed 320, min 240, max 560,
+    // trailingChromeWidth 220.
     let m = OmniboxLayout.Metrics.default
 
-    // MARK: Grows with the region, keeping side margins
+    // MARK: Grows with the region, keeping safe side margins
 
     @Test func fieldTakesTheRegionMinusAMarginOnEachSide() {
-        // Sidebar shown: 900 - 2*150 = 600.
-        #expect(OmniboxLayout.fieldWidth(detailWidth: 900, sidebarVisible: true) == 600)
-        // Sidebar hidden: 900 - 2*290 = 320 (a larger margin clears the traffic
-        // lights + toggle that now sit in the field's left margin).
-        #expect(OmniboxLayout.fieldWidth(detailWidth: 900, sidebarVisible: false) == 320)
+        // Sidebar shown: 900 - 2*220 = 460.
+        #expect(OmniboxLayout.fieldWidth(detailWidth: 900, sidebarVisible: true) == 460)
+        // Sidebar hidden: 900 - 2*320 = 260. The larger margin clears the
+        // traffic lights + sidebar toggle.
+        #expect(OmniboxLayout.fieldWidth(detailWidth: 900, sidebarVisible: false) == 260)
     }
 
     @Test func widerRegionGrowsTheFieldOneForOneBelowTheCap() {
@@ -32,22 +32,31 @@ import Testing
     }
 
     @Test func hiddenSidebarReservesMoreMarginSoTheFieldIsNarrower() {
-        // Same region, but hiding the sidebar puts more chrome in the left margin,
-        // so the field must be narrower by exactly twice the margin difference.
+        // Same region, but hiding the sidebar puts more chrome into the centered
+        // field's side margin, so the field must be narrower by twice the margin
+        // difference.
         let open = OmniboxLayout.fieldWidth(detailWidth: 1000, sidebarVisible: true)
         let closed = OmniboxLayout.fieldWidth(detailWidth: 1000, sidebarVisible: false)
         #expect(open - closed == 2 * (m.sideMarginClosed - m.sideMarginOpen))
     }
 
+    @Test func sideMarginDependsOnSidebarVisibility() {
+        #expect(OmniboxLayout.sideMargin(sidebarVisible: true) == m.sideMarginOpen)
+        #expect(OmniboxLayout.sideMargin(sidebarVisible: false) == m.sideMarginClosed)
+    }
+
+    @Test func trailingChromeIsAlwaysReservedBelowTheCap() {
+        let width = OmniboxLayout.fieldWidth(detailWidth: 1000, sidebarVisible: true)
+        #expect((1000 - width) / 2 >= m.trailingChromeWidth)
+    }
+
     @Test func sideMarginIsPreservedBelowTheCap() {
-        // (region - field) / 2 == the state's side margin, so the centered pill
-        // can never touch the region edges (the old overflow trigger). Widths
-        // chosen to sit in each state's growing regime.
-        for detailWidth: CGFloat in [700, 900, 1100] {
+        // Widths chosen to sit in each state's growing regime.
+        for detailWidth: CGFloat in [700, 900, 1000] {
             let open = OmniboxLayout.fieldWidth(detailWidth: detailWidth, sidebarVisible: true)
             #expect((detailWidth - open) / 2 == m.sideMarginOpen)
         }
-        for detailWidth: CGFloat in [900, 1100, 1300] {
+        for detailWidth: CGFloat in [900, 1100, 1200] {
             let closed = OmniboxLayout.fieldWidth(detailWidth: detailWidth, sidebarVisible: false)
             #expect((detailWidth - closed) / 2 == m.sideMarginClosed)
         }
@@ -57,7 +66,7 @@ import Testing
 
     @Test func neverShrinksBelowTheFloor() {
         // Very narrow region: region - margins would go below the floor, so the
-        // floor holds and the margins give instead (never a negative width).
+        // floor holds instead (never a negative width).
         #expect(OmniboxLayout.fieldWidth(detailWidth: 500, sidebarVisible: true) == m.minWidth)
         #expect(OmniboxLayout.fieldWidth(detailWidth: 700, sidebarVisible: false) == m.minWidth)
     }
@@ -68,14 +77,13 @@ import Testing
     }
 
     @Test func marginsGrowPastTheCap() {
-        // Once the field is capped, extra window width becomes margin — the pill
-        // stays a fixed readable width and floats centered with more air around it.
+        // Once the field is capped, extra window width becomes margin.
         let wide = OmniboxLayout.fieldWidth(detailWidth: 1600, sidebarVisible: true)
         let wider = OmniboxLayout.fieldWidth(detailWidth: 2000, sidebarVisible: true)
         #expect(wide == m.maxWidth)
         #expect(wider == m.maxWidth)
-        #expect((1600 - wide) / 2 == 390)
-        #expect((2000 - wider) / 2 == 590)
+        #expect((1600 - wide) / 2 == 520)
+        #expect((2000 - wider) / 2 == 720)
     }
 
     // MARK: Unmeasured region

@@ -90,6 +90,7 @@ struct WikiSwitcher: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            .frame(maxWidth: WikiSwitcherMetrics.toolbarLabelMaxWidth, alignment: .leading)
         }
         .menuStyle(.button)
         .buttonStyle(.borderless)
@@ -182,6 +183,10 @@ struct WikiSwitcher: View {
         importSourceURL = sourceURL
         importWikiName = sourceURL.deletingPathExtension().lastPathComponent
     }
+}
+
+private enum WikiSwitcherMetrics {
+    static let toolbarLabelMaxWidth: CGFloat = 168
 }
 
 /// A small sheet to name a new wiki. Kept separate so the create flow has a
