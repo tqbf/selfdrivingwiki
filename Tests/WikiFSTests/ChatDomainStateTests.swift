@@ -81,6 +81,11 @@ struct ChatDomainStateTests {
         #expect(buffer.replay(after: ChatUpdateSequence(rawValue: 1)) == .unavailable)
     }
 
+    @Test func replayBufferTreatsFreshInitialWatermarkAsInSync() {
+        let buffer = ChatUpdateReplayBuffer(capacity: 2)
+        #expect(buffer.replay(after: .initial) == .available([]))
+    }
+
     @Test func replayBufferReturnsStrictlyNewerUpdates() {
         var buffer = ChatUpdateReplayBuffer(capacity: 3)
         let first = ChatSessionUpdate(

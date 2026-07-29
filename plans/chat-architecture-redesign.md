@@ -148,6 +148,9 @@ Phase 0 deliverables:
 - `ChatAgentRuntime` protocol in `WikiFSEngine`
 - closure-backed runtime seam that characterizes the current launcher/backend
   boundary without yet replacing it
+- deferred from this foundation PR: the production `AgentLauncher`/ACP adapter
+  that will implement the runtime protocol against the real launcher/backend
+  path without changing external behavior
 - `ScriptedChatRuntime` in test support
 - deterministic pause gates for ordered lifecycle testing
 - characterization tests for raw identifier boundaries, CLI/File Provider
@@ -318,12 +321,11 @@ Snapshot state includes:
 - usage
 - diagnostics
 - transient transcript overlay
+- committed-transcript cursor
+  - deferred in this foundation branch: durable transcript persistence and
+    client sync do not exist yet, so the runtime snapshot intentionally keeps
+    only the transient overlay plus the per-generation update watermark
 - `lastIncludedSequence`
-
-Phase 1 intentionally does **not** add a committed-transcript cursor yet.
-That cursor only becomes meaningful once durable transcript persistence and
-client sync land in later phases; for the foundation slice the modeled state is
-the transient overlay plus the per-generation update sequence watermark.
 
 Derived UI capabilities must come from composite state. They must not be stored
 as independent booleans.
@@ -560,6 +562,9 @@ This PR implements only the foundation work:
 - shared transcript item vocabulary in `WikiFSTypes`
 - `ToolCallID` move into `WikiFSTypes`
 - `ChatAgentRuntime` protocol and production seam
+- deferred but still planned from the original Phase 0 framing: the production
+  `AgentLauncher`/ACP adapter that will plug the runtime protocol into the real
+  launcher/backend path
 - `ScriptedChatRuntime` test support
 - orthogonal session, turn, attention, capability, command, update, snapshot,
   and replay-buffer value types
@@ -581,9 +586,9 @@ Run from the repository root:
 
 ```sh
 make prompts
-swift build
-swift test
-WIKIFS_APP_TESTS=1 swift test
+make build
+make test
+WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog
 ```
 
 If the local mutation tool is available, also run:

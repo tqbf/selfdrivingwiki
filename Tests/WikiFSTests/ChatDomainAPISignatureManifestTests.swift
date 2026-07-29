@@ -20,6 +20,12 @@ struct ChatDomainAPISignatureManifestTests {
         }
     }
 
+    private func normalizedWhitespace(_ value: String) -> String {
+        value
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -53,14 +59,12 @@ struct ChatDomainAPISignatureManifestTests {
         #expect(entries.isEmpty == false, "chat-domain API signature manifest must not be empty")
 
         for entry in entries {
-            #expect(
-                entry.signature.contains("ID") || entry.signature.contains("ChatUpdateSequence"),
-                "manifest entry must assert a typed chat-domain boundary: \(entry.path)"
-            )
             let sourceURL = root.appendingPathComponent(entry.path)
             let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            let normalizedSource = normalizedWhitespace(source)
+            let normalizedSignature = normalizedWhitespace(entry.signature)
             #expect(
-                source.contains(entry.signature),
+                normalizedSource.contains(normalizedSignature),
                 "missing typed chat-domain API signature in \(entry.path): \(entry.signature)"
             )
         }

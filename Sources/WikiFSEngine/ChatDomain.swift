@@ -115,10 +115,40 @@ public enum ChatPermissionOptionBehavior: String, Sendable, Codable, CaseIterabl
     case cancel
 }
 
-public enum ChatPermissionVisualIntent: String, Sendable, Codable, CaseIterable {
+public enum ChatPermissionVisualIntent: Hashable, Sendable, Codable {
     case `default`
     case accent
     case destructive
+    case unknown(String)
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "default":
+            self = .default
+        case "accent":
+            self = .accent
+        case "destructive":
+            self = .destructive
+        default:
+            self = .unknown(rawValue)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .default:
+            try container.encode("default")
+        case .accent:
+            try container.encode("accent")
+        case .destructive:
+            try container.encode("destructive")
+        case .unknown(let rawValue):
+            try container.encode(rawValue)
+        }
+    }
 }
 
 public struct ChatPermissionOption: Hashable, Sendable, Codable {
@@ -403,7 +433,7 @@ public struct ChatUpdateReplayBuffer: Hashable, Sendable, Codable {
     ) {
         self.capacity = max(1, capacity)
         self.updates = Array(updates.suffix(max(1, capacity)))
-        self.highestSequence = highestSequence ?? updates.last?.sequence
+        self.highestSequence = highestSequence ?? updates.last?.sequence ?? .initial
     }
 
     public mutating func append(_ update: ChatSessionUpdate) {
@@ -415,9 +445,7 @@ public struct ChatUpdateReplayBuffer: Hashable, Sendable, Codable {
     }
 
     public func replay(after watermark: ChatUpdateSequence) -> ChatReplayResult {
-        guard let highestSequence else {
-            return .unavailable
-        }
+        let highestSequence = highestSequence ?? .initial
         guard watermark <= highestSequence else {
             return .unavailable
         }
@@ -470,7 +498,7 @@ public enum ChatSessionMachine {
 
         switch update.payload {
         case .queued(let queuedTurn):
-            if let activeTurn = next.activeTurn, activeTurn.state.isTerminal == false {
+            if shouldAppendQueuedTurn(to: next) {
                 next = replacing(
                     snapshot: next,
                     activeTurn: next.activeTurn,
@@ -624,7 +652,6 @@ public enum ChatSessionMachine {
                 ],
                 sequence: update.sequence
             )
-            next = promoteQueuedTurnIfAvailable(next)
             return .applied(next)
 
         case .cancelled(let turnID):
@@ -662,7 +689,11 @@ public enum ChatSessionMachine {
             return .applied(next)
 
         case .sessionReady(let capabilities, let providerState):
-            guard next.lifecycle == .starting || next.lifecycle == .recovering || next.lifecycle == .unavailable else {
+            guard next.lifecycle == .starting
+                || next.lifecycle == .recovering
+                || next.lifecycle == .unavailable
+                || next.lifecycle == .closed
+            else {
                 return .rejected(.illegalTransition(payload: update.payload))
             }
 
@@ -752,6 +783,24 @@ public enum ChatSessionMachine {
             editedAt: queuedTurn.editedAt,
             state: .queued
         )
+    }
+
+    private static func shouldAppendQueuedTurn(to snapshot: ChatRuntimeSnapshot) -> Bool {
+        if !snapshot.queuedTurns.isEmpty {
+            return true
+        }
+        guard let activeTurn = snapshot.activeTurn else {
+            return false
+        }
+        if !activeTurn.state.isTerminal {
+            return true
+        }
+        switch snapshot.attention {
+        case .turnFailed(activeTurn.turnID), .interruptedTurn(activeTurn.turnID):
+            return true
+        default:
+            return false
+        }
     }
 
     private static func promoteQueuedTurnIfAvailable(_ snapshot: ChatRuntimeSnapshot) -> ChatRuntimeSnapshot {

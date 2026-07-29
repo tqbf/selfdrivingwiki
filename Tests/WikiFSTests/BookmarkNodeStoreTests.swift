@@ -268,6 +268,26 @@ import SQLite3
         #expect(try store.listBookmarkNodes().first?.content == .folder(label: "Folder"))
     }
 
+    @Test(arguments: [
+        ("page", BookmarkNode.Content.page(PageID(rawValue: "missing-page")), "page target does not exist"),
+        ("source", BookmarkNode.Content.source(SourceID(rawValue: "missing-source")), "source target does not exist"),
+        ("chat", BookmarkNode.Content.chat(ChatID(rawValue: "missing-chat")), "chat target does not exist"),
+    ]) func retargetReferenceToMissingTargetIsRejected(
+        _: String,
+        _ missingTarget: BookmarkNode.Content,
+        _ expectedReason: String
+    ) throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let page = try store.createPage(title: "Page")
+        let reference = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(page.id))
+
+        expectInvalidBookmarkRow(reason: expectedReason) {
+            try store.retargetBookmarkNode(id: reference.id, to: missingTarget)
+        }
+
+        #expect(try store.listBookmarkNodes().first?.content == .page(page.id))
+    }
+
     @Test func deleteFolderCascadesChildren() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(

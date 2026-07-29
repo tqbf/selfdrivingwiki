@@ -148,9 +148,10 @@ struct ChatDomainAuditRegressionTests {
         )))
     }
 
-    @Test func replayBufferHandlesEmptyCoverageAndInt64Boundaries() {
+    @Test func replayBufferHandlesEmptyCoverageAndInt64Boundaries() throws {
         let empty = ChatUpdateReplayBuffer(capacity: 2)
-        #expect(empty.replay(after: ChatUpdateSequence(rawValue: 0)) == .unavailable)
+        #expect(empty.replay(after: .initial) == .available([]))
+        #expect(empty.replay(after: ChatUpdateSequence(rawValue: 1)) == .unavailable)
 
         let watermarkOnly = ChatUpdateReplayBuffer(
             capacity: 2,
@@ -164,8 +165,10 @@ struct ChatDomainAuditRegressionTests {
         edge.append(makeUpdate(sequence: Int64.min, payload: .recovering))
         #expect(edge.replay(after: ChatUpdateSequence(rawValue: Int64.min)) == .available([]))
 
-        #expect(ChatUpdateSequence(rawValue: Int64.max).next() == ChatUpdateSequence(rawValue: Int64.max))
-        #expect(ChatUpdateSequence(rawValue: Int64.max - 1).next() == ChatUpdateSequence(rawValue: Int64.max))
+        #expect(throws: ChatUpdateSequence.Error.overflow(ChatUpdateSequence(rawValue: Int64.max))) {
+            _ = try ChatUpdateSequence(rawValue: Int64.max).next()
+        }
+        #expect(try ChatUpdateSequence(rawValue: Int64.max - 1).next() == ChatUpdateSequence(rawValue: Int64.max))
     }
 
     @Test func queuedTurnsPromoteInArrivalOrderAfterTerminalOutcomes() {
@@ -212,6 +215,61 @@ struct ChatDomainAuditRegressionTests {
         #expect(afterCancellation.queuedTurns.isEmpty)
     }
 
+    @Test func failedTurnWithQueuedFollowerDoesNotOrphanAttention() {
+        let snapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .responding),
+            queuedTurns: [makeQueuedTurn(ordinal: 1, turnID: "turn-2", commandID: "command-2")]
+        )
+
+        let result = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 1,
+                payload: .failed(
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    category: .runtimeError,
+                    message: "boom",
+                    createdAt: Date(timeIntervalSince1970: 20)
+                )
+            ),
+            to: snapshot
+        )
+
+        guard case .applied(let failed) = result else {
+            Issue.record("failed update should apply")
+            return
+        }
+
+        #expect(failed.activeTurn?.turnID == ChatTurnID(rawValue: "turn-1"))
+        #expect(failed.activeTurn?.state == .terminal(.failed(category: .runtimeError, message: "boom")))
+        #expect(failed.attention == .turnFailed(ChatTurnID(rawValue: "turn-1")))
+        #expect(failed.queuedTurns.map(\.submission.turnID.rawValue) == ["turn-2"])
+    }
+
+    @Test func queuedTurnAfterTerminalFailurePreservesExistingQueueArrivalOrder() {
+        let snapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .terminal(.failed(category: .runtimeError, message: "boom"))),
+            queuedTurns: [makeQueuedTurn(ordinal: 1, turnID: "turn-2", commandID: "command-2")],
+            attention: .turnFailed(ChatTurnID(rawValue: "turn-1"))
+        )
+
+        let result = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 1,
+                payload: .queued(makeQueuedTurn(ordinal: 2, turnID: "turn-3", commandID: "command-3"))
+            ),
+            to: snapshot
+        )
+
+        guard case .applied(let queued) = result else {
+            Issue.record("queued follower should apply")
+            return
+        }
+
+        #expect(queued.activeTurn?.turnID == ChatTurnID(rawValue: "turn-1"))
+        #expect(queued.queuedTurns.map(\.submission.turnID.rawValue) == ["turn-2", "turn-3"])
+        #expect(queued.attention == .turnFailed(ChatTurnID(rawValue: "turn-1")))
+    }
+
     @Test(arguments: [
         ChatSessionLifecycle.unavailable,
         .starting,
@@ -234,6 +292,26 @@ struct ChatDomainAuditRegressionTests {
         #expect(closed.lifecycle == .closed)
         #expect(closed.activeTurn == nil)
         #expect(closed.attention == .none)
+    }
+
+    @Test func sessionReadyRecoversFromClosedLifecycle() {
+        let result = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 1,
+                payload: .sessionReady(
+                    capabilities: .unavailable,
+                    providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil)
+                )
+            ),
+            to: makeSnapshot(lifecycle: .closed)
+        )
+
+        guard case .applied(let ready) = result else {
+            Issue.record("sessionReady should recover from closed")
+            return
+        }
+
+        #expect(ready.lifecycle == .ready)
     }
 
     @Test func sessionMachineRejectsStaleChatIDs() {
@@ -306,6 +384,59 @@ struct ChatDomainAuditRegressionTests {
         }
         #expect(afterResolution.activeTurn?.state == .responding)
         #expect(afterResolution.attention == .none)
+    }
+
+    @Test func transcriptChangedReplacementCoalescesExistingStreamingMessageAcrossSequences() {
+        let snapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .responding),
+            sequence: 0
+        )
+
+        guard case .applied(let afterDelta) = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 1,
+                payload: .transcriptChanged([
+                    .messageDelta(
+                        messageID: ChatMessageID(rawValue: "message-1"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .assistant,
+                        delta: "Hel",
+                        createdAt: Date(timeIntervalSince1970: 1)
+                    )
+                ])
+            ),
+            to: snapshot
+        ) else {
+            Issue.record("streaming delta should apply")
+            return
+        }
+
+        guard case .applied(let afterReplacement) = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 2,
+                payload: .transcriptChanged([
+                    .messageReplacement(
+                        messageID: ChatMessageID(rawValue: "message-1"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .assistant,
+                        text: "Hello",
+                        createdAt: Date(timeIntervalSince1970: 1)
+                    )
+                ])
+            ),
+            to: afterDelta
+        ) else {
+            Issue.record("replacement should apply")
+            return
+        }
+
+        #expect(afterReplacement.transientTranscriptOverlay.count == 1)
+        guard case .message(let item) = afterReplacement.transientTranscriptOverlay[0] else {
+            Issue.record("expected a single coalesced message row")
+            return
+        }
+        #expect(item.messageID == ChatMessageID(rawValue: "message-1"))
+        #expect(item.text == "Hello")
     }
 
     @Test func sessionReadyTransitionsFromUnavailableAndPreservesState() {
@@ -461,11 +592,20 @@ struct ChatDomainAuditRegressionTests {
         ChatPermissionVisualIntent.default,
         .accent,
         .destructive,
+        .unknown("experimental-glow"),
     ])
     func permissionVisualIntentRoundTrips(intent: ChatPermissionVisualIntent) throws {
         let data = try JSONEncoder().encode(intent)
         let decoded = try JSONDecoder().decode(ChatPermissionVisualIntent.self, from: data)
         #expect(decoded == intent)
+    }
+
+    @Test func permissionVisualIntentUnknownValueDecodesLosslessly() throws {
+        let decoded = try JSONDecoder().decode(
+            ChatPermissionVisualIntent.self,
+            from: Data(#""vendor-custom-warning""#.utf8)
+        )
+        #expect(decoded == .unknown("vendor-custom-warning"))
     }
 
     @Test func chatSessionCommandsRoundTripEveryCase() throws {

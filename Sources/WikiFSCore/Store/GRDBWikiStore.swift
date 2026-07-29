@@ -5970,6 +5970,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
             }
             let targetRawValue = try validatedReferenceTarget(
+                db: db,
                 bookmarkID: id,
                 content: content
             )
@@ -5992,6 +5993,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
     private func validatedReferenceTarget(
+        db: Database,
         bookmarkID: BookmarkID,
         content: BookmarkNode.Content
     ) throws -> String {
@@ -6000,34 +6002,53 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "folders cannot be retargeted")
         case .page(let id):
             return try validatedTargetRawValue(
+                db: db,
                 bookmarkID: bookmarkID,
                 rawValue: id.rawValue,
-                referenceName: "page reference"
+                referenceName: "page reference",
+                existenceQuery: "SELECT 1 FROM pages WHERE id = ?;",
+                missingReason: "page target does not exist"
             )
         case .source(let id):
             return try validatedTargetRawValue(
+                db: db,
                 bookmarkID: bookmarkID,
                 rawValue: id.rawValue,
-                referenceName: "source reference"
+                referenceName: "source reference",
+                existenceQuery: "SELECT 1 FROM sources WHERE id = ?;",
+                missingReason: "source target does not exist"
             )
         case .chat(let id):
             return try validatedTargetRawValue(
+                db: db,
                 bookmarkID: bookmarkID,
                 rawValue: id.rawValue,
-                referenceName: "chat reference"
+                referenceName: "chat reference",
+                existenceQuery: "SELECT 1 FROM chats WHERE id = ?;",
+                missingReason: "chat target does not exist"
             )
         }
     }
 
     private func validatedTargetRawValue(
+        db: Database,
         bookmarkID: BookmarkID,
         rawValue: String,
-        referenceName: String
+        referenceName: String,
+        existenceQuery: String,
+        missingReason: String
     ) throws -> String {
         guard rawValue.isEmpty == false else {
             throw WikiStoreError.invalidBookmarkRow(
                 id: bookmarkID.rawValue,
                 reason: "\(referenceName) requires a non-empty target_id"
+            )
+        }
+        let exists = try Int.fetchOne(db, sql: existenceQuery, arguments: [rawValue]) != nil
+        guard exists else {
+            throw WikiStoreError.invalidBookmarkRow(
+                id: bookmarkID.rawValue,
+                reason: missingReason
             )
         }
         return rawValue

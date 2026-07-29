@@ -44,11 +44,12 @@ struct ChatIdentifierCodableCompatibilityTests {
         expectedKind: String,
         expectedID: String
     ) throws {
-        let data = try JSONEncoder().encode(reference)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(reference)
         let json = try #require(String(data: data, encoding: .utf8))
 
-        #expect(json.contains(#""kind":"\#(expectedKind)""#))
-        #expect(json.contains(#""id":"\#(expectedID)""#))
+        #expect(json == #"{"id":"\#(expectedID)","kind":"\#(expectedKind)"}"#)
 
         let decoded = try JSONDecoder().decode(ChatContextReference.self, from: data)
         #expect(decoded == reference)

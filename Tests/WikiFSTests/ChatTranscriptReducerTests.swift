@@ -35,6 +35,84 @@ struct ChatTranscriptReducerTests {
         #expect(item.text == "Hello world")
     }
 
+    @Test func transcriptChangedCoalescesStreamingAssistantMessageAcrossSequences() {
+        let base = ChatRuntimeSnapshot(
+            chatID: ChatID(rawValue: "chat-1"),
+            generation: ChatSessionGenerationID(rawValue: "generation-1"),
+            lifecycle: .ready,
+            activeTurn: ChatTurnSnapshot(
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                commandID: ChatCommandID(rawValue: "command-1"),
+                visibleText: "Hello",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1),
+                state: .responding
+            ),
+            queuedTurns: [],
+            attention: .none,
+            capabilities: .unavailable,
+            providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil),
+            usage: nil,
+            diagnostics: ChatDiagnosticsState(),
+            transientTranscriptOverlay: [],
+            lastIncludedSequence: .initial
+        )
+
+        let first = ChatSessionMachine.apply(
+            ChatSessionUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                generation: ChatSessionGenerationID(rawValue: "generation-1"),
+                sequence: ChatUpdateSequence(rawValue: 1),
+                payload: .transcriptChanged([
+                    .messageDelta(
+                        messageID: ChatMessageID(rawValue: "message-1"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .assistant,
+                        delta: "Hello",
+                        createdAt: Date(timeIntervalSince1970: 2)
+                    )
+                ])
+            ),
+            to: base
+        )
+
+        guard case .applied(let afterFirst) = first else {
+            Issue.record("first transcript delta should apply")
+            return
+        }
+
+        let second = ChatSessionMachine.apply(
+            ChatSessionUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                generation: ChatSessionGenerationID(rawValue: "generation-1"),
+                sequence: ChatUpdateSequence(rawValue: 2),
+                payload: .transcriptChanged([
+                    .messageDelta(
+                        messageID: ChatMessageID(rawValue: "message-1"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .assistant,
+                        delta: " world",
+                        createdAt: Date(timeIntervalSince1970: 2)
+                    )
+                ])
+            ),
+            to: afterFirst
+        )
+
+        guard case .applied(let afterSecond) = second else {
+            Issue.record("second transcript delta should apply")
+            return
+        }
+
+        #expect(afterSecond.transientTranscriptOverlay.count == 1)
+        guard case .message(let item) = afterSecond.transientTranscriptOverlay[0] else {
+            Issue.record("expected a single coalesced message row")
+            return
+        }
+        #expect(item.messageID == ChatMessageID(rawValue: "message-1"))
+        #expect(item.text == "Hello world")
+    }
+
     @Test func fullReplacementDoesNotDuplicateStreamingMessage() {
         let initial = ChatTranscriptReducer.reducing(items: [], with: [
             .messageDelta(

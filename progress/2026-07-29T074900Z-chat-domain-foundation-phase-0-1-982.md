@@ -35,7 +35,9 @@ client synchronization, and UI decomposition.
 - Added `Sources/WikiFSEngine/ChatAgentRuntime.swift` with the typed
   `ChatAgentRuntime` protocol, event envelope, start/configuration requests,
   and a closure-backed runtime seam that characterizes the current
-  launcher/backend boundary without yet replacing it.
+  launcher/backend boundary without yet replacing it. The original Phase 0
+  production `AgentLauncher`/ACP adapter remains explicitly deferred rather
+  than silently dropped; the protocol seam is what this branch lands.
 - Added `ScriptedChatRuntime` test support with deterministic pause gates,
   generation-preserving event envelopes, and sleep-free teardown behavior. The
   gate implementation was corrected to use stored permits so a resume cannot be
@@ -66,6 +68,10 @@ client synchronization, and UI decomposition.
   was introduced.
 - The new transcript vocabulary is Foundation-only and does not pull Engine or
   Core dependencies into `WikiFSTypes`.
+- The snapshot model still carries the Phase 1 deferral for a
+  committed-transcript cursor. This branch models only the transient overlay
+  plus `lastIncludedSequence`; durable cursoring remains a later
+  persistence/client-sync concern.
 - The typecheck guard stays compiler-level, not runtime-only: the
   `IdentifierBoundaryTypecheckTests` fixtures still run `swiftc -typecheck`
   against the built modules, with a host-target triple that supports both macOS
@@ -73,20 +79,34 @@ client synchronization, and UI decomposition.
   branch is macOS-only.
 - No schema migration, chat-row compatibility decoder, or UI migration landed
   in this branch.
+- `WikiDaemonConnection.healthCheck(timeout:)` keeps the branch's bounded
+  detached-timeout race instead of the earlier task-group shape because the XPC
+  send path can hang indefinitely when the mach service is absent. The
+  rationale stays documented inline in
+  [`Sources/WikiCtlCore/WikiDaemonConnection.swift`](../Sources/WikiCtlCore/WikiDaemonConnection.swift).
+- `ChatAgentRuntime.eventStream(for:)` is intentionally `async throws` in the
+  Phase 0 protocol seam so production and scripted runtimes can reject unknown
+  handles and duplicate subscribers through the same typed contract; that
+  widening is covered by `ChatAgentRuntimeCoverageTests` and
+  `ScriptedChatRuntimeTests`.
+- This corrective branch also tightens the public bookmark retarget mutation in
+  `GRDBWikiStore`: retargeting now validates page/source/chat targets inside
+  the same write transaction so typed bookmark references cannot be rewritten
+  to dangling rows.
 
 ## Verification
 
 - Wednesday, July 29, 2026:
   `make prompts` — passed.
 - Wednesday, July 29, 2026:
-  `make test` — passed with `2631 tests in 214 suites`.
+  `make test` — passed with `2639 tests in 214 suites`.
 - Wednesday, July 29, 2026:
   `make build` — passed, including app assembly/signing and MLX runtime
   bundling.
 - Wednesday, July 29, 2026:
   `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` — timed out with
   exit `124`.
-  Log: `tmp/test-logs/swift-test-20260729-064032.log`.
+  Log: `tmp/test-logs/swift-test-20260729-072016.log`.
   This is the current blocker: the opt-in aggregate app-test gate still does
   not exit `0` under the repository's bounded watchdog wrapper.
 - The timeout probe is materially better than the inherited raw `swift test`
@@ -110,6 +130,20 @@ client synchronization, and UI decomposition.
   `ChatTranscriptReducerTests`.
 - `ScriptedChatRuntimeTests` landed exactly as `ScriptedChatRuntimeTests`, with
   extra runtime seam coverage in `ChatAgentRuntimeCoverageTests`.
+
+**Additional corrective regressions landed on Wednesday, July 29, 2026.**
+- `ChatDomainAuditRegressionTests.transcriptChangedReplacementCoalescesExistingStreamingMessageAcrossSequences`
+  proves the state machine coalesces a `messageDelta` followed by a
+  `messageReplacement` for the same `ChatMessageID` into one overlay row across
+  ordered sequences.
+- `ChatDomainAuditRegressionTests.failedTurnWithQueuedFollowerDoesNotOrphanAttention`
+  and
+  `queuedTurnAfterTerminalFailurePreservesExistingQueueArrivalOrder`
+  pin the failure/attention and queued-arrival invariants called out in the
+  audit.
+- `BookmarkNodeStoreTests.retargetReferenceToMissingTargetIsRejected`
+  now covers page/source/chat negative retargets, proving transactional target
+  existence validation.
 
 **Follow-up on July 29, 2026.** The corrective branch
 `chat-domain-audit-fixes` repaired that opt-in app-test drift and the hosted
