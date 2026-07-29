@@ -1,7 +1,9 @@
 Last verified: 2026-07-27
 
-* **All Swift code must compile via `swift build` / `swift test` from the
-  command line (SwiftPM only) — never rely on Xcode-only tooling or APIs.**
+* **All Swift code must compile via SwiftPM from the command line — prefer
+  `make build` / `make test` as the default entrypoints, and ensure bare
+  `swift build` / `swift test` also work when used directly. Never rely on
+  Xcode-only tooling or APIs.**
   In practice this means: no macros or APIs that require an Xcode project
   file, an Xcode-managed scheme, or Xcode's build system to resolve (e.g.
   avoid `@Entry` for `EnvironmentValues`/`FocusedValues` — use the manual
@@ -341,15 +343,17 @@ Persistent chats are two tables: `chats` (one row per conversation) and
 
 **Swift** (from repo root):
 ```
-swift build          # compile
-swift test           # full suite — ~1.5 min via in-memory SQLite fixtures (#658)
-swift test --filter PdfExtractionServiceTests  # pdf extraction only
+make build           # preferred compile path; runs repo prerequisites first
+make test            # preferred full suite — ~1.5 min via in-memory SQLite fixtures (#658)
+swift test --filter PdfExtractionServiceTests  # targeted SwiftPM test run when needed
 ```
 
-`swift test` runs the full suite in ~1.5 minutes (in-memory fixtures since
-#658). Run it before every PR. CI has a single `swift` job that runs the full
-suite — there is no tier split and no skip list anymore (the slow disk-I/O
-they worked around is gone).
+Prefer `make build` / `make test` over raw `swift build` / `swift test` for
+normal local work, because the Make targets run the repo's prerequisite sync
+steps automatically. `make test` runs the full suite in ~1.5 minutes
+(in-memory fixtures since #658). Run it before every PR. CI has a single
+`swift` job that runs the full suite — there is no tier split and no skip list
+anymore (the slow disk-I/O they worked around is gone).
 
 **Mutation testing** (`swift-mutation-testing`, schematized — builds once,
 test-runs every mutant via a runtime switch):
