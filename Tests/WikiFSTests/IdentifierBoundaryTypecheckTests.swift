@@ -196,10 +196,12 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
+    #if canImport(WikiFSEngine)
     @Test func positiveChatDomainFixturesCompile() throws {
         let result = try runTypecheck("positive-chat-domain.swift")
         #expect(result.status == 0, "positive chat-domain fixture failed to typecheck:\n\(result.output)")
     }
+    #endif
 
     #if os(macOS)
     @Test func launcherPositiveFixturesCompile() throws {
