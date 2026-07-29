@@ -69,6 +69,15 @@ client synchronization, and UI decomposition.
   `EditBookmarkSheet` now retargets page/source/chat bookmarks, keeps the sheet
   open on validation failure, and surfaces the typed store error instead of
   silently dismissing.
+- Finished the remaining exact-head audit follow-up in-scope for this
+  foundation PR:
+  `ChatDomainAuditRegressionTests` now asserts typed rejection results for the
+  missing AC.3 negative cases (duplicate terminal events, stale turn-ID
+  mismatches including permission requests, illegal permission resolution, and
+  illegal lifecycle edges for `sessionClosed`, `sessionReady`, and
+  `recovering`), and the folder-rename path now matches bookmark retargeting by
+  propagating the store error back to `EditBookmarkSheet` instead of logging and
+  dismissing.
 
 **Important compatibility decisions preserved.**
 - Raw identifier text stayed primitive-string-compatible at JSON and Codable
@@ -103,20 +112,42 @@ client synchronization, and UI decomposition.
   the same write transaction so typed bookmark references cannot be rewritten
   to dangling rows.
 
+**Audit disposition on Wednesday, July 29, 2026.**
+- **F1 (missing explicit negative state-machine rejection coverage): fixed.**
+  `ChatDomainAuditRegressionTests` now parameterizes the previously-missing
+  AC.3 rejection matrix and asserts the exact
+  `.rejected(.illegalTransition(payload: ...))` result for duplicate terminal
+  events, stale turn mismatches, wrong permission resolutions, and illegal
+  lifecycle edges.
+- **F2 (`transcriptChanged` active-turn guard): explicitly rebutted / deferred.**
+  The reducer still accepts `transcriptChanged` without an active-turn guard.
+  That remains the intentional Phase 3 controller-ordering responsibility from
+  the design record rather than a Phase 0/1 reducer bug, so this branch does
+  not add a premature guard.
+- **F3 (folder rename error handling mismatch): fixed.**
+  `WikiStoreModel.renameBookmarkNode` is now throwable like
+  `retargetBookmarkNode`, and `EditBookmarkSheet` keeps the folder-edit sheet
+  open and renders the localized store error instead of silently dismissing.
+- **F4 (stale-target picker UX): explicitly deferred.**
+  A deleted target can still leave `EditBookmarkSheet` with a preselected value
+  that no longer exists in the current picker options. The transactional store
+  rejection remains the authoritative guard, and this branch deliberately keeps
+  that stale-data presentation quirk out of the Phase 0/1 foundation scope.
+
 ## Verification
 
 - Wednesday, July 29, 2026:
   `make prompts` — passed.
 - Wednesday, July 29, 2026:
-  `make test` — passed with `2645 tests in 214 suites`.
-- Wednesday, July 29, 2026:
   `make build` — passed, including app assembly/signing and MLX runtime
   bundling.
 - Wednesday, July 29, 2026:
+  `make test` — passed with `2653 tests in 215 suites`.
+- Wednesday, July 29, 2026:
   `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` — timed out with
-  exit `124` (the wrapper reported `TIMED OUT after 60s` and exited `124`
+  wrapper exit `124` (reported as `TIMED OUT after 60s` and `Exiting 124`
   after reaping `swift test`).
-  Log: `tmp/test-logs/swift-test-20260729-085236.log`.
+  Log: `tmp/test-logs/swift-test-20260729-100115.log`.
   This is the current blocker: the opt-in aggregate app-test gate still does
   not exit `0` under the repository's bounded watchdog wrapper.
 - The timeout probe is materially better than the inherited raw `swift test`
@@ -174,6 +205,18 @@ client synchronization, and UI decomposition.
 - `ScriptedChatRuntimeTests.storedGatePermitBeforeSubmitIsConsumedDeterministically`
   proves a gate resume recorded before submit/drain still releases the pause
   deterministically with no scheduler sleeps.
+- `ChatDomainAuditRegressionTests.duplicateTerminalEventsAreRejected`,
+  `staleTurnIDMismatchesAreRejected`,
+  `permissionResolvedRejectsWrongRequestID`,
+  `permissionResolvedRejectsWrongLifecycle`,
+  `sessionClosedFromClosedLifecycleIsRejected`,
+  `sessionReadyFromReadyLifecycleIsRejected`, and
+  `recoveringRejectsIllegalLifecycles`
+  now pin the exact negative AC.3 rejection results called out by the audit.
+- `WikiStoreModelBookmarkMutationTests.renameBookmarkNodePropagatesStoreFailures`
+  and `EditBookmarkSheetTests.folderRenameFailureReturnsVisibleErrorInsteadOfDismiss`
+  prove the folder rename path now surfaces the store error instead of
+  swallowing it.
 
 **Follow-up on July 29, 2026.** The corrective branch
 `chat-domain-audit-fixes` repaired that opt-in app-test drift and the hosted

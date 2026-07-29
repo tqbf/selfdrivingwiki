@@ -4,6 +4,11 @@ import WikiFSCore
 /// Sheet for editing a bookmark: folders rename in place, while leaf
 /// references retarget to a different page/source/chat.
 struct EditBookmarkSheet: View {
+    enum SaveActionResult: Equatable {
+        case dismiss
+        case showError(String)
+    }
+
     private enum RetargetSelection: Hashable {
         case page(PageID)
         case source(SourceID)
@@ -81,6 +86,38 @@ struct EditBookmarkSheet: View {
         }
     }
 
+    static func saveAction(
+        node: BookmarkNode?,
+        name: String,
+        selectedTarget: BookmarkNode.Content?,
+        renameFolder: (String) throws -> Void,
+        retargetBookmark: (BookmarkNode.Content) throws -> Void
+    ) -> SaveActionResult? {
+        guard let node else {
+            return .dismiss
+        }
+
+        switch node.content {
+        case .folder:
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else { return nil }
+            do {
+                try renameFolder(trimmed)
+                return .dismiss
+            } catch {
+                return .showError(error.localizedDescription)
+            }
+        case .page, .source, .chat:
+            guard let selectedTarget else { return nil }
+            do {
+                try retargetBookmark(selectedTarget)
+                return .dismiss
+            } catch {
+                return .showError(error.localizedDescription)
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Text(titleText)
@@ -143,27 +180,20 @@ struct EditBookmarkSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    guard let node else {
-                        dismiss()
-                        return
-                    }
                     errorMessage = nil
-                    switch node.content {
-                    case .folder:
-                        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            store.renameBookmarkNode(id: nodeID, to: trimmed)
-                            dismiss()
-                        }
-                    case .page, .source, .chat:
-                        if let selectedTarget {
-                            do {
-                                try store.retargetBookmarkNode(id: nodeID, to: selectedTarget.content)
-                                dismiss()
-                            } catch {
-                                errorMessage = error.localizedDescription
-                            }
-                        }
+                    switch Self.saveAction(
+                        node: node,
+                        name: name,
+                        selectedTarget: selectedTarget?.content,
+                        renameFolder: { try store.renameBookmarkNode(id: nodeID, to: $0) },
+                        retargetBookmark: { try store.retargetBookmarkNode(id: nodeID, to: $0) }
+                    ) {
+                    case .dismiss?:
+                        dismiss()
+                    case .showError(let message)?:
+                        errorMessage = message
+                    case nil:
+                        break
                     }
                 }
                 .keyboardShortcut(.defaultAction)

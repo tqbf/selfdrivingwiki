@@ -349,6 +349,44 @@ struct ChatDomainAuditRegressionTests {
         #expect(recovering.lifecycle == .recovering)
     }
 
+    @Test func sessionClosedFromClosedLifecycleIsRejected() {
+        let payload = ChatSessionEventPayload.sessionClosed
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 1, payload: payload),
+            to: makeSnapshot(lifecycle: .closed)
+        )
+
+        #expect(result == .rejected(.illegalTransition(payload: payload)))
+    }
+
+    @Test func sessionReadyFromReadyLifecycleIsRejected() {
+        let payload = ChatSessionEventPayload.sessionReady(
+            capabilities: .unavailable,
+            providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil)
+        )
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 1, payload: payload),
+            to: makeSnapshot(lifecycle: .ready)
+        )
+
+        #expect(result == .rejected(.illegalTransition(payload: payload)))
+    }
+
+    @Test(arguments: [
+        ChatSessionLifecycle.unavailable,
+        .recovering,
+        .closed,
+    ])
+    func recoveringRejectsIllegalLifecycles(lifecycle: ChatSessionLifecycle) {
+        let payload = ChatSessionEventPayload.recovering
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 1, payload: payload),
+            to: makeSnapshot(lifecycle: lifecycle)
+        )
+
+        #expect(result == .rejected(.illegalTransition(payload: payload)))
+    }
+
     @Test func closedRecoveryDoesNotStrandQueuedTurns() {
         let starting = makeSnapshot(
             lifecycle: .ready,
@@ -479,6 +517,94 @@ struct ChatDomainAuditRegressionTests {
         }
         #expect(afterResolution.activeTurn?.state == .responding)
         #expect(afterResolution.attention == .none)
+    }
+
+    @Test(arguments: [
+        ChatSessionEventPayload.completed(turnID: ChatTurnID(rawValue: "turn-1")),
+        .failed(
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            category: .runtimeError,
+            message: "boom",
+            createdAt: Date(timeIntervalSince1970: 2)
+        ),
+        .cancelled(turnID: ChatTurnID(rawValue: "turn-1")),
+    ])
+    func duplicateTerminalEventsAreRejected(payload: ChatSessionEventPayload) {
+        let snapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .terminal(.completed)),
+            sequence: 1
+        )
+
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 2, payload: payload),
+            to: snapshot
+        )
+
+        #expect(result == .rejected(.illegalTransition(payload: payload)))
+    }
+
+    @Test(arguments: [
+        ChatSessionEventPayload.submitted(turnID: ChatTurnID(rawValue: "turn-stale")),
+        .started(turnID: ChatTurnID(rawValue: "turn-stale")),
+        .permissionRequested(
+            ChatPendingPermissionRequest(
+                requestID: PermissionRequestID(rawValue: "permission-1"),
+                turnID: ChatTurnID(rawValue: "turn-stale"),
+                toolCallID: ToolCallID(rawValue: "tool-1"),
+                title: "Edit file",
+                message: "Allow?",
+                options: []
+            )
+        ),
+        .completed(turnID: ChatTurnID(rawValue: "turn-stale")),
+        .failed(
+            turnID: ChatTurnID(rawValue: "turn-stale"),
+            category: .runtimeError,
+            message: "boom",
+            createdAt: Date(timeIntervalSince1970: 2)
+        ),
+        .cancelled(turnID: ChatTurnID(rawValue: "turn-stale")),
+    ])
+    func staleTurnIDMismatchesAreRejected(payload: ChatSessionEventPayload) {
+        let snapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .responding),
+            sequence: 1
+        )
+
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 2, payload: payload),
+            to: snapshot
+        )
+
+        #expect(result == .rejected(.illegalTransition(payload: payload)))
+    }
+
+    @Test func permissionResolvedRejectsWrongRequestID() {
+        let payload = ChatSessionEventPayload.permissionResolved(PermissionRequestID(rawValue: "permission-wrong"))
+        let awaitingSnapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .awaitingPermission(PermissionRequestID(rawValue: "permission-1"))),
+            attention: .permissionRequired(PermissionRequestID(rawValue: "permission-1")),
+            sequence: 1
+        )
+
+        let awaitingResult = ChatSessionMachine.apply(
+            makeUpdate(sequence: 2, payload: payload),
+            to: awaitingSnapshot
+        )
+        #expect(awaitingResult == .rejected(.illegalTransition(payload: payload)))
+    }
+
+    @Test func permissionResolvedRejectsWrongLifecycle() {
+        let payload = ChatSessionEventPayload.permissionResolved(PermissionRequestID(rawValue: "permission-1"))
+        let nonAwaitingSnapshot = makeSnapshot(
+            activeTurn: makeActiveTurn(state: .responding),
+            sequence: 1
+        )
+        let nonAwaitingResult = ChatSessionMachine.apply(
+            makeUpdate(sequence: 2, payload: payload),
+            to: nonAwaitingSnapshot
+        )
+        #expect(nonAwaitingResult == .rejected(.illegalTransition(payload: payload)))
     }
 
     @Test func transcriptChangedReplacementCoalescesExistingStreamingMessageAcrossSequences() {
