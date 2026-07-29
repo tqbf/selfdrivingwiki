@@ -148,8 +148,6 @@ client synchronization, and UI decomposition.
   wrapper exit `124` (reported as `TIMED OUT after 60s` and `Exiting 124`
   after reaping `swift test`).
   Log: `tmp/test-logs/swift-test-20260729-100115.log`.
-  This is the current blocker: the opt-in aggregate app-test gate still does
-  not exit `0` under the repository's bounded watchdog wrapper.
 - The timeout probe is materially better than the inherited raw `swift test`
   hang note because it uses the repo-owned watchdog target, reaps orphaned
   `swiftpm-testing-helper` children, records a stable log path, and reports the
@@ -159,6 +157,23 @@ client synchronization, and UI decomposition.
   `SourceProvider round-trips every case through rawValue`,
   `Byteless YouTube WITH transcript is enqueued (C5 — transcript seeded)`, and
   `Maintenance submenu includes a wired Restart Daemon item`.
+
+## Operator waiver
+
+On Wednesday, July 29, 2026, the operator explicitly waived the local
+`env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` wrapper exit `124`
+for this PR as a known local infrastructure timeout rather than an
+application-code blocker.
+
+- Exact log path retained for the record:
+  `tmp/test-logs/swift-test-20260729-100115.log`.
+- GitHub CI remains the authoritative merge check for this head.
+- AC.13's standard SwiftPM/CI evidence remains green:
+  `make prompts` passed,
+  `make build` passed,
+  `make test` passed with `2653 tests in 215 suites`,
+  and merge readiness still depends on green GitHub CI plus a fresh exact-head
+  audit.
 
 **Deferred chat-domain API surface explicitly preserved.**
 - The foundation branch intentionally does **not** restore a public
@@ -225,5 +240,6 @@ coverage for the audit findings around exact JSON/raw-boundary compatibility,
 state-machine failures and stale-event rejection, runtime forwarding, and
 sleep-free scripted runtime behavior. The original foundation branch did not
 make the opt-in aggregate app-test gate green, and the corrective branch still
-does not have a successful aggregate app-test exit as of the bounded watchdog
-run above.
+does not have a successful aggregate app-test exit under the bounded watchdog
+wrapper; as recorded above, the operator waived that local wrapper timeout for
+this PR and kept GitHub CI as the authoritative gate.
