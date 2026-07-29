@@ -7,7 +7,7 @@ status: complete
 
 # Chat redesign Phase 3 corrective implementation for PR #990 / issue #982
 
-## Scope
+## Progress
 
 This entry records the corrective implementation pass for the exact audited PR
 head `ea29a810d946a2b082b80e0b430704d092f51fc4` on branch
