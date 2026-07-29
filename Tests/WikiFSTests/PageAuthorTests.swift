@@ -184,20 +184,17 @@ import Testing
 
         // HEAD flips to "user" — the leak is closed.
         let head = try store.pageOrigin(pageID: page.id)
-        #expect(head?.agentName == "user",
-                "rename should stamp 'user' on HEAD (got \(head?.agentName ?? "nil"))")
-        #expect(head?.agentKind == "human")
+        #expect(head?.agentName == .user)
+        #expect(head?.agentKind == .human)
 
         // The prior version retains the chat author (provenance survives).
         let history = try store.pageEditHistory(pageID: page.id)
         #expect(history.count >= 2,
                 "create + edit must yield ≥2 entries (got \(history.count))")
         // DESC: entry[0] = the edit (HEAD), entry[1] = the root 'import'.
-        #expect(history[0].agentName == "user",
-                "HEAD entry should be 'user' (got \(history[0].agentName))")
-        #expect(history[1].agentName == PageAuthor.chat(Self.chatULID).rawValue,
-                "root entry should retain chat:<id> (got \(history[1].agentName))")
-        #expect(history[1].agentKind == "chat")
+        #expect(history[0].agentName == .user)
+        #expect(history[1].agentName == .chat(Self.chatULID))
+        #expect(history[1].agentKind == .chat)
     }
 
     /// AC.5 — The preflight lint auto-fix (`WikiStoreModel.preflightLint`)
@@ -220,10 +217,8 @@ import Testing
             author: PageAuthor.agent("lint").rawValue)
 
         let head = try store.pageOrigin(pageID: page.id)
-        #expect(head?.agentName == PageAuthor.agent("lint").rawValue,
-                "lint auto-fix should stamp 'agent:lint' (got \(head?.agentName ?? "nil"))")
-        #expect(head?.agentKind == "agent",
-                "agentKind should be 'agent' (got \(head?.agentKind ?? "nil"))")
+        #expect(head?.agentName == .agent("lint"))
+        #expect(head?.agentKind == .agent)
     }
 
     /// AC.6 — The daemon Home bootstrap (`WikiDaemon.createWiki`) calls
@@ -243,9 +238,8 @@ import Testing
 
         // The Home page's HEAD activity should be `user`, NOT legacy-import.
         let origin = try store.pageOrigin(pageID: pages[0].id)
-        #expect(origin?.agentName == "user",
-                "daemon bootstrap should stamp 'user' (got \(origin?.agentName ?? "nil"))")
-        #expect(origin?.agentKind == "human")
-        #expect(origin?.activityKind == "import")
+        #expect(origin?.agentName == .user)
+        #expect(origin?.agentKind == .human)
+        #expect(origin?.activityKind == .import)
     }
 }

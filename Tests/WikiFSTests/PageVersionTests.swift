@@ -397,9 +397,9 @@ struct PageVersionTests {
             Issue.record("pageOrigin returned nil for a freshly created page")
             return
         }
-        #expect(origin.agentName == chatID, "agentName should be \(chatID) (got \(origin.agentName))")
-        #expect(origin.agentKind == "chat", "agentKind for chat:<id> is 'chat'")
-        #expect(origin.activityKind == "import", "root activity is 'import'")
+        #expect(origin.agentName == .chat("01JTESTCHAT00000000"))
+        #expect(origin.agentKind == .chat)
+        #expect(origin.activityKind == .import)
         #expect(origin.title == "Chat-Created")
         // savedAt is "now" (within 5s — the test runs fast).
         let drift = abs(origin.savedAt.timeIntervalSinceNow)
@@ -415,9 +415,9 @@ struct PageVersionTests {
         let page = try store.createPage(title: "Ingest Page", createdBy: agentLabel)
 
         let origin = try store.pageOrigin(pageID: page.id)
-        #expect(origin?.agentName == agentLabel)
-        #expect(origin?.agentKind == "agent")
-        #expect(origin?.activityKind == "import")
+        #expect(origin?.agentName == .agent("ingest"))
+        #expect(origin?.agentKind == .agent)
+        #expect(origin?.activityKind == .import)
     }
 
     /// #763 — `PageUpsert.upsert` with `author: "agent:ingest"` (the exact
@@ -435,10 +435,8 @@ struct PageVersionTests {
         #expect(outcome.didCreate, "should be a new page")
         let origin = try store.pageOrigin(pageID: outcome.id)
         #expect(origin != nil, "pageOrigin should resolve")
-        #expect(origin?.agentName == "agent:ingest",
-                "ingestion agent should be 'agent:ingest', not 'legacy-import' (got \(origin?.agentName ?? "nil"))")
-        #expect(origin?.agentKind == "agent",
-                "agent kind should be 'agent' (got \(origin?.agentKind ?? "nil"))")
+        #expect(origin?.agentName == .agent("ingest"))
+        #expect(origin?.agentKind == .agent)
     }
 
     /// #763 — re-ingesting an existing page (created by the user) with
@@ -460,8 +458,7 @@ struct PageVersionTests {
 
         #expect(!outcome.didCreate, "should update the existing page")
         let origin = try store.pageOrigin(pageID: outcome.id)
-        #expect(origin?.agentName == "agent:ingest",
-                "re-ingest agent should be 'agent:ingest' (got \(origin?.agentName ?? "nil"))")
+        #expect(origin?.agentName == .agent("ingest"))
     }
 
     /// #763 — re-ingesting an existing page with IDENTICAL content (a no-op
@@ -476,8 +473,7 @@ struct PageVersionTests {
         try store.updatePage(id: page.id, title: "Same Content",
                              body: "identical body", lastEditedBy: nil)
         let beforeOrigin = try store.pageOrigin(pageID: page.id)
-        #expect(beforeOrigin?.agentName == "legacy-import",
-                "pre-fix page should have legacy-import (got \(beforeOrigin?.agentName ?? "nil"))")
+        #expect(beforeOrigin?.agentName == .legacyImport)
 
         // Now re-ingest the SAME content with agent:ingest.
         _ = try PageUpsert.upsert(
@@ -490,8 +486,7 @@ struct PageVersionTests {
         // IS created (the author changed). The ref now points to the new
         // version with agent:ingest.
         let afterOrigin = try store.pageOrigin(pageID: page.id)
-        #expect(afterOrigin?.agentName == "agent:ingest",
-                "no-op re-ingest with different author should stamp new agent — got \(afterOrigin?.agentName ?? "nil")")
+        #expect(afterOrigin?.agentName == .agent("ingest"))
     }
 
     /// AC.1 (degraded path) — a `createPage` with no author (nil) falls back
@@ -503,9 +498,9 @@ struct PageVersionTests {
         let page = try store.createPage(title: "No-Author Page", createdBy: nil)
 
         let origin = try store.pageOrigin(pageID: page.id)
-        #expect(origin?.agentName == "legacy-import")
-        #expect(origin?.agentKind == "software")
-        #expect(origin?.activityKind == "import")
+        #expect(origin?.agentName == .legacyImport)
+        #expect(origin?.agentKind == .software)
+        #expect(origin?.activityKind == .import)
     }
 
     /// AC.2 — a freshly-created-then-edited page (with a DISTINCT author on
@@ -530,22 +525,22 @@ struct PageVersionTests {
 
         // Newest-first (DESC): entry[0] = the edit (most recent),
         // entry[1] = the root 'import' (oldest).
-        #expect(history[0].activityKind == "edit")
-        #expect(history[0].agentName == editAuthor)
-        #expect(history[0].agentKind == "chat")
+        #expect(history[0].activityKind == .edit)
+        #expect(history[0].agentName == .chat("01JTESTCHAT00000001"))
+        #expect(history[0].agentKind == .chat)
         // The title is the version's stored title (which equals what
         // updatePage wrote).
         #expect(history[0].title == "Edit Chain")
 
-        #expect(history[1].activityKind == "import")
-        #expect(history[1].agentName == createAuthor)
-        #expect(history[1].agentKind == "agent")
+        #expect(history[1].activityKind == .import)
+        #expect(history[1].agentName == .agent("ingest"))
+        #expect(history[1].agentKind == .agent)
 
         // pageOrigin(pageID:) reflects the HEAD = entry[0] (the chat edit).
         let head = try store.pageOrigin(pageID: page.id)
-        #expect(head?.agentName == editAuthor)
-        #expect(head?.agentKind == "chat")
-        #expect(head?.activityKind == "edit")
+        #expect(head?.agentName == .chat("01JTESTCHAT00000001"))
+        #expect(head?.agentKind == .chat)
+        #expect(head?.activityKind == .edit)
     }
 
     /// AC.3 — the CAS-OFF path (`updatePage` with no `expectedHeadVersionID`,

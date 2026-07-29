@@ -398,12 +398,12 @@ struct PageVersionCompareSheet: View {
     /// cleaned up. Mirrors the `ProvenancePanel` writer logic.
     private func writerLabel(_ origin: PageOrigin) -> String {
         if let runTitle = origin.runTitle, !runTitle.isEmpty { return runTitle }
-        switch PageAuthor(rawValue: origin.agentName) {
+        switch origin.agentName {
         case .chat: return "Chat"
         case .agent(let kind): return kind.capitalized + " run"
         case .user: return "You"
         case .legacyImport: return "Import"
-        case .other: return origin.agentName
+        case .other(let value): return value
         }
     }
 
