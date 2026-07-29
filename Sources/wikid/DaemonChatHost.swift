@@ -117,7 +117,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// every pre-existing caller.
     func startChat(
         wikiID: WikiID, firstMessage: String,
-        providerId: String? = nil, modelId: String? = nil
+        providerId: ProviderID? = nil, modelId: ModelID? = nil
     ) async throws -> ChatID {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
@@ -128,7 +128,7 @@ final class DaemonChatHost: @unchecked Sendable {
             throw DaemonChatError.emptyMessage
         }
 
-        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID.rawValue) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId ?? "nil") modelId=\(modelId ?? "nil")")
+        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID.rawValue) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId?.rawValue ?? "nil") modelId=\(modelId?.rawValue ?? "nil")")
 
         // 1. Create the chat row + seed the first user message.
         let title = ChatSummary.title(fromFirstMessage: trimmed)

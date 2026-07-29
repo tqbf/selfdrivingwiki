@@ -92,7 +92,7 @@ struct MessageSummaryTests {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
-        ]).settingStageProvider("gemini", forStage: "summarizer")
+        ]).settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
         #expect(MessageSummarizer.mode(for: config) == .model)
     }
 
@@ -101,7 +101,7 @@ struct MessageSummaryTests {
         let base = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
         ])
-        let pinned = base.settingStageProvider("claude", forStage: "summarizer")
+        let pinned = base.settingStageProvider(ProviderID(rawValue: "claude"), forStage: "summarizer")
         #expect(MessageSummarizer.mode(for: pinned) == .model)
         let cleared = pinned.settingStageProvider(nil, forStage: "summarizer")
         #expect(MessageSummarizer.mode(for: cleared) == .defaultTruncation)
@@ -267,7 +267,7 @@ struct MessageSummaryTests {
     @Test func resolveProfile_pinnedProvider_buildsHints() throws {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-        ]).settingStageProvider("claude", forStage: "summarizer")
+        ]).settingStageProvider(ProviderID(rawValue: "claude"), forStage: "summarizer")
         let creds = InMemoryACPCredentialStore()
         try creds.setAPIKey("secret-key", forProvider: "claude")
         let profile = MessageSummarizer.resolveProfile(
@@ -284,7 +284,7 @@ struct MessageSummaryTests {
     @Test func resolveProfile_unresolvableCommand_returnsNil() {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-        ]).settingStageProvider("claude", forStage: "summarizer")
+        ]).settingStageProvider(ProviderID(rawValue: "claude"), forStage: "summarizer")
         let profile = MessageSummarizer.resolveProfile(
             config: config,
             credentialStore: InMemoryACPCredentialStore(),
@@ -296,14 +296,14 @@ struct MessageSummaryTests {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
-        ]).settingStageProvider("gemini", forStage: "summarizer")
+        ]).settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         let profile = MessageSummarizer.resolveProfile(
             config: config,
             credentialStore: InMemoryACPCredentialStore(),
             resolveCommand: { _ in ["/usr/bin/true"] })
 
-        #expect(config.stageProviderIds["summarizer"] == "gemini")
+        #expect(config.stageProviderIds["summarizer"] == ProviderID(rawValue: "gemini"))
         #expect(profile == nil)
     }
 

@@ -613,7 +613,7 @@ public enum AgentOperationRunner {
         }
         let config = AgentProvidersConfig.loadOrSeed(from: launcher.resolveProvidersContainerDirectory())
         let mode = MessageSummarizer.mode(for: config)
-        let summarizerPin = config.stageProviderIds["summarizer"] ?? "none"
+        let summarizerPin = config.stageProviderIds["summarizer"]?.rawValue ?? "none"
 
         let messages = store.chatMessages(chatID: chatID)
         let pending = messages.filter { msg in

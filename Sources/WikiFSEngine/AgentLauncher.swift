@@ -415,16 +415,16 @@ public final class AgentLauncher {
     /// the new config so the composer picker can update its bound state. A
     /// nil/empty `modelId` clears the selection ("use the agent's default").
     @discardableResult
-    public func setSelectedModel(_ modelId: String?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
+    public func setSelectedModel(_ modelId: ModelID?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
-        DebugLog.store("setSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId ?? "nil") → save")
+        DebugLog.store("setSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId?.rawValue ?? "nil") → save")
         do {
             try updated.save(to: dir)
         } catch {
             // #475/#492: the user's model selection silently reverts on next
             // launch if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.setSelectedModel save failed (provider=\(providerId) modelId=\(modelId ?? "nil")): \(error)")
+            DebugLog.store("AgentLauncher.setSelectedModel save failed (provider=\(providerId) modelId=\(modelId?.rawValue ?? "nil")): \(error)")
         }
         return updated
     }
@@ -438,10 +438,10 @@ public final class AgentLauncher {
     /// Returns the post-write config for the selector's bound state.
     @discardableResult
     public func setSelectedModelAndDefault(
-        _ modelId: String?, provider: AgentProvider
+        _ modelId: ModelID?, provider: AgentProvider
     ) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
-        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId ?? "nil") → save")
+        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId?.rawValue ?? "nil") → save")
         let updated = providersConfig()
             .settingDefault(id: provider.id)
             .settingSelectedModel(modelId, forProvider: provider.id)
@@ -450,7 +450,7 @@ public final class AgentLauncher {
         } catch {
             // #475/#492: provider+model selection must land together; swallowing
             // the throw silently reverts both on next launch.
-            DebugLog.store("AgentLauncher.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId ?? "nil")): \(error)")
+            DebugLog.store("AgentLauncher.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId?.rawValue ?? "nil")): \(error)")
         }
         return updated
     }
@@ -458,7 +458,7 @@ public final class AgentLauncher {
     /// The user's persisted model selection for `providerId` (nil = "use the
     /// agent's default"). Read at spawn time so `ACPBackend.start` can call
     /// `session/set_model`. PURE-ish (one config load); `@MainActor`.
-    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> ModelID? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -467,7 +467,7 @@ public final class AgentLauncher {
     /// display-only preference (favorites sort to the top of the picker); no
     /// effect on which model actually launches.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
@@ -475,7 +475,7 @@ public final class AgentLauncher {
         } catch {
             // #475/#492: the favorite toggle silently reverts if this write
             // throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
+            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
         }
         return updated
     }
@@ -499,7 +499,7 @@ public final class AgentLauncher {
                 return
             }
             let cached = models.map {
-                CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+                CachedModelInfo(modelId: ModelID(rawValue: $0.modelId), name: $0.name, description: $0.description)
             }
             DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))")
             self.cacheDiscoveredModels(cached, forProvider: provider.id)
@@ -1202,7 +1202,7 @@ public final class AgentLauncher {
         // §3 (SpawnModelGuard scope). `stageName` is nil here — the kind-specific
         // stage name is only surfaced by the ingest orchestrator's per-phase
         // loop; for lint/query a generic refusal suffices.
-        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedStageModelId) {
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedStageModelId?.rawValue) {
             preflightError = msg
             isRunning = false
             releaseGenerationSlot()
@@ -1307,7 +1307,7 @@ public final class AgentLauncher {
             operationKind: operation.kind.rawValue,
             providerId: provider.id,
             providerLabel: provider.label,
-            selectedModelId: resolvedStageModelId,
+            selectedModelId: resolvedStageModelId?.rawValue,
             thinkingEffort: thinkingOption,
             sourceFiles: sourceFiles,
             sourceIDs: sourceIDs)
@@ -1360,7 +1360,7 @@ public final class AgentLauncher {
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
                 apiKey: acpAPIKey,
-                selectedModelId: resolvedStageModelId)
+                selectedModelId: resolvedStageModelId?.rawValue)
         if let workspaceID {
             providerHints[HintKey.env("WIKI_WORKSPACE")] = workspaceID.rawValue
         }
@@ -1617,9 +1617,9 @@ public final class AgentLauncher {
         // silent spawn. See `tmp/ingestion-stall-diagnosis.md` and
         // `SpawnModelGuard.swift`.
         let stageValidations: [(ACPIngestStage, String?)] = [
-            (.planner, plannerModel),
-            (.executor, executorModel),
-            (.finalizer, finalizerModel)
+            (.planner, plannerModel?.rawValue),
+            (.executor, executorModel?.rawValue),
+            (.finalizer, finalizerModel?.rawValue)
         ]
         for (stage, stageModelId) in stageValidations {
             if let msg = SpawnModelGuard.validate(provider: provider, modelId: stageModelId, stageName: stage.label) {
@@ -1649,9 +1649,9 @@ public final class AgentLauncher {
             var h = baseHints
             let m: String? = {
                 switch stage {
-                case .planner:   return plannerModel
-                case .executor:  return executorModel
-                case .finalizer: return finalizerModel
+                case .planner:   return plannerModel?.rawValue
+                case .executor:  return executorModel?.rawValue
+                case .finalizer: return finalizerModel?.rawValue
                 }
             }()
             if let m, !m.isEmpty {
@@ -1676,7 +1676,7 @@ public final class AgentLauncher {
         }
 
         // --- Phase 1: Planner ---
-        DebugLog.agent("runACPIngest: Phase 1 — Planner (model=\(plannerModel ?? "nil"))")
+        DebugLog.agent("runACPIngest: Phase 1 — Planner (model=\(plannerModel?.rawValue ?? "nil"))")
         currentIngestPhase = "planner"
         // #727: plannerProfile + plannerPrompt are now built inside
         // runPhaseWithFallback (per-provider, per-attempt). The old hints
@@ -1689,7 +1689,7 @@ public final class AgentLauncher {
             quotaFallback: quotaFallback,
             searchPath: loginShellPath,
             systemPrompt: systemPrompt,
-            stageModelId: plannerModel,
+            stageModelId: plannerModel?.rawValue,
             baselineModelId: nil,  // planner uses createSession — baseline from newSession (fresh)
             forkFrom: nil,
             buildPrompt: { _ in
@@ -1774,7 +1774,7 @@ public final class AgentLauncher {
             // subprocess. Events are buffered per-session and flushed to the
             // main actor as batches on each turn-end (avoiding interleaved
             // streaming deltas that would garble the transcript).
-            DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s), model=\(executorModel ?? "nil"))")
+            DebugLog.agent("runACPIngest: Phase 2 — Parallel executors (maxConcurrent=\(maxConcurrent), \(plan.distinctSourceFiles.count) source file(s), model=\(executorModel?.rawValue ?? "nil"))")
             currentIngestPhase = "executor[parallel]"
             await runParallelExecutors(
                 backend: backend,
@@ -1785,8 +1785,8 @@ public final class AgentLauncher {
                 sourceIDs: sourceIDs,
                 systemPrompt: systemPrompt,
                 maxConcurrent: maxConcurrent,
-                executorModel: executorModel,
-                plannerModel: plannerModel)
+                executorModel: executorModel?.rawValue,
+                plannerModel: plannerModel?.rawValue)
         } else {
             // Serial executors (Phase 3 behavior — current).
             for sourceFile in plan.distinctSourceFiles {
@@ -1812,8 +1812,8 @@ public final class AgentLauncher {
                     quotaFallback: quotaFallback,
                     searchPath: loginShellPath,
                     systemPrompt: systemPrompt,
-                    stageModelId: executorModel,
-                    baselineModelId: plannerModel,  // §4.5 HIGH #2 — planner's RESOLVED model, NOT stale stored
+                    stageModelId: executorModel?.rawValue,
+                    baselineModelId: plannerModel?.rawValue,  // §4.5 HIGH #2 — planner's RESOLVED model, NOT stale stored
                     forkFrom: forkFrom,
                     buildPrompt: { _ in
                         ACPIngestPrompts.executorPrompt(
@@ -1865,7 +1865,7 @@ public final class AgentLauncher {
         // --- Phase 3: Finalizer ---
         // #727: finalizerProfile + finalizerPrompt are now built inside
         // runPhaseWithFallback (per-provider, per-attempt).
-        DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel ?? "nil"))")
+        DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel?.rawValue ?? "nil"))")
         currentIngestPhase = "finalizer"
         let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
         let finalizerSourceFileNames = sourceFileNames
@@ -1875,7 +1875,7 @@ public final class AgentLauncher {
             quotaFallback: quotaFallback,
             searchPath: loginShellPath,
             systemPrompt: systemPrompt,
-            stageModelId: finalizerModel,
+            stageModelId: finalizerModel?.rawValue,
             baselineModelId: nil,  // finalizer uses createSession — baseline from newSession (fresh)
             forkFrom: nil,
             buildPrompt: { _ in
@@ -2885,8 +2885,8 @@ public final class AgentLauncher {
         firstMessagePrePersisted: Bool = false,
         historySeed: [AgentEvent] = [],
         priorAcpSessionId: AcpSessionID? = nil,
-        chatOverrideProviderId: String? = nil,
-        chatOverrideModelId: String? = nil,
+        chatOverrideProviderId: ProviderID? = nil,
+        chatOverrideModelId: ModelID? = nil,
         onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
@@ -2950,7 +2950,7 @@ public final class AgentLauncher {
             forStage: "chat",
             chatOverrideProviderId: chatOverrideProviderId,
             chatOverrideModelId: chatOverrideModelId)
-        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel ?? "nil")")
+        DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel?.rawValue ?? "nil")")
 
         // Refuse to spawn without an explicit `selectedModelId`. Mirrors the
         // ingest path's `SpawnModelGuard` guard (now at the top of
@@ -2969,7 +2969,7 @@ public final class AgentLauncher {
         // the cleanup). Placed BEFORE the PATH-preflight so the missing-model
         // message wins when both are wrong (we want the user to fix the model
         // selection even before we attempt to resolve the executable).
-        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedSelectedModel) {
+        if let msg = SpawnModelGuard.validate(provider: provider, modelId: resolvedSelectedModel?.rawValue) {
             preflightError = msg
             return
         }
@@ -3079,7 +3079,7 @@ public final class AgentLauncher {
                     provider: provider,
                     resolvedCommand: resolvedACPCommand,
                     apiKey: acpAPIKey,
-                    selectedModelId: resolvedSelectedModel)
+                    selectedModelId: resolvedSelectedModel?.rawValue)
                 // #397: chat-driven writes carry `chat:<chatID>` as their author
                 // provenance so created_by/last_edited_by points back to the
                 // originating conversation (resolvable via [[chat:…]]). An explicit

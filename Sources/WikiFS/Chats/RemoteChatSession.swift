@@ -112,7 +112,7 @@ public final class RemoteChatSession {
     /// `.chat(_)` session; no clearing needed, since starting the chat
     /// discards this whole draft `RemoteChatSession` (a fresh one is created
     /// for the new `ChatID`, per `chatID`'s `let`-ness).
-    public var pendingModelOverride: (providerId: String, modelId: String?)?
+    public var pendingModelOverride: (providerId: ProviderID, modelId: ModelID?)?
 
     // MARK: - Private: streaming-row bookkeeping
 
@@ -370,7 +370,7 @@ public final class RemoteChatSession {
 
     /// The user's persisted model selection for `providerId` (nil = agent
     /// default). Mirrors `AgentLauncher.selectedModelId(forProvider:)`.
-    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
+    public func selectedModelId(forProvider providerId: ProviderID) -> ModelID? {
         providersConfig().selectedModelId(forProvider: providerId)
     }
 
@@ -378,13 +378,13 @@ public final class RemoteChatSession {
     /// to the top of the picker). Mirrors
     /// `AgentLauncher.toggleFavoriteModel(_:forProvider:)`.
     @discardableResult
-    public func toggleFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
+    public func toggleFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
             try updated.save(to: dir)
         } catch {
-            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId)): \(error)")
+            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
         }
         return updated
     }

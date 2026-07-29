@@ -56,7 +56,7 @@ struct AgentLauncherStageKeyDispatchTests {
                 AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
                 AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
-            stageProviderIds: ["lint": "linter"])
+            stageProviderIds: ["lint": ProviderID(rawValue: "linter")])
         let ingestKey = AgentLauncher.stageKey(for: .ingest(sources: [emptySource], stateMarkdown: emptyState))
         #expect(ingestKey == "planner")
         // Ingest's resolved provider is the default (def), NOT the linter.
@@ -70,7 +70,7 @@ struct AgentLauncherStageKeyDispatchTests {
                 AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
                 AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
-            stageProviderIds: ["lint": "linter"])
+            stageProviderIds: ["lint": ProviderID(rawValue: "linter")])
         let queryKey = AgentLauncher.stageKey(for: .query(question: "Q", stateMarkdown: emptyState))
         #expect(queryKey == "chat")
         #expect(config.provider(forStage: queryKey).id == ProviderID(rawValue: "def"))
@@ -83,7 +83,7 @@ struct AgentLauncherStageKeyDispatchTests {
                 AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
                 AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
-            stageProviderIds: ["lint": "linter"])
+            stageProviderIds: ["lint": ProviderID(rawValue: "linter")])
         let lintKey = AgentLauncher.stageKey(for: .lint(stateMarkdown: emptyState))
         #expect(lintKey == "lint")
         #expect(config.provider(forStage: lintKey).id == ProviderID(rawValue: "linter"))

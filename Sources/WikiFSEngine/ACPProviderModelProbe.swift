@@ -300,7 +300,7 @@ public struct ACPProviderModelProbe: Sendable {
         // Primary path: the agent advertised `availableModels`. Paseo parity.
         if let models, !models.availableModels.isEmpty {
             return models.availableModels.map {
-                CachedModelInfo(modelId: $0.modelId, name: $0.name, description: $0.description)
+                CachedModelInfo(modelId: ModelID(rawValue: $0.modelId), name: $0.name, description: $0.description)
             }
         }
         // Fallback: derive from the configOptions model selector — the path
@@ -328,7 +328,7 @@ public struct ACPProviderModelProbe: Sendable {
             // `.value` is the model id sent to `session/set_model`. Matches
             // the same unwrapping in `ThinkingEffortOption.flatChoices`.
             CachedModelInfo(
-                modelId: choice.value.value,
+                modelId: ModelID(rawValue: choice.value.value),
                 name: choice.name,
                 description: choice.description)
         }

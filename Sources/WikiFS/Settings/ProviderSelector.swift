@@ -87,7 +87,7 @@ struct ProviderSelector: View {
     /// for a `.draft` chat that has no row yet. `nil` = no override for this
     /// chat — `current` falls through to the stage pin / global default,
     /// unchanged from before this picker became chat-scoped.
-    private var chatModelOverride: (providerId: String, modelId: String?)? {
+    private var chatModelOverride: (providerId: ProviderID, modelId: ModelID?)? {
         switch remoteSession.chatID {
         case .draft:
             return remoteSession.pendingModelOverride
@@ -107,7 +107,7 @@ struct ProviderSelector: View {
     /// override (`selectRow`) — it no longer touches the global default.
     private var current: AgentProvider {
         if let overrideProviderId = chatModelOverride?.providerId,
-           let p = config.provider(id: ProviderID(rawValue: overrideProviderId)), p.enabled {
+           let p = config.provider(id: overrideProviderId), p.enabled {
             return p
         }
         return config.provider(forStage: "chat")
@@ -266,7 +266,7 @@ struct ProviderSelector: View {
     /// selecting it picks the provider with no model → the agent's default.
     struct SelectorRow: Identifiable {
         let provider: AgentProvider
-        let modelId: String?
+        let modelId: ModelID?
         let modelLabel: String
         /// The agent-advertised one-line description (paseo shows this as the
         /// row's dimmer second line). nil for the synthetic "Default" row.
@@ -322,7 +322,7 @@ struct ProviderSelector: View {
                     modelLabel: model.displayLabel,
                     modelDescription: model.description,
                     isFavorite: config.isFavoriteModel(model.modelId, forProvider: provider.id),
-                    id: "\(provider.id.rawValue):\(model.modelId)"))
+                    id: "\(provider.id.rawValue):\(model.modelId.rawValue)"))
             }
             return rows
         }
@@ -350,15 +350,15 @@ struct ProviderSelector: View {
     /// provider's global `selectedModelId` — so a chat pinned to a model the
     /// global default doesn't use still shows the right checkmark.
     private var selectedRowID: String? {
-        if let override = chatModelOverride, override.providerId == current.id.rawValue {
+        if let override = chatModelOverride, override.providerId == current.id {
             if let modelId = override.modelId {
-                return "\(current.id.rawValue):\(modelId)"
+                return "\(current.id.rawValue):\(modelId.rawValue)"
             }
             return "\(current.id.rawValue):default"
         }
         let selectedModel = config.selectedModelId(forProvider: current.id)
         if let selectedModel {
-            return "\(current.id.rawValue):\(selectedModel)"
+            return "\(current.id.rawValue):\(selectedModel.rawValue)"
         }
         return "\(current.id.rawValue):default"
     }
@@ -403,13 +403,13 @@ struct ProviderSelector: View {
     /// model when one is active, else the provider's global selection (via
     /// `modelSegment(for:)`), else "default".
     private var currentModelSegment: String {
-        if let override = chatModelOverride, override.providerId == current.id.rawValue {
+        if let override = chatModelOverride, override.providerId == current.id {
             guard let modelId = override.modelId else { return "default" }
             if let cached = config.cachedModels(forProvider: current.id)
                 .first(where: { $0.modelId == modelId }) {
                 return cached.displayLabel
             }
-            return modelId
+            return modelId.rawValue
         }
         return modelSegment(for: current)
     }
@@ -424,7 +424,7 @@ struct ProviderSelector: View {
                 .first(where: { $0.modelId == selected }) {
                 return cached.displayLabel
             }
-            return selected
+            return selected.rawValue
         }
         return "default"
     }
@@ -447,13 +447,13 @@ struct ProviderSelector: View {
         // never contains a colon, so a first-split is safe.
         let parts = rowID.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, let provider = config.provider(id: ProviderID(rawValue: String(parts[0]))) else { return }
-        let modelId: String? = parts[1] == "default" ? nil : String(parts[1])
-        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id.rawValue) modelId=\(modelId ?? "nil") (nil=Default/agent-default)")
+        let modelId: ModelID? = parts[1] == "default" ? nil : ModelID(rawValue: String(parts[1]))
+        DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id.rawValue) modelId=\(modelId?.rawValue ?? "nil") (nil=Default/agent-default)")
         switch remoteSession.chatID {
         case .draft:
-            remoteSession.pendingModelOverride = (provider.id.rawValue, modelId)
+            remoteSession.pendingModelOverride = (provider.id, modelId)
         case .chat(let pageID):
-            store.updateChatModelOverride(id: pageID, providerId: provider.id.rawValue, modelId: modelId)
+            store.updateChatModelOverride(id: pageID, providerId: provider.id, modelId: modelId)
         }
         isPresented = false
         searchText = ""

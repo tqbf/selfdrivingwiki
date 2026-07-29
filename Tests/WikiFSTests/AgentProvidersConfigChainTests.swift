@@ -63,7 +63,7 @@ struct AgentProvidersConfigChainTests {
                 makeProvider(ProviderID(rawValue: "glm-acp"), enabled: true),
                 makeProvider(ProviderID(rawValue: "gemini"), enabled: true)
             ],
-            stageProviderIds: ["planner": "glm-acp"]
+            stageProviderIds: ["planner": ProviderID(rawValue: "glm-acp")]
         )
         let chain = config.providerChain(forStage: "planner")
         // Pinned provider should be first.
@@ -80,7 +80,7 @@ struct AgentProvidersConfigChainTests {
                 makeProvider(ProviderID(rawValue: "claude-acp"), enabled: true, isDefault: true),
                 makeProvider(ProviderID(rawValue: "glm-acp"), enabled: true)
             ],
-            stageProviderIds: ["planner": "claude-acp"]
+            stageProviderIds: ["planner": ProviderID(rawValue: "claude-acp")]
         )
         let chain = config.providerChain(forStage: "planner")
         // Stage pin = default → chain head appears only once.

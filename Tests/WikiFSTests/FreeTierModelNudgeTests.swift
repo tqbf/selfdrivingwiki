@@ -19,46 +19,46 @@ struct FreeTierModelNudgeTests {
     }
 
     @Test func returnsNilForEmptyModelId() {
-        #expect(FreeTierModelNudge.message(for: "") == nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "")) == nil)
     }
 
     @Test func returnsNilForRegularModel() {
-        #expect(FreeTierModelNudge.message(for: "sonnet") == nil)
-        #expect(FreeTierModelNudge.message(for: "claude-sonnet-4.5") == nil)
-        #expect(FreeTierModelNudge.message(for: "glm-4.7") == nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "sonnet")) == nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "claude-sonnet-4.5")) == nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "glm-4.7")) == nil)
     }
 
     // MARK: - Returns nudge for free-tier models
 
     @Test func returnsNudgeForBigPickle() {
-        let msg = FreeTierModelNudge.message(for: "opencode/big-pickle")
+        let msg = FreeTierModelNudge.message(for: ModelID(rawValue: "opencode/big-pickle"))
         #expect(msg != nil)
         #expect(msg?.contains("Free-tier models") == true)
         #expect(msg?.contains("stronger model") == true)
     }
 
     @Test func returnsNudgeForBigPickleUnderscoreVariant() {
-        let msg = FreeTierModelNudge.message(for: "opencode/big_pickle")
+        let msg = FreeTierModelNudge.message(for: ModelID(rawValue: "opencode/big_pickle"))
         #expect(msg != nil)
     }
 
     @Test func returnsNudgeCaseInsensitive() {
-        #expect(FreeTierModelNudge.message(for: "BIG-PICKLE") != nil)
-        #expect(FreeTierModelNudge.message(for: "Big_Pickle") != nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "BIG-PICKLE")) != nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "Big_Pickle")) != nil)
     }
 
     @Test func returnsNudgeForModelIdContainingPattern() {
         // The pattern is a substring match, so a versioned or prefixed id
         // still fires.
-        #expect(FreeTierModelNudge.message(for: "opencode/big-pickle-v2") != nil)
-        #expect(FreeTierModelNudge.message(for: "free/big-pickle-mini") != nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "opencode/big-pickle-v2")) != nil)
+        #expect(FreeTierModelNudge.message(for: ModelID(rawValue: "free/big-pickle-mini")) != nil)
     }
 
     @Test func returnsSameMessageForAllFreeTierModels() {
         // The message is a constant, not model-specific — pin it so the UI
         // caption is stable.
-        let a = FreeTierModelNudge.message(for: "opencode/big-pickle")
-        let b = FreeTierModelNudge.message(for: "other/big_pickle")
+        let a = FreeTierModelNudge.message(for: ModelID(rawValue: "opencode/big-pickle"))
+        let b = FreeTierModelNudge.message(for: ModelID(rawValue: "other/big_pickle"))
         #expect(a == b)
         #expect(a == FreeTierModelNudge.nudgeMessage)
     }

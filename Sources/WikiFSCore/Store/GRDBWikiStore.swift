@@ -6105,7 +6105,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func createChat(
         kind: ChatKind, title: String,
-        modelProviderId: String?, modelId: String?
+        modelProviderId: ProviderID?, modelId: ModelID?
     ) throws -> ChatSummary {
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
@@ -6118,7 +6118,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [
                 id.rawValue, kind.rawValue, title,
                 now.timeIntervalSince1970, now.timeIntervalSince1970,
-                modelProviderId, modelId
+                modelProviderId?.rawValue, modelId?.rawValue
             ])
             return ChatSummary(
                 id: id, kind: kind, title: title,
@@ -6489,14 +6489,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// representable state). Bumps `updated_at`. Routes through
     /// `mutate(event:_:)` so it emits a `.chat .updated` event, same as
     /// `updateChatAcpSessionId`.
-    public func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) throws {
+    public func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: id.rawValue, change: .updated)
         }) { db in
             try db.execute(sql: """
             UPDATE chats SET model_provider_id = ?, model_id = ?, updated_at = ?
             WHERE id = ?;
-            """, arguments: [providerId, providerId == nil ? nil : modelId,
+            """, arguments: [providerId?.rawValue, providerId == nil ? nil : modelId?.rawValue,
                             Date().timeIntervalSince1970, id.rawValue])
             guard db.changesCount > 0 else { throw WikiStoreError.chatNotFound(id) }
         }
@@ -6881,8 +6881,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             summary: summary,
             summaryAt: summaryAt,
             acpSessionId: acpSessionId.map { AcpSessionID(rawValue: $0) },
-            modelProviderId: modelProviderId,
-            modelId: modelId
+            modelProviderId: modelProviderId.map { ProviderID(rawValue: $0) },
+            modelId: modelId.map { ModelID(rawValue: $0) }
         )
     }
 

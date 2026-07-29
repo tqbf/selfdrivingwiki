@@ -668,7 +668,7 @@ public protocol WikiStore: Sendable {
     @discardableResult
     func createChat(
         kind: ChatKind, title: String,
-        modelProviderId: String?, modelId: String?
+        modelProviderId: ProviderID?, modelId: ModelID?
     ) throws -> ChatSummary
 
     /// Append the given events as new `chat_messages` rows, in one transaction:
@@ -711,7 +711,7 @@ public protocol WikiStore: Sendable {
     /// pin — outranks both the "chat" stage pin and the global default
     /// provider for THIS chat only). Pass `providerId: nil` to clear. Bumps
     /// `updated_at`. Throws `.notFound` if no chat has `id`.
-    func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) throws
+    func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
 
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
     func getChat(id: ChatID) throws -> ChatSummary

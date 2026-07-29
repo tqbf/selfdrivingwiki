@@ -407,9 +407,9 @@ public enum PageCommand {
         if let origin = try store.pageOrigin(pageID: id) {
             lines.append("")
             lines.append("# origin (HEAD)")
-            lines.append("activity\t\(origin.activityKind)")
-            lines.append("agent\t\(origin.agentName)")
-            lines.append("agent_kind\t\(origin.agentKind)")
+            lines.append("activity\t\(origin.activityKind.rawValue)")
+            lines.append("agent\t\(origin.agentName.rawValue)")
+            lines.append("agent_kind\t\(origin.agentKind.rawValue)")
             if let plan = origin.plan { lines.append("plan\t\(plan)") }
             if let extRef = origin.externalRef { lines.append("external_ref\t\(extRef)") }
             let savedAt = ISO8601DateFormatter().string(from: origin.savedAt)
@@ -427,7 +427,7 @@ public enum PageCommand {
                 // seq<TAB>activity<TAB>agent<TAB>agent_kind<TAB>date<TAB>title<TAB>version_id<TAB>blob_hash
                 let hash = entry.blobHash?.prefix(12) ?? "—"
                 let parent = history[i].parentID?.rawValue.prefix(12) ?? "—"
-                lines.append("\(i)\t\(entry.activityKind)\t\(entry.agentName)\t\(entry.agentKind)\t\(savedAt)\t\(entry.title)\t\(entry.versionID.rawValue.prefix(12))\t\(hash)\t\(parent)")
+                lines.append("\(i)\t\(entry.activityKind.rawValue)\t\(entry.agentName.rawValue)\t\(entry.agentKind.rawValue)\t\(savedAt)\t\(entry.title)\t\(entry.versionID.rawValue.prefix(12))\t\(hash)\t\(parent)")
             }
         }
 

@@ -4231,7 +4231,7 @@ public final class WikiStoreModel {
     /// composer's `ProviderSelector` picking a model for THIS chat). No
     /// manual reload — the bus fires `reloadFromStore()` async after the
     /// `.chat .updated` emit, same as `renameChat`.
-    public func updateChatModelOverride(id: ChatID, providerId: String?, modelId: String?) {
+    public func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) {
         do {
             try store.updateChatModelOverride(id: id, providerId: providerId, modelId: modelId)
         } catch {

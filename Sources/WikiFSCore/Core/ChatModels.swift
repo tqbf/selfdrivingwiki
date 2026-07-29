@@ -45,19 +45,19 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// default provider for THIS chat only. `nil` = no override, fall through
     /// to the existing stage/global resolution (`AgentProvidersConfig.provider(forStage:)`).
     /// Set by the composer's `ProviderSelector`.
-    public var modelProviderId: String?
+    public var modelProviderId: ProviderID?
     /// The model id within `modelProviderId`'s catalog. `nil` (with
     /// `modelProviderId` set) means "that provider's default model" — mirrors
     /// the composer's synthetic "Default" row. Meaningless when
     /// `modelProviderId` is `nil`.
-    public var modelId: String?
+    public var modelId: ModelID?
 
     public init(
         id: ChatID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
         summary: String? = nil, summaryAt: Date? = nil,
         acpSessionId: AcpSessionID? = nil,
-        modelProviderId: String? = nil, modelId: String? = nil
+        modelProviderId: ProviderID? = nil, modelId: ModelID? = nil
     ) {
         self.id = id
         self.kind = kind

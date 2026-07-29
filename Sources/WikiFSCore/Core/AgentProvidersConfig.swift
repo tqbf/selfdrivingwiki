@@ -44,14 +44,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// re-applies it via `session/set_model`. Keyed by `AgentProvider.id`.
     /// A missing/empty value = "use the agent's default model" (no `setModel`
     /// call) — the app's default state, so existing users see no change.
-    public var selectedModelIds: [String: String]
+    public var selectedModelIds: [String: ModelID]
 
     /// The user's favorited models per provider (paseo's per-row star). Keyed by
     /// `AgentProvider.id` → the favorited model ids. Favorites sort to the top of
     /// the composer's model picker — purely a display preference, with NO effect
     /// on routing/selection. Missing key = no favorites for that provider.
     /// Secrets-free; forward-compatible (a pre-favorites file decodes to empty).
-    public var favoriteModelIds: [String: [String]]
+    public var favoriteModelIds: [String: [ModelID]]
 
     /// Per-provider concurrent ingestion limits for the `QueueEngine`
     /// (Phase 2). Keyed by `AgentProvider.id`. A missing key (or 0) means the
@@ -72,7 +72,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// pre-per-stage `agent-providers.json` without this key decodes to `[:]`
     /// → every stage uses the provider's `selectedModelId`. See
     /// `plans/per-stage-model-selection.md`.
-    public var ingestStageModelIds: [String: String]
+    public var ingestStageModelIds: [String: ModelID]
 
     /// Per-stage PROVIDER overrides. Keyed by stage name (`"chat"`,
     /// `"planner"`, `"executor"`, `"finalizer"`, `"lint"`). Value = provider
@@ -83,16 +83,16 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// compatible: a pre-this-change `agent-providers.json` without this key
     /// decodes to `[:]` → every stage uses the global default. See
     /// `plans/agent-settings-tabs.md`.
-    public var stageProviderIds: [String: String]
+    public var stageProviderIds: [String: ProviderID]
 
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
-        selectedModelIds: [String: String] = [:],
-        favoriteModelIds: [String: [String]] = [:],
+        selectedModelIds: [String: ModelID] = [:],
+        favoriteModelIds: [String: [ModelID]] = [:],
         maxConcurrent: [String: Int] = [:],
-        ingestStageModelIds: [String: String] = [:],
-        stageProviderIds: [String: String] = [:]
+        ingestStageModelIds: [String: ModelID] = [:],
+        stageProviderIds: [String: ProviderID] = [:]
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
         self.providers = normalizedProviders
@@ -125,19 +125,19 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         // (no model caches) decodes without a migration — "no model selected →
         // agent default" is exactly the legacy behavior.
         self.providerModels = try c.decodeIfPresent([String: [CachedModelInfo]].self, forKey: .providerModels) ?? [:]
-        self.selectedModelIds = try c.decodeIfPresent([String: String].self, forKey: .selectedModelIds) ?? [:]
-        self.favoriteModelIds = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelIds) ?? [:]
+        self.selectedModelIds = try c.decodeIfPresent([String: ModelID].self, forKey: .selectedModelIds) ?? [:]
+        self.favoriteModelIds = try c.decodeIfPresent([String: [ModelID]].self, forKey: .favoriteModelIds) ?? [:]
         // Forward-compatible: pre-Phase-2 files have no `maxConcurrent` key.
         self.maxConcurrent = try c.decodeIfPresent([String: Int].self, forKey: .maxConcurrent) ?? [:]
         // Forward-compatible: pre-per-stage files have no `ingestStageModelIds`
         // key. `[:]` → every stage uses the provider's `selectedModelId`
         // (the legacy #604 collapsed behavior — no migration, no behavior
         // change for existing users).
-        self.ingestStageModelIds = try c.decodeIfPresent([String: String].self, forKey: .ingestStageModelIds) ?? [:]
+        self.ingestStageModelIds = try c.decodeIfPresent([String: ModelID].self, forKey: .ingestStageModelIds) ?? [:]
         // Forward-compatible: pre-agent-settings-tabs files have no
         // `stageProviderIds` key. `[:]` → every stage uses the global default
         // provider (the legacy behavior — no migration, no behavior change).
-        self.stageProviderIds = try c.decodeIfPresent([String: String].self, forKey: .stageProviderIds) ?? [:]
+        self.stageProviderIds = try c.decodeIfPresent([String: ProviderID].self, forKey: .stageProviderIds) ?? [:]
         // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
         // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
         // skips it. The original per-stage assignment feature was removed
@@ -240,16 +240,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// (`ChatSummary.modelProviderId`) — when set + enabled, it outranks even
     /// the stage pin. `nil` (every non-chat call site, and a chat with no
     /// override) preserves today's stage-pin-then-global-default resolution.
-    public func provider(forStage stage: String, chatOverrideProviderId: String? = nil) -> AgentProvider {
-        if let chatOverrideProviderId, !chatOverrideProviderId.isEmpty,
-           // chatOverrideProviderId is a persisted String (ChatSummary.modelProviderId) — boundary.
-           let p = provider(id: ProviderID(rawValue: chatOverrideProviderId)), p.enabled {
+    public func provider(forStage stage: String, chatOverrideProviderId: ProviderID? = nil) -> AgentProvider {
+        if let chatOverrideProviderId, !chatOverrideProviderId.rawValue.isEmpty,
+           let p = provider(id: chatOverrideProviderId), p.enabled {
             return p
         }
         if let pinnedId = stageProviderIds[stage],
-           !pinnedId.isEmpty,
-           // stageProviderIds is a persisted [String: String] dict — boundary.
-           let p = provider(id: ProviderID(rawValue: pinnedId)), p.enabled {
+           !pinnedId.rawValue.isEmpty,
+           let p = provider(id: pinnedId), p.enabled {
             return p
         }
         return selectedProvider()
@@ -285,11 +283,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// entirely, not just the provider half of it."
     public func modelId(
         forStage stage: String,
-        chatOverrideProviderId: String? = nil, chatOverrideModelId: String? = nil
-    ) -> String? {
+        chatOverrideProviderId: ProviderID? = nil, chatOverrideModelId: ModelID? = nil
+    ) -> ModelID? {
         let p = provider(forStage: stage, chatOverrideProviderId: chatOverrideProviderId)
-        if let chatOverrideProviderId, !chatOverrideProviderId.isEmpty {
-            if let chatOverrideModelId, !chatOverrideModelId.isEmpty { return chatOverrideModelId }
+        if let chatOverrideProviderId, !chatOverrideProviderId.rawValue.isEmpty {
+            if let chatOverrideModelId, !chatOverrideModelId.rawValue.isEmpty { return chatOverrideModelId }
             return selectedModelId(forProvider: p.id)
         }
         return modelId(forStage: stage, fallbackProvider: p.id)
@@ -308,8 +306,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// neuralwatt use case (`glm-5.2` / `glm-5.2-fast` / `glm-5.2-short` are
     /// one provider's variants) and keeps `providerHints` (spawn config)
     /// identical across phases — the warm subprocess is reused as-is.
-    public func modelId(forStage stage: String, fallbackProvider providerId: ProviderID) -> String? {
-        if let id = ingestStageModelIds[stage], !id.isEmpty { return id }
+    public func modelId(forStage stage: String, fallbackProvider providerId: ProviderID) -> ModelID? {
+        if let id = ingestStageModelIds[stage], !id.rawValue.isEmpty { return id }
         return selectedModelId(forProvider: providerId)
     }
 
@@ -320,15 +318,15 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Mirrors `settingSelectedModel(_:forProvider:)`'s carry-everything-else-
     /// through shape — a stage edit does NOT wipe other stages, the per-
     /// provider `selectedModelIds`, or any other field.
-    public func settingIngestStageModel(_ modelId: String?, forStage stage: String) -> AgentProvidersConfig {
-        let normalized = (modelId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+    public func settingIngestStageModel(_ modelId: ModelID?, forStage stage: String) -> AgentProvidersConfig {
+        let normalized = (modelId?.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : ModelID(rawValue: $0) }
         var stages = ingestStageModelIds
         if let normalized {
             stages[stage] = normalized
         } else {
             stages.removeValue(forKey: stage)
         }
-        DebugLog.store("AgentProvidersConfig.settingIngestStageModel: stage=\(stage) modelId=\(normalized ?? "nil")")
+        DebugLog.store("AgentProvidersConfig.settingIngestStageModel: stage=\(stage) modelId=\(normalized?.rawValue ?? "nil")")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -349,8 +347,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// be sent to the new provider. The user then re-picks (or leaves "Same as
     /// provider"). Mirrors the carry-everything-else-through shape of the other
     /// setters.
-    public func settingStageProvider(_ providerId: String?, forStage stage: String) -> AgentProvidersConfig {
-        let normalized = (providerId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+    public func settingStageProvider(_ providerId: ProviderID?, forStage stage: String) -> AgentProvidersConfig {
+        let normalized = (providerId?.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : ProviderID(rawValue: $0) }
         var pins = stageProviderIds
         let didChange: Bool
         if let normalized {
@@ -367,7 +365,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         if didChange {
             stages.removeValue(forKey: stage)
         }
-        DebugLog.store("AgentProvidersConfig.settingStageProvider: stage=\(stage) providerId=\(normalized ?? "nil") clearedModel=\(didChange)")
+        DebugLog.store("AgentProvidersConfig.settingStageProvider: stage=\(stage) providerId=\(normalized?.rawValue ?? "nil") clearedModel=\(didChange)")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -427,8 +425,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// The user's selected model id for `providerId`, or `nil` when none is set
     /// ("use the agent's default model"). PURE. Read by `ACPBackend.start` to
     /// decide whether to send `session/set_model`.
-    public func selectedModelId(forProvider providerId: ProviderID) -> String? {
-        guard let id = selectedModelIds[providerId.rawValue], !id.isEmpty else { return nil }
+    public func selectedModelId(forProvider providerId: ProviderID) -> ModelID? {
+        guard let id = selectedModelIds[providerId.rawValue], !id.rawValue.isEmpty else { return nil }
         return id
     }
 
@@ -458,14 +456,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `providerId` set (or cleared when `modelId` is nil/empty). Called by the
     /// chat-composer model picker; persisted by the launcher. A nil/empty
     /// selection = "use the agent's default" → today's behavior is unchanged.
-    public func settingSelectedModel(_ modelId: String?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
+    public func settingSelectedModel(_ modelId: ModelID?, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         var selections = selectedModelIds
-        if let modelId, !modelId.isEmpty {
+        if let modelId, !modelId.rawValue.isEmpty {
             selections[providerId.rawValue] = modelId
         } else {
             selections.removeValue(forKey: providerId.rawValue)
         }
-        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId ?? "nil")")
+        DebugLog.store("AgentProvidersConfig.settingSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId?.rawValue ?? "nil")")
         return AgentProvidersConfig(
             providers: providers,
             providerModels: providerModels,
@@ -479,12 +477,12 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
 
     /// Whether `modelId` is favorited for `providerId`. PURE.
-    public func isFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> Bool {
+    public func isFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> Bool {
         favoriteModelIds[providerId.rawValue]?.contains(modelId) ?? false
     }
 
     /// The favorited model ids for `providerId`, in favorite order. PURE.
-    public func favoriteModels(forProvider providerId: ProviderID) -> [String] {
+    public func favoriteModels(forProvider providerId: ProviderID) -> [ModelID] {
         favoriteModelIds[providerId.rawValue] ?? []
     }
 
@@ -492,7 +490,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// toggled for `providerId`. Newly-favorited ids append (preserving order);
     /// removing the last favorite drops the provider key. Persisted by the
     /// launcher; the picker re-sorts favorites to the top on the next read.
-    public func togglingFavoriteModel(_ modelId: String, forProvider providerId: ProviderID) -> AgentProvidersConfig {
+    public func togglingFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         var favorites = favoriteModelIds
         var list = favorites[providerId.rawValue] ?? []
         if let idx = list.firstIndex(of: modelId) {
@@ -535,7 +533,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     public static func seed(discovered: [DiscoveredACPAgent]) -> AgentProvidersConfig {
         AgentProvidersConfig(
             providers: [.claudeAcpDefault],
-            selectedModelIds: ["claude-acp": "sonnet"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")])
     }
 
     // MARK: - Persistence
@@ -569,7 +567,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == nil {
                 DebugLog.store("AgentProvidersConfig.loadOrSeed: BACKFILL claude-acp default-model='sonnet'")
                 selectedModelIds = selectedModelIds.merging(
-                    ["claude-acp": "sonnet"],
+                    ["claude-acp": ModelID(rawValue: "sonnet")],
                     uniquingKeysWith: { current, _ in current })
             }
             return AgentProvidersConfig(
