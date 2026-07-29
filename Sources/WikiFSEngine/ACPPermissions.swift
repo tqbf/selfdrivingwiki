@@ -240,6 +240,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
         let options: [PermissionOption]
         let toolName: String?
         let inputSummary: String?
+        let requestedAt: Date
         let continuation: CheckedContinuation<RequestPermissionResponse, Never>
         /// #606: the auto-reject timer Task, armed in `deferPermission` when a
         /// non-nil `budget` is set. `resolve`/`cancelAllPending` cancel it when
@@ -385,6 +386,7 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
                     options: request.options,
                     toolName: toolName,
                     inputSummary: inputSummary,
+                    requestedAt: Date(),
                     continuation: continuation,
                     timer: timer)
             }
@@ -501,6 +503,26 @@ public final class ACPPermissionDelegate: ClientDelegate, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    /// Snapshot the still-suspended continuations for a ceiling-kill artifact.
+    /// Called before the watchdog cancels the ACP session, while the pending map
+    /// still carries its original request timestamps.
+    func ceilingKillContext(occurredAt: Date, totalSeconds: TimeInterval) -> CeilingKillContext {
+        let pendingPermissions = lock.withLock { state in
+            state.pending.map { toolCallID, pending in
+                CeilingKillContext.PendingPermission(
+                    toolCallID: toolCallID,
+                    toolName: pending.toolName,
+                    inputSummary: pending.inputSummary,
+                    requestedAt: pending.requestedAt,
+                    waitSeconds: max(0, occurredAt.timeIntervalSince(pending.requestedAt)))
+            }
+        }
+        return CeilingKillContext(
+            occurredAt: occurredAt,
+            totalSeconds: totalSeconds,
+            pendingPermissions: pendingPermissions)
     }
 
     /// Drain (drain-on-cancel): resume EVERY pending always-ask continuation as

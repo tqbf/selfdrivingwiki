@@ -221,6 +221,13 @@ final class DebugRunLogger: @unchecked Sendable {
         appendJSONLine(payload, to: url)
     }
 
+    /// Write the permission state that existed at the exact instant a turn
+    /// ceiling fired. This must happen before cancellation drains continuations.
+    func logCeilingKillContext(_ context: CeilingKillContext) {
+        let url = folderURL.appendingPathComponent("ceiling-kill-context.json", isDirectory: false)
+        writeJSON(encodeToAny(context), to: url, encoder: prettyEncoder)
+    }
+
     // MARK: - Stderr
 
     /// Append a line of agent stderr to `debug/stderr.log`.
