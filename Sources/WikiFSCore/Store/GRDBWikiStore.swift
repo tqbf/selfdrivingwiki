@@ -58,11 +58,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 45
+    private static let currentSchemaVersion = 46
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
     public static var schemaVersion: Int { currentSchemaVersion }
+    private static let tantivyRebuildMarkerKey = "tantivy.rebuild.required"
 
     /// Read a `PRAGMA` value as text (e.g. `user_version`). Resilient: returns
     /// `""` on error. Mirrors the former `SQLiteWikiStore.pragmaValue`.
@@ -1280,6 +1281,26 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 45
         }
 
+        // v45→v46: destructive chat-subsystem rebuild for issue #982 Phase 2.
+        // Preserve all non-chat wiki data, but delete and recreate chat-owned
+        // tables (`chats`, `chat_messages`, durable turns, typed transcript,
+        // chat_search`, `chat_chunks`) so the new persistence contract starts
+        // from a clean boundary. Existing `[[chat:...]]` links may become
+        // unresolved after this reset by design.
+        if version < 46 {
+            try db.inTransaction(.immediate) {
+                try Self.rebuildChatSubsystemV46(in: db)
+                try Self.createWikiMetadataTable(in: db)
+                try db.execute(sql: """
+                INSERT INTO wiki_metadata (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """, arguments: [Self.tantivyRebuildMarkerKey, "1"])
+                try db.execute(sql: "PRAGMA user_version = 46;")
+                return .commit
+            }
+            version = 46
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1549,6 +1570,70 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             body    TEXT NOT NULL
         );
         """)
+    }
+
+    /// Create Phase 2 durable turn + typed transcript tables.
+    private static func createChatPhase2TablesV46(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_turns (
+            chat_id                TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            turn_id                TEXT NOT NULL,
+            command_id             TEXT NOT NULL,
+            ordinal                INTEGER NOT NULL,
+            state                  TEXT NOT NULL,
+            user_text              TEXT NOT NULL,
+            context_refs_json      TEXT NOT NULL,
+            submitted_at           REAL NOT NULL,
+            edited_at              REAL,
+            claim_id               TEXT,
+            claimed_at             REAL,
+            provider_submitted_at  REAL,
+            provider_session_id    TEXT,
+            terminal_message       TEXT,
+            PRIMARY KEY (chat_id, turn_id)
+        );
+        """)
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_command_id
+            ON chat_turns(chat_id, command_id);
+        """)
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_ordinal
+            ON chat_turns(chat_id, ordinal);
+        """)
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_claim_id
+            ON chat_turns(claim_id) WHERE claim_id IS NOT NULL;
+        """)
+
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_transcript_items (
+            chat_id               TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            cursor                INTEGER NOT NULL,
+            item_kind             TEXT NOT NULL,
+            item_json             TEXT NOT NULL,
+            projected_event_json  TEXT,
+            projected_text        TEXT NOT NULL DEFAULT '',
+            created_at            REAL NOT NULL,
+            PRIMARY KEY (chat_id, cursor)
+        ) WITHOUT ROWID;
+        """)
+    }
+
+    private static func rebuildChatSubsystemV46(in db: Database) throws {
+        for table in [
+            "chat_transcript_items",
+            "chat_turns",
+            "chat_chunks",
+            "chat_search",
+            "chat_messages",
+            "chats",
+        ] {
+            try db.execute(sql: "DROP TABLE IF EXISTS \(table);")
+        }
+        try createChatTablesV23(in: db)
+        try createChatSearchTables(in: db)
+        try createChatPhase2TablesV46(in: db)
     }
 
     /// Create the `wiki_metadata` key-value table (v37, issue #477). Stores
@@ -2584,6 +2669,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             body    TEXT NOT NULL
         );
         """)
+        try createChatPhase2TablesV46(in: db)
 
         // v30: page versions (W0).
         try db.execute(sql: """
@@ -6428,6 +6514,460 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) throws -> PersistedChatTurn {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let existing = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns
+                WHERE chat_id = ? AND command_id = ?;
+                """,
+                arguments: [chatID.rawValue, submission.commandID.rawValue]
+            )
+            if let existing {
+                return try Self.readPersistedChatTurn(from: existing)
+            }
+
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            guard exists != 0 else { throw WikiStoreError.chatNotFound(chatID) }
+
+            let nextOrdinal = (try Int.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(ordinal), -1) FROM chat_turns WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? -1) + 1
+            let refsJSON = String(data: try JSONEncoder().encode(submission.contextReferences), encoding: .utf8) ?? "[]"
+            try db.execute(sql: """
+            INSERT INTO chat_turns (
+                chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, arguments: [
+                chatID.rawValue, submission.turnID.rawValue, submission.commandID.rawValue,
+                nextOrdinal, ChatTurnPersistenceState.queued.rawValue, submission.userText,
+                refsJSON, submission.submittedAt.timeIntervalSince1970,
+            ])
+            return PersistedChatTurn(
+                chatID: chatID,
+                ordinal: nextOrdinal,
+                submission: submission,
+                editedAt: nil,
+                state: .queued,
+                claimID: nil,
+                claimedAt: nil,
+                providerSubmittedAt: nil,
+                providerSessionID: nil,
+                terminalMessage: nil
+            )
+        }
+    }
+
+    public func listPersistedChatTurns(chatID: ChatID) throws -> [PersistedChatTurn] {
+        try dbWriter.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns
+                WHERE chat_id = ?
+                ORDER BY ordinal ASC;
+                """,
+                arguments: [chatID.rawValue]
+            )
+            return try rows.map(Self.readPersistedChatTurn)
+        }
+    }
+
+    @discardableResult
+    public func editPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        userText: String,
+        contextReferences: [ChatContextReference],
+        editedAt: Date
+    ) throws -> PersistedChatTurn {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let refsJSON = String(data: try JSONEncoder().encode(contextReferences), encoding: .utf8) ?? "[]"
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET user_text = ?, context_refs_json = ?, edited_at = ?
+            WHERE chat_id = ? AND turn_id = ? AND state = ?;
+            """, arguments: [
+                userText, refsJSON, editedAt.timeIntervalSince1970,
+                chatID.rawValue, turnID.rawValue, ChatTurnPersistenceState.queued.rawValue,
+            ])
+            guard db.changesCount > 0 else {
+                throw WikiStoreError.unexpected("failed to edit persisted queued turn")
+            }
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            )
+            guard let row else {
+                throw WikiStoreError.unexpected("failed to reload edited persisted queued turn")
+            }
+            return try Self.readPersistedChatTurn(from: row)
+        }
+    }
+
+    @discardableResult
+    public func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> Bool {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(
+                sql: "DELETE FROM chat_turns WHERE chat_id = ? AND turn_id = ? AND state = ?;",
+                arguments: [chatID.rawValue, turnID.rawValue, ChatTurnPersistenceState.queued.rawValue]
+            )
+            return db.changesCount > 0
+        }
+    }
+
+    @discardableResult
+    public func claimNextPersistedChatTurn(
+        chatID: ChatID,
+        claimID: ChatTurnClaimID,
+        claimedAt: Date
+    ) throws -> PersistedChatTurn? {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT turn_id
+                FROM chat_turns
+                WHERE chat_id = ? AND state = ?
+                ORDER BY ordinal ASC
+                LIMIT 1;
+                """,
+                arguments: [chatID.rawValue, ChatTurnPersistenceState.queued.rawValue]
+            ) else {
+                return nil
+            }
+            let turnID: String = row["turn_id"]
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET state = ?, claim_id = ?, claimed_at = ?
+            WHERE chat_id = ? AND turn_id = ? AND state = ?;
+            """, arguments: [
+                ChatTurnPersistenceState.claimed.rawValue,
+                claimID.rawValue,
+                claimedAt.timeIntervalSince1970,
+                chatID.rawValue,
+                turnID,
+                ChatTurnPersistenceState.queued.rawValue,
+            ])
+            guard db.changesCount > 0 else {
+                return nil
+            }
+            let claimed = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID]
+            )
+            guard let claimed else {
+                throw WikiStoreError.unexpected("failed to reload claimed persisted turn")
+            }
+            return try Self.readPersistedChatTurn(from: claimed)
+        }
+    }
+
+    @discardableResult
+    public func markPersistedChatTurnProviderSubmitted(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        providerSessionID: AcpSessionID?,
+        submittedAt: Date
+    ) throws -> PersistedChatTurn {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let existingState = try String.fetchOne(
+                db,
+                sql: "SELECT state FROM chat_turns WHERE chat_id = ? AND turn_id = ?;",
+                arguments: [chatID.rawValue, turnID.rawValue]
+            )
+            guard let existingState else { throw WikiStoreError.unexpected("persisted turn missing") }
+            if existingState == ChatTurnPersistenceState.providerSubmitted.rawValue {
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                           submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                           provider_session_id, terminal_message
+                    FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                    """,
+                    arguments: [chatID.rawValue, turnID.rawValue]
+                ) else {
+                    throw WikiStoreError.unexpected("persisted submitted turn missing")
+                }
+                return try Self.readPersistedChatTurn(from: row)
+            }
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET state = ?, provider_submitted_at = ?, provider_session_id = ?
+            WHERE chat_id = ? AND turn_id = ? AND state = ? AND claim_id = ?;
+            """, arguments: [
+                ChatTurnPersistenceState.providerSubmitted.rawValue,
+                submittedAt.timeIntervalSince1970,
+                providerSessionID?.rawValue,
+                chatID.rawValue,
+                turnID.rawValue,
+                ChatTurnPersistenceState.claimed.rawValue,
+                claimID.rawValue,
+            ])
+            guard db.changesCount > 0 else {
+                throw WikiStoreError.unexpected("failed to mark persisted chat turn submitted")
+            }
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            )
+            guard let row else {
+                throw WikiStoreError.unexpected("failed to reload submitted persisted turn")
+            }
+            return try Self.readPersistedChatTurn(from: row)
+        }
+    }
+
+    @discardableResult
+    public func finishPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        state: ChatTurnPersistenceState,
+        terminalMessage: String?
+    ) throws -> PersistedChatTurn {
+        guard [.completed, .cancelled, .failed].contains(state) else {
+            throw WikiStoreError.unexpected("invalid terminal persisted turn state")
+        }
+        return try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let existingState = try String.fetchOne(
+                db,
+                sql: "SELECT state FROM chat_turns WHERE chat_id = ? AND turn_id = ?;",
+                arguments: [chatID.rawValue, turnID.rawValue]
+            )
+            guard let existingState else { throw WikiStoreError.unexpected("persisted turn missing") }
+            if existingState == state.rawValue,
+               let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+               ) {
+                return try Self.readPersistedChatTurn(from: row)
+            }
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET state = ?, terminal_message = ?
+            WHERE chat_id = ? AND turn_id = ? AND claim_id = ? AND state IN (?, ?);
+            """, arguments: [
+                state.rawValue,
+                terminalMessage,
+                chatID.rawValue,
+                turnID.rawValue,
+                claimID.rawValue,
+                ChatTurnPersistenceState.claimed.rawValue,
+                ChatTurnPersistenceState.providerSubmitted.rawValue,
+            ])
+            guard db.changesCount > 0 else {
+                throw WikiStoreError.unexpected("failed to finish persisted chat turn")
+            }
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            )
+            guard let row else {
+                throw WikiStoreError.unexpected("failed to reload finished persisted turn")
+            }
+            return try Self.readPersistedChatTurn(from: row)
+        }
+    }
+
+    @discardableResult
+    public func appendChatTranscriptItems(
+        chatID: ChatID,
+        items: [ChatTranscriptItem]
+    ) throws -> [PersistedChatTranscriptItem] {
+        guard !items.isEmpty else { return [] }
+        return try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            guard exists != 0 else { throw WikiStoreError.chatNotFound(chatID) }
+
+            let transcriptMax = try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(cursor), 0) FROM chat_transcript_items WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            let compatibilityMax = try Int.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? -1
+
+            let itemEncoder = JSONEncoder()
+            let eventEncoder = JSONEncoder()
+            let now = Date()
+            var nextCursor = transcriptMax
+            var nextSeq = compatibilityMax + 1
+            var inserted: [PersistedChatTranscriptItem] = []
+
+            for item in items {
+                nextCursor += 1
+                let projectedEvent = ChatTranscriptProjection.project(item)
+                let itemJSON = String(data: try itemEncoder.encode(item), encoding: .utf8) ?? "{}"
+                let projectedData = try eventEncoder.encode(projectedEvent)
+                let projectedJSON = String(data: projectedData, encoding: .utf8)
+                let createdAt = Self.transcriptCreatedAt(for: item) ?? now
+                try db.execute(sql: """
+                INSERT INTO chat_transcript_items (
+                    chat_id, cursor, item_kind, item_json, projected_event_json, projected_text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """, arguments: [
+                    chatID.rawValue,
+                    nextCursor,
+                    Self.transcriptItemKind(item),
+                    itemJSON,
+                    projectedJSON,
+                    projectedEvent.plainText,
+                    createdAt.timeIntervalSince1970,
+                ])
+                try db.execute(sql: """
+                INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """, arguments: [
+                    PageID(rawValue: ULID.generate()).rawValue,
+                    chatID.rawValue,
+                    nextSeq,
+                    projectedEvent.chatRole,
+                    projectedJSON ?? "{}",
+                    projectedEvent.plainText,
+                    createdAt.timeIntervalSince1970,
+                ])
+                inserted.append(PersistedChatTranscriptItem(
+                    cursor: ChatTranscriptCursor(rawValue: nextCursor),
+                    item: item,
+                    projectedEventJSON: projectedJSON,
+                    projectedPlainText: projectedEvent.plainText,
+                    createdAt: createdAt
+                ))
+                nextSeq += 1
+            }
+
+            try db.execute(sql: """
+            UPDATE chats SET updated_at = ? WHERE id = ?;
+            """, arguments: [Date().timeIntervalSince1970, chatID.rawValue])
+
+            if let title = try String.fetchOne(
+                db,
+                sql: "SELECT title FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) {
+                let body = (try String.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
+                    arguments: [chatID.rawValue]
+                )) ?? ""
+                try db.execute(sql: """
+                INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
+                """, arguments: [chatID.rawValue, title, body])
+            }
+
+            return inserted
+        }
+    }
+
+    public func readChatTranscriptPage(
+        chatID: ChatID,
+        after cursor: ChatTranscriptCursor?,
+        limit: Int
+    ) throws -> ChatTranscriptPage {
+        try dbWriter.read { db in
+            let checkpointRaw = try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(cursor), 0) FROM chat_transcript_items WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            let checkpoint = ChatTranscriptCursor(rawValue: checkpointRaw)
+            let lowerBound = cursor?.rawValue ?? 0
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT cursor, item_json, projected_event_json, projected_text, created_at
+                FROM chat_transcript_items
+                WHERE chat_id = ? AND cursor > ?
+                ORDER BY cursor ASC
+                LIMIT ?;
+                """,
+                arguments: [chatID.rawValue, lowerBound, max(0, limit)]
+            )
+            let items = try rows.map(Self.readPersistedChatTranscriptItem)
+            let nextCursor = items.last.map(\.cursor)
+            return ChatTranscriptPage(items: items, checkpoint: checkpoint, nextCursor: nextCursor)
+        }
+    }
+
+    public func chatTranscriptCheckpoint(chatID: ChatID) throws -> ChatTranscriptCursor {
+        try dbWriter.read { db in
+            let raw = try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(cursor), 0) FROM chat_transcript_items WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            return ChatTranscriptCursor(rawValue: raw)
+        }
+    }
+
 
     /// True when the `chats` table has all columns the chat-summary queries
     /// depend on (`acp_session_id` from v43, `model_provider_id` / `model_id`
@@ -6961,6 +7501,85 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             displayName: displayName,
             role: SourceRole(rawValue: roleRaw) ?? .primary
         )
+    }
+
+    private static func readPersistedChatTurn(from row: Row) throws -> PersistedChatTurn {
+        let chatID = ChatID(rawValue: row["chat_id"])
+        let turnID = ChatTurnID(rawValue: row["turn_id"])
+        let commandID = ChatCommandID(rawValue: row["command_id"])
+        let ordinal: Int = row["ordinal"]
+        let stateRaw: String = row["state"]
+        guard let state = ChatTurnPersistenceState(rawValue: stateRaw) else {
+            throw WikiStoreError.unexpected("unknown persisted chat turn state: \(stateRaw)")
+        }
+        let userText: String = row["user_text"]
+        let refsJSON: String = row["context_refs_json"]
+        let refsData = refsJSON.data(using: .utf8) ?? Data("[]".utf8)
+        let refs = try JSONDecoder().decode([ChatContextReference].self, from: refsData)
+        let submittedAt: Double = row["submitted_at"]
+        let editedAt: Double? = row["edited_at"]
+        let claimID: String? = row["claim_id"]
+        let claimedAt: Double? = row["claimed_at"]
+        let providerSubmittedAt: Double? = row["provider_submitted_at"]
+        let providerSessionID: String? = row["provider_session_id"]
+        let terminalMessage: String? = row["terminal_message"]
+        return PersistedChatTurn(
+            chatID: chatID,
+            ordinal: ordinal,
+            submission: ChatTurnSubmission(
+                commandID: commandID,
+                turnID: turnID,
+                userText: userText,
+                contextReferences: refs,
+                submittedAt: Date(timeIntervalSince1970: submittedAt)
+            ),
+            editedAt: editedAt.map(Date.init(timeIntervalSince1970:)),
+            state: state,
+            claimID: claimID.map(ChatTurnClaimID.init(rawValue:)),
+            claimedAt: claimedAt.map(Date.init(timeIntervalSince1970:)),
+            providerSubmittedAt: providerSubmittedAt.map(Date.init(timeIntervalSince1970:)),
+            providerSessionID: providerSessionID.map(AcpSessionID.init(rawValue:)),
+            terminalMessage: terminalMessage
+        )
+    }
+
+    private static func readPersistedChatTranscriptItem(from row: Row) throws -> PersistedChatTranscriptItem {
+        let cursor = ChatTranscriptCursor(rawValue: row["cursor"])
+        let itemJSON: String = row["item_json"]
+        let itemData = itemJSON.data(using: .utf8) ?? Data("{}".utf8)
+        let item = try JSONDecoder().decode(ChatTranscriptItem.self, from: itemData)
+        let projectedEventJSON: String? = row["projected_event_json"]
+        let projectedText: String = row["projected_text"]
+        let createdAt: Double = row["created_at"]
+        return PersistedChatTranscriptItem(
+            cursor: cursor,
+            item: item,
+            projectedEventJSON: projectedEventJSON,
+            projectedPlainText: projectedText,
+            createdAt: Date(timeIntervalSince1970: createdAt)
+        )
+    }
+
+    private static func transcriptItemKind(_ item: ChatTranscriptItem) -> String {
+        switch item {
+        case .message: return "message"
+        case .toolCall: return "toolCall"
+        case .systemNotice: return "systemNotice"
+        case .turnFailure: return "turnFailure"
+        }
+    }
+
+    private static func transcriptCreatedAt(for item: ChatTranscriptItem) -> Date? {
+        switch item {
+        case .message(let message):
+            return message.createdAt
+        case .toolCall(let toolCall):
+            return toolCall.updatedAt
+        case .systemNotice(let notice):
+            return notice.createdAt
+        case .turnFailure(let failure):
+            return failure.createdAt
+        }
     }
 
     // MARK: - GRDB implementation helpers

@@ -18,6 +18,7 @@ public final class TantivySearchService: Sendable {
     public let indexer: TantivyIndexer
     public let wikiID: WikiID
     private let indexDirectory: URL
+    private let rebuildMarkerSource: (any TantivyRebuildMarkerSource)?
 
     public init(wikiID: WikiID, containerDirectory: URL, contentSource: any TantivyContentSource) throws {
         self.wikiID = wikiID
@@ -28,6 +29,7 @@ public final class TantivySearchService: Sendable {
             .appendingPathComponent("search-index", isDirectory: true)
             .appendingPathComponent(wikiID.rawValue, isDirectory: true)
         self.indexDirectory = dir
+        self.rebuildMarkerSource = contentSource as? any TantivyRebuildMarkerSource
         self.indexer = try TantivyIndexer(indexDirectory: dir, contentSource: contentSource)
     }
 
@@ -93,11 +95,15 @@ public final class TantivySearchService: Sendable {
     /// caller; callers that need the build complete can `await rebuildIfNeeded()`.
     public func rebuildIfNeeded() async {
         do {
+            let markerRequiresRebuild = await rebuildMarkerSource?.requiresTantivyRebuild() ?? false
             let n = await indexer.count()
-            if n == 0 {
+            if markerRequiresRebuild || n == 0 {
                 DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: index empty — rebuilding from store")
                 try await indexer.rebuild()
                 let after = await indexer.count()
+                if markerRequiresRebuild {
+                    await rebuildMarkerSource?.clearTantivyRebuildRequirement()
+                }
                 DebugLog.store("TantivySearchService[\(wikiID.rawValue)]: rebuild complete (\(after) docs)")
             }
         } catch {

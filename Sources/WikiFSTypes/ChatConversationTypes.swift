@@ -68,6 +68,17 @@ public struct ChatTurnSubmission: Hashable, Sendable, Codable {
     }
 }
 
+/// Stable claim identity for one durable turn-claim attempt.
+public struct ChatTurnClaimID: Hashable, Sendable, Codable, RawRepresentable, Identifiable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var id: String { rawValue }
+}
+
 /// The typed status of one tool call in the shared transcript vocabulary.
 public enum ChatToolCallStatus: String, Sendable, Codable, CaseIterable {
     case pending
@@ -215,5 +226,108 @@ public enum ChatTranscriptItem: Hashable, Sendable, Codable {
         case .turnFailure(let item):
             return item.turnID
         }
+    }
+}
+
+/// Monotonic, per-chat transcript cursor used for authoritative history paging.
+public struct ChatTranscriptCursor: Hashable, Sendable, Codable, Comparable {
+    public let rawValue: Int64
+
+    public init(rawValue: Int64) {
+        self.rawValue = rawValue
+    }
+
+    public static func < (lhs: ChatTranscriptCursor, rhs: ChatTranscriptCursor) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    public static let zero = ChatTranscriptCursor(rawValue: 0)
+}
+
+/// Durable lifecycle of one persisted turn row.
+public enum ChatTurnPersistenceState: String, Hashable, Sendable, Codable, CaseIterable {
+    case queued
+    case claimed
+    case providerSubmitted
+    case completed
+    case cancelled
+    case failed
+}
+
+/// One durable turn row persisted for later controller recovery/replay.
+public struct PersistedChatTurn: Hashable, Sendable, Codable {
+    public let chatID: ChatID
+    public let ordinal: Int
+    public let submission: ChatTurnSubmission
+    public let editedAt: Date?
+    public let state: ChatTurnPersistenceState
+    public let claimID: ChatTurnClaimID?
+    public let claimedAt: Date?
+    public let providerSubmittedAt: Date?
+    public let providerSessionID: AcpSessionID?
+    public let terminalMessage: String?
+
+    public init(
+        chatID: ChatID,
+        ordinal: Int,
+        submission: ChatTurnSubmission,
+        editedAt: Date?,
+        state: ChatTurnPersistenceState,
+        claimID: ChatTurnClaimID?,
+        claimedAt: Date?,
+        providerSubmittedAt: Date?,
+        providerSessionID: AcpSessionID?,
+        terminalMessage: String?
+    ) {
+        self.chatID = chatID
+        self.ordinal = ordinal
+        self.submission = submission
+        self.editedAt = editedAt
+        self.state = state
+        self.claimID = claimID
+        self.claimedAt = claimedAt
+        self.providerSubmittedAt = providerSubmittedAt
+        self.providerSessionID = providerSessionID
+        self.terminalMessage = terminalMessage
+    }
+}
+
+/// One persisted transcript row plus its cursor and current-renderer projection.
+public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
+    public let cursor: ChatTranscriptCursor
+    public let item: ChatTranscriptItem
+    public let projectedEventJSON: String?
+    public let projectedPlainText: String
+    public let createdAt: Date
+
+    public init(
+        cursor: ChatTranscriptCursor,
+        item: ChatTranscriptItem,
+        projectedEventJSON: String?,
+        projectedPlainText: String,
+        createdAt: Date
+    ) {
+        self.cursor = cursor
+        self.item = item
+        self.projectedEventJSON = projectedEventJSON
+        self.projectedPlainText = projectedPlainText
+        self.createdAt = createdAt
+    }
+}
+
+/// One transcript page plus the high-water checkpoint visible at read time.
+public struct ChatTranscriptPage: Hashable, Sendable, Codable {
+    public let items: [PersistedChatTranscriptItem]
+    public let checkpoint: ChatTranscriptCursor
+    public let nextCursor: ChatTranscriptCursor?
+
+    public init(
+        items: [PersistedChatTranscriptItem],
+        checkpoint: ChatTranscriptCursor,
+        nextCursor: ChatTranscriptCursor?
+    ) {
+        self.items = items
+        self.checkpoint = checkpoint
+        self.nextCursor = nextCursor
     }
 }
