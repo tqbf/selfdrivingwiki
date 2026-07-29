@@ -1,0 +1,68 @@
+import Foundation
+import Testing
+
+/// Keeps the reviewed chat-domain identifier surface explicit.
+struct ChatDomainAPISignatureManifestTests {
+
+    private struct Entry {
+        let path: String
+        let signature: String
+    }
+
+    private enum ManifestError: Error, CustomStringConvertible {
+        case malformedLine(String)
+
+        var description: String {
+            switch self {
+            case .malformedLine(let line):
+                "malformed chat-domain API signature manifest line: \(line)"
+            }
+        }
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func manifestEntries() throws -> [Entry] {
+        let manifestURL = repositoryRoot()
+            .appendingPathComponent("Tests/WikiFSTests/Fixtures/ChatDomainAPISignatures.txt")
+        let manifest = try String(contentsOf: manifestURL, encoding: .utf8)
+
+        return try manifest
+            .split(whereSeparator: \.isNewline)
+            .filter { $0.starts(with: "#") == false && $0.isEmpty == false }
+            .map { line in
+                let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2,
+                      parts[0].isEmpty == false,
+                      parts[1].isEmpty == false
+                else {
+                    throw ManifestError.malformedLine(String(line))
+                }
+                return Entry(path: String(parts[0]), signature: String(parts[1]))
+            }
+    }
+
+    @Test func chatDomainIdentifierSignaturesRemainTyped() throws {
+        let root = repositoryRoot()
+        let entries = try manifestEntries()
+        #expect(entries.isEmpty == false, "chat-domain API signature manifest must not be empty")
+
+        for entry in entries {
+            #expect(
+                entry.signature.contains("ID") || entry.signature.contains("ChatUpdateSequence"),
+                "manifest entry must assert a typed chat-domain boundary: \(entry.path)"
+            )
+            let sourceURL = root.appendingPathComponent(entry.path)
+            let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            #expect(
+                source.contains(entry.signature),
+                "missing typed chat-domain API signature in \(entry.path): \(entry.signature)"
+            )
+        }
+    }
+}

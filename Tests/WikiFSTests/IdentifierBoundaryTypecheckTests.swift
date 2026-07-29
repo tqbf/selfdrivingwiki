@@ -196,6 +196,11 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
+    @Test func positiveChatDomainFixturesCompile() throws {
+        let result = try runTypecheck("positive-chat-domain.swift")
+        #expect(result.status == 0, "positive chat-domain fixture failed to typecheck:\n\(result.output)")
+    }
+
     #if os(macOS)
     @Test func launcherPositiveFixturesCompile() throws {
         let result = try runTypecheck("positive-launcher-macos.swift")
@@ -372,6 +377,42 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a ChatID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'ChatID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func pageIDIsRejectedByChatTurnAPI() throws {
+        let result = try runTypecheck("page-id-to-chat-turn-api.swift")
+        #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatTurnID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatTurnID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func chatIDIsRejectedByChatMessageAPI() throws {
+        let result = try runTypecheck("chat-id-to-chat-message-api.swift")
+        #expect(result.status != 0, "ChatID unexpectedly typechecked at a ChatMessageID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'ChatMessageID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func stringIsRejectedByChatCommandAPI() throws {
+        let result = try runTypecheck("string-to-chat-command-api.swift")
+        #expect(result.status != 0, "String unexpectedly typechecked at a ChatCommandID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatCommandID'"),
+            "unexpected compiler diagnostic:\n\(result.output)"
+        )
+    }
+
+    @Test func permissionRequestIDIsRejectedByToolCallAPI() throws {
+        let result = try runTypecheck("permission-request-id-to-tool-call-api.swift")
+        #expect(result.status != 0, "PermissionRequestID unexpectedly typechecked at a ToolCallID API boundary.")
+        #expect(
+            result.output.contains("cannot convert value of type 'PermissionRequestID' to expected argument type 'ToolCallID'"),
             "unexpected compiler diagnostic:\n\(result.output)"
         )
     }

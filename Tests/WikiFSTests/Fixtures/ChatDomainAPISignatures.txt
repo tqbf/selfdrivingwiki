@@ -1,0 +1,14 @@
+# Chat-domain API signature manifest
+#
+# Format: <repository-relative Swift path><TAB><required signature fragment>
+#
+# These entries protect the reviewed Phase 0/1 typed conversation domain.
+Sources/WikiFSTypes/ChatConversationTypes.swift	public let commandID: ChatCommandID
+Sources/WikiFSTypes/ChatConversationTypes.swift	public let turnID: ChatTurnID
+Sources/WikiFSTypes/ChatConversationTypes.swift	public let messageID: ChatMessageID
+Sources/WikiFSTypes/ChatConversationTypes.swift	public let toolCallID: ToolCallID
+Sources/WikiFSEngine/ChatAgentRuntime.swift	public let generation: ChatSessionGenerationID
+Sources/WikiFSEngine/ChatDomain.swift	public let requestID: PermissionRequestID
+Sources/WikiFSEngine/ChatDomain.swift	public let commandID: ChatCommandID
+Sources/WikiFSEngine/ChatDomain.swift	public let generation: ChatSessionGenerationID
+Sources/WikiFSEngine/ChatDomain.swift	public let sequence: ChatUpdateSequence
