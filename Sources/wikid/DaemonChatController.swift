@@ -9,6 +9,9 @@ import WikiFSCore
 import WikiFSEngine
 
 actor DaemonChatController {
+    private static let replayCapacity = 128
+    private static let liveEventOverlayCapacity = 512
+
     private let chatID: ChatID
     private let wikiID: WikiID
     private let store: GRDBWikiStore
@@ -25,6 +28,7 @@ actor DaemonChatController {
     private var currentClaimTurnID: ChatTurnID?
     private var pendingCancellationTurnID: ChatTurnID?
     private var activePermission: ChatPendingPermissionRequest?
+    private var isProcessingQueue = false
     private var latestStateUpdate = ChatStateUpdate(
         isRunning: false,
         isGenerating: false,
@@ -109,6 +113,18 @@ actor DaemonChatController {
         }
     }
 
+    func stopSession() async {
+        if let activeTurn = snapshot.activeTurn,
+           activeTurn.state.isTerminal == false {
+            await cancel(turnID: activeTurn.turnID)
+            return
+        }
+        guard runtimeHandle != nil else { return }
+        record(.sessionClosed)
+        activePermission = nil
+        await closeRuntimeAndRotateGeneration()
+    }
+
     func resolvePermission(optionID: String) async {
         guard let permission = activePermission,
               let handle = runtimeHandle else { return }
@@ -137,9 +153,10 @@ actor DaemonChatController {
     }
 
     func chatSessionState() throws -> ChatSessionState {
+        let persistedEvents = try store.chatMessages(chatID: chatID).map(\.event)
         let events = runtimeHandle == nil
-            ? try store.chatMessages(chatID: chatID).map(\.event)
-            : AgentEvent.mergingStreamDeltas(liveEvents)
+            ? persistedEvents
+            : AgentEvent.mergingStreamDeltas(persistedEvents + liveEvents)
         return ChatSessionState(
             chatID: chatID,
             events: events,
@@ -192,10 +209,24 @@ actor DaemonChatController {
     }
 
     func didReceiveLiveEvents(_ events: [AgentEvent]) {
-        liveEvents.append(contentsOf: events)
+        let filtered = events.filter { event in
+            if case .userText = event {
+                return false
+            }
+            return true
+        }
+        guard filtered.isEmpty == false else { return }
+        liveEvents.append(contentsOf: filtered)
+        if liveEvents.count > Self.liveEventOverlayCapacity {
+            liveEvents.removeFirst(liveEvents.count - Self.liveEventOverlayCapacity)
+        }
     }
 
     private func processQueueIfPossible() async throws {
+        guard isProcessingQueue == false else { return }
+        isProcessingQueue = true
+        defer { isProcessingQueue = false }
+
         guard currentClaimID == nil else { return }
         if let activeTurn = snapshot.activeTurn,
            activeTurn.state.isTerminal == false,
@@ -204,7 +235,7 @@ actor DaemonChatController {
         }
         switch snapshot.attention {
         case .turnFailed, .interruptedTurn:
-            return
+            guard snapshot.queuedTurns.isEmpty == false else { return }
         case .none, .permissionRequired:
             break
         }
@@ -226,31 +257,31 @@ actor DaemonChatController {
         if snapshot.activeTurn?.turnID != claimed.submission.turnID {
             record(.queued(queuedTurn))
         }
-
-        let handle: ChatRuntimeHandle
-        if let existingHandle = runtimeHandle {
-            handle = existingHandle
-        } else {
-            let chat = try store.getChat(id: chatID)
-            handle = try await runtime.start(
-                ChatRuntimeStartRequest(
-                    chatID: chatID,
-                    generation: generation,
-                    systemPrompt: try store.getSystemPrompt().body,
-                    providerID: chat.modelProviderId,
-                    modelID: chat.modelId,
-                    existingProviderSessionID: chat.acpSessionId
-                )
-            )
-            runtimeHandle = handle
-            startEventLoop(handle)
-        }
+        adoptClaimedTurnIfNeeded(queuedTurn)
 
         currentClaimID = claimID
         currentClaimTurnID = claimed.submission.turnID
         record(.submitted(turnID: claimed.submission.turnID))
 
+        let handle: ChatRuntimeHandle
         do {
+            if let existingHandle = runtimeHandle {
+                handle = existingHandle
+            } else {
+                let chat = try store.getChat(id: chatID)
+                handle = try await runtime.start(
+                    ChatRuntimeStartRequest(
+                        chatID: chatID,
+                        generation: generation,
+                        systemPrompt: try store.getSystemPrompt().body,
+                        providerID: chat.modelProviderId,
+                        modelID: chat.modelId,
+                        existingProviderSessionID: chat.acpSessionId
+                    )
+                )
+                runtimeHandle = handle
+                startEventLoop(handle)
+            }
             try await runtime.submitTurn(claimed.submission, in: handle)
             let marked = try store.markPersistedChatTurnProviderSubmitted(
                 chatID: chatID,
@@ -368,7 +399,8 @@ actor DaemonChatController {
             if snapshot.lifecycle != .closed {
                 record(.sessionClosed)
             }
-            runtimeHandle = nil
+            activePermission = nil
+            await closeRuntimeAndRotateGeneration()
 
         case .resumed(let providerSessionID):
             do {
@@ -443,7 +475,9 @@ actor DaemonChatController {
 
         currentClaimID = nil
         currentClaimTurnID = nil
+        activePermission = nil
         record(payload)
+        liveEvents.removeAll(keepingCapacity: true)
         return true
     }
 
@@ -467,27 +501,75 @@ actor DaemonChatController {
             sequence: next,
             payload: payload
         )
-        replayBuffer.append(update)
-        nextSequence = next
-
-        if case .applied(let applied) = ChatSessionMachine.apply(update, to: snapshot) {
+        switch ChatSessionMachine.apply(update, to: snapshot) {
+        case .applied(let applied):
+            replayBuffer.append(update)
+            nextSequence = next
             snapshot = applied
-        } else if case .sessionClosed = payload {
-            snapshot = ChatRuntimeSnapshot(
-                chatID: snapshot.chatID,
-                generation: snapshot.generation,
-                lifecycle: .closed,
-                activeTurn: nil,
-                queuedTurns: snapshot.queuedTurns,
-                attention: .none,
-                capabilities: snapshot.capabilities,
-                providerState: snapshot.providerState,
-                usage: snapshot.usage,
-                diagnostics: snapshot.diagnostics,
-                transientTranscriptOverlay: snapshot.transientTranscriptOverlay,
-                lastIncludedSequence: next
-            )
+        case .rejected(let rejection):
+            DebugLog.agent("DaemonChatController rejected update \(payload): \(rejection)")
         }
+    }
+
+    private func adoptClaimedTurnIfNeeded(_ queuedTurn: ChatQueuedTurn) {
+        guard let activeTurn = snapshot.activeTurn else { return }
+        guard activeTurn.state.isTerminal else { return }
+        guard let queuedIndex = snapshot.queuedTurns.firstIndex(where: { $0.submission.turnID == queuedTurn.submission.turnID }) else {
+            return
+        }
+
+        var remainingQueuedTurns = snapshot.queuedTurns
+        remainingQueuedTurns.remove(at: queuedIndex)
+        snapshot = ChatRuntimeSnapshot(
+            chatID: snapshot.chatID,
+            generation: snapshot.generation,
+            lifecycle: snapshot.lifecycle,
+            activeTurn: ChatTurnSnapshot(
+                turnID: queuedTurn.submission.turnID,
+                commandID: queuedTurn.submission.commandID,
+                visibleText: queuedTurn.submission.userText,
+                contextReferences: queuedTurn.submission.contextReferences,
+                submittedAt: queuedTurn.submission.submittedAt,
+                editedAt: queuedTurn.editedAt,
+                state: .queued
+            ),
+            queuedTurns: remainingQueuedTurns,
+            attention: .none,
+            capabilities: snapshot.capabilities,
+            providerState: snapshot.providerState,
+            usage: snapshot.usage,
+            diagnostics: snapshot.diagnostics,
+            transientTranscriptOverlay: snapshot.transientTranscriptOverlay,
+            lastIncludedSequence: snapshot.lastIncludedSequence
+        )
+    }
+
+    private func closeRuntimeAndRotateGeneration() async {
+        if let handle = runtimeHandle {
+            await runtime.close(handle)
+        }
+        runtimeHandle = nil
+        eventTask?.cancel()
+        eventTask = nil
+        liveEvents.removeAll(keepingCapacity: true)
+        pendingCancellationTurnID = nil
+        currentClaimID = nil
+        currentClaimTurnID = nil
+        generation = ChatSessionGenerationID(rawValue: ULID.generate())
+        snapshot = ChatRuntimeSnapshot(
+            chatID: snapshot.chatID,
+            generation: generation,
+            lifecycle: .closed,
+            activeTurn: snapshot.activeTurn,
+            queuedTurns: snapshot.queuedTurns,
+            attention: snapshot.attention,
+            capabilities: snapshot.capabilities,
+            providerState: snapshot.providerState,
+            usage: snapshot.usage,
+            diagnostics: snapshot.diagnostics,
+            transientTranscriptOverlay: [],
+            lastIncludedSequence: snapshot.lastIncludedSequence
+        )
     }
 
     private static func bootstrapSnapshot(

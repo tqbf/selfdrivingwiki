@@ -1,4 +1,5 @@
 #if os(macOS)
+import ACPModel
 import Foundation
 import Observation
 import WikiFSCore
@@ -196,11 +197,19 @@ public final class RemoteChatSession {
                 let title = dict["title"] as? String
                 let toolName = dict["toolName"] as? String
                 let inputSummary = dict["inputSummary"] as? String
+                let options: [PermissionOption] = (dict["options"] as? [[String: Any]] ?? []).compactMap { optionDict in
+                    guard let optionId = optionDict["optionId"] as? String,
+                          let name = optionDict["name"] as? String,
+                          let kind = optionDict["kind"] as? String else {
+                        return nil
+                    }
+                    return PermissionOption(kind: kind, name: name, optionId: optionId)
+                }
                 pendingPermissions = [PendingPermission(
                     toolCallId: ToolCallID(rawValue: toolCallId),
                     title: title, toolName: toolName,
                     inputSummary: inputSummary,
-                    options: [])]
+                    options: options)]
             } else {
                 pendingPermissions = []
             }

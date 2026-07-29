@@ -325,7 +325,65 @@ struct DaemonChatControllerTests {
             failureMessage: "expected replay buffer to consume transcript events"
         )
 
-        #expect(await controller.replay(after: ChatUpdateSequence(rawValue: 10)) == .unavailable)
+        let latest = await controller.typedSnapshot().lastIncludedSequence.rawValue
+        let staleWatermark = ChatUpdateSequence(rawValue: max(0, latest - 130))
+        #expect(await controller.replay(after: staleWatermark) == .unavailable)
+    }
+
+    @Test func transportCloseRotatesRuntimeAndRecoversOnNextTurn() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-first", turnID: "turn-first")
+        let second = harness.makeSubmission(commandID: "command-second", turnID: "turn-second", text: "after restart")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.transportClosed(status: 9))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
+    @Test func stopSessionClosesIdleRuntimeAndNextTurnStartsFreshRuntime() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-stop-first", turnID: "turn-stop-first")
+        let second = harness.makeSubmission(commandID: "command-stop-second", turnID: "turn-stop-second", text: "after explicit close")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { activeTurn in activeTurn?.state.isTerminal == true },
+            failureMessage: "expected the first turn to reach a terminal state before stopping the idle session"
+        )
+        await controller.stopSession()
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
+    @Test func failedTurnAttentionDoesNotBlockNextQueuedTurn() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-failed", turnID: "turn-failed")
+        let second = harness.makeSubmission(commandID: "command-recovery", turnID: "turn-recovery", text: "retry")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnFailed(
+            turnID: first.turnID,
+            category: .runtimeError,
+            message: "boom"
+        ))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect((await controller.typedSnapshot()).attention == .none)
     }
 }
 
@@ -421,6 +479,20 @@ private struct ControllerHarness {
         }
         throw HarnessError.timedOut(failureMessage)
     }
+
+    func waitUntil(
+        _ controller: DaemonChatController,
+        predicate: @Sendable @escaping (ChatTurnSnapshot?) -> Bool,
+        failureMessage: String
+    ) async throws {
+        for _ in 0..<50 {
+            if predicate(await controller.typedSnapshot().activeTurn) {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw HarnessError.timedOut(failureMessage)
+    }
 }
 
 private actor StubControllerRuntime: ChatAgentRuntime {
@@ -429,6 +501,7 @@ private actor StubControllerRuntime: ChatAgentRuntime {
         let submitCalls: [ChatTurnSubmission]
         let cancelCalls: [ChatTurnID?]
         let permissionResolutions: [ChatPermissionResolution]
+        let closeCallCount: Int
     }
 
     private let handle = ChatRuntimeHandle(rawValue: "stub-runtime")
@@ -437,6 +510,7 @@ private actor StubControllerRuntime: ChatAgentRuntime {
     private var submitCalls: [ChatTurnSubmission] = []
     private var cancelCalls: [ChatTurnID?] = []
     private var permissionResolutions: [ChatPermissionResolution] = []
+    private var closeCallCount = 0
     private var streamContinuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation?
     private var stream: AsyncStream<ChatAgentRuntimeEventEnvelope>?
 
@@ -510,7 +584,10 @@ private actor StubControllerRuntime: ChatAgentRuntime {
     }
 
     func close(_ handle: ChatRuntimeHandle) async {
+        closeCallCount += 1
         streamContinuation?.finish()
+        streamContinuation = nil
+        stream = nil
     }
 
     func emit(_ event: ChatAgentRuntimeEvent) {
@@ -526,7 +603,8 @@ private actor StubControllerRuntime: ChatAgentRuntime {
             startRequests: startRequests,
             submitCalls: submitCalls,
             cancelCalls: cancelCalls,
-            permissionResolutions: permissionResolutions
+            permissionResolutions: permissionResolutions,
+            closeCallCount: closeCallCount
         )
     }
 }

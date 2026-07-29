@@ -2898,6 +2898,8 @@ public final class AgentLauncher {
         chatOverrideProviderId: ProviderID? = nil,
         chatOverrideModelId: ModelID? = nil,
         onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
+        onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
         onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
@@ -3061,6 +3063,8 @@ public final class AgentLauncher {
         // own append when `firstMessagePreDisplayed` is set.
         let preDisplay = (firstMessageDisplay ?? firstMessage)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        onAgentEvent = onEvent
+        self.onPendingPermission = onPendingPermission
         if !preDisplay.isEmpty {
             events.append(.userText(preDisplay))
             eventTimestamps.append(Date())

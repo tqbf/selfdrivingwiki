@@ -151,7 +151,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// the registry (D1: no idle eviction for Phase C).
     func stopChat(chatID: ChatID) async {
         guard let controller = queue.sync(execute: { controllers[chatID] }) else { return }
-        await controller.cancel(turnID: nil)
+        await controller.stopSession()
     }
 
     // MARK: - Chat session state (rehydration)
@@ -195,53 +195,54 @@ final class DaemonChatHost: @unchecked Sendable {
     @MainActor var testSharedGenerationGate: GenerationGate? { nil }
 
     private func makeOrGetController(chatID: ChatID, wikiID: WikiID) throws -> DaemonChatController {
-        if let existing = queue.sync(execute: { controllers[chatID] }) {
-            return existing
-        }
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
 
-        let runtime = LauncherChatAgentRuntime(
-            chatID: chatID,
-            wikiID: wikiID,
-            store: store,
-            containerDirectory: containerDirectory,
-            extractionCoordinator: extractionCoordinator,
-            pushEvent: pushEvent,
-            onSessionID: { sessionID in
-                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                    await controller.didUpdateProviderSessionID(sessionID)
-                }
-                do {
-                    try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
-                    self.pushEvent(.chatAcpSessionId(chatID: chatID, sessionId: sessionID))
-                } catch {
-                    DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
-                }
-            },
-            onStateUpdate: { update in
-                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                    await controller.didUpdateCompatibilityState(update)
-                }
-            },
-            onLiveEvents: { events in
-                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                    await controller.didReceiveLiveEvents(events)
-                }
+        return try queue.sync {
+            if let existing = controllers[chatID] {
+                return existing
             }
-        )
-        let controller = try DaemonChatController(
-            chatID: chatID,
-            wikiID: wikiID,
-            store: store,
-            runtime: runtime,
-            pushEvent: pushEvent
-        )
-        queue.sync {
+
+            let runtime = LauncherChatAgentRuntime(
+                chatID: chatID,
+                wikiID: wikiID,
+                store: store,
+                containerDirectory: containerDirectory,
+                extractionCoordinator: extractionCoordinator,
+                pushEvent: pushEvent,
+                onSessionID: { sessionID in
+                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                        await controller.didUpdateProviderSessionID(sessionID)
+                    }
+                    do {
+                        try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
+                        self.pushEvent(.chatAcpSessionId(chatID: chatID, sessionId: sessionID))
+                    } catch {
+                        DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
+                    }
+                },
+                onStateUpdate: { update in
+                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                        await controller.didUpdateCompatibilityState(update)
+                    }
+                },
+                onLiveEvents: { events in
+                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                        await controller.didReceiveLiveEvents(events)
+                    }
+                }
+            )
+            let controller = try DaemonChatController(
+                chatID: chatID,
+                wikiID: wikiID,
+                store: store,
+                runtime: runtime,
+                pushEvent: pushEvent
+            )
             controllers[chatID] = controller
+            return controller
         }
-        return controller
     }
 
     private func resolveWikiID(for chatID: ChatID) throws -> WikiID {

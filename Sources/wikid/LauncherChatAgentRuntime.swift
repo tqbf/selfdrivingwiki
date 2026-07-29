@@ -34,8 +34,43 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         let launcher: AgentLauncher
         var hasSubscriber = false
         var startedInteractiveSession = false
-        var terminalEmittedForTurn: Set<ChatTurnID> = []
         var pendingPermission: PendingPermission?
+        var activeTurnID: ChatTurnID?
+        var lastFingerprint: StateFingerprint?
+        var translationStateByTurn: [ChatTurnID: TranscriptTranslationState] = [:]
+    }
+
+    private struct TranscriptTranslationState: Sendable {
+        var nextToolCallOrdinal = 0
+        var runningToolCallIDs: [ToolCallID] = []
+    }
+
+    private struct StateFingerprint: Equatable, Sendable {
+        let isRunning: Bool
+        let isGenerating: Bool
+        let isAwaitingGenerationSlot: Bool
+        let preflightError: String?
+        let thinkingValue: String?
+        let usageData: Data?
+        let runKindRaw: String?
+        let runStartedAt: Date?
+        let stderr: String?
+        let lastActivityAt: Date?
+        let currentProcessID: Int?
+
+        init(update: ChatStateUpdate) {
+            self.isRunning = update.isRunning
+            self.isGenerating = update.isGenerating
+            self.isAwaitingGenerationSlot = update.isAwaitingGenerationSlot
+            self.preflightError = update.preflightError
+            self.thinkingValue = update.thinkingOption?.currentValue
+            self.usageData = update.usageData
+            self.runKindRaw = update.runKindRaw
+            self.runStartedAt = update.runStartedAt
+            self.stderr = update.stderr
+            self.lastActivityAt = update.lastActivityAt
+            self.currentProcessID = update.currentProcessID
+        }
     }
 
     private let chatID: ChatID
@@ -105,6 +140,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws {
         guard var state = runtimeState, state.handle == handle else { throw RuntimeError.unknownHandle }
+        state.activeTurnID = submission.turnID
+        runtimeState = state
 
         if state.startedInteractiveSession == false {
             let request = state.request
@@ -137,16 +174,21 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                         await self.emit(.resumed(providerSessionID: sessionID))
                     }
                 },
-                onLock: { },
-                onUnlock: { },
-                onTranscript: { [weak self] events in
+                onEvent: { [weak self] event in
                     guard let self else { return }
                     Task {
-                        await self.onLiveEvents(events)
-                        await self.pushCompatibilityTranscript(events)
-                        await self.emitTranscript(events, turnID: submission.turnID)
+                        await self.handleLiveEvent(event)
                     }
-                }
+                },
+                onPendingPermission: { [weak self] permission in
+                    guard let self else { return }
+                    Task {
+                        await self.handlePendingPermission(permission)
+                    }
+                },
+                onLock: { },
+                onUnlock: { },
+                onTranscript: nil
             )
 
             state.startedInteractiveSession = true
@@ -296,8 +338,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     )
                 }
                 let update = stateAndStatus.0
-                await self.onStateUpdate(update)
-                self.pushEvent(.chatState(chatID: self.chatID, update: update))
+                await self.forwardStateUpdate(update)
 
                 if update.isRunning == false,
                    update.isGenerating == false,
@@ -321,23 +362,56 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
     }
 
-    private func emitTranscript(_ events: [AgentEvent], turnID: ChatTurnID) async {
-        let deltas = Self.transcriptDeltas(from: events, turnID: turnID)
+    private func handleLiveEvent(_ event: AgentEvent) async {
+        guard var state = runtimeState,
+              let turnID = state.activeTurnID else { return }
+        await onLiveEvents([event])
+        pushCompatibilityTranscript([event])
+        var translationState = state.translationStateByTurn[turnID] ?? TranscriptTranslationState()
+        let deltas = Self.transcriptDeltas(
+            from: [event],
+            turnID: turnID,
+            translationState: &translationState
+        )
+        state.translationStateByTurn[turnID] = translationState
+        runtimeState = state
         if deltas.isEmpty == false {
             await emit(.transcript(deltas))
         }
 
-        for event in events {
-            switch event {
-            case .turnFailed(let reason):
-                let category = Self.failureCategory(for: reason)
-                await emit(.turnFailed(turnID: turnID, category: category, message: reason.description))
-            default:
-                if AgentEvent.endsGeneration(event) {
-                    await emit(.turnCompleted(turnID))
-                }
+        switch event {
+        case .turnFailed(let reason):
+            let category = Self.failureCategory(for: reason)
+            await emit(.turnFailed(turnID: turnID, category: category, message: reason.description))
+        default:
+            if AgentEvent.endsGeneration(event) {
+                await emit(.turnCompleted(turnID))
             }
         }
+    }
+
+    private func handlePendingPermission(_ permission: PendingPermission?) async {
+        pushEvent(.chatPendingPermission(chatID: chatID, permission: permission))
+        guard var state = runtimeState else { return }
+        guard permission?.toolCallId != state.pendingPermission?.toolCallId else { return }
+        state.pendingPermission = permission
+        runtimeState = state
+
+        guard let permission,
+              let turnID = state.activeTurnID else { return }
+        await emit(.permissionRequested(
+            Self.permissionRequest(from: permission, turnID: turnID)
+        ))
+    }
+
+    private func forwardStateUpdate(_ update: ChatStateUpdate) async {
+        guard var state = runtimeState else { return }
+        let fingerprint = StateFingerprint(update: update)
+        guard fingerprint != state.lastFingerprint else { return }
+        state.lastFingerprint = fingerprint
+        runtimeState = state
+        await onStateUpdate(update)
+        pushEvent(.chatState(chatID: chatID, update: update))
     }
 
     private func pushCompatibilityTranscript(_ events: [AgentEvent]) {
@@ -354,7 +428,11 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         ))
     }
 
-    private static func transcriptDeltas(from events: [AgentEvent], turnID: ChatTurnID) -> [ChatTranscriptDelta] {
+    private static func transcriptDeltas(
+        from events: [AgentEvent],
+        turnID: ChatTurnID,
+        translationState: inout TranscriptTranslationState
+    ) -> [ChatTranscriptDelta] {
         events.compactMap { event in
             switch event {
             case .userText(let text):
@@ -398,8 +476,11 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     createdAt: Date()
                 )
             case .toolUse(let name, let inputSummary):
+                let toolCallID = ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
+                translationState.nextToolCallOrdinal += 1
+                translationState.runningToolCallIDs.append(toolCallID)
                 return .toolCallUpsert(ChatTranscriptToolCallItem(
-                    toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-\(name)"),
+                    toolCallID: toolCallID,
                     turnID: turnID,
                     toolName: name,
                     status: .running,
@@ -408,8 +489,14 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     updatedAt: Date()
                 ))
             case .toolResult(let isError, let summary):
+                let toolCallID = translationState.runningToolCallIDs.isEmpty
+                    ? ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
+                    : translationState.runningToolCallIDs.removeFirst()
+                if translationState.runningToolCallIDs.isEmpty {
+                    translationState.nextToolCallOrdinal += 1
+                }
                 return .append(.toolCall(ChatTranscriptToolCallItem(
-                    toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-result"),
+                    toolCallID: toolCallID,
                     turnID: turnID,
                     toolName: "Tool",
                     status: isError ? .failed : .completed,
@@ -430,6 +517,30 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
     }
 
+    static func transcriptDeltasForTesting(from events: [AgentEvent], turnID: ChatTurnID) -> [ChatTranscriptDelta] {
+        var translationState = TranscriptTranslationState()
+        return transcriptDeltas(from: events, turnID: turnID, translationState: &translationState)
+    }
+
+    static func permissionRequest(from permission: PendingPermission, turnID: ChatTurnID) -> ChatPendingPermissionRequest {
+        ChatPendingPermissionRequest(
+            requestID: PermissionRequestID(rawValue: "permission-\(permission.toolCallId.rawValue)"),
+            turnID: turnID,
+            toolCallID: permission.toolCallId,
+            title: permission.title ?? permission.toolName ?? "Permission request",
+            message: permission.inputSummary ?? permission.title ?? permission.toolName ?? "Approve or reject the requested tool call.",
+            options: permission.options.enumerated().map { index, option in
+                ChatPermissionOption(
+                    id: PermissionOptionID(rawValue: option.optionId),
+                    label: option.name,
+                    behavior: permissionBehavior(for: option.kind),
+                    isDefault: index == 0,
+                    visualIntent: permissionVisualIntent(for: option.kind)
+                )
+            }
+        )
+    }
+
     private static func failureCategory(for reason: TurnFailureReason) -> ChatTurnFailureCategory {
         switch reason {
         case .stalled, .ceilingExceeded:
@@ -439,6 +550,26 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         case .quotaExhausted:
             return .transportError
         }
+    }
+
+    private static func permissionBehavior(for rawKind: String) -> ChatPermissionOptionBehavior {
+        if rawKind.hasPrefix("allow") {
+            return .allow
+        }
+        if rawKind.hasPrefix("cancel") {
+            return .cancel
+        }
+        return .deny
+    }
+
+    private static func permissionVisualIntent(for rawKind: String) -> ChatPermissionVisualIntent? {
+        if rawKind.hasPrefix("allow") {
+            return .accent
+        }
+        if rawKind.hasPrefix("cancel") || rawKind.hasPrefix("reject") || rawKind.hasPrefix("deny") {
+            return .destructive
+        }
+        return nil
     }
 
     private static func capabilities(from thinkingOption: ThinkingEffortOption?) -> ChatCapabilitySet {

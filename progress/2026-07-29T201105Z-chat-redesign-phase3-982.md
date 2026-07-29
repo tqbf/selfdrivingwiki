@@ -45,6 +45,92 @@ adapters. That Phase 4 work stays out of scope here.
 - Replaced new bare `try?` swallow points in the Phase 3 daemon path with
   logged best-effort handling.
 
+## PR #990 remediation
+
+The exact-head audit for PR #990 at `49c776d036ebe905a64658c4e96efeedfcfcb226`
+was not clean. This remediation pass tightened the controller/runtime boundary
+without expanding into the out-of-scope Phase 4 XPC redesign or Phase 5 UI
+decomposition.
+
+The main production fixes in this pass are:
+
+- warm follow-up transcript translation now uses the actor-owned active turn id
+  instead of capturing the first turn id
+- live token and typed transcript deltas are forwarded again from the
+  launcher-backed runtime
+- pending permissions now translate real `toolCallID`s and typed options and
+  reach both the compatibility surface and the typed runtime event stream
+- transport close now tears down stale runtime state, rotates generation, and
+  forces the next turn onto a fresh runtime
+- queue processing now sets a synchronous in-flight guard before awaits to
+  prevent duplicate claim/submission races
+- failed/interrupted attention no longer blocks later queued turns
+- post-claim failures now finish the claimed row instead of orphaning it
+- live rehydration merges persisted history with the live overlay instead of
+  replacing history with the tail
+- live overlay user-message echoes are suppressed so warm follow-ups do not
+  duplicate persisted user rows
+- controller creation is now serialized inside `DaemonChatHost.makeOrGetController`
+- `ToolCallID` identity is preserved across tool-use/result translation and the
+  runtime seam has direct production translation tests
+- `stopChat` now distinguishes idle/live session close from active-turn
+  cancellation via `DaemonChatController.stopSession()`
+- compatibility polling now emits only on actual state changes
+- rejected controller state-machine updates no longer burn replay/sequence
+  numbers and now log the rejection reason
+- live overlay memory is bounded and replay capacity is named
+- terminal turn cleanup clears `activePermission`
+- the hosted timeout test now matches its real invariant: catching the old
+  dead-XPC multi-minute hang, not whole-suite scheduler load
+
+Focused evidence added in this remediation pass:
+
+- `LauncherChatAgentRuntimeTests.permissionTranslationPreservesToolCallIDAndTypedOptions`
+- `LauncherChatAgentRuntimeTests.transcriptTranslationPreservesToolIdentityAcrossUseAndResult`
+- `DaemonChatControllerTests.transportCloseRotatesRuntimeAndRecoversOnNextTurn`
+- `DaemonChatControllerTests.stopSessionClosesIdleRuntimeAndNextTurnStartsFreshRuntime`
+- `DaemonChatControllerTests.failedTurnAttentionDoesNotBlockNextQueuedTurn`
+- `RemoteChatSessionTests.chatPendingPermissionSetsPendingList`
+
+Audit disposition recorded on Wednesday, July 29, 2026:
+
+- `C1` fixed by actor-owned active-turn tracking in
+  `LauncherChatAgentRuntime.handleLiveEvent(_:)`.
+- `C2` fixed by restoring live event forwarding through
+  `AgentLauncher.startInteractiveQuery(... onEvent:onPendingPermission:)` and
+  runtime transcript-delta emission.
+- `C3` fixed by translating `PendingPermission` into typed
+  `ChatPendingPermissionRequest` values with real tool-call ids and options.
+- `C4` fixed by `closeRuntimeAndRotateGeneration()` and the stale-runtime
+  recovery path.
+- `C5` fixed by the synchronous `isProcessingQueue` / claim-state guard before
+  awaits in `processQueueIfPossible()`.
+- `C6` fixed by promoting claimed queued work after terminal attention and by
+  explicit idle/live close handling in `stopSession()`.
+- `H1` fixed by finishing the claimed row on any post-claim submission failure.
+- `H2` fixed by merging persisted transcript history with the live overlay in
+  `chatSessionState()`.
+- `H3` fixed by suppressing live `.userText` overlay duplicates and by
+  runtime-side first-message history dedup.
+- `H4` fixed by serializing `makeOrGetController`.
+- `H5` preserved and reverified through the existing shared gate path plus
+  `DaemonChatHostTests.daemonChatHostUsesSharedGenerationGate`.
+- `H6` fixed by stable tool-call translation ids across use/result.
+- `H7` fixed by direct production translation coverage in
+  `LauncherChatAgentRuntimeTests`.
+- `H8` remained covered by the existing daemon-host preflight rollback path and
+  its host/coordinator tests; this remediation did not need new production
+  changes there.
+- `H9` fixed by separating idle/live `stopSession()` close from active-turn
+  cancellation.
+- `M2`, `M3`, `M7`, `M9`, `L1`, and `L8` are fixed in the code changes above.
+- `L12` is fixed in this progress record and in the plan wording below.
+
+Items not expanded here remained either already fixed on the branch head before
+this remediation pass or out-of-scope for production changes in this PR. The
+focused suite list above plus the full-repo `make` runs below are the current
+evidence set for this exact head.
+
 ## Test coverage
 
 Added direct controller coverage in
@@ -80,17 +166,25 @@ Verified on Wednesday, July 29, 2026 from this worktree:
 - `make test` passed with `2669 tests in 216 suites`.
 - `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatControllerTests|ChatDaemonCoordinatorTests|DaemonChatHostTests|RemoteChatSessionTests'`
   passed with `87 tests in 4 suites`.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatControllerTests|DaemonChatHostTests|LauncherChatAgentRuntimeTests|RemoteChatSessionTests|ChatDaemonCoordinatorTests|ChatAgentRuntimeCoverageTests|WikiDaemonConnectionHealthTests'`
+  passed with `101 tests in 7 suites`.
 
 The full app-hosted run did not complete locally:
 
-- Raw `WIKIFS_APP_TESTS=1 swift test` stalled with `swiftpm-testing-helper`
-  still alive and no new output.
-- `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` timed out with
-  wrapper exit `124`.
-- The watchdog log is
-  `tmp/test-logs/swift-test-20260729-130936.log`.
-- The watchdog log shows no deterministic suite failure before timeout. It
-  also shows `Suite WikiDaemonConnectionHealthTests passed after 20.325 seconds`.
+- Raw `WIKIFS_APP_TESTS=1 swift test` hit a local hosted-suite non-completion:
+  one run failed under full load on the old `elapsed < 15` health-check
+  assertion, a focused rerun passed immediately, and after widening that test's
+  scheduler budget the raw app-hosted run still failed to finish locally.
+- The final bounded wrapper run
+  `WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` exited `124`.
+- The final watchdog log is `tmp/test-logs/swift-test-20260729-144845.log`.
+- The wrapper recorded the exact started-but-never-finished tail, including the
+  parameterized `PageAuthor` / `SourceProvider` identity tests, chat-domain
+  lifecycle parameter suites, and hosted autocomplete/highlight cases.
+- The exact local wrapper exit file is
+  `tmp/phase3-remediation-logs/make-test-watchdog-final.exit` and contains `2`
+  because GNU `make` surfaced the underlying `124` timeout as make failure
+  exit `2`.
 
 ## Phase 4 and later
 

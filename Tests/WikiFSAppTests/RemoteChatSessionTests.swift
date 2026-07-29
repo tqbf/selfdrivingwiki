@@ -1,4 +1,5 @@
 #if os(macOS)
+import ACPModel
 import Foundation
 import Testing
 @testable import WikiFSCore
@@ -306,11 +307,15 @@ struct RemoteChatSessionTests {
                 title: "Edit file",
                 toolName: "Edit",
                 inputSummary: "/path/to/file",
-                options: []))
+                options: [
+                    PermissionOption(kind: "allow_once", name: "Allow once", optionId: "allow-once"),
+                    PermissionOption(kind: "reject_once", name: "Reject", optionId: "reject-once"),
+                ]))
         session.ingest(envelope)
         #expect(session.pendingPermissions.count == 1)
         #expect(session.pendingPermissions[0].toolCallId == ToolCallID(rawValue: "tc-1"))
         #expect(session.pendingPermissions[0].title == "Edit file")
+        #expect(session.pendingPermissions[0].options.map(\.optionId) == ["allow-once", "reject-once"])
     }
 
     // MARK: - QueueEventEnvelope encoding round-trip

@@ -20,6 +20,18 @@ rebuild, and the Phase 3 per-chat daemon-controller move. It does not
 implement the Phase 4 XPC wire redesign, the Phase 4 client sync replacement,
 or the Phase 5 UI decomposition.
 
+Remediation note for PR #990 on Wednesday, July 29, 2026:
+
+- the exact-head audit at `49c776d036ebe905a64658c4e96efeedfcfcb226` found
+  controller/runtime regressions around turn identity, live streaming,
+  permission translation, transport-close recovery, replay sequencing, and
+  stop-vs-close semantics
+- the remediation pass on `chat-redesign-phase3` fixes those Phase 3
+  controller/runtime issues without taking the out-of-scope Phase 4 wire or
+  Phase 5 UI work
+- the current exact-head evidence is recorded in
+  [`progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`](../progress/2026-07-29T201105Z-chat-redesign-phase3-982.md)
+
 ## Problem
 
 The current design has good parts, but they came from separate fixes. The
