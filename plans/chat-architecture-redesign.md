@@ -518,9 +518,14 @@ maps to these concrete suites:
   `IdentifierBoundaryTypecheckTests`, including the launcher and chat-domain
   positive fixtures and the negative namespace fixtures run through
   `swiftc -typecheck`.
-- `ChatSessionMachineTransitionTests`, `ChatSessionMachineStaleEventTests`, and
-  `ChatCommandIdempotencyTests` are currently covered by
+- `ChatSessionMachineTransitionTests` and
+  `ChatSessionMachineStaleEventTests` are currently covered by
   `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- `ChatCommandIdempotencyTests` is intentionally deferred to the Phase 3
+  controller-level command-dedup work. Phase 0/1 coverage here is the reducer
+  and event negative matrix in `ChatDomainStateTests` and
+  `ChatDomainAuditRegressionTests`, not an assertion that `ChatCommandID`
+  deduplicates submitted commands yet.
 - `ScriptedChatRuntimeTests` keeps its own suite, with additional runtime seam
   coverage in `ChatAgentRuntimeCoverageTests`.
 

@@ -133,8 +133,23 @@ client synchronization, and UI decomposition.
   that no longer exists in the current picker options. The transactional store
   rejection remains the authoritative guard, and this branch deliberately keeps
   that stale-data presentation quirk out of the Phase 0/1 foundation scope.
+- **Fresh exact-head OpenCode GLM 5.2 max audit (traceability follow-up): low
+  finding fixed.**
+  The audit found one documentation-only overstatement in the design record's
+  named-test mapping: `ChatCommandIdempotencyTests` was described as currently
+  covered even though no Phase 0/1 test asserts `ChatCommandID` deduplication.
+  That statement is now corrected. Command idempotency remains intentionally
+  deferred to the Phase 3 controller-level command-dedup work; the Phase 0/1
+  evidence on this branch remains the reducer and event negative matrix in
+  `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- **Unresolved findings: none.**
 
 ## Verification
+
+This traceability-only follow-up did not rerun local SwiftPM or Make
+verification. The recorded evidence below is preserved from the earlier exact
+code head on Wednesday, July 29, 2026, including the watchdog operator waiver
+and exact log path.
 
 - Wednesday, July 29, 2026:
   `make prompts` — passed.
@@ -194,8 +209,13 @@ application-code blocker.
 - `ChatIdentifierCodableCompatibilityTests` landed exactly as
   `ChatIdentifierCodableCompatibilityTests`.
 - `ChatSessionMachineTransitionTests`, `ChatSessionMachineStaleEventTests`, and
-  `ChatCommandIdempotencyTests` are covered today by
+  `ChatSessionMachineStaleEventTests` are covered today by
   `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- `ChatCommandIdempotencyTests` remains intentionally deferred to Phase 3
+  controller-level command deduplication. Phase 0/1 does not claim a current
+  `ChatCommandID` dedup assertion; its shipped evidence is the reducer/event
+  negative matrix in `ChatDomainStateTests` and
+  `ChatDomainAuditRegressionTests`.
 - `ChatTranscriptReducerTests` landed exactly as
   `ChatTranscriptReducerTests`.
 - `ScriptedChatRuntimeTests` landed exactly as `ScriptedChatRuntimeTests`, with
