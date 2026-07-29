@@ -1,18 +1,6 @@
 import Foundation
 import WikiFSCore
 
-public struct ChatTimelineCursor: Hashable, Codable, RawRepresentable, Sendable, Comparable {
-    public let rawValue: Int64
-
-    public init(rawValue: Int64) {
-        self.rawValue = rawValue
-    }
-
-    public static func < (lhs: ChatTimelineCursor, rhs: ChatTimelineCursor) -> Bool {
-        lhs.rawValue < rhs.rawValue
-    }
-}
-
 public enum ChatSessionLifecycle: String, Sendable, Codable, CaseIterable {
     case unavailable
     case starting
@@ -54,25 +42,25 @@ public enum ChatAttentionState: Hashable, Sendable, Codable {
 }
 
 public struct ChatConfigurationValueOption: Hashable, Sendable, Codable {
-    public let id: String
+    public let id: ChatConfigurationValueID
     public let label: String
 
-    public init(id: String, label: String) {
+    public init(id: ChatConfigurationValueID, label: String) {
         self.id = id
         self.label = label
     }
 }
 
 public struct ChatConfigurationOption: Hashable, Sendable, Codable {
-    public let id: String
+    public let id: ChatConfigurationOptionID
     public let label: String
-    public let currentValueID: String?
+    public let currentValueID: ChatConfigurationValueID?
     public let valueOptions: [ChatConfigurationValueOption]
 
     public init(
-        id: String,
+        id: ChatConfigurationOptionID,
         label: String,
-        currentValueID: String?,
+        currentValueID: ChatConfigurationValueID?,
         valueOptions: [ChatConfigurationValueOption]
     ) {
         self.id = id
@@ -85,7 +73,7 @@ public struct ChatConfigurationOption: Hashable, Sendable, Codable {
 public struct ChatCapabilitySet: Hashable, Sendable, Codable {
     public let supportsResume: Bool
     public let supportsClose: Bool
-    public let availableModes: [String]
+    public let availableModes: [ChatModeID]
     public let availableModels: [ModelID]
     public let configurationOptions: [ChatConfigurationOption]
     public let supportsReasoning: Bool
@@ -95,7 +83,7 @@ public struct ChatCapabilitySet: Hashable, Sendable, Codable {
     public init(
         supportsResume: Bool,
         supportsClose: Bool,
-        availableModes: [String] = [],
+        availableModes: [ChatModeID] = [],
         availableModels: [ModelID] = [],
         configurationOptions: [ChatConfigurationOption] = [],
         supportsReasoning: Bool,
@@ -127,19 +115,25 @@ public enum ChatPermissionOptionBehavior: String, Sendable, Codable, CaseIterabl
     case cancel
 }
 
+public enum ChatPermissionVisualIntent: String, Sendable, Codable, CaseIterable {
+    case `default`
+    case accent
+    case destructive
+}
+
 public struct ChatPermissionOption: Hashable, Sendable, Codable {
     public let id: PermissionOptionID
     public let label: String
     public let behavior: ChatPermissionOptionBehavior
     public let isDefault: Bool
-    public let visualIntent: String?
+    public let visualIntent: ChatPermissionVisualIntent?
 
     public init(
         id: PermissionOptionID,
         label: String,
         behavior: ChatPermissionOptionBehavior,
         isDefault: Bool = false,
-        visualIntent: String? = nil
+        visualIntent: ChatPermissionVisualIntent? = nil
     ) {
         self.id = id
         self.label = label
@@ -259,7 +253,6 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
     public let providerState: ChatProviderState
     public let usage: SessionUsage?
     public let diagnostics: ChatDiagnosticsState
-    public let committedTranscriptCursor: ChatTimelineCursor?
     public let transientTranscriptOverlay: [ChatTranscriptItem]
     public let lastIncludedSequence: ChatUpdateSequence
 
@@ -274,7 +267,6 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
         providerState: ChatProviderState,
         usage: SessionUsage?,
         diagnostics: ChatDiagnosticsState,
-        committedTranscriptCursor: ChatTimelineCursor?,
         transientTranscriptOverlay: [ChatTranscriptItem],
         lastIncludedSequence: ChatUpdateSequence
     ) {
@@ -288,55 +280,16 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
         self.providerState = providerState
         self.usage = usage
         self.diagnostics = diagnostics
-        self.committedTranscriptCursor = committedTranscriptCursor
         self.transientTranscriptOverlay = transientTranscriptOverlay
         self.lastIncludedSequence = lastIncludedSequence
-    }
-}
-
-public func == (lhs: ChatRuntimeSnapshot, rhs: ChatRuntimeSnapshot) -> Bool {
-    lhs.chatID == rhs.chatID &&
-        lhs.generation == rhs.generation &&
-        lhs.lifecycle == rhs.lifecycle &&
-        lhs.activeTurn == rhs.activeTurn &&
-        lhs.queuedTurns == rhs.queuedTurns &&
-        lhs.attention == rhs.attention &&
-        lhs.capabilities == rhs.capabilities &&
-        lhs.providerState == rhs.providerState &&
-        sessionUsageEquals(lhs.usage, rhs.usage) &&
-        lhs.diagnostics == rhs.diagnostics &&
-        lhs.committedTranscriptCursor == rhs.committedTranscriptCursor &&
-        lhs.transientTranscriptOverlay == rhs.transientTranscriptOverlay &&
-        lhs.lastIncludedSequence == rhs.lastIncludedSequence
-}
-
-private func sessionUsageEquals(_ lhs: SessionUsage?, _ rhs: SessionUsage?) -> Bool {
-    switch (lhs, rhs) {
-    case (nil, nil):
-        return true
-    case (.some(let lhs), .some(let rhs)):
-        return lhs.inputTokens == rhs.inputTokens &&
-            lhs.outputTokens == rhs.outputTokens &&
-            lhs.totalTokens == rhs.totalTokens &&
-            lhs.cachedReadTokens == rhs.cachedReadTokens &&
-            lhs.thoughtTokens == rhs.thoughtTokens &&
-            lhs.cost == rhs.cost &&
-            lhs.currency == rhs.currency &&
-            lhs.contextUsed == rhs.contextUsed &&
-            lhs.contextSize == rhs.contextSize &&
-            lhs.providerLabel == rhs.providerLabel &&
-            lhs.modelId == rhs.modelId &&
-            lhs.modelName == rhs.modelName &&
-            lhs.thinkingLevel == rhs.thinkingLevel
-    default:
-        return false
     }
 }
 
 public extension ChatRuntimeSnapshot {
     var canSubmit: Bool {
         guard isSessionInteractive else { return false }
-        return activeTurn == nil
+        guard let activeTurn else { return true }
+        return activeTurn.state.isTerminal
     }
 
     var canQueue: Bool {
@@ -390,7 +343,11 @@ public enum ChatSessionCommand: Hashable, Sendable, Codable {
     case removeQueuedTurn(commandID: ChatCommandID, turnID: ChatTurnID)
     case retryInterruptedTurn(commandID: ChatCommandID, priorTurnID: ChatTurnID)
     case resolvePermission(ChatPermissionResolution)
-    case setConfiguration(commandID: ChatCommandID, optionID: String, valueID: String)
+    case setConfiguration(
+        commandID: ChatCommandID,
+        optionID: ChatConfigurationOptionID,
+        valueID: ChatConfigurationValueID
+    )
     case requestSnapshot(commandID: ChatCommandID)
     case closeSession(commandID: ChatCommandID)
 }
@@ -399,11 +356,11 @@ public enum ChatSessionEventPayload: Hashable, Sendable, Codable {
     case queued(ChatQueuedTurn)
     case submitted(turnID: ChatTurnID)
     case started(turnID: ChatTurnID)
-    case transcriptChanged([ChatTranscriptItem])
+    case transcriptChanged([ChatTranscriptDelta])
     case permissionRequested(ChatPendingPermissionRequest)
     case permissionResolved(PermissionRequestID)
     case completed(turnID: ChatTurnID)
-    case failed(turnID: ChatTurnID, category: ChatTurnFailureCategory, message: String)
+    case failed(turnID: ChatTurnID, category: ChatTurnFailureCategory, message: String, createdAt: Date)
     case cancelled(turnID: ChatTurnID)
     case recovering
     case sessionReady(capabilities: ChatCapabilitySet, providerState: ChatProviderState)
@@ -437,10 +394,16 @@ public enum ChatReplayResult: Hashable, Sendable, Codable {
 public struct ChatUpdateReplayBuffer: Hashable, Sendable, Codable {
     public let capacity: Int
     private(set) var updates: [ChatSessionUpdate]
+    private(set) var highestSequence: ChatUpdateSequence?
 
-    public init(capacity: Int, updates: [ChatSessionUpdate] = []) {
+    public init(
+        capacity: Int,
+        updates: [ChatSessionUpdate] = [],
+        highestSequence: ChatUpdateSequence? = nil
+    ) {
         self.capacity = max(1, capacity)
         self.updates = Array(updates.suffix(max(1, capacity)))
+        self.highestSequence = highestSequence ?? updates.last?.sequence
     }
 
     public mutating func append(_ update: ChatSessionUpdate) {
@@ -448,22 +411,44 @@ public struct ChatUpdateReplayBuffer: Hashable, Sendable, Codable {
         if updates.count > capacity {
             updates.removeFirst(updates.count - capacity)
         }
+        highestSequence = max(highestSequence ?? update.sequence, update.sequence)
     }
 
     public func replay(after watermark: ChatUpdateSequence) -> ChatReplayResult {
-        guard let oldest = updates.first?.sequence else {
-            return .available([])
-        }
-        if watermark < oldest && oldest.rawValue > watermark.rawValue + 1 {
+        guard let highestSequence else {
             return .unavailable
         }
+        guard watermark <= highestSequence else {
+            return .unavailable
+        }
+        guard let oldestSequence = updates.first?.sequence else {
+            return watermark == highestSequence ? .available([]) : .unavailable
+        }
+
+        let minimumCoveredWatermark = previousSequence(before: oldestSequence)
+        guard watermark >= minimumCoveredWatermark else {
+            return .unavailable
+        }
+
         return .available(updates.filter { $0.sequence > watermark })
     }
+
+    private func previousSequence(before sequence: ChatUpdateSequence) -> ChatUpdateSequence {
+        guard sequence.rawValue > Int64.min else { return sequence }
+        return ChatUpdateSequence(rawValue: sequence.rawValue - 1)
+    }
+}
+
+public enum ChatSessionMachineRejection: Sendable, Codable, Equatable {
+    case staleChat(expected: ChatID, received: ChatID)
+    case staleGeneration(expected: ChatSessionGenerationID, received: ChatSessionGenerationID)
+    case duplicateSequence(lastIncluded: ChatUpdateSequence, received: ChatUpdateSequence)
+    case illegalTransition(payload: ChatSessionEventPayload)
 }
 
 public enum ChatSessionMachineApplyResult: Sendable, Codable, Equatable {
     case applied(ChatRuntimeSnapshot)
-    case ignored
+    case rejected(ChatSessionMachineRejection)
 }
 
 public enum ChatSessionMachine {
@@ -471,178 +456,216 @@ public enum ChatSessionMachine {
         _ update: ChatSessionUpdate,
         to snapshot: ChatRuntimeSnapshot
     ) -> ChatSessionMachineApplyResult {
-        guard update.chatID == snapshot.chatID else { return .ignored }
-        guard update.generation == snapshot.generation else { return .ignored }
-        guard update.sequence > snapshot.lastIncludedSequence else { return .ignored }
+        guard update.chatID == snapshot.chatID else {
+            return .rejected(.staleChat(expected: snapshot.chatID, received: update.chatID))
+        }
+        guard update.generation == snapshot.generation else {
+            return .rejected(.staleGeneration(expected: snapshot.generation, received: update.generation))
+        }
+        guard update.sequence > snapshot.lastIncludedSequence else {
+            return .rejected(.duplicateSequence(lastIncluded: snapshot.lastIncludedSequence, received: update.sequence))
+        }
 
         var next = snapshot
 
         switch update.payload {
         case .queued(let queuedTurn):
-            guard next.activeTurn == nil else { return .ignored }
-            next = ChatRuntimeSnapshot(
-                chatID: next.chatID,
-                generation: next.generation,
-                lifecycle: next.lifecycle,
-                activeTurn: ChatTurnSnapshot(
-                    turnID: queuedTurn.submission.turnID,
-                    commandID: queuedTurn.submission.commandID,
-                    visibleText: queuedTurn.submission.userText,
-                    contextReferences: queuedTurn.submission.contextReferences,
-                    submittedAt: queuedTurn.submission.submittedAt,
-                    editedAt: queuedTurn.editedAt,
-                    state: .queued
-                ),
+            if let activeTurn = next.activeTurn, activeTurn.state.isTerminal == false {
+                next = replacing(
+                    snapshot: next,
+                    activeTurn: next.activeTurn,
+                    queuedTurns: next.queuedTurns + [queuedTurn],
+                    attention: next.attention,
+                    sequence: update.sequence
+                )
+                return .applied(next)
+            }
+
+            next = replacing(
+                snapshot: next,
+                activeTurn: activeTurn(from: queuedTurn),
                 queuedTurns: next.queuedTurns,
                 attention: .none,
-                capabilities: next.capabilities,
-                providerState: next.providerState,
-                usage: next.usage,
-                diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
-                transientTranscriptOverlay: next.transientTranscriptOverlay,
-                lastIncludedSequence: update.sequence
+                sequence: update.sequence
             )
             return .applied(next)
 
         case .submitted(let turnID):
-            guard var activeTurn = next.activeTurn,
+            guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state == .queued
-            else { return .ignored }
-            activeTurn = ChatTurnSnapshot(
-                turnID: activeTurn.turnID,
-                commandID: activeTurn.commandID,
-                visibleText: activeTurn.visibleText,
-                contextReferences: activeTurn.contextReferences,
-                submittedAt: activeTurn.submittedAt,
-                editedAt: activeTurn.editedAt,
-                state: .submitting
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = replacing(
+                snapshot: next,
+                activeTurn: replacingState(of: activeTurn, with: .submitting),
+                queuedTurns: next.queuedTurns,
+                attention: .none,
+                sequence: update.sequence
             )
-            next = replacing(snapshot: next, activeTurn: activeTurn, attention: .none, sequence: update.sequence)
             return .applied(next)
 
         case .started(let turnID):
-            guard var activeTurn = next.activeTurn,
+            guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state == .submitting
-            else { return .ignored }
-            activeTurn = replacingState(of: activeTurn, with: .responding)
-            next = replacing(snapshot: next, activeTurn: activeTurn, attention: .none, sequence: update.sequence)
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = replacing(
+                snapshot: next,
+                activeTurn: replacingState(of: activeTurn, with: .responding),
+                queuedTurns: next.queuedTurns,
+                attention: .none,
+                sequence: update.sequence
+            )
             return .applied(next)
 
-        case .transcriptChanged(let items):
-            var overlay = next.transientTranscriptOverlay
-            overlay.append(contentsOf: items)
-            next = ChatRuntimeSnapshot(
-                chatID: next.chatID,
-                generation: next.generation,
-                lifecycle: next.lifecycle,
+        case .transcriptChanged(let deltas):
+            next = replacing(
+                snapshot: next,
                 activeTurn: next.activeTurn,
                 queuedTurns: next.queuedTurns,
                 attention: next.attention,
-                capabilities: next.capabilities,
-                providerState: next.providerState,
-                usage: next.usage,
-                diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
-                transientTranscriptOverlay: overlay,
-                lastIncludedSequence: update.sequence
+                overlay: ChatTranscriptReducer.reducing(items: next.transientTranscriptOverlay, with: deltas),
+                sequence: update.sequence
             )
             return .applied(next)
 
         case .permissionRequested(let request):
-            guard var activeTurn = next.activeTurn,
+            guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == request.turnID,
                   activeTurn.state == .responding
-            else { return .ignored }
-            activeTurn = replacingState(of: activeTurn, with: .awaitingPermission(request.requestID))
-            next = replacing(snapshot: next, activeTurn: activeTurn, attention: .permissionRequired(request.requestID), sequence: update.sequence)
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = replacing(
+                snapshot: next,
+                activeTurn: replacingState(of: activeTurn, with: .awaitingPermission(request.requestID)),
+                queuedTurns: next.queuedTurns,
+                attention: .permissionRequired(request.requestID),
+                sequence: update.sequence
+            )
             return .applied(next)
 
         case .permissionResolved(let requestID):
-            guard var activeTurn = next.activeTurn,
+            guard let activeTurn = next.activeTurn,
                   case .awaitingPermission(let activeRequestID) = activeTurn.state,
                   activeRequestID == requestID
-            else { return .ignored }
-            activeTurn = replacingState(of: activeTurn, with: .responding)
-            next = replacing(snapshot: next, activeTurn: activeTurn, attention: .none, sequence: update.sequence)
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = replacing(
+                snapshot: next,
+                activeTurn: replacingState(of: activeTurn, with: .responding),
+                queuedTurns: next.queuedTurns,
+                attention: .none,
+                sequence: update.sequence
+            )
             return .applied(next)
 
         case .completed(let turnID):
             guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state.isTerminal == false
-            else { return .ignored }
-            next = replacing(snapshot: next, activeTurn: nil, attention: .none, sequence: update.sequence)
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = promoteQueuedTurnIfAvailable(
+                replacing(
+                    snapshot: next,
+                    activeTurn: replacingState(of: activeTurn, with: .terminal(.completed)),
+                    queuedTurns: next.queuedTurns,
+                    attention: .none,
+                    sequence: update.sequence
+                )
+            )
             return .applied(next)
 
-        case .failed(let turnID, let category, let message):
+        case .failed(let turnID, let category, let message, let createdAt):
             guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state.isTerminal == false
-            else { return .ignored }
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            let terminalOutcome: ChatTurnTerminalOutcome = if category == .interrupted {
+                .interrupted(message: message)
+            } else {
+                .failed(category: category, message: message)
+            }
+            let attention: ChatAttentionState = if category == .interrupted {
+                .interruptedTurn(turnID)
+            } else {
+                .turnFailed(turnID)
+            }
+
             next = replacing(
                 snapshot: next,
-                activeTurn: nil,
-                attention: category == .interrupted ? .interruptedTurn(turnID) : .turnFailed(turnID),
+                activeTurn: replacingState(of: activeTurn, with: .terminal(terminalOutcome)),
+                queuedTurns: next.queuedTurns,
+                attention: attention,
+                overlay: next.transientTranscriptOverlay + [
+                    .turnFailure(
+                        ChatTranscriptTurnFailureItem(
+                            turnID: turnID,
+                            category: category,
+                            message: message,
+                            createdAt: createdAt
+                        )
+                    )
+                ],
                 sequence: update.sequence
             )
-            var overlay = next.transientTranscriptOverlay
-            overlay.append(.turnFailure(ChatTranscriptTurnFailureItem(
-                turnID: turnID,
-                category: category,
-                message: message,
-                createdAt: Date()
-            )))
-            next = ChatRuntimeSnapshot(
-                chatID: next.chatID,
-                generation: next.generation,
-                lifecycle: next.lifecycle == .ready ? .failed : next.lifecycle,
-                activeTurn: next.activeTurn,
-                queuedTurns: next.queuedTurns,
-                attention: next.attention,
-                capabilities: next.capabilities,
-                providerState: next.providerState,
-                usage: next.usage,
-                diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
-                transientTranscriptOverlay: overlay,
-                lastIncludedSequence: update.sequence
-            )
+            next = promoteQueuedTurnIfAvailable(next)
             return .applied(next)
 
         case .cancelled(let turnID):
             guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state.isTerminal == false
-            else { return .ignored }
-            next = replacing(snapshot: next, activeTurn: nil, attention: .none, sequence: update.sequence)
+            else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = promoteQueuedTurnIfAvailable(
+                replacing(
+                    snapshot: next,
+                    activeTurn: replacingState(of: activeTurn, with: .terminal(.cancelled)),
+                    queuedTurns: next.queuedTurns,
+                    attention: .none,
+                    sequence: update.sequence
+                )
+            )
             return .applied(next)
 
         case .recovering:
-            guard next.lifecycle == .ready || next.lifecycle == .starting else { return .ignored }
-            next = ChatRuntimeSnapshot(
-                chatID: next.chatID,
-                generation: next.generation,
+            guard next.lifecycle == .ready || next.lifecycle == .starting else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+
+            next = replacing(
+                snapshot: next,
                 lifecycle: .recovering,
                 activeTurn: next.activeTurn,
                 queuedTurns: next.queuedTurns,
                 attention: next.attention,
-                capabilities: next.capabilities,
-                providerState: next.providerState,
-                usage: next.usage,
-                diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
-                transientTranscriptOverlay: next.transientTranscriptOverlay,
-                lastIncludedSequence: update.sequence
+                sequence: update.sequence
             )
             return .applied(next)
 
         case .sessionReady(let capabilities, let providerState):
             guard next.lifecycle == .starting || next.lifecycle == .recovering || next.lifecycle == .unavailable else {
-                return .ignored
+                return .rejected(.illegalTransition(payload: update.payload))
             }
+
             next = ChatRuntimeSnapshot(
                 chatID: next.chatID,
                 generation: next.generation,
@@ -654,16 +677,16 @@ public enum ChatSessionMachine {
                 providerState: providerState,
                 usage: next.usage,
                 diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
                 transientTranscriptOverlay: next.transientTranscriptOverlay,
                 lastIncludedSequence: update.sequence
             )
             return .applied(next)
 
         case .sessionClosed:
-            guard next.lifecycle == .ready || next.lifecycle == .recovering || next.lifecycle == .failed || next.lifecycle == .closing else {
-                return .ignored
+            guard next.lifecycle != .closed else {
+                return .rejected(.illegalTransition(payload: update.payload))
             }
+
             next = ChatRuntimeSnapshot(
                 chatID: next.chatID,
                 generation: next.generation,
@@ -675,7 +698,6 @@ public enum ChatSessionMachine {
                 providerState: next.providerState,
                 usage: next.usage,
                 diagnostics: next.diagnostics,
-                committedTranscriptCursor: next.committedTranscriptCursor,
                 transientTranscriptOverlay: next.transientTranscriptOverlay,
                 lastIncludedSequence: update.sequence
             )
@@ -685,23 +707,25 @@ public enum ChatSessionMachine {
 
     private static func replacing(
         snapshot: ChatRuntimeSnapshot,
+        lifecycle: ChatSessionLifecycle? = nil,
         activeTurn: ChatTurnSnapshot?,
+        queuedTurns: [ChatQueuedTurn],
         attention: ChatAttentionState,
+        overlay: [ChatTranscriptItem]? = nil,
         sequence: ChatUpdateSequence
     ) -> ChatRuntimeSnapshot {
         ChatRuntimeSnapshot(
             chatID: snapshot.chatID,
             generation: snapshot.generation,
-            lifecycle: snapshot.lifecycle,
+            lifecycle: lifecycle ?? snapshot.lifecycle,
             activeTurn: activeTurn,
-            queuedTurns: snapshot.queuedTurns,
+            queuedTurns: queuedTurns,
             attention: attention,
             capabilities: snapshot.capabilities,
             providerState: snapshot.providerState,
             usage: snapshot.usage,
             diagnostics: snapshot.diagnostics,
-            committedTranscriptCursor: snapshot.committedTranscriptCursor,
-            transientTranscriptOverlay: snapshot.transientTranscriptOverlay,
+            transientTranscriptOverlay: overlay ?? snapshot.transientTranscriptOverlay,
             lastIncludedSequence: sequence
         )
     }
@@ -715,6 +739,39 @@ public enum ChatSessionMachine {
             submittedAt: turn.submittedAt,
             editedAt: turn.editedAt,
             state: state
+        )
+    }
+
+    private static func activeTurn(from queuedTurn: ChatQueuedTurn) -> ChatTurnSnapshot {
+        ChatTurnSnapshot(
+            turnID: queuedTurn.submission.turnID,
+            commandID: queuedTurn.submission.commandID,
+            visibleText: queuedTurn.submission.userText,
+            contextReferences: queuedTurn.submission.contextReferences,
+            submittedAt: queuedTurn.submission.submittedAt,
+            editedAt: queuedTurn.editedAt,
+            state: .queued
+        )
+    }
+
+    private static func promoteQueuedTurnIfAvailable(_ snapshot: ChatRuntimeSnapshot) -> ChatRuntimeSnapshot {
+        guard let nextQueuedTurn = snapshot.queuedTurns.first else {
+            return snapshot
+        }
+
+        return ChatRuntimeSnapshot(
+            chatID: snapshot.chatID,
+            generation: snapshot.generation,
+            lifecycle: snapshot.lifecycle,
+            activeTurn: activeTurn(from: nextQueuedTurn),
+            queuedTurns: Array(snapshot.queuedTurns.dropFirst()),
+            attention: snapshot.attention,
+            capabilities: snapshot.capabilities,
+            providerState: snapshot.providerState,
+            usage: snapshot.usage,
+            diagnostics: snapshot.diagnostics,
+            transientTranscriptOverlay: snapshot.transientTranscriptOverlay,
+            lastIncludedSequence: snapshot.lastIncludedSequence
         )
     }
 }

@@ -5,6 +5,7 @@ import Testing
 import ACPModel
 @testable import WikiFS
 @testable import WikiFSEngine
+import WikiFSTypes
 
 /// #608 verification: a hosted `PermissionPendingRow` renders the yellow
 /// "Permission pending: <cmd>" row when a `PendingPermission` is set, and

@@ -31,7 +31,7 @@ struct AgentsSettingsViewWarningTests {
         let claude = AgentProvider.claudeAcpDefault
         let config = AgentProvidersConfig(
             providers: [claude],
-            selectedModelIds: ["claude-acp": "sonnet"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")])
         #expect(AgentsSettingsView.modelWarning(for: claude, in: config) == nil)
     }
 
@@ -45,7 +45,7 @@ struct AgentsSettingsViewWarningTests {
             // We don't set the empty string directly because setting mutators
             // strip empties; mirror what a hand-edited file with an empty
             // selectedModelId value would decode to.
-            selectedModelIds: ["claude-acp": ""])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "")])
         #expect(AgentsSettingsView.modelWarning(for: claude, in: config) != nil)
     }
 
@@ -88,8 +88,8 @@ struct AgentsSettingsViewWarningTests {
             providers: [opencode],
             providerModels: [
                 "opencode": [
-                    CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7"),
-                    CachedModelInfo(modelId: "opencode/big-pickle", name: "Big Pickle"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "glm-4.7"), name: "GLM-4.7"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "opencode/big-pickle"), name: "Big Pickle"),
                 ]
             ])
         let msg = AgentsSettingsView.modelWarning(for: opencode, in: config)

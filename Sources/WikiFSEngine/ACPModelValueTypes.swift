@@ -17,7 +17,7 @@ import WikiFSTypes
 
 /// Cumulative token/cost usage for a session. Populated by `ACPBackend` from
 /// ACP `Usage` / `UsageUpdate` events; emitted to the queue system and UI.
-public struct SessionUsage: Sendable, Codable {
+public struct SessionUsage: Sendable, Codable, Equatable {
     /// Cumulative input tokens across all turns (from `Usage.inputTokens`).
     public let inputTokens: Int
     /// Cumulative output tokens across all turns (from `Usage.outputTokens`).

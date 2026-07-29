@@ -62,7 +62,8 @@ struct ScriptedChatRuntimeTests {
             .event(.turnCompleted(ChatTurnID(rawValue: "turn-1"))),
         ], for: handle)
 
-        async let collected = collectEvents(from: runtime.eventStream(for: handle), expectedCount: 2)
+        let stream = try await runtime.eventStream(for: handle)
+        async let collected = collectEvents(from: stream, expectedCount: 2)
         try await runtime.submitTurn(makeSubmission(), in: handle)
         await runtime.resumeGate("gate-1")
 
@@ -95,7 +96,7 @@ struct ScriptedChatRuntimeTests {
         try await runtime.submitTurn(makeSubmission(), in: handle)
         try await runtime.cancelTurn(ChatTurnID(rawValue: "turn-1"), in: handle)
 
-        let recorded = await runtime.recordedCancelledTurns()
+        let recorded = await runtime.cancelledTurns
         #expect(recorded.count == 1)
         #expect(recorded[0].turnID == ChatTurnID(rawValue: "turn-1"))
         await runtime.close(handle)
@@ -113,7 +114,8 @@ struct ScriptedChatRuntimeTests {
             .finish(status: 9),
         ], for: handle)
 
-        async let collected = collectEvents(from: runtime.eventStream(for: handle), expectedCount: 2)
+        let stream = try await runtime.eventStream(for: handle)
+        async let collected = collectEvents(from: stream, expectedCount: 2)
         try await runtime.submitTurn(makeSubmission(turnID: "turn-transport"), in: handle)
         let events = await collected
 
@@ -136,7 +138,8 @@ struct ScriptedChatRuntimeTests {
             .finish(status: 0),
         ], for: handle)
 
-        async let collected = collectEvents(from: runtime.eventStream(for: handle), expectedCount: 2)
+        let stream = try await runtime.eventStream(for: handle)
+        async let collected = collectEvents(from: stream, expectedCount: 2)
         try await runtime.submitTurn(makeSubmission(), in: handle)
         let events = await collected
 

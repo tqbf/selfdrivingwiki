@@ -13,6 +13,7 @@ public struct ChatUpdateSequence: Hashable, Codable, RawRepresentable, Sendable,
     }
 
     public func next() -> ChatUpdateSequence {
-        ChatUpdateSequence(rawValue: rawValue + 1)
+        guard rawValue < Int64.max else { return self }
+        return ChatUpdateSequence(rawValue: rawValue + 1)
     }
 }

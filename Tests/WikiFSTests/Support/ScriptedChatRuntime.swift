@@ -6,6 +6,7 @@ import WikiFSTypes
 actor ScriptedChatRuntime: ChatAgentRuntime {
     enum Error: Swift.Error {
         case unknownHandle
+        case duplicateSubscriber
     }
 
     enum Step: Sendable {
@@ -22,6 +23,7 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         var snapshot: ChatRuntimeSnapshot
         var steps: [Step]
         var drainTask: Task<Void, Never>?
+        var hasSubscriber = false
     }
 
     private var nextHandle = 0
@@ -57,7 +59,6 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
             ),
             usage: nil,
             diagnostics: ChatDiagnosticsState(),
-            committedTranscriptCursor: nil,
             transientTranscriptOverlay: [],
             lastIncludedSequence: ChatUpdateSequence(rawValue: 0)
         )
@@ -67,29 +68,18 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
             continuation: continuation,
             snapshot: snapshot,
             steps: [],
-            drainTask: nil
+            drainTask: nil,
+            hasSubscriber: false
         )
         return handle
     }
 
-    nonisolated func eventStream(for handle: ChatRuntimeHandle) -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
-        AsyncStream { continuation in
-            let task = Task {
-                let stream = await self.runtimeStream(for: handle)
-                for await value in stream {
-                    guard Task.isCancelled == false else { break }
-                    continuation.yield(value)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
-    }
-
-    private func runtimeStream(for handle: ChatRuntimeHandle) -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
-        runtimes[handle]?.stream ?? AsyncStream { $0.finish() }
+    func eventStream(for handle: ChatRuntimeHandle) throws -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
+        guard var runtime = runtimes[handle] else { throw Error.unknownHandle }
+        guard runtime.hasSubscriber == false else { throw Error.duplicateSubscriber }
+        runtime.hasSubscriber = true
+        runtimes[handle] = runtime
+        return runtime.stream
     }
 
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws {
@@ -130,6 +120,7 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         guard var runtime = runtimes[handle] else { throw Error.unknownHandle }
         runtime.steps.append(contentsOf: steps)
         runtimes[handle] = runtime
+        try await startDrainIfNeeded(for: handle)
     }
 
     func resumeGate(_ gateID: String) {
@@ -163,7 +154,13 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
     }
 
     private func drain(_ handle: ChatRuntimeHandle) async {
-        while let step = nextStep(for: handle) {
+        defer { clearDrainTask(for: handle) }
+
+        while Task.isCancelled == false {
+            guard let step = nextStep(for: handle) else {
+                return
+            }
+
             switch step {
             case .pause(let gateID):
                 await waitForGate(gateID, handle: handle)
@@ -213,6 +210,12 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         runtime.continuation.finish()
     }
 
+    private func clearDrainTask(for handle: ChatRuntimeHandle) {
+        guard var runtime = runtimes[handle] else { return }
+        runtime.drainTask = nil
+        runtimes[handle] = runtime
+    }
+
     private func resumeWaiters(for handle: ChatRuntimeHandle) {
         let waiterIDs = gateWaiterHandles
             .filter { $0.value == handle }
@@ -231,10 +234,6 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
             gateWaiters[gateID] = waiters.isEmpty ? nil : waiters
             waiter.resume()
         }
-    }
-
-    func recordedCancelledTurns() -> [(handle: ChatRuntimeHandle, turnID: ChatTurnID?)] {
-        cancelledTurns
     }
 }
 #endif

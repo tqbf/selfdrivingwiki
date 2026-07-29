@@ -457,7 +457,7 @@ struct ACPIngestCollapsedRoutingTests {
                 AgentProvider(id: ProviderID(rawValue: "fake-acp"), label: "Fake",
                               command: ["/usr/bin/true"], enabled: true, isDefault: true)
             ],
-            selectedModelIds: ["fake-acp": "fake-model"])
+            selectedModelIds: ["fake-acp": ModelID(rawValue: "fake-model")])
         do {
             try config.save(to: tempDir)
         } catch {
