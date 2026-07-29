@@ -69,4 +69,35 @@ struct ChatDomainAPISignatureManifestTests {
             )
         }
     }
+
+    @Test func chatDomainConfigurationSurfacesStayTyped() throws {
+        let root = repositoryRoot()
+        let forbiddenFragmentsByPath: [String: [String]] = [
+            "Sources/WikiFSEngine/ChatAgentRuntime.swift": [
+                "public let optionID: String",
+                "public let valueID: String",
+                "func setConfiguration(_ change: String",
+            ],
+            "Sources/WikiFSEngine/ChatDomain.swift": [
+                "currentValueID: String?",
+                "availableModes: [String]",
+                "optionID: String",
+                "valueID: String",
+            ],
+        ]
+
+        for (path, forbiddenFragments) in forbiddenFragmentsByPath {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(path),
+                encoding: .utf8
+            )
+            let normalizedSource = normalizedWhitespace(source)
+            for forbiddenFragment in forbiddenFragments {
+                #expect(
+                    normalizedSource.contains(normalizedWhitespace(forbiddenFragment)) == false,
+                    "unexpected stringly-typed chat configuration fragment in \(path): \(forbiddenFragment)"
+                )
+            }
+        }
+    }
 }

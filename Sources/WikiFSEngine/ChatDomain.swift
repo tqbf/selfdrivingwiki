@@ -433,7 +433,7 @@ public struct ChatUpdateReplayBuffer: Hashable, Sendable, Codable {
     ) {
         self.capacity = max(1, capacity)
         self.updates = Array(updates.suffix(max(1, capacity)))
-        self.highestSequence = highestSequence ?? updates.last?.sequence ?? .initial
+        self.highestSequence = highestSequence ?? updates.last?.sequence
     }
 
     public mutating func append(_ update: ChatSessionUpdate) {
@@ -674,7 +674,7 @@ public enum ChatSessionMachine {
             return .applied(next)
 
         case .recovering:
-            guard next.lifecycle == .ready || next.lifecycle == .starting else {
+            guard canRecover(from: next.lifecycle) else {
                 return .rejected(.illegalTransition(payload: update.payload))
             }
 
@@ -689,21 +689,19 @@ public enum ChatSessionMachine {
             return .applied(next)
 
         case .sessionReady(let capabilities, let providerState):
-            guard next.lifecycle == .starting
-                || next.lifecycle == .recovering
-                || next.lifecycle == .unavailable
-                || next.lifecycle == .closed
-            else {
+            guard canBecomeReady(from: next.lifecycle) else {
                 return .rejected(.illegalTransition(payload: update.payload))
             }
 
+            let promotedQueuedTurn = next.activeTurn == nil ? next.queuedTurns.first : nil
+            let remainingQueuedTurns = promotedQueuedTurn == nil ? next.queuedTurns : Array(next.queuedTurns.dropFirst())
             next = ChatRuntimeSnapshot(
                 chatID: next.chatID,
                 generation: next.generation,
                 lifecycle: .ready,
-                activeTurn: next.activeTurn,
-                queuedTurns: next.queuedTurns,
-                attention: next.attention,
+                activeTurn: promotedQueuedTurn.map(activeTurn(from:)) ?? next.activeTurn,
+                queuedTurns: remainingQueuedTurns,
+                attention: promotedQueuedTurn == nil ? next.attention : .none,
                 capabilities: capabilities,
                 providerState: providerState,
                 usage: next.usage,
@@ -783,6 +781,24 @@ public enum ChatSessionMachine {
             editedAt: queuedTurn.editedAt,
             state: .queued
         )
+    }
+
+    private static func canRecover(from lifecycle: ChatSessionLifecycle) -> Bool {
+        switch lifecycle {
+        case .starting, .ready, .failed, .closing:
+            true
+        case .unavailable, .recovering, .closed:
+            false
+        }
+    }
+
+    private static func canBecomeReady(from lifecycle: ChatSessionLifecycle) -> Bool {
+        switch lifecycle {
+        case .starting, .recovering, .unavailable, .closing, .closed, .failed:
+            true
+        case .ready:
+            false
+        }
     }
 
     private static func shouldAppendQueuedTurn(to snapshot: ChatRuntimeSnapshot) -> Bool {

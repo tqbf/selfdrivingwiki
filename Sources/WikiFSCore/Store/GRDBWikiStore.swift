@@ -5969,6 +5969,20 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             guard content.kind != .folder else {
                 throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
             }
+            let existingKindRawValue = try String.fetchOne(
+                db,
+                sql: "SELECT kind FROM bookmark_nodes WHERE id = ?;",
+                arguments: [id.rawValue]
+            )
+            guard let existingKindRawValue else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "bookmark node does not exist")
+            }
+            guard let existingKind = BookmarkNodeKind(rawValue: existingKindRawValue) else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "unknown kind '\(existingKindRawValue)'")
+            }
+            guard existingKind != .folder else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
+            }
             let targetRawValue = try validatedReferenceTarget(
                 db: db,
                 bookmarkID: id,
@@ -5978,16 +5992,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             try db.execute(sql: """
             UPDATE bookmark_nodes
             SET kind = ?, label = NULL, target_id = ?, updated_at = ?
-            WHERE id = ? AND kind != ?;
+            WHERE id = ?;
             """, arguments: [
                 content.kind.rawValue,
                 targetRawValue,
                 now,
                 id.rawValue,
-                BookmarkNodeKind.folder.rawValue,
             ])
             guard db.changesCount == 1 else {
-                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "only bookmark references can be retargeted")
+                throw WikiStoreError.unexpected("retargetBookmarkNode updated \(db.changesCount) rows for \(id.rawValue)")
             }
         }
     }

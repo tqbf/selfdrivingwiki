@@ -123,6 +123,9 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         let box = HealthCheckResumeBox()
 
         return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            // Timeout — fires if the daemon never responds (no LaunchAgent
+            // registered, or a half-open connection). This is what guarantees
+            // the method always returns within `timeout`.
             let timeoutTask = Task.detached(priority: .userInitiated) {
                 do {
                     try await Task.sleep(for: .seconds(timeout))
@@ -139,9 +142,6 @@ public final class WikiDaemonConnection: @unchecked Sendable {
                 box.resume(value, cont)
             }
 
-            // Timeout — fires if the daemon never responds (no LaunchAgent
-            // registered, or a half-open connection). This is what guarantees
-            // the method always returns within `timeout`.
             // XPC error handler — fires if the connection is dead/invalidated.
             let proxy = self.connection.remoteObjectProxyWithErrorHandler { _ in
                 finish(false)

@@ -56,13 +56,14 @@ struct PageDetailViewHostedTests {
         defer { window.orderOut(nil) }
 
         // Condition-based wait: the WKWebView mounts asynchronously after the
-        // first SwiftUI render. Yield the main actor until it appears, bounded
-        // so a real regression still fails promptly.
+        // first SwiftUI render. Poll on wall clock with a bounded sleep so the
+        // hosted assertion still exercises the real mount path instead of only
+        // burning scheduler yields.
         var found = false
-        for _ in 0..<200 {
+        for _ in 0..<40 {
             found = firstSubview(of: hosting.view, ofType: WKWebView.self) != nil
             if expectWebView && found { break }
-            await Task.yield()
+            try await Task.sleep(for: .milliseconds(50))
         }
         return found
     }

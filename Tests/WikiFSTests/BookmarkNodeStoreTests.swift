@@ -288,6 +288,18 @@ import SQLite3
         #expect(try store.listBookmarkNodes().first?.content == .page(page.id))
     }
 
+    @Test func retargetMissingBookmarkNodeIsRejectedBeforeTargetValidation() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let page = try store.createPage(title: "Page")
+
+        expectInvalidBookmarkRow(reason: "bookmark node does not exist") {
+            try store.retargetBookmarkNode(
+                id: BookmarkID(rawValue: "missing-bookmark"),
+                to: .page(page.id)
+            )
+        }
+    }
+
     @Test func deleteFolderCascadesChildren() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(

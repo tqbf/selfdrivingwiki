@@ -42,6 +42,11 @@ client synchronization, and UI decomposition.
   generation-preserving event envelopes, and sleep-free teardown behavior. The
   gate implementation was corrected to use stored permits so a resume cannot be
   lost if it arrives before the drain task parks.
+- Defined and landed the corrective closed-session queue policy in
+  `ChatSessionMachine`: `sessionClosed` now clears only active execution state
+  and attention, preserves queued turns, and `sessionReady` re-promotes the
+  oldest queued turn back to active `.queued` state so recovery does not strand
+  user-submitted follow-ups.
 - Added Phase 0/1 guardrails and corrective audit coverage:
   `ChatIdentifierCodableCompatibilityTests`,
   `ChatDomainStateTests`,
@@ -60,6 +65,10 @@ client synchronization, and UI decomposition.
 - Corrected the bookmarks single-leaf edit behavior and tests so leaf
   references expose the intended `Edit…` affordance, and the app test asserts
   the exact Unicode ellipsis title.
+- Extended the bookmark edit flow into a public leaf-retarget feature:
+  `EditBookmarkSheet` now retargets page/source/chat bookmarks, keeps the sheet
+  open on validation failure, and surfaces the typed store error instead of
+  silently dismissing.
 
 **Important compatibility decisions preserved.**
 - Raw identifier text stayed primitive-string-compatible at JSON and Codable
@@ -99,20 +108,35 @@ client synchronization, and UI decomposition.
 - Wednesday, July 29, 2026:
   `make prompts` — passed.
 - Wednesday, July 29, 2026:
-  `make test` — passed with `2639 tests in 214 suites`.
+  `make test` — passed with `2645 tests in 214 suites`.
 - Wednesday, July 29, 2026:
   `make build` — passed, including app assembly/signing and MLX runtime
   bundling.
 - Wednesday, July 29, 2026:
   `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` — timed out with
-  exit `124`.
-  Log: `tmp/test-logs/swift-test-20260729-072016.log`.
+  exit `124` (the wrapper reported `TIMED OUT after 60s` and exited `124`
+  after reaping `swift test`).
+  Log: `tmp/test-logs/swift-test-20260729-085236.log`.
   This is the current blocker: the opt-in aggregate app-test gate still does
   not exit `0` under the repository's bounded watchdog wrapper.
 - The timeout probe is materially better than the inherited raw `swift test`
   hang note because it uses the repo-owned watchdog target, reaps orphaned
   `swiftpm-testing-helper` children, records a stable log path, and reports the
-  started-but-never-finished test set from that exact run.
+  started-but-never-finished test set from that exact run. On this head that
+  set included hosted/app-layer and parameterized suites such as
+  `PageAuthor round-trips every case through rawValue`,
+  `SourceProvider round-trips every case through rawValue`,
+  `Byteless YouTube WITH transcript is enqueued (C5 — transcript seeded)`, and
+  `Maintenance submenu includes a wired Restart Daemon item`.
+
+**Deferred chat-domain API surface explicitly preserved.**
+- The foundation branch intentionally does **not** restore a public
+  `ChatTimelineCursor` type.
+- `ChatRuntimeSnapshot` intentionally does **not** carry a public
+  `committedTranscriptCursor`; this branch keeps only the transient overlay plus
+  `lastIncludedSequence`.
+- Both omissions remain documented deferrals rather than silent removals; the
+  queue/lifecycle fixes above do not change that Phase 0/1 boundary.
 
 **Named test coverage shipped in this corrective branch.**
 - `ChatIdentifierBoundaryTypecheckTests` maps to the current
@@ -141,9 +165,15 @@ client synchronization, and UI decomposition.
   `queuedTurnAfterTerminalFailurePreservesExistingQueueArrivalOrder`
   pin the failure/attention and queued-arrival invariants called out in the
   audit.
+- `ChatDomainAuditRegressionTests.closedRecoveryDoesNotStrandQueuedTurns`
+  now proves the preserved queue survives `sessionClosed`, re-promotes on
+  `sessionReady`, and keeps later queued followers in arrival order.
 - `BookmarkNodeStoreTests.retargetReferenceToMissingTargetIsRejected`
   now covers page/source/chat negative retargets, proving transactional target
   existence validation.
+- `ScriptedChatRuntimeTests.storedGatePermitBeforeSubmitIsConsumedDeterministically`
+  proves a gate resume recorded before submit/drain still releases the pause
+  deterministically with no scheduler sleeps.
 
 **Follow-up on July 29, 2026.** The corrective branch
 `chat-domain-audit-fixes` repaired that opt-in app-test drift and the hosted

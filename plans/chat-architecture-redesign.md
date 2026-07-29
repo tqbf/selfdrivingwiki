@@ -290,6 +290,18 @@ Turn state:
   - `cancelling`
 - typed terminal outcomes
 
+Recovery policy for this foundation branch:
+
+- `sessionClosed` clears only active execution state and attention; it preserves
+  queued user turns.
+- `sessionReady` may recover from `starting`, `recovering`, `unavailable`,
+  `closing`, `closed`, or `failed`.
+- when `sessionReady` arrives for a recovered snapshot with no active turn but
+  preserved queued turns, the first queued turn is promoted back to active
+  `.queued` state and the remaining queue keeps arrival order.
+- `recovering` is allowed only from `starting`, `ready`, `failed`, or
+  `closing`.
+
 Attention state:
 
 - `none`

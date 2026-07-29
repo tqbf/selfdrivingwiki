@@ -4039,14 +4039,10 @@ public final class WikiStoreModel {
     }
 
     /// Retarget a bookmark reference to a new page/source/chat target.
-    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) {
-        do {
-            try store.retargetBookmarkNode(id: id, to: content)
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // store write.
-        } catch {
-            DebugLog.store("WikiStoreModel.retargetBookmarkNode failed: \(error)")
-        }
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try store.retargetBookmarkNode(id: id, to: content)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
     }
 
     /// Delete a bookmark node (cascade-deletes children for folders).

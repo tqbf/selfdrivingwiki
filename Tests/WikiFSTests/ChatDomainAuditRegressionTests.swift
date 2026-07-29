@@ -163,6 +163,7 @@ struct ChatDomainAuditRegressionTests {
 
         var edge = ChatUpdateReplayBuffer(capacity: 1)
         edge.append(makeUpdate(sequence: Int64.min, payload: .recovering))
+        #expect(edge.replay(after: .initial) == .unavailable)
         #expect(edge.replay(after: ChatUpdateSequence(rawValue: Int64.min)) == .available([]))
 
         #expect(throws: ChatUpdateSequence.Error.overflow(ChatUpdateSequence(rawValue: Int64.max))) {
@@ -279,7 +280,12 @@ struct ChatDomainAuditRegressionTests {
         .failed,
     ])
     func sessionClosedAppliesFromEveryNonClosedLifecycle(lifecycle: ChatSessionLifecycle) {
-        let snapshot = makeSnapshot(lifecycle: lifecycle, activeTurn: makeActiveTurn(state: .responding))
+        let snapshot = makeSnapshot(
+            lifecycle: lifecycle,
+            activeTurn: makeActiveTurn(state: .responding),
+            queuedTurns: [makeQueuedTurn(ordinal: 1, turnID: "turn-2", commandID: "command-2")],
+            attention: .turnFailed(ChatTurnID(rawValue: "turn-1"))
+        )
         let result = ChatSessionMachine.apply(
             makeUpdate(sequence: 1, payload: .sessionClosed),
             to: snapshot
@@ -291,10 +297,19 @@ struct ChatDomainAuditRegressionTests {
         }
         #expect(closed.lifecycle == .closed)
         #expect(closed.activeTurn == nil)
+        #expect(closed.queuedTurns.map(\.submission.turnID.rawValue) == ["turn-2"])
         #expect(closed.attention == .none)
     }
 
-    @Test func sessionReadyRecoversFromClosedLifecycle() {
+    @Test(arguments: [
+        ChatSessionLifecycle.starting,
+        .recovering,
+        .unavailable,
+        .closing,
+        .closed,
+        .failed,
+    ])
+    func sessionReadyRecoversFromDocumentedLifecycles(lifecycle: ChatSessionLifecycle) {
         let result = ChatSessionMachine.apply(
             makeUpdate(
                 sequence: 1,
@@ -303,15 +318,95 @@ struct ChatDomainAuditRegressionTests {
                     providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil)
                 )
             ),
-            to: makeSnapshot(lifecycle: .closed)
+            to: makeSnapshot(lifecycle: lifecycle)
         )
 
         guard case .applied(let ready) = result else {
-            Issue.record("sessionReady should recover from closed")
+            Issue.record("sessionReady should recover from \(lifecycle)")
             return
         }
 
         #expect(ready.lifecycle == .ready)
+    }
+
+    @Test(arguments: [
+        ChatSessionLifecycle.starting,
+        .ready,
+        .failed,
+        .closing,
+    ])
+    func recoveringAppliesFromDocumentedLifecycles(lifecycle: ChatSessionLifecycle) {
+        let result = ChatSessionMachine.apply(
+            makeUpdate(sequence: 1, payload: .recovering),
+            to: makeSnapshot(lifecycle: lifecycle)
+        )
+
+        guard case .applied(let recovering) = result else {
+            Issue.record("recovering should apply from \(lifecycle)")
+            return
+        }
+
+        #expect(recovering.lifecycle == .recovering)
+    }
+
+    @Test func closedRecoveryDoesNotStrandQueuedTurns() {
+        let starting = makeSnapshot(
+            lifecycle: .ready,
+            activeTurn: makeActiveTurn(state: .responding),
+            queuedTurns: [makeQueuedTurn(ordinal: 1, turnID: "turn-2", commandID: "command-2")]
+        )
+
+        guard case .applied(let closed) = ChatSessionMachine.apply(
+            makeUpdate(sequence: 1, payload: .sessionClosed),
+            to: starting
+        ) else {
+            Issue.record("sessionClosed should apply")
+            return
+        }
+        #expect(closed.activeTurn == nil)
+        #expect(closed.queuedTurns.map(\.submission.turnID.rawValue) == ["turn-2"])
+        #expect(closed.attention == .none)
+
+        guard case .applied(let ready) = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 2,
+                payload: .sessionReady(
+                    capabilities: .unavailable,
+                    providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil)
+                )
+            ),
+            to: closed
+        ) else {
+            Issue.record("sessionReady should recover a closed session")
+            return
+        }
+        #expect(ready.activeTurn?.turnID == ChatTurnID(rawValue: "turn-2"))
+        #expect(ready.activeTurn?.state == .queued)
+        #expect(ready.queuedTurns.isEmpty)
+        #expect(ready.attention == .none)
+
+        guard case .applied(let queued) = ChatSessionMachine.apply(
+            makeUpdate(
+                sequence: 3,
+                payload: .queued(makeQueuedTurn(ordinal: 2, turnID: "turn-3", commandID: "command-3"))
+            ),
+            to: ready
+        ) else {
+            Issue.record("new queued turn should apply after recovery")
+            return
+        }
+        #expect(queued.activeTurn?.turnID == ChatTurnID(rawValue: "turn-2"))
+        #expect(queued.queuedTurns.map(\.submission.turnID.rawValue) == ["turn-3"])
+
+        let submitted = ChatSessionMachine.apply(
+            makeUpdate(sequence: 4, payload: .submitted(turnID: ChatTurnID(rawValue: "turn-2"))),
+            to: queued
+        )
+        guard case .applied(let active) = submitted else {
+            Issue.record("preserved queued turn should submit after recovery")
+            return
+        }
+        #expect(active.activeTurn?.state == .submitting)
     }
 
     @Test func sessionMachineRejectsStaleChatIDs() {

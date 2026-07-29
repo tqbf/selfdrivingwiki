@@ -247,7 +247,7 @@ struct ChatAgentRuntimeCoverageTests {
             .event(.turnCompleted(ChatTurnID(rawValue: "turn-1"))),
         ], for: handle)
 
-        await runtime.resumeGate("gate-early")
+        await runtime.resumeGate("gate-early", for: handle)
 
         let stream = try await runtime.eventStream(for: handle)
         var iterator = stream.makeAsyncIterator()

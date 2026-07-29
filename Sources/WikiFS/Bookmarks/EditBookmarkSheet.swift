@@ -31,6 +31,7 @@ struct EditBookmarkSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
     @State private var selectedTarget: RetargetSelection?
+    @State private var errorMessage: String?
 
     private var node: BookmarkNode? {
         store.bookmarkNodes.first { $0.id == nodeID }
@@ -110,6 +111,12 @@ struct EditBookmarkSheet: View {
                     EmptyView()
                 }
 
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
                 // Timestamps (read-only) — issue #242. Relative date mirrors
                 // ChatsCellView's treatment of chat.updatedAt; the absolute date
                 // is the tooltip for precision. "Updated" only appears when the
@@ -140,18 +147,24 @@ struct EditBookmarkSheet: View {
                         dismiss()
                         return
                     }
+                    errorMessage = nil
                     switch node.content {
                     case .folder:
                         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
                             store.renameBookmarkNode(id: nodeID, to: trimmed)
+                            dismiss()
                         }
                     case .page, .source, .chat:
                         if let selectedTarget {
-                            store.retargetBookmarkNode(id: nodeID, to: selectedTarget.content)
+                            do {
+                                try store.retargetBookmarkNode(id: nodeID, to: selectedTarget.content)
+                                dismiss()
+                            } catch {
+                                errorMessage = error.localizedDescription
+                            }
                         }
                     }
-                    dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)

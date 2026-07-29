@@ -16,6 +16,16 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         case finish(status: Int32?)
     }
 
+    private struct GateKey: Hashable, Sendable {
+        let handle: ChatRuntimeHandle
+        let gateID: String
+    }
+
+    private struct GateWaiter {
+        let order: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private struct RuntimeState: Sendable {
         let generation: ChatSessionGenerationID
         let stream: AsyncStream<ChatAgentRuntimeEventEnvelope>
@@ -27,10 +37,10 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
     }
 
     private var nextHandle = 0
+    private var nextWaiterOrder = 0
     private var runtimes: [ChatRuntimeHandle: RuntimeState] = [:]
-    private var gateWaiters: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
-    private var gateWaiterHandles: [UUID: ChatRuntimeHandle] = [:]
-    private var gatePermits: [String: Int] = [:]
+    private var gateWaiters: [GateKey: [GateWaiter]] = [:]
+    private var gatePermits: [GateKey: Int] = [:]
 
     private(set) var startedRequests: [ChatRuntimeStartRequest] = []
     private(set) var submittedTurns: [(handle: ChatRuntimeHandle, submission: ChatTurnSubmission)] = []
@@ -74,7 +84,7 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         return handle
     }
 
-    func eventStream(for handle: ChatRuntimeHandle) throws -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
+    func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
         guard var runtime = runtimes[handle] else { throw Error.unknownHandle }
         guard runtime.hasSubscriber == false else { throw Error.duplicateSubscriber }
         runtime.hasSubscriber = true
@@ -123,24 +133,23 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
         try await startDrainIfNeeded(for: handle)
     }
 
-    func resumeGate(_ gateID: String) {
-        guard var waiters = gateWaiters[gateID], waiters.isEmpty == false else {
-            gatePermits[gateID, default: 0] += 1
+    func resumeGate(_ gateID: String, for handle: ChatRuntimeHandle) {
+        let gateKey = GateKey(handle: handle, gateID: gateID)
+        guard var waiters = gateWaiters[gateKey], waiters.isEmpty == false else {
+            gatePermits[gateKey, default: 0] += 1
             return
         }
 
-        let waiterID = waiters.keys.sorted { $0.uuidString < $1.uuidString }.first!
-        let waiter = waiters.removeValue(forKey: waiterID)!
-        gateWaiterHandles.removeValue(forKey: waiterID)
-        gateWaiters[gateID] = waiters.isEmpty ? nil : waiters
-        waiter.resume()
+        let waiter = waiters.removeFirst()
+        gateWaiters[gateKey] = waiters.isEmpty ? nil : waiters
+        waiter.continuation.resume()
     }
 
-    private func claimGatePermit(_ gateID: String) -> Bool {
-        guard let permits = gatePermits[gateID], permits > 0 else {
+    private func claimGatePermit(_ gateKey: GateKey) -> Bool {
+        guard let permits = gatePermits[gateKey], permits > 0 else {
             return false
         }
-        gatePermits[gateID] = permits == 1 ? nil : permits - 1
+        gatePermits[gateKey] = permits == 1 ? nil : permits - 1
         return true
     }
 
@@ -184,13 +193,15 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
     }
 
     private func waitForGate(_ gateID: String, handle: ChatRuntimeHandle) async {
-        if claimGatePermit(gateID) {
+        let gateKey = GateKey(handle: handle, gateID: gateID)
+        if claimGatePermit(gateKey) {
             return
         }
         await withCheckedContinuation { continuation in
-            let id = UUID()
-            gateWaiters[gateID, default: [:]][id] = continuation
-            gateWaiterHandles[id] = handle
+            nextWaiterOrder += 1
+            gateWaiters[gateKey, default: []].append(
+                GateWaiter(order: nextWaiterOrder, continuation: continuation)
+            )
         }
     }
 
@@ -217,22 +228,12 @@ actor ScriptedChatRuntime: ChatAgentRuntime {
     }
 
     private func resumeWaiters(for handle: ChatRuntimeHandle) {
-        let waiterIDs = gateWaiterHandles
-            .filter { $0.value == handle }
-            .map(\.key)
-        for waiterID in waiterIDs {
-            resumeWaiter(waiterID)
-        }
-    }
-
-    private func resumeWaiter(_ waiterID: UUID) {
-        guard gateWaiterHandles.removeValue(forKey: waiterID) != nil else { return }
-        let gateIDs = gateWaiters.keys.filter { gateWaiters[$0]?[waiterID] != nil }
-        for gateID in gateIDs {
-            guard var waiters = gateWaiters[gateID] else { continue }
-            guard let waiter = waiters.removeValue(forKey: waiterID) else { continue }
-            gateWaiters[gateID] = waiters.isEmpty ? nil : waiters
-            waiter.resume()
+        let keys = gateWaiters.keys.filter { $0.handle == handle }
+        for key in keys {
+            guard let waiters = gateWaiters.removeValue(forKey: key) else { continue }
+            for waiter in waiters.sorted(by: { $0.order < $1.order }) {
+                waiter.continuation.resume()
+            }
         }
     }
 }
