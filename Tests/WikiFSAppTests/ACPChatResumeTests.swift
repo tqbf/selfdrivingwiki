@@ -48,7 +48,7 @@ struct ACPChatResumeTests {
         launcher.resolveSelectedProvider = { provider }
         let config = AgentProvidersConfig(
             providers: [provider],
-            selectedModelIds: [provider.id.rawValue: "fake-model"])
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "fake-model")])
         try? config.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir

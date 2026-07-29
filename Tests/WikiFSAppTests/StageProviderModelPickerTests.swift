@@ -20,7 +20,7 @@ struct StageProviderModelPickerTests {
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", enabled: true, isDefault: true),
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
-        .settingStageProvider("gemini", forStage: "summarizer")
+        .settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         let state = StageProviderSelectionState.resolve(config: config, stageKey: "summarizer")
 
@@ -32,7 +32,7 @@ struct StageProviderModelPickerTests {
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", enabled: true, isDefault: true),
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
         ])
-        .settingStageProvider("gemini", forStage: "summarizer")
+        .settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         let state = StageProviderSelectionState.resolve(config: config, stageKey: "summarizer")
 
@@ -43,7 +43,7 @@ struct StageProviderModelPickerTests {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", enabled: true, isDefault: true),
         ])
-        .settingStageProvider("gemini", forStage: "summarizer")
+        .settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         let state = StageProviderSelectionState.resolve(config: config, stageKey: "summarizer")
 

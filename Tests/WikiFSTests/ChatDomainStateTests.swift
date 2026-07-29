@@ -36,7 +36,6 @@ struct ChatDomainStateTests {
             providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil),
             usage: nil,
             diagnostics: ChatDiagnosticsState(),
-            committedTranscriptCursor: nil,
             transientTranscriptOverlay: [],
             lastIncludedSequence: ChatUpdateSequence(rawValue: sequence)
         )
@@ -82,6 +81,11 @@ struct ChatDomainStateTests {
         #expect(buffer.replay(after: ChatUpdateSequence(rawValue: 1)) == .unavailable)
     }
 
+    @Test func replayBufferTreatsFreshInitialWatermarkAsInSync() {
+        let buffer = ChatUpdateReplayBuffer(capacity: 2)
+        #expect(buffer.replay(after: .initial) == .available([]))
+    }
+
     @Test func replayBufferReturnsStrictlyNewerUpdates() {
         var buffer = ChatUpdateReplayBuffer(capacity: 3)
         let first = ChatSessionUpdate(
@@ -117,8 +121,20 @@ struct ChatDomainStateTests {
             payload: .recovering
         )
 
-        #expect(ChatSessionMachine.apply(staleGeneration, to: snapshot) == .ignored)
-        #expect(ChatSessionMachine.apply(duplicateSequence, to: snapshot) == .ignored)
+        #expect(
+            ChatSessionMachine.apply(staleGeneration, to: snapshot)
+                == .rejected(.staleGeneration(
+                    expected: ChatSessionGenerationID(rawValue: "generation-1"),
+                    received: ChatSessionGenerationID(rawValue: "generation-OLD")
+                ))
+        )
+        #expect(
+            ChatSessionMachine.apply(duplicateSequence, to: snapshot)
+                == .rejected(.duplicateSequence(
+                    lastIncluded: ChatUpdateSequence(rawValue: 2),
+                    received: ChatUpdateSequence(rawValue: 2)
+                ))
+        )
     }
 
     @Test func sessionMachineAllowsDocumentedTurnTransitionsOnly() throws {
@@ -149,7 +165,7 @@ struct ChatDomainStateTests {
         )
 
         let base = makeSnapshot()
-        #expect(ChatSessionMachine.apply(illegalStartedFirst, to: base) == .ignored)
+        #expect(ChatSessionMachine.apply(illegalStartedFirst, to: base) == .rejected(.illegalTransition(payload: .started(turnID: ChatTurnID(rawValue: "turn-1")))))
 
         let queuedResult = ChatSessionMachine.apply(queuedUpdate, to: base)
         guard case .applied(let queuedSnapshot) = queuedResult else {

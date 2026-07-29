@@ -648,6 +648,10 @@ public protocol WikiStore: Sendable {
     /// Update the label of a bookmark node (folders only).
     func renameBookmarkFolder(id: BookmarkID, to label: String) throws
 
+    /// Retarget a bookmark reference to a new page/source/chat target.
+    /// Folders cannot be retargeted.
+    func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws
+
     /// Delete a bookmark node by id. `ON DELETE CASCADE` removes descendants.
     func deleteBookmarkNode(id: BookmarkID) throws
 

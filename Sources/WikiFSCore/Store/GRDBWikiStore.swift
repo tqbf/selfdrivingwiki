@@ -5962,6 +5962,111 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try mutate(event: { _ in
+            self.localEvent(.bookmark, id: id.rawValue, change: .updated)
+        }) { db in
+            guard content.kind != .folder else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
+            }
+            let existingKindRawValue = try String.fetchOne(
+                db,
+                sql: "SELECT kind FROM bookmark_nodes WHERE id = ?;",
+                arguments: [id.rawValue]
+            )
+            guard let existingKindRawValue else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "bookmark node does not exist")
+            }
+            guard let existingKind = BookmarkNodeKind(rawValue: existingKindRawValue) else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "unknown kind '\(existingKindRawValue)'")
+            }
+            guard existingKind != .folder else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
+            }
+            let targetRawValue = try validatedReferenceTarget(
+                db: db,
+                bookmarkID: id,
+                content: content
+            )
+            let now = Date().timeIntervalSince1970
+            try db.execute(sql: """
+            UPDATE bookmark_nodes
+            SET kind = ?, label = NULL, target_id = ?, updated_at = ?
+            WHERE id = ?;
+            """, arguments: [
+                content.kind.rawValue,
+                targetRawValue,
+                now,
+                id.rawValue,
+            ])
+            guard db.changesCount == 1 else {
+                throw WikiStoreError.unexpected("retargetBookmarkNode updated \(db.changesCount) rows for \(id.rawValue)")
+            }
+        }
+    }
+
+    private func validatedReferenceTarget(
+        db: Database,
+        bookmarkID: BookmarkID,
+        content: BookmarkNode.Content
+    ) throws -> String {
+        switch content {
+        case .folder:
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "folders cannot be retargeted")
+        case .page(let id):
+            return try validatedTargetRawValue(
+                db: db,
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "page reference",
+                existenceQuery: "SELECT 1 FROM pages WHERE id = ?;",
+                missingReason: "page target does not exist"
+            )
+        case .source(let id):
+            return try validatedTargetRawValue(
+                db: db,
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "source reference",
+                existenceQuery: "SELECT 1 FROM sources WHERE id = ?;",
+                missingReason: "source target does not exist"
+            )
+        case .chat(let id):
+            return try validatedTargetRawValue(
+                db: db,
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "chat reference",
+                existenceQuery: "SELECT 1 FROM chats WHERE id = ?;",
+                missingReason: "chat target does not exist"
+            )
+        }
+    }
+
+    private func validatedTargetRawValue(
+        db: Database,
+        bookmarkID: BookmarkID,
+        rawValue: String,
+        referenceName: String,
+        existenceQuery: String,
+        missingReason: String
+    ) throws -> String {
+        guard rawValue.isEmpty == false else {
+            throw WikiStoreError.invalidBookmarkRow(
+                id: bookmarkID.rawValue,
+                reason: "\(referenceName) requires a non-empty target_id"
+            )
+        }
+        let exists = try Int.fetchOne(db, sql: existenceQuery, arguments: [rawValue]) != nil
+        guard exists else {
+            throw WikiStoreError.invalidBookmarkRow(
+                id: bookmarkID.rawValue,
+                reason: missingReason
+            )
+        }
+        return rawValue
+    }
+
 
     public func deleteBookmarkNode(id: BookmarkID) throws {
         try mutate(event: { _ in

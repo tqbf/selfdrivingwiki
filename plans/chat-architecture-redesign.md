@@ -146,7 +146,11 @@ The redesign has six primary touch points:
 Phase 0 deliverables:
 
 - `ChatAgentRuntime` protocol in `WikiFSEngine`
-- production adapter around the current `AgentLauncher` and ACP backend
+- closure-backed runtime seam that characterizes the current launcher/backend
+  boundary without yet replacing it
+- deferred from this foundation PR: the production `AgentLauncher`/ACP adapter
+  that will implement the runtime protocol against the real launcher/backend
+  path without changing external behavior
 - `ScriptedChatRuntime` in test support
 - deterministic pause gates for ordered lifecycle testing
 - characterization tests for raw identifier boundaries, CLI/File Provider
@@ -286,6 +290,18 @@ Turn state:
   - `cancelling`
 - typed terminal outcomes
 
+Recovery policy for this foundation branch:
+
+- `sessionClosed` clears only active execution state and attention; it preserves
+  queued user turns.
+- `sessionReady` may recover from `starting`, `recovering`, `unavailable`,
+  `closing`, `closed`, or `failed`.
+- when `sessionReady` arrives for a recovered snapshot with no active turn but
+  preserved queued turns, the first queued turn is promoted back to active
+  `.queued` state and the remaining queue keeps arrival order.
+- `recovering` is allowed only from `starting`, `ready`, `failed`, or
+  `closing`.
+
 Attention state:
 
 - `none`
@@ -316,8 +332,11 @@ Snapshot state includes:
 - provider state
 - usage
 - diagnostics
-- committed transcript cursor
 - transient transcript overlay
+- committed-transcript cursor
+  - deferred in this foundation branch: durable transcript persistence and
+    client sync do not exist yet, so the runtime snapshot intentionally keeps
+    only the transient overlay plus the per-generation update watermark
 - `lastIncludedSequence`
 
 Derived UI capabilities must come from composite state. They must not be stored
@@ -492,6 +511,28 @@ The umbrella plan names these test suites:
 Later phases add more suites for persistence, daemon restart, client sync, and
 UI decomposition.
 
+On the corrective branch (`chat-domain-audit-fixes`), the implemented coverage
+maps to these concrete suites:
+
+- `ChatIdentifierBoundaryTypecheckTests` is currently enforced by
+  `IdentifierBoundaryTypecheckTests`, including the launcher and chat-domain
+  positive fixtures and the negative namespace fixtures run through
+  `swiftc -typecheck`.
+- `ChatSessionMachineTransitionTests` and
+  `ChatSessionMachineStaleEventTests` are currently covered by
+  `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- `ChatCommandIdempotencyTests` is intentionally deferred to the Phase 3
+  controller-level command-dedup work. Phase 0/1 coverage here is the reducer
+  and event negative matrix in `ChatDomainStateTests` and
+  `ChatDomainAuditRegressionTests`, not an assertion that `ChatCommandID`
+  deduplicates submitted commands yet.
+- `ScriptedChatRuntimeTests` keeps its own suite, with additional runtime seam
+  coverage in `ChatAgentRuntimeCoverageTests`.
+
+The current verification evidence for this branch is macOS-hosted. The
+typecheck fixtures still keep Linux target-triple support in the test harness,
+but that is a compatibility guard in code, not a claim that Linux CI ran here.
+
 ## Review strategy
 
 Before and during implementation:
@@ -538,6 +579,9 @@ This PR implements only the foundation work:
 - shared transcript item vocabulary in `WikiFSTypes`
 - `ToolCallID` move into `WikiFSTypes`
 - `ChatAgentRuntime` protocol and production seam
+- deferred but still planned from the original Phase 0 framing: the production
+  `AgentLauncher`/ACP adapter that will plug the runtime protocol into the real
+  launcher/backend path
 - `ScriptedChatRuntime` test support
 - orthogonal session, turn, attention, capability, command, update, snapshot,
   and replay-buffer value types
@@ -559,9 +603,9 @@ Run from the repository root:
 
 ```sh
 make prompts
-swift build
-swift test
-WIKIFS_APP_TESTS=1 swift test
+make build
+make test
+WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog
 ```
 
 If the local mutation tool is available, also run:

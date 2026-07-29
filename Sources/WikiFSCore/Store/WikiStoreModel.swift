@@ -4028,14 +4028,17 @@ public final class WikiStoreModel {
     }
 
     /// Rename a folder.
-    public func renameBookmarkNode(id: BookmarkID, to label: String) {
-        do {
-            try store.renameBookmarkFolder(id: id, to: label)
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // store write.
-        } catch {
-            DebugLog.store("WikiStoreModel.renameBookmarkNode failed: \(error)")
-        }
+    public func renameBookmarkNode(id: BookmarkID, to label: String) throws {
+        try store.renameBookmarkFolder(id: id, to: label)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
+    }
+
+    /// Retarget a bookmark reference to a new page/source/chat target.
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try store.retargetBookmarkNode(id: id, to: content)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
     }
 
     /// Delete a bookmark node (cascade-deletes children for folders).

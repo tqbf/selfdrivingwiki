@@ -149,7 +149,7 @@ import WikiFSCore
         // Pin the chat path's guard input contract — what
         // `startInteractiveQuery` actually feeds into `SpawnModelGuard.validate`.
         #expect(provider.id == ProviderID(rawValue: "opencode"))
-        #expect(modelId?.rawValue == "glm-4.7")
+        #expect(modelId == ModelID(rawValue: "glm-4.7"))
         #expect(SpawnModelGuard.validate(provider: provider, modelId: modelId?.rawValue) == nil)
     }
 }

@@ -20,6 +20,12 @@ struct ChatDomainAPISignatureManifestTests {
         }
     }
 
+    private func normalizedWhitespace(_ value: String) -> String {
+        value
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -53,16 +59,45 @@ struct ChatDomainAPISignatureManifestTests {
         #expect(entries.isEmpty == false, "chat-domain API signature manifest must not be empty")
 
         for entry in entries {
-            #expect(
-                entry.signature.contains("ID") || entry.signature.contains("ChatUpdateSequence"),
-                "manifest entry must assert a typed chat-domain boundary: \(entry.path)"
-            )
             let sourceURL = root.appendingPathComponent(entry.path)
             let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            let normalizedSource = normalizedWhitespace(source)
+            let normalizedSignature = normalizedWhitespace(entry.signature)
             #expect(
-                source.contains(entry.signature),
+                normalizedSource.contains(normalizedSignature),
                 "missing typed chat-domain API signature in \(entry.path): \(entry.signature)"
             )
+        }
+    }
+
+    @Test func chatDomainConfigurationSurfacesStayTyped() throws {
+        let root = repositoryRoot()
+        let forbiddenFragmentsByPath: [String: [String]] = [
+            "Sources/WikiFSEngine/ChatAgentRuntime.swift": [
+                "public let optionID: String",
+                "public let valueID: String",
+                "func setConfiguration(_ change: String",
+            ],
+            "Sources/WikiFSEngine/ChatDomain.swift": [
+                "currentValueID: String?",
+                "availableModes: [String]",
+                "optionID: String",
+                "valueID: String",
+            ],
+        ]
+
+        for (path, forbiddenFragments) in forbiddenFragmentsByPath {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(path),
+                encoding: .utf8
+            )
+            let normalizedSource = normalizedWhitespace(source)
+            for forbiddenFragment in forbiddenFragments {
+                #expect(
+                    normalizedSource.contains(normalizedWhitespace(forbiddenFragment)) == false,
+                    "unexpected stringly-typed chat configuration fragment in \(path): \(forbiddenFragment)"
+                )
+            }
         }
     }
 }

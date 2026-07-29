@@ -35,10 +35,10 @@ public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
 }
 
 public struct ChatRuntimeConfigurationChange: Hashable, Sendable, Codable {
-    public let optionID: String
-    public let valueID: String
+    public let optionID: ChatConfigurationOptionID
+    public let valueID: ChatConfigurationValueID
 
-    public init(optionID: String, valueID: String) {
+    public init(optionID: ChatConfigurationOptionID, valueID: ChatConfigurationValueID) {
         self.optionID = optionID
         self.valueID = valueID
     }
@@ -68,7 +68,7 @@ public struct ChatAgentRuntimeEventEnvelope: Hashable, Sendable, Codable {
 
 public protocol ChatAgentRuntime: Sendable {
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle
-    func eventStream(for handle: ChatRuntimeHandle) -> AsyncStream<ChatAgentRuntimeEventEnvelope>
+    func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope>
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws
     func cancelTurn(_ turnID: ChatTurnID?, in handle: ChatRuntimeHandle) async throws
     func resolvePermission(_ resolution: ChatPermissionResolution, in handle: ChatRuntimeHandle) async throws
@@ -79,7 +79,7 @@ public protocol ChatAgentRuntime: Sendable {
 
 public struct ClosureBackedChatAgentRuntime: ChatAgentRuntime {
     public typealias StartOperation = @Sendable (ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle
-    public typealias EventStreamOperation = @Sendable (ChatRuntimeHandle) -> AsyncStream<ChatAgentRuntimeEventEnvelope>
+    public typealias EventStreamOperation = @Sendable (ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope>
     public typealias SubmitOperation = @Sendable (ChatTurnSubmission, ChatRuntimeHandle) async throws -> Void
     public typealias CancelOperation = @Sendable (ChatTurnID?, ChatRuntimeHandle) async throws -> Void
     public typealias PermissionOperation = @Sendable (ChatPermissionResolution, ChatRuntimeHandle) async throws -> Void
@@ -120,8 +120,8 @@ public struct ClosureBackedChatAgentRuntime: ChatAgentRuntime {
         try await startOperation(request)
     }
 
-    public func eventStream(for handle: ChatRuntimeHandle) -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
-        eventStreamOperation(handle)
+    public func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope> {
+        try await eventStreamOperation(handle)
     }
 
     public func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws {
