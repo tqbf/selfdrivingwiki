@@ -39,7 +39,7 @@ APP_GROUP      := $(or $(call cfg,APP_GROUP),group.org.sockpuppet.wiki)
 KEYCHAIN_ACCESS_GROUP = $(or $(call cfg,KEYCHAIN_ACCESS_GROUP),$(TEAM_ID).$(patsubst group.%,%,$(APP_GROUP)))
 LSREGISTER   := /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 PLUGINKIT    := pluginkit
-MIN_MACOS    := 26.5.2
+MIN_MACOS    := 26.0
 MIN_SWIFT    := 6.0
 
 # Fast test tier — skips the slow SQLite integration suites (tagged

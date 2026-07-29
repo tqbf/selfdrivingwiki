@@ -22,7 +22,7 @@ let strictSwiftSettings: [SwiftSetting] = podcastSwiftSettings + [.unsafeFlags([
 
 let package = Package(
     name: "WikiFS",
-    platforms: [.macOS("26.5.2")],
+    platforms: [.macOS("26.0")],
     dependencies: [
         // swift-markdown powers the reader's markdown→HTML renderer
         // (plans/source-web-reader.md / textual-to-wkwebview.md). Pure-Swift GFM

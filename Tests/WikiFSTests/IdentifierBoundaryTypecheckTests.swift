@@ -122,7 +122,7 @@ struct IdentifierBoundaryTypecheckTests {
         #endif
 
         #if os(macOS)
-        return "\(architecture)-apple-macosx26.5.2"
+        return "\(architecture)-apple-macosx26.0"
         #elseif os(Linux)
         return "\(architecture)-unknown-linux-gnu"
         #else
