@@ -1373,51 +1373,31 @@ struct ChatDetailView: View {
     /// and `firePendingQueuedMessage` (#740 auto-fire), so the queued deliver
     /// path is identical to a manual send — only the *timing* differs.
     private func submitMessage(_ wireMessage: String) {
-        if remoteSession.isInteractiveSession {
-            // Live chat mid-session: append a turn to the existing daemon
-            // session via the sendChatMessage XPC.
-            if let chatID {
-                Task {
-                    do {
-                        try await coordinator.sendMessage(
-                            chatID: chatID, message: wireMessage)
-                    } catch {
-                        DebugLog.agent("ChatDetailView.sendMessage failed: \(error)")
-                    }
-                }
-            }
-        } else if let chatID {
-            // D3: a persisted (non-live) chat — continue it on the daemon.
-            // The daemon reads history + acpSessionId, builds the adaptive
-            // preamble (or resumes), and streams into the SAME chat row.
-            Task {
-                do {
-                    try await coordinator.continueChat(
+        Task {
+            do {
+                let override = remoteSession.pendingModelOverride
+                let submission = ChatTurnSubmission(
+                    commandID: ChatCommandID(rawValue: ULID.generate()),
+                    turnID: ChatTurnID(rawValue: ULID.generate()),
+                    userText: wireMessage,
+                    contextReferences: [],
+                    submittedAt: Date()
+                )
+                let resolvedChatID = try await coordinator.submitTurn(
+                    ChatSubmitRequest(
                         wikiID: session.wikiID,
                         chatID: chatID,
-                        message: wireMessage)
-                } catch {
-                    DebugLog.agent("ChatDetailView.continueChat failed: \(error)")
-                    remoteSession.preflightError = error.localizedDescription
+                        submission: submission,
+                        providerId: chatID == nil ? override?.providerId : nil,
+                        modelId: chatID == nil ? override?.modelId : nil
+                    )
+                )
+                if chatID == nil {
+                    store.retargetActiveTabToChat(chatID: resolvedChatID)
                 }
-            }
-        } else {
-            // Draft state (.newChat): start a NEW chat on the daemon. The
-            // daemon creates the chat row + seeds the first message, then
-            // returns the chat ULID; we retarget the active tab to it (mirrors
-            // the old AgentOperationRunner.startChat → retargetActiveTabToChat
-            // path, but the row now lives in the daemon-owned store).
-            Task {
-                do {
-                    let override = remoteSession.pendingModelOverride
-                    let newChatID = try await coordinator.startChat(
-                        wikiID: session.wikiID, firstMessage: wireMessage,
-                        providerId: override?.providerId, modelId: override?.modelId)
-                    store.retargetActiveTabToChat(chatID: newChatID)
-                } catch {
-                    DebugLog.agent("ChatDetailView.startChat failed: \(error)")
-                    remoteSession.preflightError = error.localizedDescription
-                }
+            } catch {
+                DebugLog.agent("ChatDetailView.submitMessage failed: \(error)")
+                remoteSession.preflightError = error.localizedDescription
             }
         }
     }

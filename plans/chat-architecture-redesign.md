@@ -8,16 +8,17 @@ Issue: #982
 
 State: In progress
 
-Scope of this branch: Phase 0, Phase 1, and Phase 2
+Scope of this branch: Phase 0, Phase 1, Phase 2, and Phase 3
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
 submission, queuing, lifecycle, permissions, cancellation, recovery,
 persistence, and client synchronization.
 
-This branch implements the Phase 0/1 foundation plus the Phase 2 persistence
-rebuild. It does not implement daemon-controller replacement, XPC wire
-replacement, client sync replacement, or UI decomposition.
+This branch implements the Phase 0/1 foundation, the Phase 2 persistence
+rebuild, and the Phase 3 per-chat daemon-controller move. It does not
+implement the Phase 4 XPC wire redesign, the Phase 4 client sync replacement,
+or the Phase 5 UI decomposition.
 
 ## Problem
 
@@ -197,8 +198,6 @@ Phase 2 deliverables:
 Replace `DaemonChatHost` launcher-oriented orchestration with a per-chat
 controller that owns generation, queue, permissions, replay buffer, and
 runtime lifecycle.
-
-This phase is out of scope for this branch.
 
 ### Phase 4: Replace the chat XPC mirror with sequenced snapshots and a pure client reducer
 
@@ -579,7 +578,7 @@ Before and during implementation:
 
 ## Branch scope for this PR
 
-This PR implements the foundation and persistence work:
+This PR implements the foundation, persistence, and controller work:
 
 - this design record and the `PLAN.md` index entry
 - strong Foundation-only chat identifiers
@@ -599,12 +598,19 @@ This PR implements the foundation and persistence work:
   boundaries
 - typed transcript persistence, compatibility projection, cursor paging, and
   checkpoints
+- per-chat daemon controllers with generation-guarded runtime event handling,
+  durable queue recovery, restart interruption marking, terminal-outcome
+  winner enforcement, typed snapshot production, and bounded replay
+- daemon/client compatibility migration to one typed submit path through the
+  daemon contract, client wrapper, coordinator, and `ChatDetailView`
 - Tantivy rebuild marker invalidation for destructive chat search resets
-- tests for AC.1, AC.3, AC.4, AC.5, AC.9, AC.13, AC.14, and AC.15
+- direct controller, host, and coordinator tests for Phase 3 lifecycle,
+  restart, stale-event, replay, and compatibility cases
+- tests for AC.1, AC.2, AC.3, AC.4, AC.5, AC.6, AC.7, AC.8, AC.9, AC.13,
+  AC.14, and AC.15
 
 Out of scope for this PR:
 
-- daemon controller replacement
 - XPC wire redesign
 - client synchronization migration
 - UI decomposition
@@ -617,6 +623,7 @@ Run from the repository root:
 make prompts
 make build
 make test
+WIKIFS_APP_TESTS=1 swift test
 WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog
 ```
 

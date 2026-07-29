@@ -368,6 +368,9 @@ public extension ChatRuntimeSnapshot {
 public enum ChatSessionCommand: Hashable, Sendable, Codable {
     case createChat(commandID: ChatCommandID)
     case submitTurn(ChatTurnSubmission)
+    /// Cancels the currently active turn only. Queued turns are managed with
+    /// `removeQueuedTurn`, which preserves arrival order and does not reuse the
+    /// active-turn cancellation path.
     case cancelTurn(commandID: ChatCommandID, turnID: ChatTurnID?)
     case editQueuedTurn(turn: ChatQueuedTurn)
     case removeQueuedTurn(commandID: ChatCommandID, turnID: ChatTurnID)

@@ -318,6 +318,14 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.submitChatTurnData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
     func continueChat(request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
@@ -401,6 +409,10 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
     func startChat(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
+    }
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
         reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }

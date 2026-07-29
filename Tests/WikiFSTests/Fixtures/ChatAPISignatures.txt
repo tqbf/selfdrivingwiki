@@ -44,7 +44,7 @@ Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func sendChatMessage(chatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {
 Sources/WikiFS/Settings/AgentToolsView.swift	        activeChatID: ChatID?, isGenerating: Bool, chatID: ChatID
 Sources/WikiCtlCore/ChatCommand.swift	        case id(ChatID)
-Sources/wikid/DaemonChatHost.swift	        let persistedChatID: ChatID = chat.id
-Sources/wikid/DaemonChatHost.swift	        let continuedChatID: ChatID = chatID
+Sources/wikid/DaemonChatHost.swift	    func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+Sources/wikid/DaemonChatHost.swift	        let resolvedChatID: ChatID
 Sources/wikid/DaemonChatHost.swift	    ) async throws -> ChatID {
 Sources/wikid/DaemonChatHost.swift	    func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {

@@ -633,6 +633,24 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
+    /// Submit one typed chat turn. Returns JSON `ChatSubmitReply`.
+    func submitChatTurnData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
+            let chatID = try await host.submitTurn(req)
+            let reply = ChatSubmitReply(chatID: chatID, error: nil)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        } catch {
+            let reply = ChatSubmitReply(chatID: nil, error: error.localizedDescription)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
     /// Continue a chat. Returns JSON `ChatErrorReply`.
     func continueChatData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
