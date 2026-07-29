@@ -310,10 +310,88 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         _ = daemon.createWiki(name: "Test")
 
-        // The chat host lazily creates one gate and shares it across all chats.
-        // Verify the host is constructed without error.
         let host = try await daemon.ensureChatHost()
-        #expect(host.hasLiveSession(ChatID(rawValue: "any-chat")) == false)
+        let firstGate = try #require(await host.testSharedGenerationGate)
+
+        let store = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+        let firstChat = try store.createChat(kind: .edit, title: "First Gate Chat")
+        let secondChat = try store.createChat(kind: .edit, title: "Second Gate Chat")
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.submitTurn(ChatSubmitRequest(
+                wikiID: WikiID(rawValue: "test-wiki"),
+                chatID: firstChat.id,
+                submission: ChatTurnSubmission(
+                    commandID: ChatCommandID(rawValue: ULID.generate()),
+                    turnID: ChatTurnID(rawValue: ULID.generate()),
+                    userText: "first controller",
+                    contextReferences: [],
+                    submittedAt: Date()
+                )
+            ))
+        }
+        let secondGateAfterFirstController = try #require(await host.testSharedGenerationGate)
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.submitTurn(ChatSubmitRequest(
+                wikiID: WikiID(rawValue: "test-wiki"),
+                chatID: secondChat.id,
+                submission: ChatTurnSubmission(
+                    commandID: ChatCommandID(rawValue: ULID.generate()),
+                    turnID: ChatTurnID(rawValue: ULID.generate()),
+                    userText: "second controller",
+                    contextReferences: [],
+                    submittedAt: Date()
+                )
+            ))
+        }
+        let thirdGateAfterSecondController = try #require(await host.testSharedGenerationGate)
+
+        #expect(firstGate === secondGateAfterFirstController)
+        #expect(firstGate === thirdGateAfterSecondController)
+    }
+
+    @Test func newChatPreflightFailureRollsBackCreatedRowAndPropagatesError() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        _ = daemon.createWiki(name: "Test")
+        let host = try await daemon.ensureChatHost()
+        let store = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.startChat(wikiID: WikiID(rawValue: "test-wiki"), firstMessage: "new chat preflight")
+        }
+
+        #expect(try store.listChats().isEmpty)
+    }
+
+    @Test func existingChatPreflightFailurePreservesRowAndPropagatesError() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        _ = daemon.createWiki(name: "Test")
+        let host = try await daemon.ensureChatHost()
+        let store = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+        let existing = try store.createChat(kind: .edit, title: "Existing chat")
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.submitTurn(ChatSubmitRequest(
+                wikiID: WikiID(rawValue: "test-wiki"),
+                chatID: existing.id,
+                submission: ChatTurnSubmission(
+                    commandID: ChatCommandID(rawValue: ULID.generate()),
+                    turnID: ChatTurnID(rawValue: ULID.generate()),
+                    userText: "existing chat preflight",
+                    contextReferences: [],
+                    submittedAt: Date()
+                )
+            ))
+        }
+
+        let chats = try store.listChats()
+        #expect(chats.map(\.id) == [existing.id])
     }
 
     // MARK: - AC.4a: DaemonWorkloadClient chat round-trip (RC6)

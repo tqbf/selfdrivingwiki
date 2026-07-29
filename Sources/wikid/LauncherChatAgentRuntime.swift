@@ -36,13 +36,27 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         var startedInteractiveSession = false
         var pendingPermission: PendingPermission?
         var activeTurnID: ChatTurnID?
+        var latestProviderSessionID: AcpSessionID?
         var lastFingerprint: StateFingerprint?
         var translationStateByTurn: [ChatTurnID: TranscriptTranslationState] = [:]
     }
 
     private struct TranscriptTranslationState: Sendable {
+        struct StreamingMessageState: Sendable {
+            let messageID: ChatMessageID
+            let createdAt: Date
+            var text: String
+        }
+
+        struct RunningToolCallState: Sendable {
+            let toolCallID: ToolCallID
+            let toolName: String
+        }
+
+        var assistantMessage: StreamingMessageState?
+        var reasoningMessage: StreamingMessageState?
         var nextToolCallOrdinal = 0
-        var runningToolCallIDs: [ToolCallID] = []
+        var runningToolCalls: [RunningToolCallState] = []
     }
 
     private struct StateFingerprint: Equatable, Sendable {
@@ -76,12 +90,14 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private let chatID: ChatID
     private let wikiID: WikiID
     private let store: GRDBWikiStore
-    private let containerDirectory: URL
     private let extractionCoordinator: ExtractionCoordinator
+    private let generationGate: GenerationGate
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
     private let onSessionID: @Sendable (AcpSessionID?) async -> Void
     private let onStateUpdate: @Sendable (ChatStateUpdate) async -> Void
     private let onLiveEvents: @Sendable ([AgentEvent]) async -> Void
+    private let onMessageSummary: @MainActor @Sendable (ChatID) -> Void
+    private let onStreamingCheckpoint: @MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool
 
     private var runtimeState: RuntimeState?
     private var monitorTask: Task<Void, Never>?
@@ -90,22 +106,26 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         chatID: ChatID,
         wikiID: WikiID,
         store: GRDBWikiStore,
-        containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
+        generationGate: GenerationGate,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         onSessionID: @escaping @Sendable (AcpSessionID?) async -> Void,
         onStateUpdate: @escaping @Sendable (ChatStateUpdate) async -> Void,
-        onLiveEvents: @escaping @Sendable ([AgentEvent]) async -> Void
+        onLiveEvents: @escaping @Sendable ([AgentEvent]) async -> Void,
+        onMessageSummary: @escaping @MainActor @Sendable (ChatID) -> Void,
+        onStreamingCheckpoint: @escaping @MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool
     ) {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
-        self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
+        self.generationGate = generationGate
         self.pushEvent = pushEvent
         self.onSessionID = onSessionID
         self.onStateUpdate = onStateUpdate
         self.onLiveEvents = onLiveEvents
+        self.onMessageSummary = onMessageSummary
+        self.onStreamingCheckpoint = onStreamingCheckpoint
     }
 
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle {
@@ -114,7 +134,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
 
         let launcher = await MainActor.run {
-            let launcher = AgentLauncher(extractionCoordinator: extractionCoordinator)
+            let launcher = AgentLauncher(generationGate: generationGate, extractionCoordinator: extractionCoordinator)
             launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return launcher
         }
@@ -145,17 +165,34 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
         if state.startedInteractiveSession == false {
             let request = state.request
-            let historySeed = try store.chatMessages(chatID: chatID).map(\.event)
+            let history = try store.chatMessages(chatID: chatID)
+            let historySeed = history.map(\.event)
             let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
             let systemPrompt = request.systemPrompt
             let priorSessionID = request.existingProviderSessionID
             let providerID = request.providerID
             let modelID = request.modelID
-            let firstMessage = submission.userText
+            let firstMessage: String
+            if priorSessionID == nil, history.isEmpty == false {
+                firstMessage = await MainActor.run {
+                    let budget = AgentOperationRunner.adaptivePreambleBudget(
+                        eligibleTurns: AgentOperationRunner.projectedPreambleTurns(from: history).count
+                    )
+                    return AgentOperationRunner.continuationPreamble(
+                        from: history,
+                        newMessage: submission.userText,
+                        maxTurns: budget.maxTurns,
+                        maxBytes: budget.maxBytes
+                    )
+                }
+            } else {
+                firstMessage = submission.userText
+            }
             let firstPrePersisted = historySeed.contains(.userText(firstMessage))
 
             await state.launcher.startInteractiveQuery(
                 firstMessage: firstMessage,
+                firstMessageDisplay: submission.userText,
                 stateMarkdown: stateMarkdown,
                 wikiID: wikiID,
                 wikiRoot: "",
@@ -170,6 +207,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 onAcpSessionId: { [weak self] sessionID in
                     guard let self else { return }
                     Task {
+                        await self.updateLatestProviderSessionID(sessionID)
                         await self.onSessionID(sessionID)
                         await self.emit(.resumed(providerSessionID: sessionID))
                     }
@@ -188,23 +226,28 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 },
                 onLock: { },
                 onUnlock: { },
-                onTranscript: nil
+                onTranscript: nil,
+                onMessageSummary: onMessageSummary,
+                onStreamingCheckpoint: onStreamingCheckpoint
             )
 
+            if let preflight = await MainActor.run(body: { state.launcher.preflightError }) {
+                throw RuntimeError.preflight(preflight)
+            }
             state.startedInteractiveSession = true
             runtimeState = state
-            try await armCompatibilityPolling(for: state)
+            let providerSessionID = currentProviderSessionID(
+                fallback: request.existingProviderSessionID
+            )
             try await emit(.sessionReady(
                 capabilities: Self.capabilities(from: await MainActor.run { state.launcher.thinkingOption }),
                 providerState: ChatProviderState(
                     providerID: request.providerID,
                     modelID: request.modelID,
-                    providerSessionID: request.existingProviderSessionID
+                    providerSessionID: providerSessionID
                 )
             ))
-            if let preflight = await MainActor.run(body: { state.launcher.preflightError }) {
-                throw RuntimeError.preflight(preflight)
-            }
+            try await armCompatibilityPolling(for: state)
             return
         }
 
@@ -415,9 +458,19 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     }
 
     private func pushCompatibilityTranscript(_ events: [AgentEvent]) {
-        for event in events where event.isPersistable {
+        for event in events {
             pushEvent(.chatEvent(chatID: chatID, event: event))
         }
+    }
+
+    private func updateLatestProviderSessionID(_ sessionID: AcpSessionID?) {
+        guard var state = runtimeState else { return }
+        state.latestProviderSessionID = sessionID
+        runtimeState = state
+    }
+
+    private func currentProviderSessionID(fallback: AcpSessionID?) -> AcpSessionID? {
+        runtimeState?.latestProviderSessionID ?? fallback
     }
 
     private func emit(_ event: ChatAgentRuntimeEvent) async {
@@ -444,41 +497,87 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     createdAt: Date()
                 )))
             case .assistantText(let text):
-                return .append(.message(ChatTranscriptMessageItem(
-                    messageID: ChatMessageID(rawValue: ULID.generate()),
+                let current = translationState.assistantMessage
+                    ?? TranscriptTranslationState.StreamingMessageState(
+                        messageID: ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"),
+                        createdAt: Date(),
+                        text: ""
+                    )
+                translationState.assistantMessage = TranscriptTranslationState.StreamingMessageState(
+                    messageID: current.messageID,
+                    createdAt: current.createdAt,
+                    text: text
+                )
+                return .messageReplacement(
+                    messageID: current.messageID,
                     turnID: turnID,
                     role: .assistant,
                     text: text,
-                    createdAt: Date()
-                )))
+                    createdAt: current.createdAt
+                )
             case .thinking(let text):
-                return .append(.message(ChatTranscriptMessageItem(
-                    messageID: ChatMessageID(rawValue: ULID.generate()),
+                let current = translationState.reasoningMessage
+                    ?? TranscriptTranslationState.StreamingMessageState(
+                        messageID: ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"),
+                        createdAt: Date(),
+                        text: ""
+                    )
+                translationState.reasoningMessage = TranscriptTranslationState.StreamingMessageState(
+                    messageID: current.messageID,
+                    createdAt: current.createdAt,
+                    text: text
+                )
+                return .messageReplacement(
+                    messageID: current.messageID,
                     turnID: turnID,
                     role: .reasoning,
                     text: text,
-                    createdAt: Date()
-                )))
+                    createdAt: current.createdAt
+                )
             case .assistantTextDelta(let delta):
-                return .messageDelta(
-                    messageID: ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"),
+                let current = translationState.assistantMessage
+                    ?? TranscriptTranslationState.StreamingMessageState(
+                        messageID: ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"),
+                        createdAt: Date(),
+                        text: ""
+                    )
+                let nextText = current.text + delta
+                translationState.assistantMessage = TranscriptTranslationState.StreamingMessageState(
+                    messageID: current.messageID,
+                    createdAt: current.createdAt,
+                    text: nextText
+                )
+                return .messageReplacement(
+                    messageID: current.messageID,
                     turnID: turnID,
                     role: .assistant,
-                    delta: delta,
-                    createdAt: Date()
+                    text: nextText,
+                    createdAt: current.createdAt
                 )
             case .thinkingDelta(let delta):
-                return .messageDelta(
-                    messageID: ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"),
+                let current = translationState.reasoningMessage
+                    ?? TranscriptTranslationState.StreamingMessageState(
+                        messageID: ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"),
+                        createdAt: Date(),
+                        text: ""
+                    )
+                let nextText = current.text + delta
+                translationState.reasoningMessage = TranscriptTranslationState.StreamingMessageState(
+                    messageID: current.messageID,
+                    createdAt: current.createdAt,
+                    text: nextText
+                )
+                return .messageReplacement(
+                    messageID: current.messageID,
                     turnID: turnID,
                     role: .reasoning,
-                    delta: delta,
-                    createdAt: Date()
+                    text: nextText,
+                    createdAt: current.createdAt
                 )
             case .toolUse(let name, let inputSummary):
                 let toolCallID = ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
                 translationState.nextToolCallOrdinal += 1
-                translationState.runningToolCallIDs.append(toolCallID)
+                translationState.runningToolCalls.append(.init(toolCallID: toolCallID, toolName: name))
                 return .toolCallUpsert(ChatTranscriptToolCallItem(
                     toolCallID: toolCallID,
                     turnID: turnID,
@@ -489,21 +588,21 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     updatedAt: Date()
                 ))
             case .toolResult(let isError, let summary):
-                let toolCallID = translationState.runningToolCallIDs.isEmpty
-                    ? ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
-                    : translationState.runningToolCallIDs.removeFirst()
-                if translationState.runningToolCallIDs.isEmpty {
-                    translationState.nextToolCallOrdinal += 1
-                }
-                return .append(.toolCall(ChatTranscriptToolCallItem(
-                    toolCallID: toolCallID,
+                let toolCall = translationState.runningToolCalls.isEmpty
+                    ? TranscriptTranslationState.RunningToolCallState(
+                        toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)"),
+                        toolName: "Tool"
+                    )
+                    : translationState.runningToolCalls.removeFirst()
+                return .toolCallUpsert(ChatTranscriptToolCallItem(
+                    toolCallID: toolCall.toolCallID,
                     turnID: turnID,
-                    toolName: "Tool",
+                    toolName: toolCall.toolName,
                     status: isError ? .failed : .completed,
                     detail: summary,
                     permissionRequestID: nil,
                     updatedAt: Date()
-                )))
+                ))
             case .turnFailed(let reason):
                 return .append(.turnFailure(ChatTranscriptTurnFailureItem(
                     turnID: turnID,

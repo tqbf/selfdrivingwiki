@@ -20,7 +20,7 @@ actor DaemonChatController {
 
     private var generation: ChatSessionGenerationID
     private var snapshot: ChatRuntimeSnapshot
-    private var replayBuffer = ChatUpdateReplayBuffer(capacity: 128)
+    private var replayBuffer: ChatUpdateReplayBuffer
     private var nextSequence = ChatUpdateSequence.initial
     private var runtimeHandle: ChatRuntimeHandle?
     private var eventTask: Task<Void, Never>?
@@ -56,6 +56,7 @@ actor DaemonChatController {
         self.runtime = runtime
         self.pushEvent = pushEvent
         self.generation = ChatSessionGenerationID(rawValue: ULID.generate())
+        self.replayBuffer = ChatUpdateReplayBuffer(capacity: Self.replayCapacity)
         self.snapshot = try Self.bootstrapSnapshot(chatID: chatID, store: store, generation: generation)
         if case .permissionRequired = snapshot.attention {
             self.activePermission = nil
@@ -183,25 +184,14 @@ actor DaemonChatController {
     }
 
     func didUpdateProviderSessionID(_ sessionID: AcpSessionID?) {
-        let providerState = ChatProviderState(
-            providerID: snapshot.providerState.providerID,
-            modelID: snapshot.providerState.modelID,
-            providerSessionID: sessionID
-        )
-        snapshot = ChatRuntimeSnapshot(
-            chatID: snapshot.chatID,
-            generation: snapshot.generation,
-            lifecycle: snapshot.lifecycle,
-            activeTurn: snapshot.activeTurn,
-            queuedTurns: snapshot.queuedTurns,
-            attention: snapshot.attention,
+        record(.sessionReady(
             capabilities: snapshot.capabilities,
-            providerState: providerState,
-            usage: snapshot.usage,
-            diagnostics: snapshot.diagnostics,
-            transientTranscriptOverlay: snapshot.transientTranscriptOverlay,
-            lastIncludedSequence: snapshot.lastIncludedSequence
-        )
+            providerState: ChatProviderState(
+                providerID: snapshot.providerState.providerID,
+                modelID: snapshot.providerState.modelID,
+                providerSessionID: sessionID
+            )
+        ))
     }
 
     func didUpdateCompatibilityState(_ update: ChatStateUpdate) {
@@ -254,7 +244,9 @@ actor DaemonChatController {
             submission: claimed.submission,
             editedAt: claimed.editedAt
         )
-        if snapshot.activeTurn?.turnID != claimed.submission.turnID {
+        let alreadyTracked = snapshot.activeTurn?.turnID == claimed.submission.turnID
+            || snapshot.queuedTurns.contains(where: { $0.submission.turnID == claimed.submission.turnID })
+        if alreadyTracked == false {
             record(.queued(queuedTurn))
         }
         adoptClaimedTurnIfNeeded(queuedTurn)
@@ -282,6 +274,7 @@ actor DaemonChatController {
                 runtimeHandle = handle
                 startEventLoop(handle)
             }
+            record(.started(turnID: claimed.submission.turnID))
             try await runtime.submitTurn(claimed.submission, in: handle)
             let marked = try store.markPersistedChatTurnProviderSubmitted(
                 chatID: chatID,
@@ -310,13 +303,16 @@ actor DaemonChatController {
                     lastIncludedSequence: snapshot.lastIncludedSequence
                 )
             }
-            record(.started(turnID: claimed.submission.turnID))
         } catch {
             DebugLog.agent("DaemonChatController.processQueueIfPossible submit failed: \(error)")
             _ = finishPersistedTurn(
                 turnID: claimed.submission.turnID,
                 outcome: .failed(category: .runtimeError, message: error.localizedDescription)
             )
+            if let runtimeError = error as? LauncherChatAgentRuntime.RuntimeError,
+               case .preflight(let message) = runtimeError {
+                throw DaemonChatError.preflightFailed(message)
+            }
         }
     }
 
@@ -376,6 +372,11 @@ actor DaemonChatController {
             } else {
                 _ = finishPersistedTurn(turnID: turnID, outcome: .failed(category: category, message: message))
             }
+            do {
+                try await processQueueIfPossible()
+            } catch {
+                DebugLog.agent("DaemonChatController.turnFailed queue advance failed: \(error)")
+            }
 
         case .turnCancelled(let turnID):
             _ = finishPersistedTurn(turnID: turnID, outcome: .cancelled)
@@ -401,6 +402,11 @@ actor DaemonChatController {
             }
             activePermission = nil
             await closeRuntimeAndRotateGeneration()
+            do {
+                try await processQueueIfPossible()
+            } catch {
+                DebugLog.agent("DaemonChatController.transportClosed queue advance failed: \(error)")
+            }
 
         case .resumed(let providerSessionID):
             do {
@@ -596,13 +602,6 @@ actor DaemonChatController {
                 DebugLog.store("DaemonChatController.bootstrapSnapshot interrupted finish failed: \(error)")
             }
         }
-        if interrupted.isEmpty == false {
-            do {
-                try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
-            } catch {
-                DebugLog.store("DaemonChatController.bootstrapSnapshot session reset failed: \(error)")
-            }
-        }
 
         let queuedTurns = turns
             .filter { $0.state == .queued }
@@ -647,7 +646,7 @@ actor DaemonChatController {
             providerState: ChatProviderState(
                 providerID: chat.modelProviderId,
                 modelID: chat.modelId,
-                providerSessionID: interrupted.isEmpty ? chat.acpSessionId : nil
+                providerSessionID: chat.acpSessionId
             ),
             usage: nil,
             diagnostics: ChatDiagnosticsState(),
@@ -671,8 +670,14 @@ actor DaemonChatController {
                 ))
             case .toolCallUpsert(let toolCall):
                 return .toolCall(toolCall)
-            case .messageDelta:
-                return nil
+            case .messageDelta(let messageID, let turnID, let role, let delta, let createdAt):
+                return .message(ChatTranscriptMessageItem(
+                    messageID: messageID,
+                    turnID: turnID,
+                    role: role,
+                    text: delta,
+                    createdAt: createdAt
+                ))
             }
         }
     }

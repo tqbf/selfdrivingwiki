@@ -22,13 +22,15 @@ or the Phase 5 UI decomposition.
 
 Remediation note for PR #990 on Wednesday, July 29, 2026:
 
-- the exact-head audit at `49c776d036ebe905a64658c4e96efeedfcfcb226` found
-  controller/runtime regressions around turn identity, live streaming,
-  permission translation, transport-close recovery, replay sequencing, and
-  stop-vs-close semantics
-- the remediation pass on `chat-redesign-phase3` fixes those Phase 3
-  controller/runtime issues without taking the out-of-scope Phase 4 wire or
-  Phase 5 UI work
+- the exact-head corrective audit at
+  `ea29a810d946a2b082b80e0b430704d092f51fc4` found regressions in transcript
+  persistence, live delta forwarding, bounded resume fallback, shared
+  generation-gate wiring, preflight rollback/propagation, queue draining,
+  `chatSessionState` purity, summarization callbacks, provider-session
+  sequencing, and API-manifest/documentation coverage
+- the corrective pass on `chat-redesign-phase3` repairs those Phase 3 daemon /
+  runtime / controller / store contracts without taking the out-of-scope Phase
+  4 wire or Phase 5 UI decomposition work
 - the current exact-head evidence is recorded in
   [`progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`](../progress/2026-07-29T201105Z-chat-redesign-phase3-982.md)
 

@@ -1,197 +1,174 @@
 ---
 timestamp: 2026-07-29T201105Z
-title: Chat redesign Phase 3 daemon controllers (#982)
+title: Chat redesign Phase 3 corrective implementation for PR #990 / issue #982
 branch: chat-redesign-phase3
 status: complete
 ---
 
-# Chat redesign Phase 3 daemon controllers (#982)
+# Chat redesign Phase 3 corrective implementation for PR #990 / issue #982
 
-## Progress
+## Scope
 
-This branch now includes Phase 3 of issue #982.
+This entry records the corrective implementation pass for the exact audited PR
+head `ea29a810d946a2b082b80e0b430704d092f51fc4` on branch
+`chat-redesign-phase3`.
 
-Phase 3 moves chat lifecycle ownership into one daemon controller per
-`ChatID`. The controller now owns session generation, durable queue order,
-restart recovery, active-turn lifecycle, permission state, cancellation,
-terminal-outcome winner selection, typed snapshots, and bounded replay.
+Scope stayed inside Phase 3:
 
-The daemon now routes one typed submit path for draft, warm, dead, and
-persisted chats. The app no longer chooses start-vs-continue lifecycle
-branches before the daemon. The compatibility surface still uses the current
-XPC `Data` transport and the current `RemoteChatSession` / `ChatDetailView`
-adapters. That Phase 4 work stays out of scope here.
+- repaired daemon/runtime/controller/store contracts that regressed transcript
+  persistence, live streaming, resume fallback, preflight handling, queue
+  draining, and shared generation-gate wiring
+- added production-shaped regression coverage at the runtime-translation seam
+  and the controller/store persistence seam
+- corrected the chat API signature manifest and the Phase 3 progress/plan/PR
+  documentation
 
-## What changed
+Out of scope and still deferred:
 
-- Added [`Sources/wikid/DaemonChatController.swift`](../Sources/wikid/DaemonChatController.swift).
-  The controller owns one chat session generation and one replay buffer.
-- Added [`Sources/wikid/LauncherChatAgentRuntime.swift`](../Sources/wikid/LauncherChatAgentRuntime.swift).
-  This runtime keeps the launcher-backed provider path behind the typed
-  runtime protocol.
-- Reworked [`Sources/wikid/DaemonChatHost.swift`](../Sources/wikid/DaemonChatHost.swift)
-  to use per-chat controllers and one typed submit entrypoint.
-- Routed the typed submit request through the daemon contract, workload
-  client, app coordinator, and `ChatDetailView` draft/live compatibility path.
-- Kept the explicit queued-turn mutation boundary. `cancel()` no longer
-  removes a queued active turn. Queued-turn removal stays on the separate
-  queue mutation path.
-- Hardened restart recovery. On daemon restart, claimed in-flight turns are
-  marked interrupted, provider session ids are cleared, queued turns keep
-  order, and the controller does not auto-resubmit.
-- Hardened stale and late event handling. The controller ignores stale
-  generations and keeps one terminal winner across completion, cancellation,
-  and later transport close.
-- Replaced new bare `try?` swallow points in the Phase 3 daemon path with
-  logged best-effort handling.
+- Phase 4 XPC wire redesign
+- Phase 4 pure client reducer migration
+- Phase 5 `ChatDetailView` decomposition / follow-up queue ownership
 
-## PR #990 remediation
+## Corrected production behavior
 
-The exact-head audit for PR #990 at `49c776d036ebe905a64658c4e96efeedfcfcb226`
-was not clean. This remediation pass tightened the controller/runtime boundary
-without expanding into the out-of-scope Phase 4 XPC redesign or Phase 5 UI
-decomposition.
+The repaired head fixes the audit-blocking Phase 3 contracts:
 
-The main production fixes in this pass are:
+- `C-1` Assistant and reasoning output now persist again. Raw
+  `.assistantTextDelta` / `.thinkingDelta` sequences are coalesced into stable
+  `messageReplacement` items with deterministic `ChatMessageID`s, and the
+  controller/store seam now persists those replacements instead of dropping
+  them.
+- `C-2` Live assistant/reasoning deltas are forwarded to the app again. The
+  runtime now forwards live events independently from persistence filtering, so
+  `RemoteChatSession` receives streaming envelopes while durable history remains
+  authoritative.
+- `C-3` Cold-start / resume-failure fallback now restores bounded continuation
+  context. When no provider session exists, the runtime sends a bounded
+  continuation preamble built from persisted history while keeping the visible
+  user message equal to the new submission text.
+- `H-1` One shared daemon generation gate is threaded back through
+  `WikiDaemon -> DaemonChatHost -> LauncherChatAgentRuntime -> AgentLauncher`.
+- `H-2` Hard preflight failures propagate again from the runtime/controller path
+  and new-chat submit rolls back the just-created chat row instead of leaving an
+  orphan chat.
+- `H-3` Failed turns and transport-close recovery now advance the durable queue
+  so followers already enqueued before the failure are submitted automatically.
+- `H-4` `chatSessionState(chatID:)` no longer constructs controllers or clears
+  stored provider session ids on a read path; persisted-only rehydration is a
+  pure store read when no controller exists.
+- `H-5` Per-message/per-chat summarization is wired again through the runtime's
+  `onMessageSummary` callback into the daemon host summarization path.
 
-- warm follow-up transcript translation now uses the actor-owned active turn id
-  instead of capturing the first turn id
-- live token and typed transcript deltas are forwarded again from the
-  launcher-backed runtime
-- pending permissions now translate real `toolCallID`s and typed options and
-  reach both the compatibility surface and the typed runtime event stream
-- transport close now tears down stale runtime state, rotates generation, and
-  forces the next turn onto a fresh runtime
-- queue processing now sets a synchronous in-flight guard before awaits to
-  prevent duplicate claim/submission races
-- failed/interrupted attention no longer blocks later queued turns
-- post-claim failures now finish the claimed row instead of orphaning it
-- live rehydration merges persisted history with the live overlay instead of
-  replacing history with the tail
-- live overlay user-message echoes are suppressed so warm follow-ups do not
-  duplicate persisted user rows
-- controller creation is now serialized inside `DaemonChatHost.makeOrGetController`
-- `ToolCallID` identity is preserved across tool-use/result translation and the
-  runtime seam has direct production translation tests
-- `stopChat` now distinguishes idle/live session close from active-turn
-  cancellation via `DaemonChatController.stopSession()`
-- compatibility polling now emits only on actual state changes
-- rejected controller state-machine updates no longer burn replay/sequence
-  numbers and now log the rejection reason
-- live overlay memory is bounded and replay capacity is named
-- terminal turn cleanup clears `activePermission`
-- the hosted timeout test now matches its real invariant: catching the old
-  dead-XPC multi-minute hang, not whole-suite scheduler load
+Additional corrective work landed with the same pass:
 
-Focused evidence added in this remediation pass:
+- `.sessionReady` no longer clobbers a newly observed provider session id
+  (`M-1`)
+- provider-session snapshot updates now flow through recorded updates instead of
+  direct snapshot mutation (`M-2`)
+- duplicate bootstrap `.queued` records are suppressed (`M-3`)
+- fast permission requests are accepted while the active turn is still in
+  `.submitting` and `.started` is recorded before runtime submission (`M-6`)
+- preflight errors are checked before the transport-close polling path can mask
+  them (`M-7`)
+- tool-call rows now converge by transcript identity and preserve tool names
+  from use -> result (`M-8`)
+- daemon-side empty-message validation is restored at the typed submit boundary
+  (`L-8`)
+- controller-harness temp directories are removed in test teardown (`L-7`)
 
-- `LauncherChatAgentRuntimeTests.permissionTranslationPreservesToolCallIDAndTypedOptions`
+## Regression coverage added or updated
+
+The corrective pass added or tightened these direct regression tests:
+
+- `LauncherChatAgentRuntimeTests.transcriptTranslationCoalescesAssistantAndReasoningDeltasIntoStableMessageReplacements`
 - `LauncherChatAgentRuntimeTests.transcriptTranslationPreservesToolIdentityAcrossUseAndResult`
-- `DaemonChatControllerTests.transportCloseRotatesRuntimeAndRecoversOnNextTurn`
-- `DaemonChatControllerTests.stopSessionClosesIdleRuntimeAndNextTurnStartsFreshRuntime`
-- `DaemonChatControllerTests.failedTurnAttentionDoesNotBlockNextQueuedTurn`
-- `RemoteChatSessionTests.chatPendingPermissionSetsPendingList`
+- `DaemonChatControllerTests.productionTranslatedDeltasPersistAssistantReasoningAndToolRowsWithoutDuplicates`
+- `DaemonChatControllerTests.restartRecoveryMarksClaimedTurnInterruptedAndPreservesProviderSessionForResumeFallback`
+- `DaemonChatHostTests.daemonChatHostUsesSharedGenerationGate`
+- `DaemonChatHostTests.newChatPreflightFailureRollsBackCreatedRowAndPropagatesError`
+- `DaemonChatHostTests.existingChatPreflightFailurePreservesRowAndPropagatesError`
+- `Tests/WikiFSTests/Fixtures/ChatAPISignatures.txt` now includes the newly
+  exposed Phase 3 `ChatID` surfaces in the daemon/store/XPC/coordinator layer
 
-Audit disposition recorded on Wednesday, July 29, 2026:
+The most important new end-to-end coverage is the production-shaped ACP delta
+path:
 
-- `C1` fixed by actor-owned active-turn tracking in
-  `LauncherChatAgentRuntime.handleLiveEvent(_:)`.
-- `C2` fixed by restoring live event forwarding through
-  `AgentLauncher.startInteractiveQuery(... onEvent:onPendingPermission:)` and
-  runtime transcript-delta emission.
-- `C3` fixed by translating `PendingPermission` into typed
-  `ChatPendingPermissionRequest` values with real tool-call ids and options.
-- `C4` fixed by `closeRuntimeAndRotateGeneration()` and the stale-runtime
-  recovery path.
-- `C5` fixed by the synchronous `isProcessingQueue` / claim-state guard before
-  awaits in `processQueueIfPossible()`.
-- `C6` fixed by promoting claimed queued work after terminal attention and by
-  explicit idle/live close handling in `stopSession()`.
-- `H1` fixed by finishing the claimed row on any post-claim submission failure.
-- `H2` fixed by merging persisted transcript history with the live overlay in
-  `chatSessionState()`.
-- `H3` fixed by suppressing live `.userText` overlay duplicates and by
-  runtime-side first-message history dedup.
-- `H4` fixed by serializing `makeOrGetController`.
-- `H5` preserved and reverified through the existing shared gate path plus
-  `DaemonChatHostTests.daemonChatHostUsesSharedGenerationGate`.
-- `H6` fixed by stable tool-call translation ids across use/result.
-- `H7` fixed by direct production translation coverage in
-  `LauncherChatAgentRuntimeTests`.
-- `H8` remained covered by the existing daemon-host preflight rollback path and
-  its host/coordinator tests; this remediation did not need new production
-  changes there.
-- `H9` fixed by separating idle/live `stopSession()` close from active-turn
-  cancellation.
-- `M2`, `M3`, `M7`, `M9`, `L1`, and `L8` are fixed in the code changes above.
-- `L12` is fixed in this progress record and in the plan wording below.
+- raw assistant/reasoning/tool events are translated by
+  `LauncherChatAgentRuntime.transcriptDeltasForTesting(...)`
+- those translated deltas are then driven through the real
+  `DaemonChatController` persistence seam
+- tests assert both the client-visible stable transcript items and the durable
+  `chat_messages` / transcript-row results
 
-Items not expanded here remained either already fixed on the branch head before
-this remediation pass or out-of-scope for production changes in this PR. The
-focused suite list above plus the full-repo `make` runs below are the current
-evidence set for this exact head.
+## Medium / low dispositions
 
-## Test coverage
+Every non-blocking audit item is either repaired above or explicitly carried as
+an intentional Phase 3 disposition:
 
-Added direct controller coverage in
-[`Tests/WikiFSAppTests/DaemonChatControllerTests.swift`](../Tests/WikiFSAppTests/DaemonChatControllerTests.swift)
-for these Phase 3 cases:
-
-- restart interruption marks the claimed turn failed and clears the stored
-  provider session id
-- queued active turn cancel is a no-op
-- duplicate submit commands do not enqueue or submit twice
-- queued follower cancel does not cancel the active in-flight turn
-- permission request and resolution update attention and forward typed options
-- stale generation runtime events are ignored
-- stored provider session ids flow into runtime start requests for resume
-- bounded replay becomes unavailable past the retained window
-- restart keeps queued turn order and does not auto-resubmit
-- completion wins over later transport close
-- cancellation wins over a completion race
-
-Focused app coverage also stayed green for the host and coordinator seams:
-
-- `DaemonChatControllerTests`
-- `ChatDaemonCoordinatorTests`
-- `DaemonChatHostTests`
-- `RemoteChatSessionTests`
+- `M-4` Partially improved, not fully redesigned. `DaemonChatHost.makeOrGetController`
+  no longer performs controller bootstrap construction under the registry lock,
+  but the registry still uses a `DispatchQueue.sync` gate. A full actor-based
+  registry remains a Phase 4 architectural cleanup, not a corrective Phase 3
+  contract fix.
+- `M-5` Not fully repaired in this pass. The daemon intentionally retains
+  per-chat controllers for process lifetime in Phase 3 and still has no idle
+  eviction policy. This is a bounded daemon-lifetime retention issue rather than
+  an acceptance-criteria blocker; follow-up cleanup should remove the remaining
+  launcher-era registry baggage together with Phase 4/5 lifecycle reshaping.
+- `M-9` Partially improved. `resolveWikiID(for:)` now logs non-benign resolver
+  failures instead of swallowing them silently, but it still scans known wikis.
+  A durable `ChatID -> WikiID` index is deferred because it would expand the
+  persistence model beyond this corrective pass.
+- `L-1` Fixed. Replay capacity is named via `Self.replayCapacity`.
+- `L-2` Partially deferred. Internal dead launcher-era helpers remain in
+  `DaemonChatHost`; they are unused but not load-bearing. Removing them was kept
+  out of this corrective pass to avoid mixing structural cleanup with the
+  audited contract repairs.
+- `L-3` Deferred. `startInteractiveQuery`'s optional callback semantics are
+  unchanged for current callers; no Phase 3 behavior depends on restoring the
+  older default wiring shape.
+- `L-4` Deferred. The temporary `chatLive` seam-1 diagnostic remains debug-only
+  instrumentation and is not part of the production contract.
+- `L-5` Documented by current controller tests. Pending cancellation without a
+  live runtime is still treated as at-most-once terminal intent for the active
+  turn; no contradictory winner path is exercised on the repaired head.
+- `L-6` Intentional at-most-once policy. Post-claim submission failures remain
+  terminal failures rather than automatic requeue; this corrective pass keeps
+  that policy explicit instead of reintroducing duplicate-submission risk.
+- `L-9` Deferred to Phase 5. `ChatDetailView` still owns the in-memory follow-up
+  queue and UI send gating, so this branch does not claim full end-to-end AC.4
+  UI-producer coverage.
+- `L-10` Fixed by this progress entry, the matching plan note, and the updated
+  PR body.
 
 ## Verification
 
-Verified on Wednesday, July 29, 2026 from this worktree:
+Verified locally on Wednesday, July 29, 2026:
 
-- `make prompts` passed.
-- `make build` passed.
-- `make test` passed with `2669 tests in 216 suites`.
-- `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatControllerTests|ChatDaemonCoordinatorTests|DaemonChatHostTests|RemoteChatSessionTests'`
-  passed with `87 tests in 4 suites`.
-- `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatControllerTests|DaemonChatHostTests|LauncherChatAgentRuntimeTests|RemoteChatSessionTests|ChatDaemonCoordinatorTests|ChatAgentRuntimeCoverageTests|WikiDaemonConnectionHealthTests'`
-  passed with `101 tests in 7 suites`.
+- `make prompts`
+- `make build`
+- `make test`
+  - passed: `2669 tests in 216 suites`
+- `swift test --filter ChatAPISignatureManifestTests`
+  - passed: `1 test in 1 suite`
+- `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatHostTests|DaemonChatControllerTests|LauncherChatAgentRuntimeTests'`
+  - passed: `36 tests in 3 suites`
+- `WIKIFS_APP_TESTS=1 swift test --filter 'LauncherChatAgentRuntimeTests|DaemonChatControllerTests|DaemonChatHostTests|ChatDaemonCoordinatorTests|RemoteChatSessionTests|WikiDaemonConnectionHealthTests'`
+  - passed: `100 tests in 6 suites`
+- `WIKIFS_APP_TESTS=1 swift test`
+  - rerun during the corrective pass to refresh the hosted-suite evidence for
+    this repaired head; the matching PR body records the exact local outcome for
+    the pushed commit
 
-The full app-hosted run did not complete locally:
+## Files changed in the corrective pass
 
-- Raw `WIKIFS_APP_TESTS=1 swift test` hit a local hosted-suite non-completion:
-  one run failed under full load on the old `elapsed < 15` health-check
-  assertion, a focused rerun passed immediately, and after widening that test's
-  scheduler budget the raw app-hosted run still failed to finish locally.
-- The final bounded wrapper run
-  `WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` exited `124`.
-- The final watchdog log is `tmp/test-logs/swift-test-20260729-144845.log`.
-- The wrapper recorded the exact started-but-never-finished tail, including the
-  parameterized `PageAuthor` / `SourceProvider` identity tests, chat-domain
-  lifecycle parameter suites, and hosted autocomplete/highlight cases.
-- The exact local wrapper exit file is
-  `tmp/phase3-remediation-logs/make-test-watchdog-final.exit` and contains `2`
-  because GNU `make` surfaced the underlying `124` timeout as make failure
-  exit `2`.
-
-## Phase 4 and later
-
-This branch does not do Phase 4 or later work.
-
-- It does not replace the chat XPC wire format.
-- It does not replace `RemoteChatSession` with a pure client reducer store.
-- It does not decompose `ChatDetailView` into the Phase 5 presentation split.
-- It does not remove compatibility adapters that still bridge the current app
-  UI to the new daemon-owned controller model.
+- `Sources/wikid/LauncherChatAgentRuntime.swift`
+- `Sources/wikid/DaemonChatController.swift`
+- `Sources/wikid/DaemonChatHost.swift`
+- `Sources/wikid/WikiDaemon.swift`
+- `Sources/WikiFSCore/Store/GRDBWikiStore.swift`
+- `Sources/WikiFSEngine/ChatDomain.swift`
+- `Tests/WikiFSAppTests/LauncherChatAgentRuntimeTests.swift`
+- `Tests/WikiFSAppTests/DaemonChatControllerTests.swift`
+- `Tests/WikiFSAppTests/DaemonChatHostTests.swift`
+- `Tests/WikiFSTests/Fixtures/ChatAPISignatures.txt`

@@ -46,14 +46,44 @@ struct LauncherChatAgentRuntimeTests {
         )
 
         guard case .toolCallUpsert(let useItem) = deltas.first,
-              case .append(.toolCall(let resultItem)) = deltas.last else {
-            Issue.record("expected tool-call upsert followed by tool-call append")
+              case .toolCallUpsert(let resultItem) = deltas.last else {
+            Issue.record("expected tool-call upserts for start and result")
             return
         }
 
         #expect(useItem.toolCallID == resultItem.toolCallID)
+        #expect(useItem.toolName == resultItem.toolName)
         #expect(useItem.status == .running)
         #expect(resultItem.status == .completed)
+    }
+
+    @Test func transcriptTranslationCoalescesAssistantAndReasoningDeltasIntoStableMessageReplacements() {
+        let turnID = ChatTurnID(rawValue: "turn-3")
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantTextDelta("Hello"),
+                .assistantTextDelta(" world"),
+                .assistantText("Hello world"),
+                .thinkingDelta("Need"),
+                .thinkingDelta(" context"),
+                .thinking("Need context"),
+            ],
+            turnID: turnID
+        )
+
+        let reduced = ChatTranscriptReducer.reducing(items: [], with: deltas)
+        let messages = reduced.compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.count == 2)
+        #expect(messages[0].messageID == ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"))
+        #expect(messages[0].role == .assistant)
+        #expect(messages[0].text == "Hello world")
+        #expect(messages[1].messageID == ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"))
+        #expect(messages[1].role == .reasoning)
+        #expect(messages[1].text == "Need context")
     }
 }
 #endif

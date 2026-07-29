@@ -22,9 +22,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
 
-    // Retained only so the pre-Phase-3 compatibility code below still
-    // compiles while the controller path is taking over behavior.
-    private var _sharedGate: GenerationGate?
+    private let sharedGate: GenerationGate
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid.chat")
     private var controllers: [ChatID: DaemonChatController] = [:]
     private var sessions: [ChatID: ChatSession] = [:]
@@ -41,6 +39,7 @@ final class DaemonChatHost: @unchecked Sendable {
     init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
+        generationGate: GenerationGate,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
         resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
@@ -48,6 +47,7 @@ final class DaemonChatHost: @unchecked Sendable {
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
+        self.sharedGate = generationGate
         self.storeResolver = storeResolver
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
@@ -58,6 +58,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
     @discardableResult
     func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        let trimmed = request.submission.userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw DaemonChatError.emptyMessage
+        }
         let resolvedChatID: ChatID
         if let existingChatID = request.chatID {
             resolvedChatID = existingChatID
@@ -75,8 +79,20 @@ final class DaemonChatHost: @unchecked Sendable {
         }
 
         let controller = try makeOrGetController(chatID: resolvedChatID, wikiID: request.wikiID)
-        _ = try await controller.submit(request)
-        return resolvedChatID
+        do {
+            _ = try await controller.submit(request)
+            return resolvedChatID
+        } catch {
+            if request.chatID == nil,
+               let store = storeResolver(request.wikiID) {
+                do {
+                    try store.deleteChat(id: resolvedChatID)
+                } catch {
+                    DebugLog.store("DaemonChatHost.submitTurn rollback failed: \(error)")
+                }
+            }
+            throw error
+        }
     }
 
     // MARK: - Start a new chat
@@ -160,8 +176,15 @@ final class DaemonChatHost: @unchecked Sendable {
     /// still has the launcher, reads from it; otherwise throws (the client
     /// falls back to reading from its local store).
     func chatSessionState(chatID: ChatID) async throws -> ChatSessionState {
-        let controller = try makeOrGetController(chatID: chatID, wikiID: try resolveWikiID(for: chatID))
-        return try await controller.chatSessionState()
+        if let controller = queue.sync(execute: { controllers[chatID] }) {
+            return try await controller.chatSessionState()
+        }
+        let wikiID = try resolveWikiID(for: chatID)
+        guard let store = storeResolver(wikiID) else {
+            throw DaemonChatError.noStore(wikiID)
+        }
+        _ = try store.getChat(id: chatID)
+        return try Self.persistedOnlySessionState(chatID: chatID, store: store)
     }
 
     // MARK: - Resolve a pending permission
@@ -192,54 +215,74 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// The shared generation gate (for cross-chat serialization tests, RC3).
     /// Must be accessed on the main actor.
-    @MainActor var testSharedGenerationGate: GenerationGate? { nil }
+    @MainActor var testSharedGenerationGate: GenerationGate? { sharedGenerationGate() }
 
     private func makeOrGetController(chatID: ChatID, wikiID: WikiID) throws -> DaemonChatController {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
 
-        return try queue.sync {
+        if let existing = queue.sync(execute: { controllers[chatID] }) {
+            return existing
+        }
+
+        let runtime = LauncherChatAgentRuntime(
+            chatID: chatID,
+            wikiID: wikiID,
+            store: store,
+            extractionCoordinator: extractionCoordinator,
+            generationGate: sharedGate,
+            pushEvent: pushEvent,
+            onSessionID: { sessionID in
+                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                    await controller.didUpdateProviderSessionID(sessionID)
+                }
+                do {
+                    try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
+                    self.pushEvent(.chatAcpSessionId(chatID: chatID, sessionId: sessionID))
+                } catch {
+                    DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
+                }
+            },
+            onStateUpdate: { update in
+                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                    await controller.didUpdateCompatibilityState(update)
+                }
+            },
+            onLiveEvents: { events in
+                if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
+                    await controller.didReceiveLiveEvents(events)
+                }
+            },
+            onMessageSummary: { chatID in
+                self.summarizePendingMessages(chatID: chatID, wikiID: wikiID)
+            },
+            onStreamingCheckpoint: { chatID, handle, event, isDraft in
+                do {
+                    try store.checkpointStreamingMessage(
+                        chatID: chatID,
+                        handle: handle,
+                        event: event,
+                        isDraft: isDraft
+                    )
+                    return true
+                } catch {
+                    DebugLog.store("DaemonChatHost checkpoint write failed: \(error)")
+                    return false
+                }
+            }
+        )
+        let controller = try DaemonChatController(
+            chatID: chatID,
+            wikiID: wikiID,
+            store: store,
+            runtime: runtime,
+            pushEvent: pushEvent
+        )
+        return queue.sync {
             if let existing = controllers[chatID] {
                 return existing
             }
-
-            let runtime = LauncherChatAgentRuntime(
-                chatID: chatID,
-                wikiID: wikiID,
-                store: store,
-                containerDirectory: containerDirectory,
-                extractionCoordinator: extractionCoordinator,
-                pushEvent: pushEvent,
-                onSessionID: { sessionID in
-                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                        await controller.didUpdateProviderSessionID(sessionID)
-                    }
-                    do {
-                        try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
-                        self.pushEvent(.chatAcpSessionId(chatID: chatID, sessionId: sessionID))
-                    } catch {
-                        DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
-                    }
-                },
-                onStateUpdate: { update in
-                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                        await controller.didUpdateCompatibilityState(update)
-                    }
-                },
-                onLiveEvents: { events in
-                    if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
-                        await controller.didReceiveLiveEvents(events)
-                    }
-                }
-            )
-            let controller = try DaemonChatController(
-                chatID: chatID,
-                wikiID: wikiID,
-                store: store,
-                runtime: runtime,
-                pushEvent: pushEvent
-            )
             controllers[chatID] = controller
             return controller
         }
@@ -253,10 +296,33 @@ final class DaemonChatHost: @unchecked Sendable {
                 _ = try store.getChat(id: chatID)
                 return descriptor.id
             } catch {
+                DebugLog.store("DaemonChatHost.resolveWikiID skipped \(descriptor.id.rawValue): \(error)")
                 continue
             }
         }
         throw DaemonChatError.noSession(chatID.rawValue)
+    }
+
+    private func sharedGenerationGate() -> GenerationGate { sharedGate }
+
+    private static func persistedOnlySessionState(chatID: ChatID, store: GRDBWikiStore) throws -> ChatSessionState {
+        ChatSessionState(
+            chatID: chatID,
+            events: try store.chatMessages(chatID: chatID).map(\.event),
+            isRunning: false,
+            isGenerating: false,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: nil,
+            runStartedAt: nil,
+            stderr: nil,
+            lastActivityAt: nil,
+            currentProcessID: nil
+        )
     }
 
     // MARK: - Private: event stream wiring
@@ -392,7 +458,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chats.summary` (issue #411) — the sole writer of that column now that
     /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
-        chatID: ChatID, wikiID: WikiID, launcher: AgentLauncher
+        chatID: ChatID, wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
 

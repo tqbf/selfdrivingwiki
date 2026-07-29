@@ -582,6 +582,9 @@ final class WikiDaemon: @unchecked Sendable {
                 containerDirectory: containerDirectory,
                 localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         }
+        let generationGate = await MainActor.run {
+            GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
@@ -591,6 +594,7 @@ final class WikiDaemon: @unchecked Sendable {
         let host = DaemonChatHost(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
+            generationGate: generationGate,
             storeResolver: storeResolver,
             resolveSelectedProvider: {
                 AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()

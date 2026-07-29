@@ -7,7 +7,7 @@ import Testing
 
 @MainActor
 struct DaemonChatControllerTests {
-    @Test func restartRecoveryMarksClaimedTurnInterruptedAndClearsProviderSession() async throws {
+    @Test func restartRecoveryMarksClaimedTurnInterruptedAndPreservesProviderSessionForResumeFallback() async throws {
         let harness = try ControllerHarness()
         let claimID = ChatTurnClaimID(rawValue: "claim-restart")
         let turn = try harness.store.enqueuePersistedChatTurn(
@@ -41,8 +41,8 @@ struct DaemonChatControllerTests {
         } else {
             Issue.record("expected interrupted-turn attention after daemon restart")
         }
-        #expect(snapshot.providerState.providerSessionID == nil)
-        #expect(recoveredChat.acpSessionId == nil)
+        #expect(snapshot.providerState.providerSessionID == AcpSessionID(rawValue: "session-restart"))
+        #expect(recoveredChat.acpSessionId == AcpSessionID(rawValue: "session-restart"))
         #expect(turns.count == 1)
         #expect(turns[0].state == .failed)
         #expect(turns[0].terminalMessage == "This turn was interrupted when the daemon restarted.")
@@ -385,9 +385,65 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
         #expect((await controller.typedSnapshot()).attention == .none)
     }
+
+    @Test func productionTranslatedDeltasPersistAssistantReasoningAndToolRowsWithoutDuplicates() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let submission = harness.makeSubmission(commandID: "command-runtime-deltas", turnID: "turn-runtime-deltas")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantTextDelta("Hello"),
+                .assistantTextDelta(" world"),
+                .thinkingDelta("Need"),
+                .thinking("Need context"),
+                .toolUse(name: "Edit", inputSummary: "/tmp/file.md"),
+                .toolResult(isError: false, summary: "updated file"),
+            ],
+            turnID: submission.turnID
+        )
+
+        await harness.runtime.emit(.transcript(deltas))
+
+        let messages = try harness.store.chatMessages(chatID: harness.chat.id)
+        #expect(messages.contains { $0.event == .assistantText("Hello world") })
+        #expect(messages.contains { $0.event == .thinking("Need context") })
+        let toolRows = messages.filter {
+            if case .toolResult(isError: false, summary: "updated file") = $0.event { return true }
+            return false
+        }
+        #expect(toolRows.count == 1)
+
+        let transcriptPage = try harness.store.readChatTranscriptPage(chatID: harness.chat.id, after: nil, limit: 20)
+        let transcriptItems = transcriptPage.items.map(\.item)
+        let persistedAssistant = transcriptItems.compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item, message.role == .assistant else { return nil }
+            return message
+        }
+        let persistedReasoning = transcriptItems.compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item, message.role == .reasoning else { return nil }
+            return message
+        }
+        let persistedTools = transcriptItems.compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+        #expect(persistedAssistant.contains {
+            $0.messageID == ChatMessageID(rawValue: "assistant-\(submission.turnID.rawValue)")
+                && $0.text == "Hello world"
+        })
+        #expect(persistedReasoning.contains {
+            $0.messageID == ChatMessageID(rawValue: "reasoning-\(submission.turnID.rawValue)")
+                && $0.text == "Need context"
+        })
+        #expect(persistedTools.count == 1)
+        #expect(persistedTools.first?.toolName == "Edit")
+        #expect(persistedTools.first?.status == .completed)
+    }
 }
 
-private struct ControllerHarness {
+private final class ControllerHarness {
     enum HarnessError: Error {
         case timedOut(String)
     }
@@ -409,6 +465,10 @@ private struct ControllerHarness {
         store = try GRDBWikiStore(databaseURL: rootDirectory.appendingPathComponent("wiki.sqlite"))
         chat = try store.createChat(kind: .edit, title: "Controller Test Chat")
         runtime = StubControllerRuntime()
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: rootDirectory)
     }
 
     func makeController() throws -> DaemonChatController {

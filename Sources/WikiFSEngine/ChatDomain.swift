@@ -568,9 +568,14 @@ public enum ChatSessionMachine {
 
         case .permissionRequested(let request):
             guard let activeTurn = next.activeTurn,
-                  activeTurn.turnID == request.turnID,
-                  activeTurn.state == .responding
+                  activeTurn.turnID == request.turnID
             else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+            switch activeTurn.state {
+            case .submitting, .responding:
+                break
+            default:
                 return .rejected(.illegalTransition(payload: update.payload))
             }
 
