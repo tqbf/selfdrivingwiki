@@ -75,7 +75,7 @@ TEAM_ID="${TEAM_ID:-KK7E9G89GW}"
 # → GeneratedKeychain.swift) and into the generated wikid entitlements below, so
 # app, daemon, and code agree for ANY developer. See plans/keychain-sharing.md.
 KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-${TEAM_ID}.${APP_GROUP#group.}}"
-MIN_MACOS="14.0"
+MIN_MACOS="26.5.2"
 
 APP_PROFILE="signing/WikiFS.provisionprofile"
 EXT_PROFILE="signing/WikiFSFileProvider.provisionprofile"

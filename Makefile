@@ -39,7 +39,7 @@ APP_GROUP      := $(or $(call cfg,APP_GROUP),group.org.sockpuppet.wiki)
 KEYCHAIN_ACCESS_GROUP = $(or $(call cfg,KEYCHAIN_ACCESS_GROUP),$(TEAM_ID).$(patsubst group.%,%,$(APP_GROUP)))
 LSREGISTER   := /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 PLUGINKIT    := pluginkit
-MIN_MACOS    := 14
+MIN_MACOS    := 26.5.2
 MIN_SWIFT    := 6.0
 
 # Fast test tier — skips the slow SQLite integration suites (tagged
@@ -184,9 +184,8 @@ deps:
 	if [ -z "$$OS_VERSION" ]; then \
 	  echo "  ✗ Could not detect macOS version. $(APP_NAME) only builds on macOS."; exit 1; \
 	fi; \
-	OS_MAJOR=$$(echo $$OS_VERSION | cut -d. -f1); \
-	if [ $$OS_MAJOR -lt $(MIN_MACOS) ]; then \
-	  echo "  ✗ macOS $$OS_VERSION — $(APP_NAME) requires macOS $(MIN_MACOS).0 or newer."; exit 1; \
+	if ! awk -v min="$(MIN_MACOS)" -v os="$$OS_VERSION" 'BEGIN { n = split(min, a, "."); m = split(os, b, "."); max = (n > m ? n : m); for (i = 1; i <= max; i++) { ai = a[i] + 0; bi = b[i] + 0; if (bi > ai) exit 0; if (bi < ai) exit 1 } exit 0 }'; then \
+	  echo "  ✗ macOS $$OS_VERSION — $(APP_NAME) requires macOS $(MIN_MACOS) or newer."; exit 1; \
 	fi; \
 	echo "  ✓ macOS $$OS_VERSION"
 	@command -v swift >/dev/null 2>&1 || { \

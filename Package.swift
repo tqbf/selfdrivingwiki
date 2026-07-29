@@ -22,7 +22,7 @@ let strictSwiftSettings: [SwiftSetting] = podcastSwiftSettings + [.unsafeFlags([
 
 let package = Package(
     name: "WikiFS",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS("26.5.2")],
     dependencies: [
         // swift-markdown powers the reader's markdown→HTML renderer
         // (plans/source-web-reader.md / textual-to-wkwebview.md). Pure-Swift GFM
@@ -44,24 +44,22 @@ let package = Package(
         // discarded stderr, unexposed PID). The fork fixes all four. Upstream PRs
         // offered when the upstream resumes.
         .package(url: "https://github.com/wsargent/swift-acp", from: "0.2.0"),
-        // GRDB.swift — GRDB toolkit for SQLite. Phase 1 pilot: QueueStore uses
-        // DatabaseQueue + DatabaseMigrator replacing hand-rolled sqlite3_* calls
-        // (plans/grdb-adoption.md §6). The default GRDB product uses the system
-        // SQLite (same as SQLiteWikiStore) — they coexist on different database
-        // files with no conflict.
+        // GRDB.swift — GRDB toolkit for SQLite. `GRDBWikiStore` is the sole
+        // production store backend, and QueueStore also uses DatabaseQueue +
+        // DatabaseMigrator. See plans/grdb-adoption.md.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         // swift-crypto — Apple's Swift Crypto package. On macOS, `CryptoKit`
         // (system framework) provides SHA256 etc. On Linux, this package
-        // provides the identical API under the `Crypto` module. Already a
-        // transitive dependency via GRDB; declared directly so WikiFSCore can
-        // depend on the `Crypto` product on Linux (#754, #780).
+        // provides the identical API under the `Crypto` module. Declared
+        // directly so WikiFSCore can depend on the `Crypto` product on Linux
+        // (#754, #780).
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         // tantivy.swift — Rust Tantivy full-text search via UniFFI bindings + an
-        // @TantivyDocument macro. Phase 0 build spike (plans/tantivy-search-sidecar.md):
-        // verify the pre-built XCFramework (libtantivy-rs.xcframework) resolves under
-        // bare `swift build` (no Xcode) and links for aarch64-apple-darwin. Ships a
-        // macOS arm64 slice; no x86_64 (acceptable — MLX already requires Apple Silicon).
-        // NOT wired into the search pipeline yet — spike only.
+        // @TantivyDocument macro. Provides the app/CLI BM25 lexical search leg
+        // that fuses with vector similarity through the `bm25Leg` store seam.
+        // macOS arm64 only: the pre-built XCFramework has no x86_64 slice, which
+        // is acceptable because MLX already requires Apple Silicon. See
+        // plans/tantivy-search-sidecar.md.
         .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
@@ -116,8 +114,8 @@ let package = Package(
         // WikiLinkSpan). Extracted from WikiFSCore in module restructuring
         // Phase 2 (#532). Re-exported by WikiFSCore via ModuleExports.swift.
         // Previously Sources/WikiFSCore/Markdown/.
-        // JavaScriptCore: MarkdownLinter + MermaidValidator run vendored JS
-        // bundles (markdownlint, merval) in a JSContext (no Node at runtime).
+        // JavaScriptCore: MarkdownLinter runs vendored markdownlint JS; Mermaid
+        // validation uses the bundled Mermaid v11 library (no Node at runtime).
         .target(
             name: "WikiFSMarkdown",
             dependencies: ["WikiFSTypes", "WikiFSLinks"],
@@ -134,21 +132,21 @@ let package = Package(
             name: "WikiFSSearch",
             dependencies: [
                 "WikiFSTypes",
-                // Phase 0 spike: TantivySwift (Tantivy FFI + @TantivyDocument macro).
-                // Natural home for search-engine integration (plans/tantivy-search-sidecar.md §8.1).
-                // macOS-only: the pre-built XCFramework ships only a macOS arm64 slice.
-                // Guarded with #if os(macOS) in source; the dependency is conditional so
-                // Linux `swift build --target WikiFSSearch` doesn't try to build it (#754).
+                // TantivySwift (Tantivy FFI + @TantivyDocument macro) backs the
+                // BM25 lexical search leg. macOS-only: the pre-built XCFramework
+                // ships only a macOS arm64 slice. Guarded with #if os(macOS) in
+                // source; the dependency is conditional so Linux builds don't try
+                // to build it (#754).
                 .product(name: "TantivySwift", package: "tantivy.swift",
                          condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/WikiFSSearch",
             swiftSettings: strictSwiftSettings
         ),
-        // Non-UI core: page model, ULID, the WikiStore protocol + SQLite
-        // implementation, and the @Observable WikiStoreModel. Depended on by
-        // the executable AND the test target so logic is testable without a
-        // running app (SWIFTUI-RULES §9.1 — model logic in its own target).
+        // Non-UI core: page model, the WikiStore protocol, GRDBWikiStore, and
+        // the @Observable WikiStoreModel. Depended on by the executable AND the
+        // test target so logic is testable without a running app (SWIFTUI-RULES
+        // §9.1 — model logic in its own target).
         .target(
             name: "WikiFSCore",
             dependencies: [
@@ -161,8 +159,8 @@ let package = Package(
                 // On macOS, the SDK provides SQLite3 directly.
                 .target(name: "CSQLite", condition: .when(platforms: [.linux])),
                 // On macOS, `CryptoKit` (system framework) provides SHA256.
-                // On Linux, `swift-crypto` (transitive via GRDB) provides the
-                // identical API under the `Crypto` module (#754, #780).
+                // On Linux, swift-crypto provides the identical API under the
+                // `Crypto` module (#754, #780).
                 .product(name: "Crypto", package: "swift-crypto",
                          condition: .when(platforms: [.linux])),
             ],
@@ -175,10 +173,11 @@ let package = Package(
             ],
             swiftSettings: strictSwiftSettings,
         ),
-        // — which the File Provider extension must NOT (com.apple.fileprovider-
-        // nonui forbids Metal on macOS 26). Core reaches the implementation via
-        // the injectable EmbeddingService.miniLMFactory seam; the app installs it
-        // here at launch (EmbedderBootstrap). Mirrors the PDFKit isolation.
+        // MLX on-device MiniLM embeddings. Kept out of WikiFSCore so the File
+        // Provider extension never links MLX/Metal (com.apple.fileprovider-nonui
+        // forbids Metal on macOS 26). Core reaches the implementation via the
+        // injectable EmbeddingService.miniLMFactory seam; the app installs it at
+        // launch through EmbedderBootstrap. Mirrors the PDFKit isolation.
         .target(
             name: "WikiFSMLX",
             dependencies: [
@@ -188,12 +187,11 @@ let package = Package(
             path: "Sources/WikiFSMLX",
             swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
         ),
-        // The agent execution engine — extracted from the app target so a
-        // standalone daemon (`wikid`) can link it. Holds: AgentLauncher,
-        // ACPBackend, ClaudeCLIBackend, AgentOperationRunner, GenerationGate,
-        // ExtractionCoordinator, AgentBackend/Factory, OperationRequest, plus
-        // the ACP stall-recovery + permission seams. See
-        // plans/multi-wiki-daemon.md §3.
+        // The agent execution engine — extracted from the app target so the
+        // bundled `wikid` XPC service can link it. Holds AgentLauncher,
+        // ACPBackend, AgentOperationRunner, GenerationGate, ExtractionCoordinator,
+        // AgentBackend/Factory, OperationRequest, queue workers, and the ACP
+        // stall-recovery + permission seams. See plans/multi-wiki-daemon.md §3.
         .target(
             name: "WikiFSEngine",
             dependencies: [
@@ -255,25 +253,23 @@ let package = Package(
             // consistently across the dependency.
             swiftSettings: strictSwiftSettings
         ),
-        // wikictl — the agent's write path (plans/llm-wiki.md Phase A). A
-        // scriptable CLI that writes straight to a wiki's <ulid>.sqlite in the
-        // App Group container and posts a per-wiki Darwin notification so the app
-        // refreshes. Reads still go via the read-only File Provider mount; this
-        // is the WRITE half of "read via the mount, write via wikictl".
+        // wikictl — the agent's scriptable path into a wiki. It opens the wiki's
+        // <ulid>.sqlite in the App Group container via GRDBWikiStore, performs
+        // read/write commands, and posts a per-wiki Darwin notification after
+        // committing writes so the app refreshes. Raw source reads go through the
+        // `wikictl file` family rather than the File Provider mount.
         .executableTarget(
             name: "wikictl",
             dependencies: ["WikiFSCore", "WikiCtlCore"],
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
-        // wikid — the XPC daemon (plans/multi-wiki-daemon.md Phase 1B). Owns the
-        // live wiki registry + store lifecycle, serving clients via XPC. Launchd
-        // starts it on-demand when a client connects to the mach service name.
-        // The daemon links WikiFSCore (for WikiRegistry, SQLiteWikiStore, the
-        // WikiDaemonProtocol) and, on macOS, WikiFSEngine (for the workload host
-        // scaffold — QueueEngine construction. See plans/daemon-workloads.md
-        // Phase 0). On Linux, WikiFSEngine is unavailable (ACP is macOS-only),
-        // so the workload host is compiled out.
+        // wikid — the bundled XPC service (Contents/XPCServices/wikid.xpc). It
+        // owns the live wiki registry + GRDBWikiStore lifecycle and serves app
+        // clients through WikiDaemonProtocol. macOS runs it as an on-demand XPC
+        // service tied to the app; Linux keeps the portable stdio JSON-RPC path.
+        // On macOS it also links WikiFSEngine for queue/chat workloads; on Linux
+        // that workload host is compiled out because ACP is macOS-only.
         .executableTarget(
             name: "wikid",
             dependencies: [
@@ -371,10 +367,11 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
-        // macOS-only tests — AppKit/WebKit/FileProvider/SwiftUI-hosted views,
-        // Tantivy integration, MLX embedder, PDF extraction, JS linter/validator.
-        // Every file is wrapped in #if os(macOS) so on Linux this compiles to an
-        // empty module and `swift test` runs only WikiFSCoreTests (#754).
+        // macOS-only integration tests — AppKit/WebKit/FileProvider/SwiftUI-hosted
+        // views, Tantivy integration, MLX embedder, PDF extraction, JS linter/
+        // validator. Kept out of the default test graph because these suites can
+        // wedge SwiftPM's shared test helper when run alongside daemon/app tests;
+        // opt in with WIKIFS_APP_TESTS=1 (#754, #949).
         .testTarget(
             name: "WikiFSAppTests",
             dependencies: [
@@ -393,10 +390,10 @@ let package = Package(
         ),
         // The File Provider extension binary. build.sh repackages this into a
         // .appex bundle under Self Driving Wiki.app/Contents/PlugIns and signs it.
-        //
-        // Declared unconditionally in targets[]; the fileProviderTargetExtension
-        // array below holds the macOS-only flag set. The .filter { } clause at
-        // the end drops it from the manifest on Linux.
+        // Declared unconditionally so macOS test dependencies can name it; the
+        // source files are #if os(macOS)-guarded, and the Linux filter below keeps
+        // the target name available while dropping app/MLX/test targets that would
+        // pull unavailable frameworks or Cmlx CUDA code.
         .executableTarget(
             name: "WikiFSFileProvider",
             dependencies: ["WikiFSCore", "WikiFSTypes"],
@@ -414,34 +411,23 @@ let package = Package(
             ]
         ),
     ].filter {
-        // Drop macOS-only executables / targets on Linux — SwiftPM builds every
-        // target in the package during `swift test`, not just test-target deps.
-        // These targets either #include Obj-C frameworks, use launchd / NSXPC /
-        // AppKit / SwiftUI APIs unavailable on Linux, or pull in CGraphics-only
-        // C++ deps (Cmlx → cublasLt.h CUDA backend, missing on Linux runners).
-        // macOS is unaffected; the existing WIKIFS_APP_STORE=1 route still
-        // works as before (#754, #780).
+        // Keep the Linux manifest focused on portable code. Filter targets that
+        // require Obj-C private frameworks, AppKit/SwiftUI/WebKit/FileProvider,
+        // Darwin notifications, or MLX/Cmlx GPU code that fails on CUDA-less
+        // Linux runners. macOS is unaffected; WIKIFS_APP_STORE=1 still drops the
+        // private podcast helper on all platforms (#754, #780).
         //
-        // Filtered:
-        // - podcast-token-helper: Obj-C executable, needs Foundation.h +
-        //   AppleMediaServices private framework. Not a dep of WikiFSAppTests,
-        //   so filtering it out of the manifest is safe.
-        // - wikictl: macOS CLI client; calls WikiDaemonConnection (guarded
-        //   #if os(macOS)) and DarwinNotifier.postChange (also guarded).
-        //   Not a dep of WikiFSAppTests, so filtering is safe.
-        // - WikiFS: the app executable. Imports AppKit/SwiftUI unconditionally;
-        //   links WikiFSMLX → mlx-swift-lm → mlx-swift → Cmlx, which tries to
-        //   compile its CUDA backend on Linux (cublasLt.h not found).
-        // - WikiFSMLX: links MLXEmbedders (mlx-swift-lm). Same CUDA build issue.
-        // - WikiFSAppTests: empty on Linux (all source #if os(macOS)-guarded)
-        //   but pulls WikiFSMLX via a conditional dep — SwiftPM still resolves
-        //   the package, and `swift test` builds the Cmlx dep transitively.
-        // - WikiFSFileProvider: handled differently (sources #if os(macOS)-
-        //   guarded; target stays in manifest so WikiFSAppTests' dep name
-        //   resolves). See comment on its declaration above.
+        // Filtered on Linux:
+        // - podcast-token-helper: Obj-C executable, Foundation.h + private
+        //   AppleMediaServices framework.
+        // - wikictl: standalone macOS CLI; uses Darwin notification and XPC seams.
+        // - WikiFS: app executable; imports AppKit/SwiftUI and links WebKit/MLX.
+        // - WikiFSMLX: links MLXEmbedders → mlx-swift → Cmlx GPU code.
+        // - WikiFSAppTests: macOS integration target that depends on app/MLX/FileProvider.
         //
-        // NOTE: wikid is intentionally NOT filtered — it has a Linux
-        // stdio-JSON-RPC transport path (#else // Linux at main.swift:120).
+        // WikiFSFileProvider stays declared because its sources are os(macOS)-
+        // guarded and macOS-only test dependencies need the target name. wikid is
+        // intentionally NOT filtered: it has a Linux stdio JSON-RPC transport.
         if $0.name == "WikiFSAppTests" && !appTestsEnabled { return false }
         #if os(Linux)
         if $0.name == "podcast-token-helper" { return false }
