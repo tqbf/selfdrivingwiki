@@ -586,13 +586,13 @@ PLIST
 	     container, so a sandboxed daemon can execute NONE of them (not even the
 	     bundled bun, which lives in the app bundle outside the .xpc) → ingestion
 	     is impossible. It also can't reach the SHARED App Group container: inside
-	     the sandbox `homeDirectoryForCurrentUser` is the sandbox home, so the
+	     the sandbox \`homeDirectoryForCurrentUser\` is the sandbox home, so the
 	     literal container path lands in an empty sandbox-local dir with no wikis
 	     ("No store for wikiID"). Un-sandboxing restores both. This reverts the
 	     app-sandbox that the #887 XPC migration added; the daemon still reaches
 	     the shared DB via the App Group container and secrets via the keychain
 	     access group — same boundaries the un-sandboxed app already uses.
-	     `com.apple.security.app-sandbox` is intentionally ABSENT. -->
+	     \`com.apple.security.app-sandbox\` is intentionally ABSENT. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>${APP_GROUP}</string>
