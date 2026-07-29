@@ -341,8 +341,10 @@ struct StoreEmissionTests {
         let source = try addSeedSource(store)
         let first = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "v1", origin: .extraction, note: nil)
+        try await drain(rec)
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "v2", origin: .extraction, note: nil)
+        try await drain(rec)
         try store.setActiveMarkdown(sourceID: source.id, to: first.id)
         try await drain(rec)
 
@@ -376,9 +378,11 @@ struct StoreEmissionTests {
         let first = try store.recordMarkdownExtraction(
             sourceID: source.id, content: "v1", backend: .anthropic,
             sourceVersionID: nil, note: nil, modelVersion: "x")
+        try await drain(rec)
         _ = try store.recordMarkdownExtraction(
             sourceID: source.id, content: "v2", backend: .anthropic,
             sourceVersionID: nil, note: nil, modelVersion: "x")
+        try await drain(rec)
         try store.setActiveMarkdown(sourceID: source.id, to: first.id)
         try await drain(rec)
 
@@ -646,6 +650,129 @@ struct StoreEmissionTests {
             chatID: chat.id,
             claimID: ChatTurnClaimID(rawValue: "claim-1"),
             claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func editPersistedChatTurnEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try await drain(rec)
+        _ = try store.editPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            userText: "edited",
+            contextReferences: [.page(PageID(rawValue: "page-1"))],
+            editedAt: Date(timeIntervalSince1970: 2)
+        )
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func removePersistedQueuedChatTurnEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try await drain(rec)
+        let removed = try store.removePersistedQueuedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1")
+        )
+        #expect(removed)
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func markPersistedChatTurnProviderSubmittedEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        try await drain(rec)
+        _ = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            providerSessionID: AcpSessionID(rawValue: "acp-1"),
+            submittedAt: Date(timeIntervalSince1970: 3)
+        )
+        let events = try await awaitEvents(rec)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+    }
+
+    @Test func finishPersistedChatTurnEmitsChatUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        _ = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            providerSessionID: AcpSessionID(rawValue: "acp-1"),
+            submittedAt: Date(timeIntervalSince1970: 3)
+        )
+        try await drain(rec)
+        _ = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .completed,
+            terminalMessage: "done"
         )
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)

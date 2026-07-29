@@ -33,6 +33,13 @@ This phase deliberately stops at the persistence/search seam. It does not
 implement Phase 3 daemon controllers, Phase 4 XPC/client sync replacement,
 Phase 5 UI decomposition, or Phase 6 compatibility cleanup.
 
+Follow-up audit fixes on PR #989 tightened Phase 2 test completeness without
+changing production behavior. The additions cover file-backed reopen durability
+for a full persisted-turn lifecycle, explicit idempotency for
+`markPersistedChatTurnProviderSubmitted` and `finishPersistedChatTurn`,
+rejection of a second conflicting terminal outcome, and the missing
+`ResourceChangeEvent` assertions for edit/remove/submit/finish turn mutators.
+
 ## Verification
 
 Focused verification passed after fixing the v46 migration assumption for
@@ -50,6 +57,7 @@ The new coverage added in this phase includes:
 - destructive migration preservation/deletion boundaries
 - durable turn ordering, idempotent enqueue, claims, provider-submission, and
   terminal transitions
+- file-backed reopen durability for enqueue/edit/claim/submit/finish turn state
 - typed transcript round trips and `AgentEvent` compatibility projection
 - cursor paging and transcript checkpoints
 - `mutate(event:)` emission coverage for the new public chat mutators

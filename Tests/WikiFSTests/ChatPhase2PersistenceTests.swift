@@ -29,9 +29,16 @@ struct ChatPhase2PersistenceTests {
         )
     }
 
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private func fileURL(prefix: String) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+        let dir = repositoryRoot()
+            .appendingPathComponent("tmp/\(prefix)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
@@ -129,6 +136,130 @@ struct ChatPhase2PersistenceTests {
         #expect(claimed2.submission.turnID == ChatTurnID(rawValue: "turn-2"))
     }
 
+    @Test func fileBackedTurnLifecycleRoundTripsAcrossReopen() throws {
+        let url = try fileURL(prefix: "chat-phase2-turn-roundtrip")
+        var store = try GRDBWikiStore(databaseURL: url)
+        let chat = try store.createChat(kind: .edit, title: "Queue")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: submission(
+                commandID: "cmd-1",
+                turnID: "turn-1",
+                text: "draft",
+                refs: [
+                    .page(PageID(rawValue: "page-1")),
+                    .source(SourceID(rawValue: "source-1")),
+                    .chat(ChatID(rawValue: "chat-2")),
+                ],
+                submittedAt: 1
+            )
+        )
+        _ = try store.editPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            userText: "edited",
+            contextReferences: [
+                .page(PageID(rawValue: "page-1")),
+                .source(SourceID(rawValue: "source-1")),
+                .chat(ChatID(rawValue: "chat-2")),
+            ],
+            editedAt: Date(timeIntervalSince1970: 2)
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 3)
+        )
+        _ = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            providerSessionID: AcpSessionID(rawValue: "acp-1"),
+            submittedAt: Date(timeIntervalSince1970: 4)
+        )
+        _ = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .completed,
+            terminalMessage: "done"
+        )
+        store.close()
+
+        store = try GRDBWikiStore(databaseURL: url)
+        let turns = try store.listPersistedChatTurns(chatID: chat.id)
+        #expect(turns.count == 1)
+        let turn = try #require(turns.first)
+
+        #expect(turn.chatID == chat.id)
+        #expect(turn.ordinal == 0)
+        #expect(turn.submission.commandID == ChatCommandID(rawValue: "cmd-1"))
+        #expect(turn.submission.turnID == ChatTurnID(rawValue: "turn-1"))
+        #expect(turn.submission.userText == "edited")
+        #expect(turn.submission.contextReferences == [
+            .page(PageID(rawValue: "page-1")),
+            .source(SourceID(rawValue: "source-1")),
+            .chat(ChatID(rawValue: "chat-2")),
+        ])
+        #expect(turn.submission.submittedAt == Date(timeIntervalSince1970: 1))
+        #expect(turn.editedAt == Date(timeIntervalSince1970: 2))
+        #expect(turn.state == .completed)
+        #expect(turn.claimID == ChatTurnClaimID(rawValue: "claim-1"))
+        #expect(turn.claimedAt == Date(timeIntervalSince1970: 3))
+        #expect(turn.providerSubmittedAt == Date(timeIntervalSince1970: 4))
+        #expect(turn.providerSessionID == AcpSessionID(rawValue: "acp-1"))
+        #expect(turn.terminalMessage == "done")
+    }
+
+    @Test func providerSubmittedAndTerminalPersistenceAreIdempotent() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Queue")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: submission(commandID: "cmd-1", turnID: "turn-1", text: "draft")
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        let firstSubmitted = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            providerSessionID: AcpSessionID(rawValue: "acp-1"),
+            submittedAt: Date(timeIntervalSince1970: 3)
+        )
+        let secondSubmitted = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            providerSessionID: AcpSessionID(rawValue: "acp-2"),
+            submittedAt: Date(timeIntervalSince1970: 4)
+        )
+        #expect(secondSubmitted == firstSubmitted)
+        #expect(secondSubmitted.providerSubmittedAt == Date(timeIntervalSince1970: 3))
+        #expect(secondSubmitted.providerSessionID == AcpSessionID(rawValue: "acp-1"))
+
+        let firstFinished = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .completed,
+            terminalMessage: "done"
+        )
+        let secondFinished = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .completed,
+            terminalMessage: "different"
+        )
+        #expect(secondFinished == firstFinished)
+        #expect(secondFinished.terminalMessage == "done")
+    }
+
     @Test func invalidPersistedTurnTransitionsThrow() throws {
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Queue")
@@ -154,6 +285,29 @@ struct ChatPhase2PersistenceTests {
                 claimID: ChatTurnClaimID(rawValue: "claim-1"),
                 state: .queued,
                 terminalMessage: "illegal"
+            )
+        }
+
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        _ = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .completed,
+            terminalMessage: "done"
+        )
+
+        #expect(throws: WikiStoreError.self) {
+            _ = try store.finishPersistedChatTurn(
+                chatID: chat.id,
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                claimID: ChatTurnClaimID(rawValue: "claim-1"),
+                state: .failed,
+                terminalMessage: "different terminal"
             )
         }
     }
