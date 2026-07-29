@@ -197,9 +197,12 @@ struct PageVersionCompareSheet: View {
         } label: {
             HStack(spacing: 6) {
                 Circle().fill(tint).frame(width: 7, height: 7)
-                (Text("\(title): ").foregroundStyle(.secondary)
-                    + Text(current.map(versionLabel) ?? "—").fontWeight(.medium))
-                    .lineLimit(1).truncationMode(.middle)
+                Text(title + ": ")
+                    .foregroundStyle(.secondary)
+                Text(current.map(versionLabel) ?? "—")
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             .font(.callout)
             .frame(maxWidth: 220, alignment: .leading)

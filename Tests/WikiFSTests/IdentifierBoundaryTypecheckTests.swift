@@ -89,12 +89,13 @@ struct IdentifierBoundaryTypecheckTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var arguments = [
             "swiftc", "-typecheck",
+            "-target", typecheckTargetTriple(),
             "-I", buildProducts.debugDirectory.path,
             "-I", buildProducts.modulesDirectory.path,
             "-module-cache-path", scratchDirectory.path,
             fixtureURL(fixtureName).path,
         ]
-        arguments.insert(contentsOf: compilerSearchArguments(root: root, buildProducts: buildProducts), at: 4)
+        arguments.insert(contentsOf: compilerSearchArguments(root: root, buildProducts: buildProducts), at: 6)
         process.arguments = arguments
         process.currentDirectoryURL = root
 
@@ -109,6 +110,24 @@ struct IdentifierBoundaryTypecheckTests {
             status: process.terminationStatus,
             output: String(decoding: outputData, as: UTF8.self)
         )
+    }
+
+    private func typecheckTargetTriple() -> String {
+        #if arch(arm64)
+        let architecture = "arm64"
+        #elseif arch(x86_64)
+        let architecture = "x86_64"
+        #else
+        let architecture = "unknown"
+        #endif
+
+        #if os(macOS)
+        return "\(architecture)-apple-macosx26.0"
+        #elseif os(Linux)
+        return "\(architecture)-unknown-linux-gnu"
+        #else
+        return "\(architecture)-unknown-unknown"
+        #endif
     }
 
     private func requiredFixtureModules(_ fixtureName: String) throws -> Set<String> {
