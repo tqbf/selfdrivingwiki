@@ -3,6 +3,7 @@ import XCTest
 import Foundation
 import ACPModel
 @testable import WikiFSEngine
+import WikiFSTypes
 
 /// Unit tests for `DebugRunLogger` — verifies the folder structure, JSON
 /// validity, and best-effort behavior (no throw on failure).
