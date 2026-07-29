@@ -243,6 +243,31 @@ import SQLite3
         #expect(try store.listBookmarkNodes().first?.content == .page(page.id))
     }
 
+    @Test func retargetReferenceUpdatesKindAndTarget() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let page = try store.createPage(title: "Page")
+        let source = try store.addSource(filename: "source.txt", data: Data("source".utf8))
+        let reference = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(page.id))
+
+        try store.retargetBookmarkNode(id: reference.id, to: .source(source.id))
+
+        let nodes = try store.listBookmarkNodes()
+        #expect(nodes.first?.content == .source(source.id))
+        #expect(store.scalarText("SELECT kind || '|' || COALESCE(label, 'NULL') || '|' || target_id FROM bookmark_nodes WHERE id = '\(reference.id.rawValue)';") == "source_ref|NULL|\(source.id.rawValue)")
+    }
+
+    @Test func retargetFolderIsRejected() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let folder = try store.createBookmarkNode(
+            parentID: nil, position: 0, content: .folder(label: "Folder"))
+        let page = try store.createPage(title: "Page")
+
+        expectInvalidBookmarkRow {
+            try store.retargetBookmarkNode(id: folder.id, to: .page(page.id))
+        }
+        #expect(try store.listBookmarkNodes().first?.content == .folder(label: "Folder"))
+    }
+
     @Test func deleteFolderCascadesChildren() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let parent = try store.createBookmarkNode(

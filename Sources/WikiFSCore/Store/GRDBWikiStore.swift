@@ -5962,6 +5962,77 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try mutate(event: { _ in
+            self.localEvent(.bookmark, id: id.rawValue, change: .updated)
+        }) { db in
+            guard content.kind != .folder else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "folders cannot be retargeted")
+            }
+            let targetRawValue = try validatedReferenceTarget(
+                bookmarkID: id,
+                content: content
+            )
+            let now = Date().timeIntervalSince1970
+            try db.execute(sql: """
+            UPDATE bookmark_nodes
+            SET kind = ?, label = NULL, target_id = ?, updated_at = ?
+            WHERE id = ? AND kind != ?;
+            """, arguments: [
+                content.kind.rawValue,
+                targetRawValue,
+                now,
+                id.rawValue,
+                BookmarkNodeKind.folder.rawValue,
+            ])
+            guard db.changesCount == 1 else {
+                throw WikiStoreError.invalidBookmarkRow(id: id.rawValue, reason: "only bookmark references can be retargeted")
+            }
+        }
+    }
+
+    private func validatedReferenceTarget(
+        bookmarkID: BookmarkID,
+        content: BookmarkNode.Content
+    ) throws -> String {
+        switch content {
+        case .folder:
+            throw WikiStoreError.invalidBookmarkRow(id: bookmarkID.rawValue, reason: "folders cannot be retargeted")
+        case .page(let id):
+            return try validatedTargetRawValue(
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "page reference"
+            )
+        case .source(let id):
+            return try validatedTargetRawValue(
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "source reference"
+            )
+        case .chat(let id):
+            return try validatedTargetRawValue(
+                bookmarkID: bookmarkID,
+                rawValue: id.rawValue,
+                referenceName: "chat reference"
+            )
+        }
+    }
+
+    private func validatedTargetRawValue(
+        bookmarkID: BookmarkID,
+        rawValue: String,
+        referenceName: String
+    ) throws -> String {
+        guard rawValue.isEmpty == false else {
+            throw WikiStoreError.invalidBookmarkRow(
+                id: bookmarkID.rawValue,
+                reason: "\(referenceName) requires a non-empty target_id"
+            )
+        }
+        return rawValue
+    }
+
 
     public func deleteBookmarkNode(id: BookmarkID) throws {
         try mutate(event: { _ in

@@ -256,6 +256,29 @@ struct BookmarksMultiSelectMenuTests {
         }
     }
 
+    @Test func singleLeafEditInvokesEditCallback() throws {
+        let nodes = [leaf("n1")]
+        let vc = makeVC(nodes: nodes)
+        let outline = vc.outlineView!
+
+        var editedID: BookmarkID?
+        vc.callbacks = BookmarksCallbacks(
+            onOpen: { _ in }, onOpenBackground: { _ in },
+            onGoToOriginal: { _ in },
+            onEdit: { id in editedID = id }, onDelete: { _ in },
+            onAddPage: { _ in }, onAddSource: { _ in },
+            onNewFolder: {}, onNewSubfolder: { _ in }
+        )
+
+        let buildMenu: (NSOutlineView, Any) -> NSMenu? = vc.outlineView(_:menuFor:)
+        let menu = buildMenu(outline, nodes[0])!
+        let editItem = try #require(menu.items.first { $0.title == "Edit…" })
+
+        _ = vc.perform(editItem.action, with: editItem)
+
+        #expect(editedID == nodes[0].id)
+    }
+
     // MARK: - "Go to Original" action
 
     @Test func goToOriginalShownForSingleLeaf() {

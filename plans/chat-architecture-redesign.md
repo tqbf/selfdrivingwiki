@@ -146,7 +146,8 @@ The redesign has six primary touch points:
 Phase 0 deliverables:
 
 - `ChatAgentRuntime` protocol in `WikiFSEngine`
-- production adapter around the current `AgentLauncher` and ACP backend
+- closure-backed runtime seam that characterizes the current launcher/backend
+  boundary without yet replacing it
 - `ScriptedChatRuntime` in test support
 - deterministic pause gates for ordered lifecycle testing
 - characterization tests for raw identifier boundaries, CLI/File Provider
@@ -316,9 +317,13 @@ Snapshot state includes:
 - provider state
 - usage
 - diagnostics
-- committed transcript cursor
 - transient transcript overlay
 - `lastIncludedSequence`
+
+Phase 1 intentionally does **not** add a committed-transcript cursor yet.
+That cursor only becomes meaningful once durable transcript persistence and
+client sync land in later phases; for the foundation slice the modeled state is
+the transient overlay plus the per-generation update sequence watermark.
 
 Derived UI capabilities must come from composite state. They must not be stored
 as independent booleans.
@@ -491,6 +496,23 @@ The umbrella plan names these test suites:
 
 Later phases add more suites for persistence, daemon restart, client sync, and
 UI decomposition.
+
+On the corrective branch (`chat-domain-audit-fixes`), the implemented coverage
+maps to these concrete suites:
+
+- `ChatIdentifierBoundaryTypecheckTests` is currently enforced by
+  `IdentifierBoundaryTypecheckTests`, including the launcher and chat-domain
+  positive fixtures and the negative namespace fixtures run through
+  `swiftc -typecheck`.
+- `ChatSessionMachineTransitionTests`, `ChatSessionMachineStaleEventTests`, and
+  `ChatCommandIdempotencyTests` are currently covered by
+  `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- `ScriptedChatRuntimeTests` keeps its own suite, with additional runtime seam
+  coverage in `ChatAgentRuntimeCoverageTests`.
+
+The current verification evidence for this branch is macOS-hosted. The
+typecheck fixtures still keep Linux target-triple support in the test harness,
+but that is a compatibility guard in code, not a claim that Linux CI ran here.
 
 ## Review strategy
 

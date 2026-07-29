@@ -4,7 +4,7 @@ import Foundation
 import WikiFSTypes
 
 actor ScriptedChatRuntime: ChatAgentRuntime {
-    enum Error: Swift.Error {
+    enum Error: Swift.Error, Equatable {
         case unknownHandle
         case duplicateSubscriber
     }

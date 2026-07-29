@@ -78,9 +78,7 @@ struct SidebarView: View {
             context: $bookmarkPickerContext,
             store: store))
         .sheet(item: $editBookmarkNodeID) { ctx in
-            EditBookmarkSheet(store: store, nodeID: ctx.nodeID) { newName in
-                store.renameBookmarkNode(id: ctx.nodeID, to: newName)
-            }
+            EditBookmarkSheet(store: store, nodeID: ctx.nodeID)
         }
         .alert("New Folder", isPresented: $showingNewBookmarkFolder) {
             TextField("Folder name", text: $newBookmarkFolderName)

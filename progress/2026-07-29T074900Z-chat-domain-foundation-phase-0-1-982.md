@@ -1,18 +1,18 @@
 ---
 timestamp: 2026-07-29T074900Z
 title: "2026-07-29 — Chat domain foundation Phase 0/1 (#982)"
-branch: chat-domain-foundation
-status: complete
+branch: chat-domain-audit-fixes
+status: blocked
 ---
 
 # 2026-07-29 — Chat domain foundation Phase 0/1 (#982)
 
 ## Progress
 
-**Scope.** This branch lands only the foundation slice of the reviewed chat
-architecture redesign for issue #982. It intentionally stops before schema v46,
-durable turn persistence, daemon controller replacement, XPC migration, client
-synchronization, and UI decomposition.
+**Scope.** This branch still lands only the foundation slice of the reviewed
+chat architecture redesign for issue #982. It intentionally stops before schema
+v46, durable turn persistence, daemon controller replacement, XPC migration,
+client synchronization, and UI decomposition.
 
 **What landed.**
 - Added the design record at
@@ -34,19 +34,30 @@ synchronization, and UI decomposition.
   updates, replay, and tests share one typed reducer instead of ad hoc folds.
 - Added `Sources/WikiFSEngine/ChatAgentRuntime.swift` with the typed
   `ChatAgentRuntime` protocol, event envelope, start/configuration requests,
-  and a closure-backed seam for production adaptation work in later phases.
+  and a closure-backed runtime seam that characterizes the current
+  launcher/backend boundary without yet replacing it.
 - Added `ScriptedChatRuntime` test support with deterministic pause gates,
   generation-preserving event envelopes, and sleep-free teardown behavior. The
   gate implementation was corrected to use stored permits so a resume cannot be
   lost if it arrives before the drain task parks.
-- Added Phase 0/1 guardrails:
+- Added Phase 0/1 guardrails and corrective audit coverage:
   `ChatIdentifierCodableCompatibilityTests`,
   `ChatDomainStateTests`,
+  `ChatDomainAuditRegressionTests`,
   `ChatTranscriptReducerTests`,
   `ScriptedChatRuntimeTests`,
+  `ChatAgentRuntimeCoverageTests`,
   `ChatDomainAPISignatureManifestTests`,
   and new `IdentifierBoundaryTypecheckTests` fixtures for turn, message,
   command, and permission/tool-call namespace boundaries.
+- Repaired the typed `ProviderID`/`ModelID` app-test fixture drift that blocked
+  the earlier corrective audit from even compiling the opt-in app test target.
+- Repaired the hosted `PageDetailView` test harness so it injects the
+  `WindowRightInspectorController` environment object the live app provides,
+  without papering over real environment failures.
+- Corrected the bookmarks single-leaf edit behavior and tests so leaf
+  references expose the intended `Edit…` affordance, and the app test asserts
+  the exact Unicode ellipsis title.
 
 **Important compatibility decisions preserved.**
 - Raw identifier text stayed primitive-string-compatible at JSON and Codable
@@ -55,26 +66,57 @@ synchronization, and UI decomposition.
   was introduced.
 - The new transcript vocabulary is Foundation-only and does not pull Engine or
   Core dependencies into `WikiFSTypes`.
+- The typecheck guard stays compiler-level, not runtime-only: the
+  `IdentifierBoundaryTypecheckTests` fixtures still run `swiftc -typecheck`
+  against the built modules, with a host-target triple that supports both macOS
+  and Linux compilation paths even though the current CI/test evidence in this
+  branch is macOS-only.
 - No schema migration, chat-row compatibility decoder, or UI migration landed
   in this branch.
 
 ## Verification
 
-- `make prompts` — passed.
-- Focused Phase 0/1 foundation verification:
-  `swift test --filter 'ChatDomainAPISignatureManifestTests|IdentifierBoundaryTypecheckTests|ChatIdentifierCodableCompatibilityTests|ChatDomainStateTests|ChatTranscriptReducerTests|ScriptedChatRuntimeTests'`
-  — 43 tests in 6 suites passed.
-- `swift build` — passed.
-- First `swift test` run surfaced one failure in
-  `StoreEmissionTests.revertProcessedMarkdownUnknownVersionEmitsNothingAndKeepsHeadUnchanged`.
-  A focused rerun of that test passed immediately, indicating a flaky unrelated
-  expectation rather than a deterministic regression from this branch.
-- Second `swift test` run — 2,614 tests in 212 suites passed.
-- `WIKIFS_APP_TESTS=1 swift test` did **not** pass. The opt-in app test target
-  currently contains unrelated compile drift where tests still pass raw
-  `String` values into newer `ModelID`/`ProviderID`-typed APIs, for example in
-  `Tests/WikiFSAppTests/RunAwaitsTurnTests.swift:60`,
-  `ACPChatResumeTests.swift:51`, `ACPProviderModelProbeTests.swift`, and
-  `AgentProviderModelTests.swift`. This branch did not touch those APIs or
-  those app tests, so the failure is recorded here rather than broadened into a
-  separate typed-model migration.
+- Wednesday, July 29, 2026:
+  `make prompts` — passed.
+- Wednesday, July 29, 2026:
+  `make test` — passed with `2631 tests in 214 suites`.
+- Wednesday, July 29, 2026:
+  `make build` — passed, including app assembly/signing and MLX runtime
+  bundling.
+- Wednesday, July 29, 2026:
+  `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=60 make test-watchdog` — timed out with
+  exit `124`.
+  Log: `tmp/test-logs/swift-test-20260729-064032.log`.
+  This is the current blocker: the opt-in aggregate app-test gate still does
+  not exit `0` under the repository's bounded watchdog wrapper.
+- The timeout probe is materially better than the inherited raw `swift test`
+  hang note because it uses the repo-owned watchdog target, reaps orphaned
+  `swiftpm-testing-helper` children, records a stable log path, and reports the
+  started-but-never-finished test set from that exact run.
+
+**Named test coverage shipped in this corrective branch.**
+- `ChatIdentifierBoundaryTypecheckTests` maps to the current
+  `IdentifierBoundaryTypecheckTests` suite plus the launcher/chat-domain
+  positive fixtures and negative namespace fixtures it runs with
+  `swiftc -typecheck`.
+- `ChatDomainAPISignatureManifestTests` landed exactly as
+  `ChatDomainAPISignatureManifestTests`.
+- `ChatIdentifierCodableCompatibilityTests` landed exactly as
+  `ChatIdentifierCodableCompatibilityTests`.
+- `ChatSessionMachineTransitionTests`, `ChatSessionMachineStaleEventTests`, and
+  `ChatCommandIdempotencyTests` are covered today by
+  `ChatDomainStateTests` and `ChatDomainAuditRegressionTests`.
+- `ChatTranscriptReducerTests` landed exactly as
+  `ChatTranscriptReducerTests`.
+- `ScriptedChatRuntimeTests` landed exactly as `ScriptedChatRuntimeTests`, with
+  extra runtime seam coverage in `ChatAgentRuntimeCoverageTests`.
+
+**Follow-up on July 29, 2026.** The corrective branch
+`chat-domain-audit-fixes` repaired that opt-in app-test drift and the hosted
+`PageDetailView` inspector environment setup, and it added direct regression
+coverage for the audit findings around exact JSON/raw-boundary compatibility,
+state-machine failures and stale-event rejection, runtime forwarding, and
+sleep-free scripted runtime behavior. The original foundation branch did not
+make the opt-in aggregate app-test gate green, and the corrective branch still
+does not have a successful aggregate app-test exit as of the bounded watchdog
+run above.
