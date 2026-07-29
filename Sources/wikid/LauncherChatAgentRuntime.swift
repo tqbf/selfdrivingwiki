@@ -1,5 +1,6 @@
 // pattern: Imperative Shell
 
+#if canImport(WikiFSEngine)
 import Foundation
 import WikiFSCore
 import WikiFSEngine
@@ -468,3 +469,4 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         )
     }
 }
+#endif // canImport(WikiFSEngine)

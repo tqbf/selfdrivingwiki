@@ -3,6 +3,7 @@
 // coordinate persistence, runtime events, replay state, and compatibility
 // signaling in one actor to keep terminal-winner and queue-order invariants.
 
+#if canImport(WikiFSEngine)
 import Foundation
 import WikiFSCore
 import WikiFSEngine
@@ -594,3 +595,4 @@ actor DaemonChatController {
         }
     }
 }
+#endif // canImport(WikiFSEngine)
