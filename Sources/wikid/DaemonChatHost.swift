@@ -217,6 +217,14 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Must be accessed on the main actor.
     @MainActor var testSharedGenerationGate: GenerationGate? { sharedGenerationGate() }
 
+    func controllerUsesStreamingCheckpointForTesting(
+        chatID: ChatID,
+        wikiID: WikiID
+    ) async throws -> Bool {
+        let controller = try makeOrGetController(chatID: chatID, wikiID: wikiID)
+        return await controller.runtimeUsesStreamingCheckpointForTesting()
+    }
+
     private func makeOrGetController(chatID: ChatID, wikiID: WikiID) throws -> DaemonChatController {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
@@ -233,7 +241,8 @@ final class DaemonChatHost: @unchecked Sendable {
             extractionCoordinator: extractionCoordinator,
             generationGate: sharedGate,
             pushEvent: pushEvent,
-            onSessionID: { sessionID in
+            onSessionID: { [weak self] sessionID in
+                guard let self else { return }
                 if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
                     await controller.didUpdateProviderSessionID(sessionID)
                 }
@@ -244,33 +253,27 @@ final class DaemonChatHost: @unchecked Sendable {
                     DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
                 }
             },
-            onStateUpdate: { update in
+            onStateUpdate: { [weak self] update in
+                guard let self else { return }
                 if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
                     await controller.didUpdateCompatibilityState(update)
                 }
             },
-            onLiveEvents: { events in
+            onLiveEvents: { [weak self] events in
+                guard let self else { return }
                 if let controller = self.queue.sync(execute: { self.controllers[chatID] }) {
                     await controller.didReceiveLiveEvents(events)
                 }
             },
-            onMessageSummary: { chatID in
+            onMessageSummary: { [weak self] chatID in
+                guard let self else { return }
                 self.summarizePendingMessages(chatID: chatID, wikiID: wikiID)
             },
-            onStreamingCheckpoint: { chatID, handle, event, isDraft in
-                do {
-                    try store.checkpointStreamingMessage(
-                        chatID: chatID,
-                        handle: handle,
-                        event: event,
-                        isDraft: isDraft
-                    )
-                    return true
-                } catch {
-                    DebugLog.store("DaemonChatHost checkpoint write failed: \(error)")
-                    return false
-                }
-            }
+            // Phase 3's typed per-delta controller persistence is the sole
+            // owner of compatibility `chat_messages` rows in the daemon path.
+            // Wiring the legacy checkpoint sink here would dual-write the same
+            // assistant message under a second identity and reopen #982/#990.
+            onStreamingCheckpoint: nil
         )
         let controller = try DaemonChatController(
             chatID: chatID,

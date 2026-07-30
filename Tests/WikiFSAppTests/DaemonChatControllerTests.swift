@@ -405,10 +405,14 @@ struct DaemonChatControllerTests {
         )
 
         await harness.runtime.emit(.transcript(deltas))
+        await harness.runtime.emit(.turnCompleted(submission.turnID))
 
         let messages = try harness.store.chatMessages(chatID: harness.chat.id)
-        #expect(messages.contains { $0.event == .assistantText("Hello world") })
-        #expect(messages.contains { $0.event == .thinking("Need context") })
+        let assistantRows = messages.filter { $0.event == .assistantText("Hello world") }
+        let reasoningRows = messages.filter { $0.event == .thinking("Need context") }
+        #expect(assistantRows.count == 1)
+        #expect(reasoningRows.count == 1)
+        #expect(assistantRows.allSatisfy { $0.isDraft == false })
         let toolRows = messages.filter {
             if case .toolResult(isError: false, summary: "updated file") = $0.event { return true }
             return false
@@ -437,6 +441,8 @@ struct DaemonChatControllerTests {
             $0.messageID == ChatMessageID(rawValue: "reasoning-\(submission.turnID.rawValue)")
                 && $0.text == "Need context"
         })
+        #expect(persistedAssistant.count == 1)
+        #expect(persistedReasoning.count == 1)
         #expect(persistedTools.count == 1)
         #expect(persistedTools.first?.toolName == "Edit")
         #expect(persistedTools.first?.status == .completed)

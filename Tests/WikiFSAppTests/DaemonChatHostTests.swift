@@ -179,6 +179,23 @@ struct DaemonChatHostTests {
         #expect(summarized.summaryKind == .defaultTruncation)
     }
 
+    @Test func daemonControllerPathDisablesLegacyStreamingCheckpointSink() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "Test"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Checkpoint Disabled")
+        let host = try await daemon.ensureChatHost()
+
+        let usesCheckpoint = try await host.controllerUsesStreamingCheckpointForTesting(
+            chatID: chat.id,
+            wikiID: wiki.id
+        )
+
+        #expect(usesCheckpoint == false)
+    }
+
     // MARK: - DaemonWikiState helper
 
     @Test func daemonWikiStateBuildsStateMarkdown() throws {

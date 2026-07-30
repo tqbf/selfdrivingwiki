@@ -179,6 +179,13 @@ actor DaemonChatController {
 
     func typedSnapshot() -> ChatRuntimeSnapshot { snapshot }
 
+    func runtimeUsesStreamingCheckpointForTesting() async -> Bool {
+        guard let launcherRuntime = runtime as? LauncherChatAgentRuntime else {
+            return false
+        }
+        return await launcherRuntime.usesStreamingCheckpointForTesting()
+    }
+
     func replay(after watermark: ChatUpdateSequence) -> ChatReplayResult {
         replayBuffer.replay(after: watermark)
     }

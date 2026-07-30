@@ -10,7 +10,7 @@ status: complete
 ## Progress
 
 This entry records the corrective implementation pass for the exact audited PR
-head `ea29a810d946a2b082b80e0b430704d092f51fc4` on branch
+head `e1a5cf259e859c2680282f7c5e1bfc8c1ddbfcb6` on branch
 `chat-redesign-phase3`.
 
 Scope stayed inside Phase 3:
@@ -18,8 +18,11 @@ Scope stayed inside Phase 3:
 - repaired daemon/runtime/controller/store contracts that regressed transcript
   persistence, live streaming, resume fallback, preflight handling, queue
   draining, and shared generation-gate wiring
+- removed the daemon-path compatibility `chat_messages` dual-writer so typed
+  per-delta controller persistence is the sole streamed assistant-message
+  projector in Phase 3
 - added production-shaped regression coverage at the runtime-translation seam
-  and the controller/store persistence seam
+  plus the real host/runtime wiring seam
 - corrected the chat API signature manifest and the Phase 3 progress/plan/PR
   documentation
 
@@ -33,7 +36,8 @@ Out of scope and still deferred:
 
 The repaired head fixes the audit-blocking Phase 3 contracts:
 
-- `C-1` Assistant and reasoning output now persist again. Raw
+- `C-1` Assistant and reasoning output now persist again in both the typed
+  transcript tables and the real compatibility projection. Raw
   `.assistantTextDelta` / `.thinkingDelta` sequences are coalesced into stable
   `messageReplacement` items with deterministic `ChatMessageID`s, and the
   controller/store seam now persists those replacements instead of dropping
@@ -58,6 +62,12 @@ The repaired head fixes the audit-blocking Phase 3 contracts:
   pure store read when no controller exists.
 - `H-5` Per-message/per-chat summarization is wired again through the runtime's
   `onMessageSummary` callback into the daemon host summarization path.
+- `H-NEW-1` The real daemon ACP path no longer dual-writes compatibility
+  `chat_messages` rows. `DaemonChatHost` now leaves the launcher-era streaming
+  checkpoint sink disabled for Phase 3 controllers, so
+  `DaemonChatController -> appendChatTranscriptItems` is the sole compatibility
+  writer for streamed assistant output while live-event forwarding and typed
+  per-delta recovery semantics stay intact.
 
 Additional corrective work landed with the same pass:
 
@@ -82,6 +92,7 @@ The corrective pass added or tightened these direct regression tests:
 
 - `LauncherChatAgentRuntimeTests.transcriptTranslationCoalescesAssistantAndReasoningDeltasIntoStableMessageReplacements`
 - `LauncherChatAgentRuntimeTests.transcriptTranslationPreservesToolIdentityAcrossUseAndResult`
+- `DaemonChatHostTests.daemonControllerPathDisablesLegacyStreamingCheckpointSink`
 - `DaemonChatControllerTests.productionTranslatedDeltasPersistAssistantReasoningAndToolRowsWithoutDuplicates`
 - `DaemonChatControllerTests.restartRecoveryMarksClaimedTurnInterruptedAndPreservesProviderSessionForResumeFallback`
 - `DaemonChatHostTests.daemonChatHostUsesSharedGenerationGate`
@@ -98,7 +109,11 @@ path:
 - those translated deltas are then driven through the real
   `DaemonChatController` persistence seam
 - tests assert both the client-visible stable transcript items and the durable
-  `chat_messages` / transcript-row results
+  `chat_messages` / transcript-row results, including exact convergence to one
+  finalized assistant compatibility row
+- the real daemon host path now has a direct regression that proves the
+  launcher-era checkpoint sink is disabled for Phase 3 controllers before any
+  live ACP traffic reaches the store
 
 ## Medium / low dispositions
 
@@ -110,11 +125,11 @@ an intentional Phase 3 disposition:
   but the registry still uses a `DispatchQueue.sync` gate. A full actor-based
   registry remains a Phase 4 architectural cleanup, not a corrective Phase 3
   contract fix.
-- `M-5` Not fully repaired in this pass. The daemon intentionally retains
-  per-chat controllers for process lifetime in Phase 3 and still has no idle
-  eviction policy. This is a bounded daemon-lifetime retention issue rather than
-  an acceptance-criteria blocker; follow-up cleanup should remove the remaining
-  launcher-era registry baggage together with Phase 4/5 lifecycle reshaping.
+- `M-5` Partially improved. `DaemonChatHost` now captures itself weakly in the
+  runtime callback closures, so the host/runtime/controller graph no longer
+  retains itself through those callback references alone. Phase 3 still keeps
+  per-chat controllers for daemon lifetime and still has no idle-eviction
+  policy; that bounded lifecycle cleanup remains deferred to Phase 4/5.
 - `M-9` Partially improved. `resolveWikiID(for:)` now logs non-benign resolver
   failures instead of swallowing them silently, but it still scans known wikis.
   A durable `ChatID -> WikiID` index is deferred because it would expand the
@@ -124,9 +139,10 @@ an intentional Phase 3 disposition:
   `DaemonChatHost`; they are unused but not load-bearing. Removing them was kept
   out of this corrective pass to avoid mixing structural cleanup with the
   audited contract repairs.
-- `L-3` Deferred. `startInteractiveQuery`'s optional callback semantics are
-  unchanged for current callers; no Phase 3 behavior depends on restoring the
-  older default wiring shape.
+- `L-3` Partially addressed. `startInteractiveQuery`'s optional callback shape
+  is now used intentionally in Phase 3: the daemon runtime passes `nil` for the
+  legacy streaming-checkpoint sink so only typed controller persistence writes
+  compatibility rows. Broader launcher-era callback cleanup remains deferred.
 - `L-4` Deferred. The temporary `chatLive` seam-1 diagnostic remains debug-only
   instrumentation and is not part of the production contract.
 - `L-5` Documented by current controller tests. Pending cancellation without a
@@ -143,32 +159,45 @@ an intentional Phase 3 disposition:
 
 ## Verification
 
-Verified locally on Wednesday, July 29, 2026:
+Verified locally on Thursday, July 30, 2026:
 
 - `make prompts`
+- passed
 - `make build`
+- passed
 - `make test`
   - passed: `2669 tests in 216 suites`
-- `swift test --filter ChatAPISignatureManifestTests`
-  - passed: `1 test in 1 suite`
 - `WIKIFS_APP_TESTS=1 swift test --filter 'DaemonChatHostTests|DaemonChatControllerTests|LauncherChatAgentRuntimeTests'`
-  - passed: `36 tests in 3 suites`
-- `WIKIFS_APP_TESTS=1 swift test --filter 'LauncherChatAgentRuntimeTests|DaemonChatControllerTests|DaemonChatHostTests|ChatDaemonCoordinatorTests|RemoteChatSessionTests|WikiDaemonConnectionHealthTests'`
-  - passed: `100 tests in 6 suites`
+  - passed: `37 tests in 3 suites`
+- `WIKIFS_APP_TESTS=1 swift test --filter 'LauncherChatAgentRuntimeTests|DaemonChatControllerTests|DaemonChatHostTests|StreamingCheckpointStoreTests|ChatPhase2PersistenceTests|StoreEmissionTests'`
+  - passed: `104 tests in 6 suites`
+- `WIKIFS_APP_TESTS=1 swift test --parallel --num-workers 1 --filter 'ContentTypeRegistryTests|PageAuthorTests|SourceProviderTests'`
+  - passed: `78 tests in 3 suites`
 - `WIKIFS_APP_TESTS=1 swift test`
-  - rerun during the corrective pass to refresh the hosted-suite evidence for
-    this repaired head; the matching PR body records the exact local outcome for
-    the pushed commit
+  - local hosted/app run did not terminate cleanly on this machine; after more
+    than three minutes the `swiftpm-testing-helper` remained alive and mostly
+    idle in the hosted-suite tail, so the run was interrupted rather than
+    waited indefinitely
+- `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=120 make test-watchdog`
+  - timed out with wrapper exit `124`
+  - log: `tmp/test-logs/swift-test-20260729-171234.log`
+  - representative started-but-never-finished tests from that bounded run
+    included `podcastTranscribes()`, `htmlExtractsViaMime()`, `pdfExtracts()`,
+    `roundTripIdentity(_:)`, `helpVerbNonEmpty(_:)`, and
+    `systemImageNonEmpty(_:)`
+  - isolated serial rerun of the representative unfinished suites
+    (`ContentTypeRegistryTests|PageAuthorTests|SourceProviderTests`) passed as
+    `78 tests in 3 suites`, so the watchdog timeout is recorded as a broad
+    hosted-suite timeout on this machine rather than a reproduced product
+    regression in those suites
 
 ## Files changed in the corrective pass
 
 - `Sources/wikid/LauncherChatAgentRuntime.swift`
 - `Sources/wikid/DaemonChatController.swift`
 - `Sources/wikid/DaemonChatHost.swift`
-- `Sources/wikid/WikiDaemon.swift`
-- `Sources/WikiFSCore/Store/GRDBWikiStore.swift`
-- `Sources/WikiFSEngine/ChatDomain.swift`
 - `Tests/WikiFSAppTests/LauncherChatAgentRuntimeTests.swift`
 - `Tests/WikiFSAppTests/DaemonChatControllerTests.swift`
 - `Tests/WikiFSAppTests/DaemonChatHostTests.swift`
-- `Tests/WikiFSTests/Fixtures/ChatAPISignatures.txt`
+- `plans/chat-architecture-redesign.md`
+- `progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`

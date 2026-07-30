@@ -1,6 +1,6 @@
 # Chat Architecture Redesign
 
-Last updated: July 29, 2026
+Last updated: July 30, 2026
 
 ## Status
 
@@ -20,17 +20,22 @@ rebuild, and the Phase 3 per-chat daemon-controller move. It does not
 implement the Phase 4 XPC wire redesign, the Phase 4 client sync replacement,
 or the Phase 5 UI decomposition.
 
-Remediation note for PR #990 on Wednesday, July 29, 2026:
+Remediation note for PR #990 on Thursday, July 30, 2026:
 
 - the exact-head corrective audit at
-  `ea29a810d946a2b082b80e0b430704d092f51fc4` found regressions in transcript
+  `e1a5cf259e859c2680282f7c5e1bfc8c1ddbfcb6` found regressions in transcript
   persistence, live delta forwarding, bounded resume fallback, shared
   generation-gate wiring, preflight rollback/propagation, queue draining,
   `chatSessionState` purity, summarization callbacks, provider-session
-  sequencing, and API-manifest/documentation coverage
+  sequencing, compatibility `chat_messages` dual-writes in the real daemon ACP
+  path, and API-manifest/documentation coverage
 - the corrective pass on `chat-redesign-phase3` repairs those Phase 3 daemon /
   runtime / controller / store contracts without taking the out-of-scope Phase
   4 wire or Phase 5 UI decomposition work
+- the repaired Phase 3 invariant is now explicit: for streamed assistant output
+  in the daemon path, typed controller persistence is the sole compatibility
+  `chat_messages` writer; the launcher-era streaming checkpoint sink stays
+  disabled in this path
 - the current exact-head evidence is recorded in
   [`progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`](../progress/2026-07-29T201105Z-chat-redesign-phase3-982.md)
 

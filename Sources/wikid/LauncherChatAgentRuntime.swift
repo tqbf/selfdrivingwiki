@@ -97,7 +97,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private let onStateUpdate: @Sendable (ChatStateUpdate) async -> Void
     private let onLiveEvents: @Sendable ([AgentEvent]) async -> Void
     private let onMessageSummary: @MainActor @Sendable (ChatID) -> Void
-    private let onStreamingCheckpoint: @MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool
+    private let onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)?
 
     private var runtimeState: RuntimeState?
     private var monitorTask: Task<Void, Never>?
@@ -113,7 +113,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         onStateUpdate: @escaping @Sendable (ChatStateUpdate) async -> Void,
         onLiveEvents: @escaping @Sendable ([AgentEvent]) async -> Void,
         onMessageSummary: @escaping @MainActor @Sendable (ChatID) -> Void,
-        onStreamingCheckpoint: @escaping @MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool
+        onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)? = nil
     ) {
         self.chatID = chatID
         self.wikiID = wikiID
@@ -467,6 +467,10 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         guard var state = runtimeState else { return }
         state.latestProviderSessionID = sessionID
         runtimeState = state
+    }
+
+    func usesStreamingCheckpointForTesting() -> Bool {
+        onStreamingCheckpoint != nil
     }
 
     private func currentProviderSessionID(fallback: AcpSessionID?) -> AcpSessionID? {
