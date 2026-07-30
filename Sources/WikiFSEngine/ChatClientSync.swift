@@ -40,14 +40,6 @@ public extension ChatClientSyncState {
         guard let projection else { return base }
         return ChatClientSyncReducer.mergingCommitted(base, with: projection.transcriptOverlay)
     }
-
-    var displayEvents: [AgentEvent] {
-        displayTranscriptItems.map(ChatTranscriptProjection.project)
-    }
-
-    var displayEventTimestamps: [Date?] {
-        displayTranscriptItems.map(ChatClientSyncReducer.timestamp(for:))
-    }
 }
 
 public enum ChatClientSyncEffect: Sendable, Equatable {

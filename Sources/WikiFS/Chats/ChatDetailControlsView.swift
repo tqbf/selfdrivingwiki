@@ -5,7 +5,7 @@ import SwiftUI
 
 struct ChatDetailControlsView: View {
     let showsDebugControls: Bool
-    let isGenerating: Bool
+    let isAnswering: Bool
     @Binding var showsInternals: Bool
     @Binding var hideToolCalls: Bool
     let exitStatus: Int32?
@@ -14,7 +14,7 @@ struct ChatDetailControlsView: View {
     var body: some View {
         HStack(spacing: 8) {
             if showsDebugControls {
-                if isGenerating {
+                if isAnswering {
                     ProgressView()
                         .controlSize(.small)
                 }

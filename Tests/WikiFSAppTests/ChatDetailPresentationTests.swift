@@ -14,8 +14,8 @@ struct ChatDetailPresentationTests {
             chatID: ChatID(rawValue: "01J" + String(repeating: "A", count: 22)),
             chatSummary: nil,
             showsInternals: true,
-            remoteSession: .fixture(isGenerating: true, runningKind: .query),
-            persistedMessages: [],
+            remoteSession: .fixture(runState: .answering, runningKind: .query),
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
@@ -31,7 +31,7 @@ struct ChatDetailPresentationTests {
             chatSummary: nil,
             showsInternals: false,
             remoteSession: .fixture(),
-            persistedMessages: [],
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
@@ -40,37 +40,121 @@ struct ChatDetailPresentationTests {
         #expect(presentation.contentState == .missingChat)
     }
 
-    @Test func transcriptProjectionUsesLiveEventsAndKeepsTimestampsAlignedAfterFiltering() {
-        let liveTimestamps = [
-            Date(timeIntervalSince1970: 10),
-            Date(timeIntervalSince1970: 20),
-            Date(timeIntervalSince1970: 30),
-        ]
-        let presentation = ChatDetailPresentation.make(
-            chatID: ChatID(rawValue: "01J" + String(repeating: "C", count: 22)),
-            chatSummary: ChatSummary.fixture(id: ChatID(rawValue: "01J" + String(repeating: "C", count: 22))),
+    @Test func transcriptProjectionSelectsTheTypedLiveTranscriptInsteadOfPersistedRows() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
+        let liveTranscript = ChatDisplayProjection.project(items: [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "live-message"),
+                turnID: ChatTurnID(rawValue: "live-turn"),
+                role: .assistant,
+                text: "Live response",
+                createdAt: .distantPast
+            ))
+        ], activeContentBlock: nil).transcript
+        let persistedItems = persisted([
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-message"),
+                turnID: ChatTurnID(rawValue: "persisted-turn"),
+                role: .assistant,
+                text: "Persisted response",
+                createdAt: .distantPast
+            ))
+        ])
+        let live = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: ChatSummary.fixture(id: chatID),
             showsInternals: false,
             remoteSession: .fixture(
-                activeChatID: ChatID(rawValue: "01J" + String(repeating: "C", count: 22)),
-                isGenerating: true,
-                events: [
-                    .userText("hello"),
-                    .toolResult(isError: false, summary: "ok"),
-                    .assistantText("world"),
-                ],
-                eventTimestamps: liveTimestamps
+                sessionChatID: chatID,
+                runState: .answering,
+                transcript: liveTranscript
             ),
-            persistedMessages: [
-                ChatMessage.fixture(seq: 0, event: .userText("persisted")),
-            ],
+            persistedTranscriptItems: persistedItems,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+        let persisted = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: ChatSummary.fixture(id: chatID),
+            showsInternals: false,
+            remoteSession: .fixture(transcript: liveTranscript),
+            persistedTranscriptItems: persistedItems,
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
         )
 
-        #expect(presentation.transcript.events == [.userText("hello"), .assistantText("world")])
-        #expect(presentation.transcript.timestamps == [liveTimestamps[0], liveTimestamps[2]])
-        #expect(presentation.transcript.isRunning)
+        #expect(live.transcript.displayTranscript.rows.first?.textForSearch == "Live response")
+        #expect(live.transcript.isAnswering)
+        #expect(persisted.transcript.displayTranscript.rows.first?.textForSearch == "Persisted response")
+        #expect(persisted.transcript.isAnswering == false)
+    }
+
+    @Test func persistedOutlineUsesModelSummaryReturnedByTranscriptPage() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Summary round-trip")
+        let turnID = ChatTurnID(rawValue: "turn-summary")
+        let assistantMessageID = ChatMessageID(rawValue: "transcript-assistant-id")
+        let assistantText = "Raw response opening that must not become the outline summary."
+        _ = try store.appendChatTranscriptItems(
+            chatID: chat.id,
+            items: [
+                .message(.init(
+                    messageID: ChatMessageID(rawValue: "transcript-user-id"),
+                    turnID: turnID,
+                    role: .user,
+                    text: "What changed?",
+                    createdAt: .distantPast
+                )),
+                .message(.init(
+                    messageID: assistantMessageID,
+                    turnID: turnID,
+                    role: .assistant,
+                    text: assistantText,
+                    createdAt: .distantPast
+                )),
+            ]
+        )
+        let compatibilityAssistant = try #require(
+            store.chatMessages(chatID: chat.id).first { message in
+                message.event == .assistantText(assistantText)
+            }
+        )
+        // The compatibility message id is independently generated. This makes
+        // a PageID-to-ChatMessageID conversion unable to find the summary.
+        #expect(compatibilityAssistant.id.rawValue != assistantMessageID.rawValue)
+        #expect(compatibilityAssistant.seq == 1)
+        try store.updateMessageSummary(
+            chatID: chat.id,
+            messageID: compatibilityAssistant.id,
+            summary: "Distinctive model summary.",
+            kind: .model
+        )
+
+        let page = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+        let persistedAssistant = try #require(page.items.first { item in
+            guard case .message(let message) = item.item else { return false }
+            return message.messageID == assistantMessageID
+        })
+        #expect(persistedAssistant.cursor.rawValue - 1 == Int64(compatibilityAssistant.seq))
+        #expect(persistedAssistant.cachedResponseSummary == "Distinctive model summary.")
+        let presentation = ChatDetailPresentation.make(
+            chatID: chat.id,
+            chatSummary: chat,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: page.items,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.outlineEntries.first?.response == "Distinctive model summary.")
+        #expect(presentation.outlineEntries.first?.response != ChatSummary.summaryExtract(
+            from: assistantText,
+            maxLength: 200
+        ))
     }
 
     @Test func pendingPermissionOnlySurfacesForLiveChat() {
@@ -92,8 +176,8 @@ struct ChatDetailPresentationTests {
             chatID: liveChatID,
             chatSummary: ChatSummary.fixture(id: liveChatID),
             showsInternals: false,
-            remoteSession: .fixture(activeChatID: liveChatID, pendingPermissions: [request]),
-            persistedMessages: [],
+            remoteSession: .fixture(sessionChatID: liveChatID, runState: .warm, pendingPermissions: [request]),
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
@@ -103,7 +187,7 @@ struct ChatDetailPresentationTests {
             chatSummary: ChatSummary.fixture(id: liveChatID),
             showsInternals: false,
             remoteSession: .fixture(pendingPermissions: [request]),
-            persistedMessages: [],
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
@@ -120,11 +204,11 @@ struct ChatDetailPresentationTests {
             chatSummary: ChatSummary.fixture(id: liveChatID),
             showsInternals: false,
             remoteSession: .fixture(
-                activeChatID: liveChatID,
-                isGenerating: true,
+                sessionChatID: liveChatID,
+                runState: .answering,
                 runningKind: .query
             ),
-            persistedMessages: [],
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: true,
             isChatOperationConfigured: true
@@ -143,11 +227,11 @@ struct ChatDetailPresentationTests {
             chatSummary: ChatSummary.fixture(id: liveChatID),
             showsInternals: false,
             remoteSession: .fixture(
-                activeChatID: liveChatID,
-                isGenerating: true,
+                sessionChatID: liveChatID,
+                runState: .answering,
                 runningKind: .query
             ),
-            persistedMessages: [],
+            persistedTranscriptItems: [],
             queuedMessages: [.fixture(preview: "next up")],
             hasDraftText: true,
             isChatOperationConfigured: true
@@ -164,7 +248,7 @@ struct ChatDetailPresentationTests {
             chatSummary: nil,
             showsInternals: false,
             remoteSession: .fixture(),
-            persistedMessages: [],
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: true,
             isChatOperationConfigured: false
@@ -175,62 +259,54 @@ struct ChatDetailPresentationTests {
         #expect(presentation.composer.caption == "Configure an enabled provider and model in Settings → Providers before sending.")
     }
 
-    @Test func outlineProjectionUsesCachedPersistedSummaryWhenAvailable() throws {
+    @Test func pagedTranscriptWithoutPromptDoesNotCreateOutlineEntry() {
         let chatID = ChatID(rawValue: "01J" + String(repeating: "G", count: 22))
         let presentation = ChatDetailPresentation.make(
             chatID: chatID,
             chatSummary: ChatSummary.fixture(id: chatID),
             showsInternals: false,
             remoteSession: .fixture(),
-            persistedMessages: [
-                .fixture(chatID: chatID, seq: 0, event: .userText("[[page:Project Plan]]\n\nWhat changed?")),
-                .fixture(
-                    chatID: chatID,
-                    seq: 1,
-                    event: .assistantText("Fallback summary should not win."),
-                    summary: "Cached persisted summary",
-                    summaryKind: .model
-                ),
-            ],
+            persistedTranscriptItems: [],
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
         )
 
-        let entry = try #require(presentation.outlineEntries.first)
-        #expect(entry.question == "Project Plan\n\nWhat changed?")
-        #expect(entry.response == "Cached persisted summary")
+        #expect(presentation.outlineEntries.isEmpty)
+    }
+}
+
+private func persisted(_ items: [ChatTranscriptItem]) -> [PersistedChatTranscriptItem] {
+    items.enumerated().map { index, item in
+        PersistedChatTranscriptItem(
+            cursor: ChatTranscriptCursor(rawValue: Int64(index + 1)),
+            item: item,
+            projectedEventJSON: nil,
+            projectedPlainText: ChatTranscriptProjection.project(item).plainText,
+            createdAt: .distantPast
+        )
     }
 }
 
 private extension ChatDetailPresentation.RemoteState {
     static func fixture(
-        activeChatID: ChatID? = nil,
-        runState: ChatRunState? = nil,
-        isGenerating: Bool = false,
-        isAwaitingGenerationSlot: Bool = false,
+        sessionChatID: ChatID? = nil,
+        runState: ChatRunState = .idle,
         runningKind: WikiOperation.Kind? = nil,
         preflightError: String? = nil,
         pendingPermissions: [PendingPermission] = [],
         runStartedAt: Date? = nil,
-        events: [AgentEvent] = [],
-        eventTimestamps: [Date?] = [],
+        transcript: ChatDisplayTranscript = .empty,
         exitStatus: Int32? = nil
     ) -> Self {
         .init(
-            runState: runState ?? {
-                if isGenerating { return .answering }
-                if isAwaitingGenerationSlot { return .queued }
-                if activeChatID != nil { return .warm }
-                return .idle
-            }(),
-            activeChatID: activeChatID,
+            runState: runState,
+            sessionChatID: sessionChatID,
             runningKind: runningKind,
             preflightError: preflightError,
             pendingPermissions: pendingPermissions,
             runStartedAt: runStartedAt,
-            events: events,
-            eventTimestamps: eventTimestamps,
+            transcript: transcript,
             exitStatus: exitStatus
         )
     }

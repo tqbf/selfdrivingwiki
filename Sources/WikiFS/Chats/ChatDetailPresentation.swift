@@ -13,19 +13,14 @@ struct ChatDetailPresentation {
 
     struct RemoteState {
         let runState: ChatRunState
-        let activeChatID: ChatID?
+        let sessionChatID: ChatID?
         let runningKind: WikiOperation.Kind?
         let preflightError: String?
         let pendingPermissions: [PendingPermission]
         let runStartedAt: Date?
-        let events: [AgentEvent]
-        let eventTimestamps: [Date?]
+        let transcript: ChatDisplayTranscript
         let exitStatus: Int32?
 
-        var isRunning: Bool { runState.isLive }
-        var isGenerating: Bool { runState.isAnswering }
-        var isAwaitingGenerationSlot: Bool { runState == .queued }
-        var isInteractiveSession: Bool { runState.isLive }
     }
 
     struct Controls {
@@ -33,10 +28,9 @@ struct ChatDetailPresentation {
     }
 
     struct Transcript {
-        let events: [AgentEvent]
-        let timestamps: [Date?]
+        let displayTranscript: ChatDisplayTranscript
         let emptyStateMessage: String
-        let isRunning: Bool
+        let isAnswering: Bool
     }
 
     struct Composer {
@@ -63,31 +57,27 @@ struct ChatDetailPresentation {
         chatSummary: ChatSummary?,
         showsInternals: Bool,
         remoteSession: RemoteState,
-        persistedMessages: [ChatMessage],
+        persistedTranscriptItems: [PersistedChatTranscriptItem],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
     ) -> Self {
-        let isLiveChat = chatID.map { remoteSession.activeChatID == $0 } ?? false
-        let displayEvents = displayMessages(
-            isLiveChat: isLiveChat,
-            launcherEvents: remoteSession.events,
-            persistedEvents: persistedMessages.map(\.event)
-        )
-        let displayTimestamps = displayTimestamps(
-            isLiveChat: isLiveChat,
-            launcherEvents: remoteSession.events,
-            launcherTimestamps: remoteSession.eventTimestamps,
-            persistedMessages: persistedMessages
-        )
+        let isLiveChat = chatID.map {
+            remoteSession.sessionChatID == $0 && remoteSession.runState.isLive
+        } ?? false
+        let displayTranscript = isLiveChat
+            ? remoteSession.transcript
+            : ChatDisplayProjection.project(
+                items: persistedTranscriptItems.map(\.item),
+                activeContentBlock: nil
+            ).transcript
         let controls = Controls(
             showsDebugControls: showsDebugControls(
-                isGenerating: remoteSession.isGenerating,
-                isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
+                runState: remoteSession.runState,
                 runningKind: remoteSession.runningKind
             )
         )
-        let transcriptIsRunning = transcriptIsRunning(
+        let transcriptIsAnswering = transcriptIsAnswering(
             isLiveChat: isLiveChat,
             runState: remoteSession.runState
         )
@@ -97,20 +87,17 @@ struct ChatDetailPresentation {
             remoteSession: remoteSession,
             isChatOperationConfigured: isChatOperationConfigured
         )
-        let canType = canType(remoteSession: remoteSession)
         let canSend = canSendPredicate(
             hasMount: true,
-            canType: canType,
-            isGenerating: remoteSession.isGenerating,
-            isAwaitingSlot: remoteSession.isAwaitingGenerationSlot,
+            runState: remoteSession.runState,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
         )
         let outlineEntries = buildOutlineEntries(
-            displayMessages: displayEvents,
-            displayTimestamps: displayTimestamps,
-            isLiveChat: isLiveChat,
-            persistedMessages: persistedMessages
+            displayTranscript: displayTranscript,
+            cachedResponseSummaries: isLiveChat
+                ? [:]
+                : cachedResponseSummaries(from: persistedTranscriptItems)
         )
         let contentState: ContentState
         if showsInternals && controls.showsDebugControls {
@@ -125,18 +112,16 @@ struct ChatDetailPresentation {
             contentState: contentState,
             controls: controls,
             transcript: Transcript(
-                events: displayEvents,
-                timestamps: displayTimestamps,
+                displayTranscript: displayTranscript,
                 emptyStateMessage: transcriptEmptyMessage(chatID: chatID, isLiveChat: isLiveChat),
-                isRunning: transcriptIsRunning
+                isAnswering: transcriptIsAnswering
             ),
             composer: Composer(
                 isEnabled: composerEnabled,
                 caption: composerCaptionText(
-                    isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
+                    runState: remoteSession.runState,
                     hasChatID: chatID != nil,
                     isLiveChat: isLiveChat,
-                    isGenerating: remoteSession.isGenerating,
                     isChatOperationConfigured: isChatOperationConfigured
                 ),
                 canSend: canSend,
@@ -145,12 +130,11 @@ struct ChatDetailPresentation {
                     queuedMessages: queuedMessages
                 ),
                 showsStopButton: showsStopButton(
-                    isGenerating: remoteSession.isGenerating,
-                    isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
+                    runState: remoteSession.runState,
                     runningKind: remoteSession.runningKind
                 ),
                 showsQueueButton: showsQueueButton(
-                    isGenerating: remoteSession.isGenerating,
+                    runState: remoteSession.runState,
                     runningKind: remoteSession.runningKind,
                     queuedMessages: queuedMessages
                 )
@@ -164,39 +148,10 @@ struct ChatDetailPresentation {
                 chatID: chatID,
                 isLiveChat: isLiveChat
             ),
-            showsThinkingIndicator: transcriptIsRunning && remoteSession.isGenerating,
+            showsThinkingIndicator: transcriptIsAnswering,
             outlineEntries: outlineEntries,
             chatInspectorAvailable: !outlineEntries.isEmpty
         )
-    }
-
-    static func displayMessages(
-        isLiveChat: Bool,
-        launcherEvents: [AgentEvent],
-        persistedEvents: [AgentEvent]
-    ) -> [AgentEvent] {
-        (isLiveChat ? launcherEvents : persistedEvents).transcriptVisible
-    }
-
-    static func displayTimestamps(
-        isLiveChat: Bool,
-        launcherEvents: [AgentEvent],
-        launcherTimestamps: [Date?],
-        persistedMessages: [ChatMessage]
-    ) -> [Date?] {
-        let indices: [Int]
-        if isLiveChat {
-            indices = launcherEvents.transcriptVisibleIndices
-            return indices.map { idx in
-                idx < launcherTimestamps.count ? launcherTimestamps[idx] : nil
-            }
-        }
-
-        let persistedEvents = persistedMessages.map(\.event)
-        indices = persistedEvents.transcriptVisibleIndices
-        return indices.map { idx in
-            idx < persistedMessages.count ? persistedMessages[idx].createdAt : nil
-        }
     }
 
     static func transcriptEmptyMessage(chatID: ChatID?, isLiveChat: Bool) -> String {
@@ -206,16 +161,15 @@ struct ChatDetailPresentation {
         return isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
     }
 
-    static func transcriptIsRunning(isLiveChat: Bool, runState: ChatRunState) -> Bool {
+    static func transcriptIsAnswering(isLiveChat: Bool, runState: ChatRunState) -> Bool {
         isLiveChat && runState.isAnswering
     }
 
     static func showsDebugControls(
-        isGenerating: Bool,
-        isAwaitingGenerationSlot: Bool,
+        runState: ChatRunState,
         runningKind: WikiOperation.Kind?
     ) -> Bool {
-        (isGenerating || isAwaitingGenerationSlot) && runningKind == .query
+        (runState.isAnswering || runState == .queued) && runningKind == .query
     }
 
     static func livePendingPermission(
@@ -227,96 +181,51 @@ struct ChatDetailPresentation {
     }
 
     static func buildOutlineEntries(
-        displayMessages: [AgentEvent],
-        displayTimestamps: [Date?],
-        isLiveChat: Bool,
-        persistedMessages: [ChatMessage]
+        displayTranscript: ChatDisplayTranscript,
+        cachedResponseSummaries: [ChatMessageID: String] = [:]
     ) -> [ChatOutlineEntry] {
-        let cachedSummaries: [String?]
-        let cachedSummaryKinds: [ChatMessageSummaryKind?]
-        if isLiveChat {
-            cachedSummaries = Array(repeating: nil, count: displayMessages.count)
-            cachedSummaryKinds = Array(repeating: nil, count: displayMessages.count)
-        } else {
-            let visiblePersistedMessages = visiblePersistedMessages(persistedMessages)
-            cachedSummaries = visiblePersistedMessages.map(\.summary)
-            cachedSummaryKinds = visiblePersistedMessages.map(\.summaryKind)
-        }
-
-        var entries: [ChatOutlineEntry] = []
-        var pendingQuestion: String?
-        var pendingQuestionTimestamp: Date?
-
-        for (index, event) in displayMessages.enumerated() {
-            let timestamp = index < displayTimestamps.count ? displayTimestamps[index] : nil
-            switch event {
-            case .userText(let text):
-                if let pendingQuestion {
-                    entries.append(
-                        ChatOutlineEntry(
-                            question: pendingQuestion,
-                            response: nil,
-                            questionTimestamp: pendingQuestionTimestamp,
-                            responseTimestamp: nil
-                        )
-                    )
-                }
-                pendingQuestion = humanizeAttachmentRefs(in: text)
-                pendingQuestionTimestamp = timestamp
-
-            case .assistantText(let text), .result(_, let text):
-                guard let question = pendingQuestion else { continue }
-                let cachedSummary = index < cachedSummaries.count ? cachedSummaries[index] : nil
-                let summary = cachedSummary ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
-                if let cachedSummary {
-                    let kind = index < cachedSummaryKinds.count ? cachedSummaryKinds[index]?.rawValue ?? "unknown" : "unknown"
-                    DebugLog.ingest("chatOutlineEntries: seq=\(index) using cached summary (kind=\(kind))")
-                    entries.append(
-                        ChatOutlineEntry(
-                            question: question,
-                            response: cachedSummary.isEmpty ? nil : cachedSummary,
-                            questionTimestamp: pendingQuestionTimestamp,
-                            responseTimestamp: timestamp
-                        )
-                    )
-                } else {
-                    DebugLog.ingest("chatOutlineEntries: seq=\(index) no cache, using truncation fallback")
-                    entries.append(
-                        ChatOutlineEntry(
-                            question: question,
-                            response: summary.isEmpty ? nil : summary,
-                            questionTimestamp: pendingQuestionTimestamp,
-                            responseTimestamp: timestamp
-                        )
-                    )
-                }
-                pendingQuestion = nil
-                pendingQuestionTimestamp = nil
-
-            default:
-                break
+        displayTranscript.sections.compactMap { section -> ChatOutlineEntry? in
+            guard case .turn(let turn) = section,
+                  let prompt = turn.prompt else { return nil }
+            let response = turn.rows.first { row in
+                if case .assistantMessage = row { return true }
+                return false
             }
-        }
-
-        if let pendingQuestion {
-            entries.append(
-                ChatOutlineEntry(
-                    question: pendingQuestion,
-                    response: nil,
-                    questionTimestamp: pendingQuestionTimestamp,
-                    responseTimestamp: nil
-                )
+            let cachedSummary: String?
+            if case .assistantMessage(let responseID, _, _, _, _) = response {
+                cachedSummary = cachedResponseSummaries[responseID]
+            } else {
+                cachedSummary = nil
+            }
+            let summary = cachedSummary ?? response.map {
+                ChatSummary.summaryExtract(from: $0.textForSearch, maxLength: 200)
+            }
+            return ChatOutlineEntry(
+                id: .turn(turnID: turn.turnID, promptRowID: prompt.id),
+                question: humanizeAttachmentRefs(in: prompt.textForSearch),
+                response: summary.flatMap { $0.isEmpty ? nil : $0 },
+                questionTimestamp: prompt.timestamp,
+                responseTimestamp: response?.timestamp
             )
         }
-
-        return entries
     }
 
-    private static func visiblePersistedMessages(_ persistedMessages: [ChatMessage]) -> [ChatMessage] {
-        let indices = persistedMessages.map(\.event).transcriptVisibleIndices
-        return indices.compactMap { idx in
-            idx < persistedMessages.count ? persistedMessages[idx] : nil
+    /// Summary cache and display row identity meet only at the persisted
+    /// transcript boundary. `cachedResponseSummary` was joined by cursor/seq;
+    /// this extracts the transcript message ID from that same row rather than
+    /// converting the unrelated compatibility `chat_messages.id` namespace.
+    private static func cachedResponseSummaries(
+        from persistedItems: [PersistedChatTranscriptItem]
+    ) -> [ChatMessageID: String] {
+        var summaries: [ChatMessageID: String] = [:]
+        for persistedItem in persistedItems {
+            guard let summary = persistedItem.cachedResponseSummary,
+                  case .message(let message) = persistedItem.item,
+                  message.role == .assistant
+            else { continue }
+            summaries[message.messageID] = summary
         }
+        return summaries
     }
 
     private static func isComposerEnabled(
@@ -326,34 +235,24 @@ struct ChatDetailPresentation {
         isChatOperationConfigured: Bool
     ) -> Bool {
         guard isChatOperationConfigured else { return false }
-        guard chatID != nil else {
-            return remoteSession.isInteractiveSession || !remoteSession.isRunning || remoteSession.isGenerating
-        }
-        if isLiveChat {
-            return remoteSession.isInteractiveSession || !remoteSession.isRunning || remoteSession.isGenerating
-        }
-        return !remoteSession.isGenerating && !remoteSession.isAwaitingGenerationSlot
-    }
-
-    private static func canType(remoteSession: RemoteState) -> Bool {
-        remoteSession.isInteractiveSession || !remoteSession.isRunning || remoteSession.isGenerating
+        guard chatID != nil, !isLiveChat else { return true }
+        return remoteSession.runState != .answering && remoteSession.runState != .queued
     }
 
     static func composerCaptionText(
-        isAwaitingGenerationSlot: Bool,
+        runState: ChatRunState,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isGenerating: Bool,
         isChatOperationConfigured: Bool
     ) -> String? {
         _ = hasChatID
         if isChatOperationConfigured == false {
             return "Configure an enabled provider and model in Settings → Providers before sending."
         }
-        if isAwaitingGenerationSlot {
+        if runState == .queued {
             return "Waiting for the other session to finish before sending…"
         }
-        if isGenerating {
+        if runState.isAnswering {
             return isLiveChat
                 ? "Agent is responding…"
                 : "Another chat is responding — wait or stop it."
@@ -363,45 +262,45 @@ struct ChatDetailPresentation {
 
     static func canSendPredicate(
         hasMount: Bool,
-        canType: Bool,
-        isGenerating: Bool,
-        isAwaitingSlot: Bool,
+        runState: ChatRunState,
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
     ) -> Bool {
         _ = hasMount
-        return isChatOperationConfigured && canType && !isGenerating && !isAwaitingSlot && hasDraftText
+        return isChatOperationConfigured
+            && !runState.isAnswering
+            && runState != .queued
+            && hasDraftText
     }
 
     private static func showsStopButton(
-        isGenerating: Bool,
-        isAwaitingGenerationSlot: Bool,
+        runState: ChatRunState,
         runningKind: WikiOperation.Kind?
     ) -> Bool {
-        (isGenerating || isAwaitingGenerationSlot) && runningKind == .query
+        (runState.isAnswering || runState == .queued) && runningKind == .query
     }
 
     private static func showsQueueButton(
-        isGenerating: Bool,
+        runState: ChatRunState,
         runningKind: WikiOperation.Kind?,
         queuedMessages: [PendingQueuedMessage]
     ) -> Bool {
-        isGenerating && runningKind == .query && queuedMessages.isEmpty
+        runState.isAnswering && runningKind == .query && queuedMessages.isEmpty
     }
 
     private static func sendButtonTitle(
         remoteSession: RemoteState,
         queuedMessages: [PendingQueuedMessage]
     ) -> String {
-        if remoteSession.isAwaitingGenerationSlot {
+        if remoteSession.runState == .queued {
             return "Waiting for the other session to finish before sending…"
         }
-        if remoteSession.isGenerating {
+        if remoteSession.runState.isAnswering {
             return queuedMessages.isEmpty
                 ? "Queue for when the response finishes"
                 : "Queued — will send when the response finishes"
         }
-        return remoteSession.isInteractiveSession ? "Send" : "Start Query"
+        return remoteSession.runState.isLive ? "Send" : "Start Query"
     }
 
     static func shouldShowPreflightBanner(

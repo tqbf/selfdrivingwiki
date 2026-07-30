@@ -21,7 +21,7 @@ struct ChatDetailView: View {
 
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
-    @State private var persistedMessages: [ChatMessage] = []
+    @State private var persistedTranscriptItems: [PersistedChatTranscriptItem] = []
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .outline
@@ -35,7 +35,7 @@ struct ChatDetailView: View {
 
     private var isLiveChat: Bool {
         guard let chatID else { return false }
-        return remoteSession.activeChatID == chatID
+        return remoteSession.chatID.chatID == chatID && remoteSession.runState.isLive
     }
 
     private var chatSummary: ChatSummary? {
@@ -45,13 +45,12 @@ struct ChatDetailView: View {
     private var remotePresentationState: ChatDetailPresentation.RemoteState {
         .init(
             runState: remoteSession.runState,
-            activeChatID: remoteSession.activeChatID,
+            sessionChatID: remoteSession.chatID.chatID,
             runningKind: remoteSession.runningKind,
             preflightError: remoteSession.preflightError,
             pendingPermissions: remoteSession.pendingPermissions,
             runStartedAt: remoteSession.runStartedAt,
-            events: remoteSession.events,
-            eventTimestamps: remoteSession.eventTimestamps,
+            transcript: remoteSession.displayTranscript,
             exitStatus: remoteSession.exitStatus
         )
     }
@@ -62,7 +61,7 @@ struct ChatDetailView: View {
             chatSummary: chatSummary,
             showsInternals: showsInternals,
             remoteSession: remotePresentationState,
-            persistedMessages: persistedMessages,
+            persistedTranscriptItems: persistedTranscriptItems,
             queuedMessages: queuedMessages,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
@@ -85,14 +84,14 @@ struct ChatDetailView: View {
 
     private var liveDebugKey: String {
         let id = chatID?.rawValue ?? "draft"
-        let active = remoteSession.activeChatID?.rawValue ?? "nil"
+        let sessionChatID = remoteSession.chatID.chatID?.rawValue ?? "draft"
         let state = String(describing: remoteSession.runState)
-        return "chat=\(id) live=\(isLiveChat) activeChatID=\(active) runState=\(state) "
-            + "liveEvents=\(remoteSession.events.count) persisted=\(persistedMessages.count) display=\(presentation.transcript.events.count)"
+        return "chat=\(id) live=\(isLiveChat) sessionChatID=\(sessionChatID) runState=\(state) "
+            + "liveRows=\(remoteSession.displayTranscript.rows.count) persisted=\(persistedTranscriptItems.count) display=\(presentation.transcript.displayTranscript.rows.count)"
     }
 
-    private var displayMessages: [AgentEvent] {
-        presentation.transcript.events
+    private var displayRows: [ChatDisplayRow] {
+        presentation.transcript.displayTranscript.rows
     }
 
     var body: some View {
@@ -101,7 +100,7 @@ struct ChatDetailView: View {
                 content
                 ChatDetailControlsView(
                     showsDebugControls: presentation.controls.showsDebugControls,
-                    isGenerating: remoteSession.isGenerating,
+                    isAnswering: remoteSession.runState.isAnswering,
                     showsInternals: $showsInternals,
                     hideToolCalls: $hideToolCalls,
                     exitStatus: remoteSession.exitStatus,
@@ -118,15 +117,12 @@ struct ChatDetailView: View {
         .onChange(of: chatZoom) { _, _ in
             composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
-        .onChange(of: remoteSession.isRunning) { _, isRunning in
-            if !isRunning { showsInternals = false }
-            if !isRunning, !queuedMessages.isEmpty {
+        .onChange(of: remoteSession.runState) { _, runState in
+            if !runState.isLive { showsInternals = false }
+            if !runState.isLive, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
-        }
-        .onChange(of: remoteSession.isGenerating) { _, isGenerating in
-            guard !isGenerating else { return }
-            guard remoteSession.isRunning, !queuedMessages.isEmpty else { return }
+            guard !runState.isAnswering, runState.isLive, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentProvidersConfigDidChange)) { notification in
@@ -138,7 +134,7 @@ struct ChatDetailView: View {
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
-                persistedMessages = store.chatMessages(chatID: chatID)
+                loadPersistedTranscript(chatID: chatID)
                 remoteSession.installHistoryLoader { afterCursor in
                     store.readChatTranscriptPage(
                         chatID: chatID,
@@ -148,7 +144,7 @@ struct ChatDetailView: View {
                 }
                 await coordinator.rehydrate(chatID: chatID)
             } else {
-                persistedMessages = []
+                persistedTranscriptItems = []
                 if let question = store.pendingChatQuestion {
                     store.pendingChatQuestion = nil
                     store.draftChatMessage = question
@@ -161,9 +157,9 @@ struct ChatDetailView: View {
         .onChange(of: presentation.chatInspectorAvailable) { _, _ in
             updateRightSidebarRegistration()
         }
-        .onChange(of: remoteSession.activeChatID) { _, _ in
+        .onChange(of: remoteSession.runState) { _, _ in
             if let chatID, !isLiveChat {
-                persistedMessages = store.chatMessages(chatID: chatID)
+                loadPersistedTranscript(chatID: chatID)
             }
             updateRightSidebarRegistration()
         }
@@ -172,19 +168,19 @@ struct ChatDetailView: View {
         }
         .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {
-                persistedMessages = store.chatMessages(chatID: chatID)
+                loadPersistedTranscript(chatID: chatID)
             }
         }
         .task(id: ChatAnchorTaskKey(
             chatID: chatID,
             anchorVersion: store.pendingScrollAnchorVersion,
-            messageCount: displayMessages.count
+            messageCount: displayRows.count
         )) {
-            guard let chatID, !displayMessages.isEmpty else { return }
+            guard let chatID, !displayRows.isEmpty else { return }
             guard let fragment = store.consumePendingScrollAnchor(for: .chat(chatID)) else { return }
             let quote = ChatQuoteResolver.quoteText(fragment)
             guard !quote.isEmpty,
-                  ChatQuoteResolver.messageIndex(of: fragment, in: displayMessages) != nil
+                  displayRows.contains(where: { $0.textForSearch.wikiNormalized.lowercased().contains(quote.wikiNormalized.lowercased()) })
             else { return }
             quoteAnchor = ChatHighlightRequest(
                 version: (quoteAnchor?.version ?? 0) + 1,
@@ -269,13 +265,12 @@ struct ChatDetailView: View {
             outlineScroll: outlineScroll,
             quoteAnchor: quoteAnchor,
             hideToolCalls: hideToolCalls
-        ) { optionID, approve in
+        ) { intent in
             guard let chatID else { return }
             Task {
                 await coordinator.resolvePermission(
                     chatID: chatID,
-                    optionId: optionID,
-                    approve: approve
+                    intent: intent
                 )
             }
         }
@@ -344,10 +339,10 @@ struct ChatDetailView: View {
                 onCompareVersions: nil,
                 outline: {
                     AnyView(
-                        ChatInspectorOutlineView(entries: presentation.outlineEntries) { turnIndex in
+                        ChatInspectorOutlineView(entries: presentation.outlineEntries) { target in
                             outlineScroll = ChatScrollRequest(
                                 version: (outlineScroll?.version ?? 0) + 1,
-                                turnIndex: turnIndex
+                                target: target
                             )
                         }
                     )
@@ -473,7 +468,7 @@ struct ChatDetailView: View {
 
     private func sendMessage() {
         guard isChatOperationConfigured else { return }
-        if remoteSession.isGenerating {
+        if remoteSession.runState.isAnswering {
             queueMessage()
             return
         }
@@ -487,7 +482,7 @@ struct ChatDetailView: View {
     }
 
     private func queueMessage() {
-        guard isChatOperationConfigured, remoteSession.isGenerating else { return }
+        guard isChatOperationConfigured, remoteSession.runState.isAnswering else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         queuedMessages.append(
@@ -568,18 +563,6 @@ struct ChatDetailView: View {
         }
     }
 
-    nonisolated static func displayMessages(
-        isLiveChat: Bool,
-        launcherEvents: [AgentEvent],
-        persistedEvents: [AgentEvent]
-    ) -> [AgentEvent] {
-        ChatDetailPresentation.displayMessages(
-            isLiveChat: isLiveChat,
-            launcherEvents: launcherEvents,
-            persistedEvents: persistedEvents
-        )
-    }
-
     nonisolated static func debugFolderButtonHelpText(debugURL: URL?) -> String {
         ChatDetailPresentation.debugFolderButtonHelpText(debugURL: debugURL)
     }
@@ -609,37 +592,48 @@ struct ChatDetailView: View {
     }
 
     static func composerCaptionText(
-        isAwaitingGenerationSlot: Bool,
+        runState: ChatRunState,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isGenerating: Bool,
         isChatOperationConfigured: Bool
     ) -> String? {
         ChatDetailPresentation.composerCaptionText(
-            isAwaitingGenerationSlot: isAwaitingGenerationSlot,
+            runState: runState,
             hasChatID: hasChatID,
             isLiveChat: isLiveChat,
-            isGenerating: isGenerating,
             isChatOperationConfigured: isChatOperationConfigured
         )
     }
 
     nonisolated static func canSendPredicate(
         hasMount: Bool,
-        canType: Bool,
-        isGenerating: Bool,
-        isAwaitingSlot: Bool,
+        runState: ChatRunState,
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
     ) -> Bool {
         ChatDetailPresentation.canSendPredicate(
             hasMount: hasMount,
-            canType: canType,
-            isGenerating: isGenerating,
-            isAwaitingSlot: isAwaitingSlot,
+            runState: runState,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
         )
+    }
+
+    private func loadPersistedTranscript(chatID: ChatID) {
+        var items: [PersistedChatTranscriptItem] = []
+        var cursor: ChatTranscriptCursor?
+        while true {
+            let page = store.readChatTranscriptPage(
+                chatID: chatID,
+                after: cursor,
+                limit: RemoteChatSession.committedHistoryPageSize
+            )
+            items += page.items
+            guard let nextCursor = page.nextCursor,
+                  nextCursor != cursor else { break }
+            cursor = nextCursor
+        }
+        persistedTranscriptItems = items
     }
 }
 
@@ -716,6 +710,11 @@ enum ChatMetrics {
 }
 
 struct ChatOutlineEntry: Hashable {
+    enum ID: Hashable {
+        case turn(turnID: ChatTurnID, promptRowID: ChatDisplayRowID)
+    }
+
+    let id: ID
     let question: String
     let response: String?
     let questionTimestamp: Date?

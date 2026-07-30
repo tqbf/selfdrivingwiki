@@ -62,7 +62,7 @@ Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(_ chatID: Cha
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(chatID: ChatID) async {
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func setThinkingEffort(chatID: ChatID, value: String) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func rehydrate(chatID: ChatID) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {

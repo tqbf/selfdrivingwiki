@@ -316,9 +316,7 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
+            runState: .idle,
             hasDraftText: true,
             isChatOperationConfigured: true) == true)
     }
@@ -328,9 +326,7 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateTrueWithoutMount() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: false,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
+            runState: .idle,
             hasDraftText: true,
             isChatOperationConfigured: true) == true)
     }
@@ -339,20 +335,17 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateFalseWhileGenerating() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: true,
-            isAwaitingSlot: false,
+            runState: .answering,
             hasDraftText: true,
             isChatOperationConfigured: true) == false)
     }
 
-    /// `canSendPredicate` returns false when the composer is disabled.
-    @Test func canSendPredicateFalseWhenCannotType() {
+    /// `canSendPredicate` returns false while a turn is queued for the
+    /// generation gate.
+    @Test func canSendPredicateFalseWhileQueued() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: false,
-            isGenerating: false,
-            isAwaitingSlot: false,
+            runState: .queued,
             hasDraftText: true,
             isChatOperationConfigured: true) == false)
     }
@@ -361,9 +354,7 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateFalseWithNoDraftText() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
+            runState: .idle,
             hasDraftText: false,
             isChatOperationConfigured: true) == false)
     }

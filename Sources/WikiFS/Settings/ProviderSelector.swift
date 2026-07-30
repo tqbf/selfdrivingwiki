@@ -130,7 +130,7 @@ struct ProviderSelector: View {
         .onAppear { refresh() }
         // Keep in sync if a session flips (the composer is rebuilt when a chat
         // becomes live).
-        .onChange(of: remoteSession.activeChatID) { _, _ in refresh() }
+        .onChange(of: remoteSession.runState) { _, _ in refresh() }
         .onChange(of: remoteSession.providerConfiguration) { _, _ in refresh() }
     }
 

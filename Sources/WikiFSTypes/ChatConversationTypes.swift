@@ -368,7 +368,29 @@ public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
     public let projectedEventJSON: String?
     public let projectedPlainText: String
     public let createdAt: Date
+    /// Cached summary from the compatibility `chat_messages` row at this
+    /// cursor. The store joins it by the durable cursor/sequence relationship;
+    /// it is deliberately not keyed by the compatibility row's `PageID`.
+    public let cachedResponseSummary: String?
 
+    public init(
+        cursor: ChatTranscriptCursor,
+        item: ChatTranscriptItem,
+        projectedEventJSON: String?,
+        projectedPlainText: String,
+        createdAt: Date,
+        cachedResponseSummary: String?
+    ) {
+        self.cursor = cursor
+        self.item = item
+        self.projectedEventJSON = projectedEventJSON
+        self.projectedPlainText = projectedPlainText
+        self.createdAt = createdAt
+        self.cachedResponseSummary = cachedResponseSummary
+    }
+
+    /// Source-compatible initializer for callers that do not have a cached
+    /// summary (newly appended rows and existing test fixtures).
     public init(
         cursor: ChatTranscriptCursor,
         item: ChatTranscriptItem,
@@ -381,6 +403,7 @@ public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
         self.projectedEventJSON = projectedEventJSON
         self.projectedPlainText = projectedPlainText
         self.createdAt = createdAt
+        self.cachedResponseSummary = nil
     }
 }
 

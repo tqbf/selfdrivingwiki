@@ -8,7 +8,7 @@ import WikiFSCore
 struct AgentQueueView: View {
     /// The daemon-mirrored chat session (replaces the in-process chat
     /// `AgentLauncher` after Phase C4). Run-state reads (`events`,
-    /// `preflightError`, `stderr`, `isRunning`, `runningKind`) come from the
+    /// `preflightError`, `stderr`, `runState`, `runningKind`) come from the
     /// daemon's live launcher via chat envelopes.
     var remoteSession: RemoteChatSession
     let showsResultEvents: Bool
@@ -67,7 +67,7 @@ struct AgentQueueView: View {
     }
 
     private var renderedEvents: [AgentEvent] {
-        remoteSession.events.filter { event in
+        remoteSession.activityFeedEvents.filter { event in
             if !showsInternals && event.isInternalTranscriptEvent {
                 return false
             }
@@ -80,7 +80,7 @@ struct AgentQueueView: View {
 
     @ViewBuilder
     private var placeholder: some View {
-        if remoteSession.isRunning {
+        if remoteSession.runState.isLive {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(showsInternals ? (remoteSession.runningKind.map { "Starting \($0.title)…" } ?? "Starting…") : "Waiting for output…")
@@ -135,5 +135,3 @@ struct AgentQueueView: View {
 private enum ActivityMetrics {
     static let padding: CGFloat = 10
 }
-
-
