@@ -40,24 +40,88 @@ struct ChatDetailPresentationTests {
         #expect(presentation.contentState == .missingChat)
     }
 
-    @Test func transcriptProjectionUsesTheTypedLiveTranscript() {
-        let presentation = ChatDetailPresentation.make(
-            chatID: ChatID(rawValue: "01J" + String(repeating: "C", count: 22)),
-            chatSummary: ChatSummary.fixture(id: ChatID(rawValue: "01J" + String(repeating: "C", count: 22))),
+    @Test func transcriptProjectionSelectsTheTypedLiveTranscriptInsteadOfPersistedRows() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
+        let liveTranscript = ChatDisplayProjection.project(items: [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "live-message"),
+                turnID: ChatTurnID(rawValue: "live-turn"),
+                role: .assistant,
+                text: "Live response",
+                createdAt: .distantPast
+            ))
+        ], activeContentBlock: nil).transcript
+        let persistedItems: [ChatTranscriptItem] = [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-message"),
+                turnID: ChatTurnID(rawValue: "persisted-turn"),
+                role: .assistant,
+                text: "Persisted response",
+                createdAt: .distantPast
+            ))
+        ]
+        let live = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: ChatSummary.fixture(id: chatID),
             showsInternals: false,
             remoteSession: .fixture(
-                sessionChatID: ChatID(rawValue: "01J" + String(repeating: "C", count: 22)),
+                sessionChatID: chatID,
                 runState: .answering,
-                transcript: ChatDisplayProjection.project(items: [], activeContentBlock: nil).transcript
+                transcript: liveTranscript
             ),
-            persistedTranscriptItems: [],
+            persistedTranscriptItems: persistedItems,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+        let persisted = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: ChatSummary.fixture(id: chatID),
+            showsInternals: false,
+            remoteSession: .fixture(transcript: liveTranscript),
+            persistedTranscriptItems: persistedItems,
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
         )
 
-        #expect(presentation.transcript.displayTranscript.rows.isEmpty)
-        #expect(presentation.transcript.isAnswering)
+        #expect(live.transcript.displayTranscript.rows.first?.textForSearch == "Live response")
+        #expect(live.transcript.isAnswering)
+        #expect(persisted.transcript.displayTranscript.rows.first?.textForSearch == "Persisted response")
+        #expect(persisted.transcript.isAnswering == false)
+    }
+
+    @Test func persistedOutlinePrefersTheCachedResponseSummary() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "H", count: 22))
+        let answerID = ChatMessageID(rawValue: "answer-message")
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: ChatSummary.fixture(id: chatID),
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [
+                .message(.init(
+                    messageID: ChatMessageID(rawValue: "question-message"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .user,
+                    text: "What changed?",
+                    createdAt: .distantPast
+                )),
+                .message(.init(
+                    messageID: answerID,
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .assistant,
+                    text: "A long response whose opening is not the model summary.",
+                    createdAt: .distantPast
+                )),
+            ],
+            persistedResponseSummaries: [answerID: "Model-generated summary."],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.outlineEntries.first?.response == "Model-generated summary.")
     }
 
     @Test func pendingPermissionOnlySurfacesForLiveChat() {

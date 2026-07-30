@@ -68,6 +68,17 @@ struct ChatDisplayProjectionTests {
         #expect(result.anomalies.contains(.noncontiguousTurn(turnID: ChatTurnID(rawValue: "turn-1"))))
     }
 
+    @Test func noticeSeparatedRowsOfTheSameTurnDoNotReportANoncontiguousTurn() {
+        let result = ChatDisplayProjection.project(items: [
+            userMessage(id: "message-1", turn: "turn-1", text: "Question"),
+            notice(id: "notice-1", turn: nil),
+            assistantMessage(id: "message-2", turn: "turn-1", text: "Answer"),
+        ], activeContentBlock: nil)
+
+        #expect(result.transcript.sections.count == 3)
+        #expect(result.anomalies.contains(.noncontiguousTurn(turnID: ChatTurnID(rawValue: "turn-1"))) == false)
+    }
+
     @Test func onlyValidatedAssistantOrReasoningActiveRowsStream() {
         let streamingAssistant = assistantMessage(id: "message-1", turn: "turn-1", text: "Partial")
         let validBlock = ChatDisplayActiveContentBlock(
@@ -190,6 +201,105 @@ struct ChatDisplayProjectionTests {
             title: "Notice",
             message: "Message",
             createdAt: .distantPast
+        ))
+    }
+}
+
+@MainActor
+struct ChatTranscriptRenderingInputTests {
+    @Test func failedReadOnlyToolCallSurvivesTheRendererBridgeWithErrorSemantics() {
+        let input = renderingInput(for: .toolCall(.init(
+            toolCallID: ToolCallID(rawValue: "tool-read"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            toolName: "Read",
+            status: .failed,
+            detail: "permission denied",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )))
+
+        #expect(input.events == [.toolResult(isError: true, summary: "permission denied")])
+        #expect(input.events.transcriptVisible == input.events)
+        let html = ChatWebView.Coordinator.chatRowHTML(for: input.events[0])
+        #expect(html.isEmpty == false)
+        #expect(html.contains("is-error"))
+        #expect(html.contains("permission denied"))
+    }
+
+    @Test func completedToolCallUsesTerminalSuccessSemanticsAndRemainsFiltered() {
+        let input = renderingInput(for: .toolCall(.init(
+            toolCallID: ToolCallID(rawValue: "tool-write"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            toolName: "Write",
+            status: .completed,
+            detail: "updated page.md",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )))
+
+        #expect(input.events == [.toolResult(isError: false, summary: "updated page.md")])
+        #expect(input.events.transcriptVisible.isEmpty)
+        #expect(ChatWebView.Coordinator.chatRowHTML(for: input.events[0]).isEmpty)
+    }
+
+    @Test func cancelledToolCallUsesTerminalErrorSemantics() {
+        let input = renderingInput(for: .toolCall(.init(
+            toolCallID: ToolCallID(rawValue: "tool-cancelled"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            toolName: "Write",
+            status: .cancelled,
+            detail: nil,
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )))
+
+        #expect(input.events == [.toolResult(isError: true, summary: "Write")])
+        #expect(input.events.transcriptVisible == input.events)
+    }
+
+    @Test func pendingAndRunningToolCallsRemainVisibleProgressRows() {
+        let pending = renderingInput(for: toolCall(status: .pending))
+        let running = renderingInput(for: toolCall(status: .running))
+
+        #expect(pending.events == [.toolUse(name: "Edit", inputSummary: "page.md")])
+        #expect(running.events == [.toolUse(name: "Edit", inputSummary: "page.md")])
+        #expect(pending.events.transcriptVisible == pending.events)
+        #expect(running.events.transcriptVisible == running.events)
+    }
+
+    @Test func noticeRemainsVisibleAndRenderableAtTheRendererBoundary() {
+        let input = renderingInput(for: .systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "notice-1"),
+            turnID: nil,
+            kind: .session,
+            title: "Context updated",
+            message: "The agent resumed the session.",
+            createdAt: .distantPast
+        )))
+
+        #expect(input.events == [.assistantText("Context updated\n\nThe agent resumed the session.")])
+        #expect(input.events.transcriptVisible == input.events)
+        let html = ChatWebView.Coordinator.chatRowHTML(for: input.events[0])
+        #expect(html.isEmpty == false)
+        #expect(html.contains("Context updated"))
+        #expect(html.contains("The agent resumed the session."))
+    }
+
+    private func renderingInput(for item: ChatTranscriptItem) -> ChatTranscriptRenderingInput {
+        ChatTranscriptRenderingInput(
+            transcript: ChatDisplayProjection.project(items: [item], activeContentBlock: nil).transcript
+        )
+    }
+
+    private func toolCall(status: ChatToolCallStatus) -> ChatTranscriptItem {
+        .toolCall(.init(
+            toolCallID: ToolCallID(rawValue: "tool-edit"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            toolName: "Edit",
+            status: status,
+            detail: "page.md",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
         ))
     }
 }

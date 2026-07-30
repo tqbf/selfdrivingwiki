@@ -243,6 +243,7 @@ enum ChatDisplayProjection {
         var currentTurnRows: [ChatDisplayRow] = []
         var unattributedRows: [ChatDisplayRow] = []
         var encounteredTurnIDs: Set<ChatTurnID> = []
+        var lastClosedTurnID: ChatTurnID?
 
         func appendCurrentTurn() {
             guard let currentTurnID, let firstRow = currentTurnRows.first else { return }
@@ -252,6 +253,7 @@ enum ChatDisplayProjection {
                 prompt: currentTurnRows.first(where: \.isPrompt),
                 rows: currentTurnRows
             )))
+            lastClosedTurnID = currentTurnID
             currentTurnRows = []
         }
 
@@ -276,7 +278,8 @@ enum ChatDisplayProjection {
             if currentTurnID != turnID {
                 appendCurrentTurn()
                 if encounteredTurnIDs.contains(turnID),
-                   encounteredTurnIDs.contains(where: { $0 != turnID }) {
+                   let lastClosedTurnID,
+                   lastClosedTurnID != turnID {
                     anomalies.append(.noncontiguousTurn(turnID: turnID))
                 }
                 currentTurnID = turnID

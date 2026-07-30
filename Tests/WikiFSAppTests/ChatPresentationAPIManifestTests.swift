@@ -23,6 +23,15 @@ struct ChatPresentationAPIManifestTests {
         #expect(remoteSession.contains("var activeChatID:") == false)
     }
 
+    @Test func rendererCompatibilityAdapterRemainsTheOnlyPresentationAgentEventBoundary() throws {
+        let projection = try source(named: "ChatDisplayProjection.swift")
+        let rendererAdapter = try source(named: "ChatTranscriptView.swift")
+
+        #expect(projection.contains("AgentEvent") == false)
+        #expect(rendererAdapter.contains("struct ChatTranscriptRenderingInput"))
+        #expect(rendererAdapter.contains("AgentEvent"))
+    }
+
     @Test func projectionAndPermissionBoundaryUseTypedIDsAndIntent() throws {
         let projection = try source(named: "ChatDisplayProjection.swift")
         let pane = try source(named: "ChatTranscriptPaneView.swift")

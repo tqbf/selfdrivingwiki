@@ -137,10 +137,17 @@ struct ChatTranscriptRenderingInput {
             .assistantText(text)
         case .reasoning(_, _, let text, _, _):
             .thinking(text)
-        case .toolCall(_, _, let toolName, _, let detail, _, _):
-            .toolUse(name: toolName, inputSummary: detail ?? "")
+        case .toolCall(_, _, let toolName, let status, let detail, _, _):
+            switch status {
+            case .pending, .running:
+                .toolUse(name: toolName, inputSummary: detail ?? "")
+            case .completed:
+                .toolResult(isError: false, summary: detail ?? toolName)
+            case .failed, .cancelled:
+                .toolResult(isError: true, summary: detail ?? toolName)
+            }
         case .notice(_, _, _, let title, let message, _):
-            .raw([title, message].joined(separator: "\n"))
+            .assistantText("\(title)\n\n\(message)")
         case .failure(_, _, _, let message, _):
             .turnFailed(reason: .agentError(message))
         }

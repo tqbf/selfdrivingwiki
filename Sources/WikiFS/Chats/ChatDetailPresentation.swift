@@ -58,6 +58,7 @@ struct ChatDetailPresentation {
         showsInternals: Bool,
         remoteSession: RemoteState,
         persistedTranscriptItems: [ChatTranscriptItem],
+        persistedResponseSummaries: [ChatMessageID: String] = [:],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
@@ -93,7 +94,10 @@ struct ChatDetailPresentation {
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
         )
-        let outlineEntries = buildOutlineEntries(displayTranscript: displayTranscript)
+        let outlineEntries = buildOutlineEntries(
+            displayTranscript: displayTranscript,
+            cachedResponseSummaries: isLiveChat ? [:] : persistedResponseSummaries
+        )
         let contentState: ContentState
         if showsInternals && controls.showsDebugControls {
             contentState = .internals
@@ -175,7 +179,10 @@ struct ChatDetailPresentation {
         return pendingPermissions.first
     }
 
-    static func buildOutlineEntries(displayTranscript: ChatDisplayTranscript) -> [ChatOutlineEntry] {
+    static func buildOutlineEntries(
+        displayTranscript: ChatDisplayTranscript,
+        cachedResponseSummaries: [ChatMessageID: String] = [:]
+    ) -> [ChatOutlineEntry] {
         displayTranscript.sections.compactMap { section -> ChatOutlineEntry? in
             guard case .turn(let turn) = section,
                   let prompt = turn.prompt else { return nil }
@@ -183,11 +190,19 @@ struct ChatDetailPresentation {
                 if case .assistantMessage = row { return true }
                 return false
             }
+            let cachedSummary: String?
+            if case .assistantMessage(let responseID, _, _, _, _) = response {
+                cachedSummary = cachedResponseSummaries[responseID]
+            } else {
+                cachedSummary = nil
+            }
+            let summary = cachedSummary ?? response.map {
+                ChatSummary.summaryExtract(from: $0.textForSearch, maxLength: 200)
+            }
             return ChatOutlineEntry(
                 id: .turn(turnID: turn.turnID, promptRowID: prompt.id),
                 question: humanizeAttachmentRefs(in: prompt.textForSearch),
-                response: response.map { ChatSummary.summaryExtract(from: $0.textForSearch, maxLength: 200) }
-                    .flatMap { $0.isEmpty ? nil : $0 },
+                response: summary.flatMap { $0.isEmpty ? nil : $0 },
                 questionTimestamp: prompt.timestamp,
                 responseTimestamp: response?.timestamp
             )
