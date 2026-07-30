@@ -6869,6 +6869,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: "SELECT COALESCE(MAX(seq), -1) FROM chat_messages WHERE chat_id = ?;",
                 arguments: [chatID.rawValue]
             ) ?? -1
+            // Every durable transcript item has exactly one compatibility row.
+            // Do not silently create an offset mapping after a legacy-only
+            // write: summaries would then attach to the wrong transcript item.
+            let expectedCompatibilityMax = Int(transcriptMax) - 1
+            guard compatibilityMax == expectedCompatibilityMax else {
+                throw WikiStoreError.unexpected(
+                    "chat transcript and compatibility projection are out of sync"
+                )
+            }
 
             let itemEncoder = JSONEncoder()
             let eventEncoder = JSONEncoder()
@@ -6995,13 +7004,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             ) ?? 0
             let checkpoint = ChatTranscriptCursor(rawValue: checkpointRaw)
             let lowerBound = cursor?.rawValue ?? 0
+            // `chat_messages` is the compatibility projection: its dense
+            // zero-based seq is the one-based durable transcript cursor minus one.
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT chat_id, cursor, item_json, projected_event_json, projected_text, created_at
-                FROM chat_transcript_items
-                WHERE chat_id = ? AND cursor > ?
-                ORDER BY cursor ASC
+                SELECT ti.chat_id, ti.cursor, ti.item_json, ti.projected_event_json,
+                       ti.projected_text, ti.created_at, m.summary AS cached_response_summary
+                FROM chat_transcript_items AS ti
+                LEFT JOIN chat_messages AS m
+                    ON m.chat_id = ti.chat_id AND m.seq = ti.cursor - 1
+                WHERE ti.chat_id = ? AND ti.cursor > ?
+                ORDER BY ti.cursor ASC
                 LIMIT ?;
                 """,
                 arguments: [chatID.rawValue, lowerBound, max(0, limit)]
@@ -7610,12 +7624,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let projectedEventJSON: String? = row["projected_event_json"]
         let projectedText: String = row["projected_text"]
         let createdAt: Double = row["created_at"]
+        let cachedResponseSummary: String? = row["cached_response_summary"]
         return PersistedChatTranscriptItem(
             cursor: cursor,
             item: item,
             projectedEventJSON: projectedEventJSON,
             projectedPlainText: projectedText,
-            createdAt: Date(timeIntervalSince1970: createdAt)
+            createdAt: Date(timeIntervalSince1970: createdAt),
+            cachedResponseSummary: cachedResponseSummary
         )
     }
 

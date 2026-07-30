@@ -57,8 +57,7 @@ struct ChatDetailPresentation {
         chatSummary: ChatSummary?,
         showsInternals: Bool,
         remoteSession: RemoteState,
-        persistedTranscriptItems: [ChatTranscriptItem],
-        persistedResponseSummaries: [ChatMessageID: String] = [:],
+        persistedTranscriptItems: [PersistedChatTranscriptItem],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
@@ -69,7 +68,7 @@ struct ChatDetailPresentation {
         let displayTranscript = isLiveChat
             ? remoteSession.transcript
             : ChatDisplayProjection.project(
-                items: persistedTranscriptItems,
+                items: persistedTranscriptItems.map(\.item),
                 activeContentBlock: nil
             ).transcript
         let controls = Controls(
@@ -96,7 +95,9 @@ struct ChatDetailPresentation {
         )
         let outlineEntries = buildOutlineEntries(
             displayTranscript: displayTranscript,
-            cachedResponseSummaries: isLiveChat ? [:] : persistedResponseSummaries
+            cachedResponseSummaries: isLiveChat
+                ? [:]
+                : cachedResponseSummaries(from: persistedTranscriptItems)
         )
         let contentState: ContentState
         if showsInternals && controls.showsDebugControls {
@@ -207,6 +208,24 @@ struct ChatDetailPresentation {
                 responseTimestamp: response?.timestamp
             )
         }
+    }
+
+    /// Summary cache and display row identity meet only at the persisted
+    /// transcript boundary. `cachedResponseSummary` was joined by cursor/seq;
+    /// this extracts the transcript message ID from that same row rather than
+    /// converting the unrelated compatibility `chat_messages.id` namespace.
+    private static func cachedResponseSummaries(
+        from persistedItems: [PersistedChatTranscriptItem]
+    ) -> [ChatMessageID: String] {
+        var summaries: [ChatMessageID: String] = [:]
+        for persistedItem in persistedItems {
+            guard let summary = persistedItem.cachedResponseSummary,
+                  case .message(let message) = persistedItem.item,
+                  message.role == .assistant
+            else { continue }
+            summaries[message.messageID] = summary
+        }
+        return summaries
     }
 
     private static func isComposerEnabled(

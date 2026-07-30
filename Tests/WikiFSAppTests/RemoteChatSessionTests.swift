@@ -46,10 +46,13 @@ struct RemoteChatSessionTests {
             )
         ))
 
-        #expect(session.displayTranscript.rows.count == 2)
+        #expect(session.displayTranscript.rows.map(\.id) == [
+            .message(ChatMessageID(rawValue: "user-turn-1-question")),
+            .message(ChatMessageID(rawValue: "assistant-turn-1-answer")),
+        ])
+        #expect(session.displayTranscript.rows.map(\.textForSearch) == ["question", "answer"])
         #expect(session.runState.isLive)
         #expect(session.runState.isAnswering)
-        #expect(session.chatID.chatID == ChatID(rawValue: "chat-1"))
         #expect(session.runStartedAt?.timeIntervalSince1970 == 50)
         #expect(session.preflightError == "preflight")
         #expect(session.thinkingOption?.currentValue == "high")
@@ -93,9 +96,11 @@ struct RemoteChatSessionTests {
         )
         session.optimisticSubmit(submission)
 
-        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.displayTranscript.rows.map(\.id) == [
+            .message(ChatMessageID(rawValue: "optimistic-turn-1"))
+        ])
+        #expect(session.displayTranscript.rows.map(\.textForSearch) == ["hello"])
         #expect(session.runState == .queued)
-        #expect(session.chatID.chatID == ChatID(rawValue: "chat-1"))
     }
 
     @Test func optimisticSubmitFailedPreservesAuthoritativeReadyLifecycle() {
@@ -116,7 +121,6 @@ struct RemoteChatSessionTests {
 
         #expect(session.displayTranscript.rows.isEmpty)
         #expect(session.runState == .warm)
-        #expect(session.chatID.chatID == ChatID(rawValue: "chat-1"))
         #expect(session.runState.isLive)
     }
 
@@ -310,7 +314,10 @@ struct RemoteChatSessionTests {
 
         await expectEventually((session.syncState?.committedItems.count ?? 0) == 1)
         let syncState = try #require(session.syncState)
-        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.displayTranscript.rows.map(\.id) == [
+            .message(ChatMessageID(rawValue: "user-\(turnID.rawValue)-hello"))
+        ])
+        #expect(session.displayTranscript.rows.map(\.textForSearch) == ["hello"])
         #expect(syncState.committedItems.count == 1)
         #expect(syncState.projection?.transcriptOverlay.isEmpty == true)
     }
@@ -318,11 +325,8 @@ struct RemoteChatSessionTests {
     @Test func markNotLiveRelinquishesLivenessClaim() {
         let session = makeSession()
         session.hydrate(from: makeSnapshot(lifecycle: .ready))
-        #expect(session.chatID.chatID == ChatID(rawValue: "chat-1"))
-
         session.markNotLive()
 
-        #expect(session.runState == .idle)
         #expect(session.runState == .idle)
         #expect(!session.runState.isLive)
     }
@@ -340,7 +344,7 @@ struct RemoteChatSessionTests {
         #expect(session.displayTranscript.rows.isEmpty)
         #expect(session.preflightError == nil)
         #expect(session.runState == .idle)
-        #expect(session.runState == .idle)
+        #expect(session.pendingPermissions.isEmpty)
     }
 
     @Test func resetCancelsPendingHistoryLoadBeforeStalePageApplies() async {

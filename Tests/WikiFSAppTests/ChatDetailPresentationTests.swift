@@ -51,7 +51,7 @@ struct ChatDetailPresentationTests {
                 createdAt: .distantPast
             ))
         ], activeContentBlock: nil).transcript
-        let persistedItems: [ChatTranscriptItem] = [
+        let persistedItems = persisted([
             .message(.init(
                 messageID: ChatMessageID(rawValue: "persisted-message"),
                 turnID: ChatTurnID(rawValue: "persisted-turn"),
@@ -59,7 +59,7 @@ struct ChatDetailPresentationTests {
                 text: "Persisted response",
                 createdAt: .distantPast
             ))
-        ]
+        ])
         let live = ChatDetailPresentation.make(
             chatID: chatID,
             chatSummary: ChatSummary.fixture(id: chatID),
@@ -91,37 +91,70 @@ struct ChatDetailPresentationTests {
         #expect(persisted.transcript.isAnswering == false)
     }
 
-    @Test func persistedOutlinePrefersTheCachedResponseSummary() {
-        let chatID = ChatID(rawValue: "01J" + String(repeating: "H", count: 22))
-        let answerID = ChatMessageID(rawValue: "answer-message")
-        let presentation = ChatDetailPresentation.make(
-            chatID: chatID,
-            chatSummary: ChatSummary.fixture(id: chatID),
-            showsInternals: false,
-            remoteSession: .fixture(),
-            persistedTranscriptItems: [
+    @Test func persistedOutlineUsesModelSummaryReturnedByTranscriptPage() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Summary round-trip")
+        let turnID = ChatTurnID(rawValue: "turn-summary")
+        let assistantMessageID = ChatMessageID(rawValue: "transcript-assistant-id")
+        let assistantText = "Raw response opening that must not become the outline summary."
+        _ = try store.appendChatTranscriptItems(
+            chatID: chat.id,
+            items: [
                 .message(.init(
-                    messageID: ChatMessageID(rawValue: "question-message"),
-                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    messageID: ChatMessageID(rawValue: "transcript-user-id"),
+                    turnID: turnID,
                     role: .user,
                     text: "What changed?",
                     createdAt: .distantPast
                 )),
                 .message(.init(
-                    messageID: answerID,
-                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    messageID: assistantMessageID,
+                    turnID: turnID,
                     role: .assistant,
-                    text: "A long response whose opening is not the model summary.",
+                    text: assistantText,
                     createdAt: .distantPast
                 )),
-            ],
-            persistedResponseSummaries: [answerID: "Model-generated summary."],
+            ]
+        )
+        let compatibilityAssistant = try #require(
+            store.chatMessages(chatID: chat.id).first { message in
+                message.event == .assistantText(assistantText)
+            }
+        )
+        // The compatibility message id is independently generated. This makes
+        // a PageID-to-ChatMessageID conversion unable to find the summary.
+        #expect(compatibilityAssistant.id.rawValue != assistantMessageID.rawValue)
+        #expect(compatibilityAssistant.seq == 1)
+        try store.updateMessageSummary(
+            chatID: chat.id,
+            messageID: compatibilityAssistant.id,
+            summary: "Distinctive model summary.",
+            kind: .model
+        )
+
+        let page = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+        let persistedAssistant = try #require(page.items.first { item in
+            guard case .message(let message) = item.item else { return false }
+            return message.messageID == assistantMessageID
+        })
+        #expect(persistedAssistant.cursor.rawValue - 1 == Int64(compatibilityAssistant.seq))
+        #expect(persistedAssistant.cachedResponseSummary == "Distinctive model summary.")
+        let presentation = ChatDetailPresentation.make(
+            chatID: chat.id,
+            chatSummary: chat,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: page.items,
             queuedMessages: [],
             hasDraftText: false,
             isChatOperationConfigured: true
         )
 
-        #expect(presentation.outlineEntries.first?.response == "Model-generated summary.")
+        #expect(presentation.outlineEntries.first?.response == "Distinctive model summary.")
+        #expect(presentation.outlineEntries.first?.response != ChatSummary.summaryExtract(
+            from: assistantText,
+            maxLength: 200
+        ))
     }
 
     @Test func pendingPermissionOnlySurfacesForLiveChat() {
@@ -240,6 +273,18 @@ struct ChatDetailPresentationTests {
         )
 
         #expect(presentation.outlineEntries.isEmpty)
+    }
+}
+
+private func persisted(_ items: [ChatTranscriptItem]) -> [PersistedChatTranscriptItem] {
+    items.enumerated().map { index, item in
+        PersistedChatTranscriptItem(
+            cursor: ChatTranscriptCursor(rawValue: Int64(index + 1)),
+            item: item,
+            projectedEventJSON: nil,
+            projectedPlainText: ChatTranscriptProjection.project(item).plainText,
+            createdAt: .distantPast
+        )
     }
 }
 

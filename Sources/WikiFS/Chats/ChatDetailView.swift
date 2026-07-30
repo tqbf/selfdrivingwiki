@@ -21,8 +21,7 @@ struct ChatDetailView: View {
 
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
-    @State private var persistedTranscriptItems: [ChatTranscriptItem] = []
-    @State private var persistedResponseSummaries: [ChatMessageID: String] = [:]
+    @State private var persistedTranscriptItems: [PersistedChatTranscriptItem] = []
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .outline
@@ -63,7 +62,6 @@ struct ChatDetailView: View {
             showsInternals: showsInternals,
             remoteSession: remotePresentationState,
             persistedTranscriptItems: persistedTranscriptItems,
-            persistedResponseSummaries: persistedResponseSummaries,
             queuedMessages: queuedMessages,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
@@ -147,7 +145,6 @@ struct ChatDetailView: View {
                 await coordinator.rehydrate(chatID: chatID)
             } else {
                 persistedTranscriptItems = []
-                persistedResponseSummaries = [:]
                 if let question = store.pendingChatQuestion {
                     store.pendingChatQuestion = nil
                     store.draftChatMessage = question
@@ -623,7 +620,7 @@ struct ChatDetailView: View {
     }
 
     private func loadPersistedTranscript(chatID: ChatID) {
-        var items: [ChatTranscriptItem] = []
+        var items: [PersistedChatTranscriptItem] = []
         var cursor: ChatTranscriptCursor?
         while true {
             let page = store.readChatTranscriptPage(
@@ -631,18 +628,12 @@ struct ChatDetailView: View {
                 after: cursor,
                 limit: RemoteChatSession.committedHistoryPageSize
             )
-            items += page.items.map(\.item)
+            items += page.items
             guard let nextCursor = page.nextCursor,
                   nextCursor != cursor else { break }
             cursor = nextCursor
         }
         persistedTranscriptItems = items
-        persistedResponseSummaries = Dictionary(
-            uniqueKeysWithValues: store.chatMessages(chatID: chatID).compactMap { message in
-                guard let summary = message.summary else { return nil }
-                return (ChatMessageID(rawValue: message.id.rawValue), summary)
-            }
-        )
     }
 }
 
