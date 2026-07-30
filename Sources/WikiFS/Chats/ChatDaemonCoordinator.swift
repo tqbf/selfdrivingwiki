@@ -11,6 +11,7 @@ import WikiFSEngine
 /// connection.
 public protocol ChatDaemonCommands: AnyObject, Sendable {
     func startChat(_ request: ChatStartRequest) async throws -> ChatID
+    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
     func continueChat(_ request: ChatContinueRequest) async throws
     func sendChatMessage(chatID: ChatID, message: String) async throws
     func stopChat(_ chatID: ChatID) async throws
@@ -190,6 +191,14 @@ public final class ChatDaemonCoordinator {
         try await client.startChat(ChatStartRequest(
             wikiID: wikiID, firstMessage: firstMessage,
             providerId: providerId, modelId: modelId))
+    }
+
+    /// Submit one typed turn through the daemon's unified chat-submit path.
+    /// The daemon creates a chat for draft submissions and decides whether an
+    /// existing chat is warm, dead, or persisted-only.
+    @discardableResult
+    public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        try await client.submitChatTurn(request)
     }
 
     /// Continue a persisted chat with a new user turn.

@@ -582,6 +582,9 @@ final class WikiDaemon: @unchecked Sendable {
                 containerDirectory: containerDirectory,
                 localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         }
+        let generationGate = await MainActor.run {
+            GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
@@ -591,6 +594,7 @@ final class WikiDaemon: @unchecked Sendable {
         let host = DaemonChatHost(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
+            generationGate: generationGate,
             storeResolver: storeResolver,
             resolveSelectedProvider: {
                 AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
@@ -626,6 +630,24 @@ final class WikiDaemon: @unchecked Sendable {
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatStartReply(chatID: nil, error: error.localizedDescription)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Submit one typed chat turn. Returns JSON `ChatSubmitReply`.
+    func submitChatTurnData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
+            let chatID = try await host.submitTurn(req)
+            let reply = ChatSubmitReply(chatID: chatID, error: nil)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        } catch {
+            let reply = ChatSubmitReply(chatID: nil, error: error.localizedDescription)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else

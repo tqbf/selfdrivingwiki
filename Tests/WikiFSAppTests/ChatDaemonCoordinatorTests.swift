@@ -191,6 +191,35 @@ struct ChatDaemonCoordinatorTests {
         #expect(req.message == "more")
     }
 
+    @Test func submitTurn_forwardsUnifiedTypedRequestAndReturnsChatID() async throws {
+        let stub = StubChatDaemonCommands()
+        stub.nextSubmitChatID = ChatID(rawValue: "chat-submitted")
+        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let request = ChatSubmitRequest(
+            wikiID: WikiID(rawValue: "wiki-1"),
+            chatID: nil,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "command-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "hello",
+                contextReferences: [.chat(ChatID(rawValue: "chat-context"))],
+                submittedAt: Date(timeIntervalSince1970: 123)
+            ),
+            providerId: ProviderID(rawValue: "provider-1"),
+            modelId: ModelID(rawValue: "model-1")
+        )
+
+        let chatID = try await coord.submitTurn(request)
+
+        #expect(chatID == ChatID(rawValue: "chat-submitted"))
+        let recorded = try #require(stub.submitTurnCalls.first)
+        #expect(recorded.wikiID == request.wikiID)
+        #expect(recorded.chatID == nil)
+        #expect(recorded.submission == request.submission)
+        #expect(recorded.providerId == request.providerId)
+        #expect(recorded.modelId == request.modelId)
+    }
+
     @Test func sendMessage_forwardsChatIDAndMessage() async throws {
         let stub = StubChatDaemonCommands()
         let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
@@ -403,6 +432,7 @@ struct ChatDaemonCoordinatorTests {
 @MainActor
 final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var startChatCalls: [ChatStartRequest] = []
+    var submitTurnCalls: [ChatSubmitRequest] = []
     var continueChatCalls: [ChatContinueRequest] = []
     var sendCalls: [(ChatID, String)] = []
     var stopCalls: [ChatID] = []
@@ -411,6 +441,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var configOptionCalls: [ChatConfigOptionRequest] = []
 
     var nextStartChatID: ChatID = ChatID(rawValue: "stub-chat-id")
+    var nextSubmitChatID: ChatID = ChatID(rawValue: "stub-submit-chat-id")
     var sessionState: ChatSessionState?
     var shouldThrow: Bool
 
@@ -422,6 +453,12 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         startChatCalls.append(request)
         if shouldThrow { throw StubError.throwing }
         return nextStartChatID
+    }
+
+    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        submitTurnCalls.append(request)
+        if shouldThrow { throw StubError.throwing }
+        return nextSubmitChatID
     }
 
     func continueChat(_ request: ChatContinueRequest) async throws {

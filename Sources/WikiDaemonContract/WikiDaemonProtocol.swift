@@ -109,6 +109,10 @@ import Foundation
     /// reply is JSON `ChatStartReply` (`{"chatID": "<ulid>", "error": null}`).
     func startChat(request: Data, reply: @escaping (Data) -> Void)
 
+    /// Submit one typed chat turn. `request` is JSON-encoded
+    /// `ChatSubmitRequest`; reply is JSON `ChatSubmitReply`.
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void)
+
     /// Continue a persisted chat with a new user turn.
     /// `request` is JSON `ChatContinueRequest`; reply `{"error": null}`.
     func continueChat(request: Data, reply: @escaping (Data) -> Void)

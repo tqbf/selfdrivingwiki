@@ -284,6 +284,31 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    /// Submit one typed chat turn. The daemon creates a chat when
+    /// `request.chatID == nil`, otherwise it decides how to route the turn for
+    /// the existing chat.
+    @discardableResult
+    public func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        let requestData = try JSONEncoder().encode(request)
+        return try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.submitChatTurn(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
+                throw DaemonXPCError.unexpectedReply
+            }
+            if let error = dict["error"] as? String, !error.isEmpty {
+                throw DaemonXPCError.failure(error)
+            }
+            guard let chatID = dict["chatID"] as? String else {
+                throw DaemonXPCError.unexpectedReply
+            }
+            return ChatID(rawValue: chatID)
+        }
+    }
+
     /// Continue a persisted chat with a new user turn.
     public func continueChat(_ request: ChatContinueRequest) async throws {
         let requestData = try JSONEncoder().encode(request)

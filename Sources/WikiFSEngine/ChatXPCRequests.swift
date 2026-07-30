@@ -40,6 +40,46 @@ public struct ChatStartReply: Codable, Sendable {
     }
 }
 
+/// Submit one typed user turn to the daemon. `chatID == nil` means "create a
+/// new chat first"; otherwise the daemon decides whether the existing chat is
+/// warm, dead, or persisted-only and routes the turn through the same
+/// controller submit path.
+public struct ChatSubmitRequest: Codable, Sendable {
+    public let wikiID: WikiID
+    public let chatID: ChatID?
+    public let submission: ChatTurnSubmission
+    /// Draft-chat override chosen before a `chats` row exists. Ignored when
+    /// `chatID` is non-nil.
+    public let providerId: ProviderID?
+    public let modelId: ModelID?
+
+    public init(
+        wikiID: WikiID,
+        chatID: ChatID?,
+        submission: ChatTurnSubmission,
+        providerId: ProviderID? = nil,
+        modelId: ModelID? = nil
+    ) {
+        self.wikiID = wikiID
+        self.chatID = chatID
+        self.submission = submission
+        self.providerId = providerId
+        self.modelId = modelId
+    }
+}
+
+/// Reply to `submitChatTurn`: always returns the authoritative chat id so the
+/// draft state can retarget after the daemon creates the chat row.
+public struct ChatSubmitReply: Codable, Sendable {
+    public let chatID: ChatID?
+    public let error: String?
+
+    public init(chatID: ChatID?, error: String?) {
+        self.chatID = chatID
+        self.error = error
+    }
+}
+
 /// Continue a persisted chat with a new user turn. The daemon reads the
 /// chat's history + `acpSessionId` from the store, builds the adaptive
 /// preamble (or attempts ACP resume), and starts a fresh session writing to

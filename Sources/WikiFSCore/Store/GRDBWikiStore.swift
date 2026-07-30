@@ -6863,45 +6863,85 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             var inserted: [PersistedChatTranscriptItem] = []
 
             for item in items {
-                nextCursor += 1
                 let projectedEvent = ChatTranscriptProjection.project(item)
                 let itemJSON = String(data: try itemEncoder.encode(item), encoding: .utf8) ?? "{}"
                 let projectedData = try eventEncoder.encode(projectedEvent)
                 let projectedJSON = String(data: projectedData, encoding: .utf8)
                 let createdAt = Self.transcriptCreatedAt(for: item) ?? now
-                try db.execute(sql: """
-                INSERT INTO chat_transcript_items (
-                    chat_id, cursor, item_kind, item_json, projected_event_json, projected_text, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?);
-                """, arguments: [
-                    chatID.rawValue,
-                    nextCursor,
-                    Self.transcriptItemKind(item),
-                    itemJSON,
-                    projectedJSON,
-                    projectedEvent.plainText,
-                    createdAt.timeIntervalSince1970,
-                ])
-                try db.execute(sql: """
-                INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
-                """, arguments: [
-                    PageID(rawValue: ULID.generate()).rawValue,
-                    chatID.rawValue,
-                    nextSeq,
-                    projectedEvent.chatRole,
-                    projectedJSON ?? "{}",
-                    projectedEvent.plainText,
-                    createdAt.timeIntervalSince1970,
-                ])
-                inserted.append(PersistedChatTranscriptItem(
-                    cursor: ChatTranscriptCursor(rawValue: nextCursor),
-                    item: item,
-                    projectedEventJSON: projectedJSON,
-                    projectedPlainText: projectedEvent.plainText,
-                    createdAt: createdAt
-                ))
-                nextSeq += 1
+                if let existingCursor = try Self.transcriptCursor(
+                    for: item,
+                    chatID: chatID,
+                    db: db
+                ) {
+                    try db.execute(sql: """
+                    UPDATE chat_transcript_items
+                    SET item_kind = ?, item_json = ?, projected_event_json = ?, projected_text = ?, created_at = ?
+                    WHERE chat_id = ? AND cursor = ?;
+                    """, arguments: [
+                        Self.transcriptItemKind(item),
+                        itemJSON,
+                        projectedJSON,
+                        projectedEvent.plainText,
+                        createdAt.timeIntervalSince1970,
+                        chatID.rawValue,
+                        existingCursor.rawValue,
+                    ])
+                    let compatibilitySeq = Int(existingCursor.rawValue - 1)
+                    try db.execute(sql: """
+                    UPDATE chat_messages
+                    SET role = ?, event_json = ?, text = ?, created_at = ?
+                    WHERE chat_id = ? AND seq = ?;
+                    """, arguments: [
+                        projectedEvent.chatRole,
+                        projectedJSON ?? "{}",
+                        projectedEvent.plainText,
+                        createdAt.timeIntervalSince1970,
+                        chatID.rawValue,
+                        compatibilitySeq,
+                    ])
+                    inserted.append(PersistedChatTranscriptItem(
+                        cursor: existingCursor,
+                        item: item,
+                        projectedEventJSON: projectedJSON,
+                        projectedPlainText: projectedEvent.plainText,
+                        createdAt: createdAt
+                    ))
+                } else {
+                    nextCursor += 1
+                    try db.execute(sql: """
+                    INSERT INTO chat_transcript_items (
+                        chat_id, cursor, item_kind, item_json, projected_event_json, projected_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                    """, arguments: [
+                        chatID.rawValue,
+                        nextCursor,
+                        Self.transcriptItemKind(item),
+                        itemJSON,
+                        projectedJSON,
+                        projectedEvent.plainText,
+                        createdAt.timeIntervalSince1970,
+                    ])
+                    try db.execute(sql: """
+                    INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                    """, arguments: [
+                        PageID(rawValue: ULID.generate()).rawValue,
+                        chatID.rawValue,
+                        nextSeq,
+                        projectedEvent.chatRole,
+                        projectedJSON ?? "{}",
+                        projectedEvent.plainText,
+                        createdAt.timeIntervalSince1970,
+                    ])
+                    inserted.append(PersistedChatTranscriptItem(
+                        cursor: ChatTranscriptCursor(rawValue: nextCursor),
+                        item: item,
+                        projectedEventJSON: projectedJSON,
+                        projectedPlainText: projectedEvent.plainText,
+                        createdAt: createdAt
+                    ))
+                    nextSeq += 1
+                }
             }
 
             try db.execute(sql: """
@@ -7567,6 +7607,59 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         case .systemNotice: return "systemNotice"
         case .turnFailure: return "turnFailure"
         }
+    }
+
+    private static func transcriptCursor(
+        for item: ChatTranscriptItem,
+        chatID: ChatID,
+        db: Database
+    ) throws -> ChatTranscriptCursor? {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT cursor, item_json
+            FROM chat_transcript_items
+            WHERE chat_id = ? AND item_kind = ?
+            ORDER BY cursor DESC;
+            """,
+            arguments: [chatID.rawValue, transcriptItemKind(item)]
+        )
+        let decoder = JSONDecoder()
+        for row in rows {
+            let itemJSON: String = row["item_json"]
+            guard let data = itemJSON.data(using: .utf8) else {
+                continue
+            }
+            let persisted: ChatTranscriptItem
+            do {
+                persisted = try decoder.decode(ChatTranscriptItem.self, from: data)
+            } catch {
+                DebugLog.store("GRDBWikiStore.transcriptCursor decode failed: \(error)")
+                continue
+            }
+            switch (persisted, item) {
+            case let (.message(existing), .message(candidate))
+                where existing.messageID == candidate.messageID:
+                return ChatTranscriptCursor(rawValue: row["cursor"])
+            case let (.toolCall(existing), .toolCall(candidate))
+                where existing.toolCallID == candidate.toolCallID:
+                return ChatTranscriptCursor(rawValue: row["cursor"])
+            case let (.turnFailure(existing), .turnFailure(candidate))
+                where existing.turnID == candidate.turnID &&
+                    existing.category == candidate.category &&
+                    existing.message == candidate.message:
+                return ChatTranscriptCursor(rawValue: row["cursor"])
+            case let (.systemNotice(existing), .systemNotice(candidate))
+                where existing.turnID == candidate.turnID &&
+                    existing.kind == candidate.kind &&
+                    existing.title == candidate.title &&
+                    existing.message == candidate.message:
+                return ChatTranscriptCursor(rawValue: row["cursor"])
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     private static func transcriptCreatedAt(for item: ChatTranscriptItem) -> Date? {
