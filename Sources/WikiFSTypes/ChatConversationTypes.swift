@@ -1,3 +1,5 @@
+// pattern: Functional Core
+
 import Foundation
 
 /// A typed context reference attached to a user turn.
@@ -167,6 +169,7 @@ public struct ChatTranscriptToolCallItem: Hashable, Sendable, Codable {
 
 /// One system notice row in the durable transcript vocabulary.
 public struct ChatTranscriptSystemNoticeItem: Hashable, Sendable, Codable {
+    public let noticeID: ChatTranscriptNoticeID
     public let turnID: ChatTurnID?
     public let kind: ChatSystemNoticeKind
     public let title: String
@@ -174,37 +177,103 @@ public struct ChatTranscriptSystemNoticeItem: Hashable, Sendable, Codable {
     public let createdAt: Date
 
     public init(
+        noticeID: ChatTranscriptNoticeID,
         turnID: ChatTurnID?,
         kind: ChatSystemNoticeKind,
         title: String,
         message: String,
         createdAt: Date
     ) {
+        self.noticeID = noticeID
         self.turnID = turnID
         self.kind = kind
         self.title = title
         self.message = message
         self.createdAt = createdAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case noticeID
+        case turnID
+        case kind
+        case title
+        case message
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.noticeID) else {
+            throw ChatTranscriptItemDecodingError.missingNoticeIdentity
+        }
+        self.noticeID = try container.decode(ChatTranscriptNoticeID.self, forKey: .noticeID)
+        self.turnID = try container.decodeIfPresent(ChatTurnID.self, forKey: .turnID)
+        self.kind = try container.decode(ChatSystemNoticeKind.self, forKey: .kind)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.message = try container.decode(String.self, forKey: .message)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(noticeID, forKey: .noticeID)
+        try container.encodeIfPresent(turnID, forKey: .turnID)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(title, forKey: .title)
+        try container.encode(message, forKey: .message)
+        try container.encode(createdAt, forKey: .createdAt)
+    }
 }
 
 /// One terminal turn-failure row in the durable transcript vocabulary.
 public struct ChatTranscriptTurnFailureItem: Hashable, Sendable, Codable {
+    public let failureID: ChatTranscriptFailureID
     public let turnID: ChatTurnID
     public let category: ChatTurnFailureCategory
     public let message: String
     public let createdAt: Date
 
     public init(
+        failureID: ChatTranscriptFailureID,
         turnID: ChatTurnID,
         category: ChatTurnFailureCategory,
         message: String,
         createdAt: Date
     ) {
+        self.failureID = failureID
         self.turnID = turnID
         self.category = category
         self.message = message
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case failureID
+        case turnID
+        case category
+        case message
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.failureID) else {
+            throw ChatTranscriptItemDecodingError.missingFailureIdentity
+        }
+        self.failureID = try container.decode(ChatTranscriptFailureID.self, forKey: .failureID)
+        self.turnID = try container.decode(ChatTurnID.self, forKey: .turnID)
+        self.category = try container.decode(ChatTurnFailureCategory.self, forKey: .category)
+        self.message = try container.decode(String.self, forKey: .message)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(failureID, forKey: .failureID)
+        try container.encode(turnID, forKey: .turnID)
+        try container.encode(category, forKey: .category)
+        try container.encode(message, forKey: .message)
+        try container.encode(createdAt, forKey: .createdAt)
     }
 }
 

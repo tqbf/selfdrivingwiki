@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 // WikiFS, causing type mismatches.
 internal import GRDB
 
+// pattern: Imperative Shell
+
 /// A GRDB-backed implementation of the ``WikiStore`` protocol.
 ///
 /// This is a **parallel implementation** — it does NOT replace
@@ -58,7 +60,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 46
+    private static let currentSchemaVersion = 47
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1301,6 +1303,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 46
         }
 
+        // v46→v47: durable notice and failure identities. These IDs are part
+        // of `item_json`, so this keeps `chat_transcript_items` table shape
+        // unchanged. The transaction stamps the version only after every
+        // legacy payload has been rewritten successfully.
+        if version < 47 {
+            try db.inTransaction(.immediate) {
+                try Self.assignLegacyTranscriptItemIDsV47(in: db)
+                try db.execute(sql: "PRAGMA user_version = 47;")
+                return .commit
+            }
+            version = 47
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -2369,9 +2384,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return nil
     }
 
-    /// Build the complete current schema (v39 end-state) on a fresh `Database`.
+    /// Build the complete current schema (v47 end-state) on a fresh `Database`.
     /// Mirrors `SQLiteWikiStore.createFreshSchemaV20()` + the additive tables
-    /// from v23–v39. All DDL is `IF NOT EXISTS`-guarded so re-running on an
+    /// from v23–v47. All DDL is `IF NOT EXISTS`-guarded so re-running on an
     /// already-current DB is a no-op (idempotent for GRDB's migrator).
     private static func createFreshSchema(on db: Database) throws {
         let now = Date().timeIntervalSince1970
@@ -6983,7 +6998,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT cursor, item_json, projected_event_json, projected_text, created_at
+                SELECT chat_id, cursor, item_json, projected_event_json, projected_text, created_at
                 FROM chat_transcript_items
                 WHERE chat_id = ? AND cursor > ?
                 ORDER BY cursor ASC
@@ -7586,8 +7601,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private static func readPersistedChatTranscriptItem(from row: Row) throws -> PersistedChatTranscriptItem {
         let cursor = ChatTranscriptCursor(rawValue: row["cursor"])
         let itemJSON: String = row["item_json"]
-        let itemData = itemJSON.data(using: .utf8) ?? Data("{}".utf8)
-        let item = try JSONDecoder().decode(ChatTranscriptItem.self, from: itemData)
+        let chatID = ChatID(rawValue: row["chat_id"])
+        let item = try Self.decodePersistedTranscriptItem(
+            itemJSON,
+            chatID: chatID,
+            cursor: cursor
+        )
         let projectedEventJSON: String? = row["projected_event_json"]
         let projectedText: String = row["projected_text"]
         let createdAt: Double = row["created_at"]
@@ -7624,15 +7643,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """,
             arguments: [chatID.rawValue, transcriptItemKind(item)]
         )
-        let decoder = JSONDecoder()
         for row in rows {
             let itemJSON: String = row["item_json"]
-            guard let data = itemJSON.data(using: .utf8) else {
+            guard itemJSON.data(using: .utf8) != nil else {
                 continue
             }
             let persisted: ChatTranscriptItem
             do {
-                persisted = try decoder.decode(ChatTranscriptItem.self, from: data)
+                persisted = try Self.decodePersistedTranscriptItem(
+                    itemJSON,
+                    chatID: chatID,
+                    cursor: ChatTranscriptCursor(rawValue: row["cursor"])
+                )
             } catch {
                 DebugLog.store("GRDBWikiStore.transcriptCursor decode failed: \(error)")
                 continue
@@ -7645,21 +7667,113 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 where existing.toolCallID == candidate.toolCallID:
                 return ChatTranscriptCursor(rawValue: row["cursor"])
             case let (.turnFailure(existing), .turnFailure(candidate))
-                where existing.turnID == candidate.turnID &&
-                    existing.category == candidate.category &&
-                    existing.message == candidate.message:
+                where existing.failureID == candidate.failureID:
                 return ChatTranscriptCursor(rawValue: row["cursor"])
             case let (.systemNotice(existing), .systemNotice(candidate))
-                where existing.turnID == candidate.turnID &&
-                    existing.kind == candidate.kind &&
-                    existing.title == candidate.title &&
-                    existing.message == candidate.message:
+                where existing.noticeID == candidate.noticeID:
                 return ChatTranscriptCursor(rawValue: row["cursor"])
             default:
                 continue
             }
         }
         return nil
+    }
+
+    /// Decode a persisted item without mutating the database. This is the
+    /// legacy page compatibility boundary for a read-only or partially
+    /// migrated store. Normal `ChatTranscriptItem` decoding intentionally
+    /// remains strict.
+    private static func decodePersistedTranscriptItem(
+        _ itemJSON: String,
+        chatID: ChatID,
+        cursor: ChatTranscriptCursor
+    ) throws -> ChatTranscriptItem {
+        guard let itemData = itemJSON.data(using: .utf8) else {
+            throw WikiStoreError.unexpected("invalid persisted chat transcript JSON")
+        }
+        do {
+            return try JSONDecoder().decode(ChatTranscriptItem.self, from: itemData)
+        } catch let error as ChatTranscriptItemDecodingError {
+            switch error {
+            case .missingNoticeIdentity, .missingFailureIdentity:
+                let repaired = try Self.rewritingLegacyTranscriptItemJSON(
+                    itemJSON,
+                    chatID: chatID,
+                    cursor: cursor
+                )
+                return try JSONDecoder().decode(ChatTranscriptItem.self, from: repaired)
+            }
+        }
+    }
+
+    /// Derive the same identifier for migration and read-only compatibility.
+    /// The cursor is durable provenance, never a display position.
+    private static func legacyTranscriptItemID(
+        chatID: ChatID,
+        cursor: ChatTranscriptCursor,
+        itemKind: String
+    ) -> String {
+        "chat-transcript-v47:\(itemKind):\(chatID.rawValue):\(cursor.rawValue)"
+    }
+
+    private static func rewritingLegacyTranscriptItemJSON(
+        _ itemJSON: String,
+        chatID: ChatID,
+        cursor: ChatTranscriptCursor
+    ) throws -> Data {
+        let object = try JSONSerialization.jsonObject(with: Data(itemJSON.utf8))
+        guard var root = object as? [String: Any] else {
+            throw WikiStoreError.unexpected("invalid persisted chat transcript object")
+        }
+
+        let cases: [(itemKind: String, payloadKey: String)] = [
+            ("systemNotice", "noticeID"),
+            ("turnFailure", "failureID"),
+        ]
+        for candidate in cases {
+            guard var associated = root[candidate.itemKind] as? [String: Any],
+                  var payload = associated["_0"] as? [String: Any]
+            else { continue }
+
+            if payload[candidate.payloadKey] == nil {
+                payload[candidate.payloadKey] = Self.legacyTranscriptItemID(
+                    chatID: chatID,
+                    cursor: cursor,
+                    itemKind: candidate.itemKind
+                )
+                associated["_0"] = payload
+                root[candidate.itemKind] = associated
+            }
+            return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        }
+        return Data(itemJSON.utf8)
+    }
+
+    private static func assignLegacyTranscriptItemIDsV47(in db: Database) throws {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT chat_id, cursor, item_json
+            FROM chat_transcript_items
+            WHERE item_kind IN ('systemNotice', 'turnFailure')
+            ORDER BY chat_id ASC, cursor ASC;
+            """
+        )
+        for row in rows {
+            let chatID = ChatID(rawValue: row["chat_id"])
+            let cursor = ChatTranscriptCursor(rawValue: row["cursor"])
+            let itemJSON: String = row["item_json"]
+            let rewritten = try Self.rewritingLegacyTranscriptItemJSON(
+                itemJSON,
+                chatID: chatID,
+                cursor: cursor
+            )
+            guard String(data: rewritten, encoding: .utf8) != itemJSON else { continue }
+            try db.execute(
+                sql: "UPDATE chat_transcript_items SET item_json = ? WHERE chat_id = ? AND cursor = ?;",
+                arguments: [String(decoding: rewritten, as: UTF8.self), chatID.rawValue, cursor.rawValue]
+            )
+        }
     }
 
     private static func transcriptCreatedAt(for item: ChatTranscriptItem) -> Date? {

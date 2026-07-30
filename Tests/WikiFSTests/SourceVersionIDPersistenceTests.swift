@@ -13,7 +13,7 @@ import Testing
 /// `sources.id` and markdown-version `PageID`s.
 struct SourceVersionIDPersistenceTests {
 
-    private let preSourceVersionIDRefactorSchemaVersion = "46"
+    private let currentSchemaVersion = "47"
     private let legacySourceID = "01JSOURCEVERSIONFIXTURE000001"
     private let legacyVersionV1 = "01JSOURCEVERSION000000000001"
     private let legacyVersionV2 = "01JSOURCEVERSION000000000002"
@@ -106,7 +106,7 @@ struct SourceVersionIDPersistenceTests {
 
     private func seedLegacyFixture(at databaseURL: URL) throws {
         let initialStore = try GRDBWikiStore(databaseURL: databaseURL)
-        #expect(initialStore.pragmaValue("user_version") == preSourceVersionIDRefactorSchemaVersion)
+        #expect(initialStore.pragmaValue("user_version") == currentSchemaVersion)
         initialStore.close()
 
         try execute(
@@ -161,7 +161,7 @@ struct SourceVersionIDPersistenceTests {
         let databaseURL = try temporaryDatabaseURL()
         try seedLegacyFixture(at: databaseURL)
 
-        #expect(try pragmaValue("user_version", at: databaseURL) == preSourceVersionIDRefactorSchemaVersion)
+        #expect(try pragmaValue("user_version", at: databaseURL) == currentSchemaVersion)
         #expect(try normalizedRows(
             """
             SELECT cid, name, type, "notnull", dflt_value, pk
@@ -253,7 +253,7 @@ struct SourceVersionIDPersistenceTests {
         #expect(origin.plan == "https://example.com/legacy")
         #expect(markdownHead.id == SourceMarkdownVersionID(rawValue: legacyMarkdownVersionID))
         #expect(markdownHead.sourceVersionID == SourceVersionID(rawValue: legacyVersionV2))
-        #expect(reopened.pragmaValue("user_version") == preSourceVersionIDRefactorSchemaVersion)
+        #expect(reopened.pragmaValue("user_version") == currentSchemaVersion)
     }
 
     @Test func liveSourceVersionWritesPreserveRawSQLiteStrings() throws {

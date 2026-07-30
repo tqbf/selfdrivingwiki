@@ -25,6 +25,7 @@ actor DaemonChatController {
 
     private var generation: ChatSessionGenerationID
     private var snapshot: ChatRuntimeSnapshot
+    private var activeContentBlock: ChatActiveContentBlock? = nil
     private var replayBuffer: ChatUpdateReplayBuffer
     private var nextSequence = ChatUpdateSequence.initial
     private var committedCursor: ChatTranscriptCursor
@@ -372,6 +373,10 @@ actor DaemonChatController {
 
     private func handleRuntimeEvent(_ envelope: ChatAgentRuntimeEventEnvelope) async {
         guard envelope.generation == generation else { return }
+        // The runtime supplies this transition with the same envelope as the
+        // transcript delta. Clearing it first prevents a closed block from
+        // remaining live across a semantic boundary.
+        activeContentBlock = envelope.activeContentBlock
 
         switch envelope.event {
         case .sessionReady(let capabilities, let providerState):
@@ -492,6 +497,7 @@ actor DaemonChatController {
             message = terminalMessage
             payload = .failed(
                 turnID: turnID,
+                failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
                 category: category,
                 message: terminalMessage,
                 createdAt: Date()
@@ -501,6 +507,7 @@ actor DaemonChatController {
             message = terminalMessage
             payload = .failed(
                 turnID: turnID,
+                failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
                 category: .interrupted,
                 message: terminalMessage,
                 createdAt: Date()
@@ -573,7 +580,8 @@ actor DaemonChatController {
             pendingPermission: activePermission,
             runMetadata: compatibilityRunMetadata(),
             usage: compatibilityUsage() ?? snapshot.usage,
-            diagnostics: compatibilityDiagnostics()
+            diagnostics: compatibilityDiagnostics(),
+            activeContentBlock: activeContentBlock
         )
     }
 
@@ -604,6 +612,7 @@ actor DaemonChatController {
                 lastActivityAt: nil,
                 currentProcessID: projection.diagnostics.currentProcessID
             ),
+            activeContentBlock: projection.activeContentBlock,
             transcriptOverlay: projection.transcriptOverlay,
             committedCursor: projection.committedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,

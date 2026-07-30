@@ -256,7 +256,7 @@ struct ChatIDPersistenceTests {
         #expect(try pragmaValue("user_version", at: databaseURL) == preChatIDRefactorSchemaVersion)
 
         let reopened = try GRDBWikiStore(databaseURL: databaseURL)
-        #expect(reopened.pragmaValue("user_version") == "46")
+        #expect(reopened.pragmaValue("user_version") == "47")
         #expect(try reopened.listChats().isEmpty)
         #expect(try reopened.chatMessages(chatID: ChatID(rawValue: legacyChatID)).isEmpty)
     }
@@ -301,7 +301,7 @@ struct ChatIDPersistenceTests {
         let chat = try store.createChat(kind: .edit, title: "Fresh Chat")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.assistantText("follow up")])
 
-        #expect(store.pragmaValue("user_version") == "46")
+        #expect(store.pragmaValue("user_version") == "47")
         #expect(try normalizedRows(
             "SELECT id FROM chats WHERE id = '\(chat.id.rawValue)';",
             at: databaseURL
@@ -320,7 +320,7 @@ struct ChatIDPersistenceTests {
         try assertPreChatIDRefactorSchemaLayout(at: databaseURL)
 
         let store = try GRDBWikiStore(databaseURL: databaseURL)
-        #expect(store.pragmaValue("user_version") == "46")
+        #expect(store.pragmaValue("user_version") == "47")
         #expect(try normalizedRows("PRAGMA table_info('chat_turns');", at: databaseURL) == [
             "0|chat_id|TEXT|1|NULL|1",
             "1|turn_id|TEXT|1|NULL|2",

@@ -44,6 +44,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private struct TranscriptTranslationState: Sendable {
         struct OpenContentBlock: Sendable {
             let messageID: ChatMessageID
+            let turnID: ChatTurnID
             let role: ChatTranscriptMessageRole
             let createdAt: Date
             var text: String
@@ -424,7 +425,10 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         state.translationStateByTurn[turnID] = translationState
         runtimeState = state
         if deltas.isEmpty == false {
-            await emit(.transcript(deltas))
+            await emit(
+                .transcript(deltas),
+                activeContentBlock: Self.activeContentBlock(in: translationState)
+            )
         }
 
         switch event {
@@ -474,11 +478,15 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         runtimeState?.latestProviderSessionID ?? fallback
     }
 
-    private func emit(_ event: ChatAgentRuntimeEvent) async {
+    private func emit(
+        _ event: ChatAgentRuntimeEvent,
+        activeContentBlock: ChatActiveContentBlock? = nil
+    ) async {
         guard let state = runtimeState else { return }
         state.continuation.yield(ChatAgentRuntimeEventEnvelope(
             generation: state.request.generation,
-            event: event
+            event: event,
+            activeContentBlock: activeContentBlock
         ))
     }
 
@@ -566,6 +574,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             case .turnFailed(let reason):
                 closeContentBlock(in: &translationState)
                 return .append(.turnFailure(ChatTranscriptTurnFailureItem(
+                    failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
                     turnID: turnID,
                     category: failureCategory(for: reason),
                     message: reason.description,
@@ -637,6 +646,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             messageID: ChatMessageID(
                 rawValue: "\(role.rawValue)-\(turnID.rawValue)-block-\(translationState.nextContentBlockOrdinal)"
             ),
+            turnID: turnID,
             role: role,
             createdAt: Date(),
             text: ""
@@ -648,6 +658,17 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
     private static func closeContentBlock(in translationState: inout TranscriptTranslationState) {
         translationState.contentBlock = .none
+    }
+
+    private static func activeContentBlock(
+        in translationState: TranscriptTranslationState
+    ) -> ChatActiveContentBlock? {
+        guard case .open(let block) = translationState.contentBlock else { return nil }
+        return ChatActiveContentBlock(
+            messageID: block.messageID,
+            turnID: block.turnID,
+            role: block.role
+        )
     }
 
     static func transcriptDeltasForTesting(from events: [AgentEvent], turnID: ChatTurnID) -> [ChatTranscriptDelta] {

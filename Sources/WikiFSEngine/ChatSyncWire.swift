@@ -1,6 +1,68 @@
 import Foundation
 import WikiFSCore
 
+// pattern: Functional Core
+
+/// The only lifecycle state a live content block can carry on the sync wire.
+/// A finalized block is represented by the absence of this value.
+public enum ChatActiveContentBlockPhase: String, Sendable, Codable, Equatable, Hashable {
+    case streaming
+}
+
+/// Non-persisted metadata for the transcript content block that is open now.
+public struct ChatActiveContentBlock: Sendable, Codable, Equatable, Hashable {
+    public let messageID: ChatMessageID
+    public let turnID: ChatTurnID
+    public let role: ChatTranscriptMessageRole
+    public let phase: ChatActiveContentBlockPhase
+
+    public init(
+        messageID: ChatMessageID,
+        turnID: ChatTurnID,
+        role: ChatTranscriptMessageRole,
+        phase: ChatActiveContentBlockPhase = .streaming
+    ) {
+        self.messageID = messageID
+        self.turnID = turnID
+        self.role = role
+        self.phase = phase
+    }
+}
+
+/// Provenance for a legacy transcript value repaired at a sync-envelope edge.
+/// `sourceOrdinal` identifies the source occurrence. It is never a display
+/// position or a durable transcript cursor.
+public struct LegacyTranscriptOccurrence: Sendable, Codable, Equatable, Hashable {
+    public enum ItemKind: String, Sendable, Codable, Equatable, Hashable, CaseIterable {
+        case systemNotice
+        case turnFailure
+    }
+
+    public let chatID: ChatID
+    public let generation: ChatSessionGenerationID
+    public let sequence: ChatUpdateSequence
+    public let sourceOrdinal: Int
+    public let itemKind: ItemKind
+
+    public init(
+        chatID: ChatID,
+        generation: ChatSessionGenerationID,
+        sequence: ChatUpdateSequence,
+        sourceOrdinal: Int,
+        itemKind: ItemKind
+    ) {
+        self.chatID = chatID
+        self.generation = generation
+        self.sequence = sequence
+        self.sourceOrdinal = sourceOrdinal
+        self.itemKind = itemKind
+    }
+
+    public var durableIDRawValue: String {
+        "chat-wire-v1:\(itemKind.rawValue):\(chatID.rawValue):\(generation.rawValue):\(sequence.rawValue):\(sourceOrdinal)"
+    }
+}
+
 public struct ChatRunMetadata: Sendable, Codable, Equatable {
     public let preflightError: String?
     public let thinkingOption: ThinkingEffortOption?
@@ -41,6 +103,7 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
     public let providerState: ChatProviderState
     public let usage: SessionUsage?
     public let diagnostics: ChatDiagnosticsState
+    public let activeContentBlock: ChatActiveContentBlock?
     public let transcriptOverlay: [ChatTranscriptItem]
     public let committedCursor: ChatTranscriptCursor
     public let lastIncludedSequence: ChatUpdateSequence
@@ -58,6 +121,7 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
         providerState: ChatProviderState,
         usage: SessionUsage?,
         diagnostics: ChatDiagnosticsState,
+        activeContentBlock: ChatActiveContentBlock? = nil,
         transcriptOverlay: [ChatTranscriptItem],
         committedCursor: ChatTranscriptCursor,
         lastIncludedSequence: ChatUpdateSequence,
@@ -74,6 +138,7 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
         self.providerState = providerState
         self.usage = usage
         self.diagnostics = diagnostics
+        self.activeContentBlock = activeContentBlock
         self.transcriptOverlay = transcriptOverlay
         self.committedCursor = committedCursor
         self.lastIncludedSequence = lastIncludedSequence
@@ -89,7 +154,8 @@ public extension ChatSyncProjection {
         pendingPermission: ChatPendingPermissionRequest?,
         runMetadata: ChatRunMetadata,
         usage: SessionUsage?,
-        diagnostics: ChatDiagnosticsState
+        diagnostics: ChatDiagnosticsState,
+        activeContentBlock: ChatActiveContentBlock? = nil
     ) -> ChatSyncProjection {
         ChatSyncProjection(
             chatID: snapshot.chatID,
@@ -102,6 +168,7 @@ public extension ChatSyncProjection {
             providerState: snapshot.providerState,
             usage: usage,
             diagnostics: diagnostics,
+            activeContentBlock: activeContentBlock,
             transcriptOverlay: snapshot.transientTranscriptOverlay,
             committedCursor: committedCursor,
             lastIncludedSequence: snapshot.lastIncludedSequence,
@@ -203,6 +270,52 @@ private enum ChatSyncWire {
             throw ChatSyncWireError.unsupportedWireVersion(wireVersion)
         }
     }
+
+    /// Repair pre-v47 notice/failure items only while decoding a versioned
+    /// envelope. Leaf transcript decoding remains intentionally strict.
+    static func repairingLegacyTranscriptIDs(in data: Data) throws -> Data {
+        var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let envelopeKey = root["snapshot"] == nil ? "update" : "snapshot"
+        guard var envelope = root[envelopeKey] as? [String: Any],
+              var projection = envelope["projection"] as? [String: Any],
+              let chatRaw = projection["chatID"] as? String,
+              let generationRaw = projection["generation"] as? String,
+              let sequenceNumber = projection["lastIncludedSequence"] as? NSNumber,
+              var overlay = projection["transcriptOverlay"] as? [[String: Any]]
+        else {
+            return data
+        }
+
+        let chatID = ChatID(rawValue: chatRaw)
+        let generation = ChatSessionGenerationID(rawValue: generationRaw)
+        let sequence = ChatUpdateSequence(rawValue: sequenceNumber.int64Value)
+        var changed = false
+        for sourceOrdinal in overlay.indices {
+            for itemKind in LegacyTranscriptOccurrence.ItemKind.allCases {
+                guard var associated = overlay[sourceOrdinal][itemKind.rawValue] as? [String: Any],
+                      var payload = associated["_0"] as? [String: Any]
+                else { continue }
+                let identityKey = itemKind == .systemNotice ? "noticeID" : "failureID"
+                guard payload[identityKey] == nil else { continue }
+                let occurrence = LegacyTranscriptOccurrence(
+                    chatID: chatID,
+                    generation: generation,
+                    sequence: sequence,
+                    sourceOrdinal: sourceOrdinal,
+                    itemKind: itemKind
+                )
+                payload[identityKey] = occurrence.durableIDRawValue
+                associated["_0"] = payload
+                overlay[sourceOrdinal][itemKind.rawValue] = associated
+                changed = true
+            }
+        }
+        guard changed else { return data }
+        projection["transcriptOverlay"] = overlay
+        envelope["projection"] = projection
+        root[envelopeKey] = envelope
+        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
 }
 
 public struct ChatSyncSnapshotEnvelope: Sendable, Codable, Equatable {
@@ -224,7 +337,8 @@ public struct ChatSyncSnapshotEnvelope: Sendable, Codable, Equatable {
     public static func decodeData(_ data: Data) throws -> ChatSyncSnapshot {
         try ChatSyncWire.validateVersion(in: data, malformed: ChatSyncWireError.malformedSnapshot)
         do {
-            return try JSONDecoder().decode(ChatSyncSnapshotEnvelope.self, from: data).snapshot
+            let repairedData = try ChatSyncWire.repairingLegacyTranscriptIDs(in: data)
+            return try JSONDecoder().decode(ChatSyncSnapshotEnvelope.self, from: repairedData).snapshot
         } catch {
             throw ChatSyncWireError.malformedSnapshot(error.localizedDescription)
         }
@@ -250,7 +364,8 @@ public struct ChatSyncUpdateEnvelope: Sendable, Codable, Equatable {
     public static func decodeData(_ data: Data) throws -> ChatSyncUpdate {
         do {
             try ChatSyncWire.validateVersion(in: data, malformed: ChatSyncWireError.malformedUpdate)
-            return try JSONDecoder().decode(WireEnvelope.self, from: data).decodedUpdate
+            let repairedData = try ChatSyncWire.repairingLegacyTranscriptIDs(in: data)
+            return try JSONDecoder().decode(WireEnvelope.self, from: repairedData).decodedUpdate
         } catch let error as ChatSyncWireError {
             throw error
         } catch {
@@ -294,6 +409,7 @@ public struct ChatSyncUpdateEnvelope: Sendable, Codable, Equatable {
                     providerState: update.projection.providerState,
                     usage: update.projection.usage,
                     diagnostics: update.projection.diagnostics,
+                    activeContentBlock: update.projection.activeContentBlock,
                     transcriptOverlay: [],
                     committedCursor: update.projection.committedCursor,
                     lastIncludedSequence: update.projection.lastIncludedSequence,

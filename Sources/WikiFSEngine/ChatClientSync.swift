@@ -1,3 +1,5 @@
+// pattern: Functional Core
+
 import Foundation
 import WikiFSCore
 
@@ -102,9 +104,12 @@ public enum ChatClientSyncReducer {
             return ChatClientSyncReduction(state: state)
         }
 
-        let preservedProjection = preservingLoadedHistory(
+        let preservedProjection = validatingActiveContentBlock(
+            in: preservingLoadedHistory(
             snapshot.projection,
             loadedCommittedCursor: state.loadedCommittedCursor
+            ),
+            committedItems: state.committedItems
         )
         var next = ChatClientSyncState(
             chatID: state.chatID,
@@ -327,6 +332,7 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
                 transcriptOverlay: projection.transcriptOverlay + [optimisticMessage],
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -352,6 +358,7 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
                 transcriptOverlay: projection.transcriptOverlay + [optimisticMessage],
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -410,6 +417,7 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
             transcriptOverlay: filteredOverlay,
             committedCursor: projection.committedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
@@ -439,10 +447,14 @@ public enum ChatClientSyncReducer {
             reason: update.reason,
             currentProjection: currentProjection
         )
-        return preservingTerminalOverlayIfNeeded(
+        let terminalNormalized = preservingTerminalOverlayIfNeeded(
             currentProjection: currentProjection,
             incomingProjection: compactNormalized,
             reason: update.reason,
+            committedItems: committedItems
+        )
+        return validatingActiveContentBlock(
+            in: terminalNormalized,
             committedItems: committedItems
         )
     }
@@ -521,12 +533,53 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
             transcriptOverlay: overlay,
             committedCursor: projection.committedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
             pendingPermission: projection.pendingPermission,
             runMetadata: projection.runMetadata
         )
+    }
+
+    /// The wire may carry an old envelope or an out-of-order block reference.
+    /// A client never treats metadata as live until the matching typed message
+    /// is present with the same role and turn.
+    private static func validatingActiveContentBlock(
+        in projection: ChatSyncProjection,
+        committedItems: [PersistedChatTranscriptItem]
+    ) -> ChatSyncProjection {
+        guard let activeContentBlock = projection.activeContentBlock else {
+            return projection
+        }
+        let allItems = committedItems.map(\.item) + projection.transcriptOverlay
+        let isValid = allItems.contains { item in
+            guard case .message(let message) = item else { return false }
+            return message.messageID == activeContentBlock.messageID
+                && message.turnID == activeContentBlock.turnID
+                && message.role == activeContentBlock.role
+        }
+        guard isValid else {
+            return ChatSyncProjection(
+                chatID: projection.chatID,
+                generation: projection.generation,
+                lifecycle: projection.lifecycle,
+                activeTurn: projection.activeTurn,
+                queuedTurns: projection.queuedTurns,
+                attention: projection.attention,
+                capabilities: projection.capabilities,
+                providerState: projection.providerState,
+                usage: projection.usage,
+                diagnostics: projection.diagnostics,
+                activeContentBlock: nil,
+                transcriptOverlay: projection.transcriptOverlay,
+                committedCursor: projection.committedCursor,
+                lastIncludedSequence: projection.lastIncludedSequence,
+                pendingPermission: projection.pendingPermission,
+                runMetadata: projection.runMetadata
+            )
+        }
+        return projection
     }
 
     private static func mergingOverlay(
@@ -585,6 +638,7 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
             transcriptOverlay: projection.transcriptOverlay,
             committedCursor: loadedCommittedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
@@ -621,6 +675,7 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
                 transcriptOverlay: filteredOverlay,
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -712,11 +767,41 @@ public enum ChatClientSyncReducer {
             let identity = transcriptIdentity(for: item)
             if let index = merged.lastIndex(where: { transcriptIdentity(for: $0) == identity }) {
                 merged[index] = item
+            } else if merged.contains(where: {
+                canonicalItem($0, replacesLegacyOverlay: item)
+            }) {
+                // A legacy wire adapter has only envelope provenance. Its
+                // synthetic identity must never displace canonical migrated
+                // history that describes the same notice or failure.
+                continue
             } else {
                 merged.append(item)
             }
         }
         return merged
+    }
+
+    private static func canonicalItem(
+        _ canonical: ChatTranscriptItem,
+        replacesLegacyOverlay overlay: ChatTranscriptItem
+    ) -> Bool {
+        switch (canonical, overlay) {
+        case let (.systemNotice(history), .systemNotice(live)):
+            guard live.noticeID.rawValue.hasPrefix("chat-wire-v1:") else { return false }
+            return history.turnID == live.turnID
+                && history.kind == live.kind
+                && history.title == live.title
+                && history.message == live.message
+                && history.createdAt == live.createdAt
+        case let (.turnFailure(history), .turnFailure(live)):
+            guard live.failureID.rawValue.hasPrefix("chat-wire-v1:") else { return false }
+            return history.turnID == live.turnID
+                && history.category == live.category
+                && history.message == live.message
+                && history.createdAt == live.createdAt
+        default:
+            return false
+        }
     }
 
     private enum TranscriptIdentity: Hashable {

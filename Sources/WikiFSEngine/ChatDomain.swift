@@ -1,3 +1,5 @@
+// pattern: Functional Core
+
 import Foundation
 import WikiFSCore
 
@@ -393,7 +395,13 @@ public enum ChatSessionEventPayload: Hashable, Sendable, Codable {
     case permissionRequested(ChatPendingPermissionRequest)
     case permissionResolved(PermissionRequestID)
     case completed(turnID: ChatTurnID)
-    case failed(turnID: ChatTurnID, category: ChatTurnFailureCategory, message: String, createdAt: Date)
+    case failed(
+        turnID: ChatTurnID,
+        failureID: ChatTranscriptFailureID,
+        category: ChatTurnFailureCategory,
+        message: String,
+        createdAt: Date
+    )
     case cancelled(turnID: ChatTurnID)
     case recovering
     case sessionReady(capabilities: ChatCapabilitySet, providerState: ChatProviderState)
@@ -625,7 +633,7 @@ public enum ChatSessionMachine {
             )
             return .applied(next)
 
-        case .failed(let turnID, let category, let message, let createdAt):
+        case .failed(let turnID, let failureID, let category, let message, let createdAt):
             guard let activeTurn = next.activeTurn,
                   activeTurn.turnID == turnID,
                   activeTurn.state.isTerminal == false
@@ -652,6 +660,7 @@ public enum ChatSessionMachine {
                 overlay: [
                     .turnFailure(
                         ChatTranscriptTurnFailureItem(
+                            failureID: failureID,
                             turnID: turnID,
                             category: category,
                             message: message,
