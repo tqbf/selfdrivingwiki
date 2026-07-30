@@ -1,6 +1,6 @@
 # Chat Architecture Redesign
 
-Last updated: July 30, 2026
+Last updated: July 29, 2026
 
 ## Status
 
@@ -20,7 +20,7 @@ rebuild, and the Phase 3 per-chat daemon-controller move. It does not
 implement the Phase 4 XPC wire redesign, the Phase 4 client sync replacement,
 or the Phase 5 UI decomposition.
 
-Remediation note for PR #990 on Thursday, July 30, 2026:
+Remediation note for PR #990 on Wednesday, July 29, 2026:
 
 - the exact-head corrective audit at
   `e1a5cf259e859c2680282f7c5e1bfc8c1ddbfcb6` found regressions in transcript

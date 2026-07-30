@@ -159,7 +159,7 @@ an intentional Phase 3 disposition:
 
 ## Verification
 
-Verified locally on Thursday, July 30, 2026:
+Verified locally on Wednesday, July 29, 2026:
 
 - `make prompts`
 - passed
@@ -179,7 +179,8 @@ Verified locally on Thursday, July 30, 2026:
     idle in the hosted-suite tail, so the run was interrupted rather than
     waited indefinitely
 - `env WIKIFS_APP_TESTS=1 TEST_TIMEOUT=120 make test-watchdog`
-  - timed out with wrapper exit `124`
+  - command ended non-zero because the watchdog timed out
+  - watchdog summary reported `Exiting 124`
   - log: `tmp/test-logs/swift-test-20260729-171234.log`
   - representative started-but-never-finished tests from that bounded run
     included `podcastTranscribes()`, `htmlExtractsViaMime()`, `pdfExtracts()`,
