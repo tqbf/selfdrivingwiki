@@ -16,9 +16,10 @@ struct ChatTranscriptPaneView: View {
     let outlineScroll: ChatScrollRequest?
     let quoteAnchor: ChatHighlightRequest?
     let hideToolCalls: Bool
-    let onResolvePermission: (String, Bool) -> Void
+    let onResolvePermission: (ChatPermissionResolutionIntent) -> Void
 
     var body: some View {
+        let rendererInput = ChatTranscriptRenderingInput(transcript: transcript.displayTranscript)
         VStack(spacing: 0) {
             if let preflightBannerMessage {
                 preflightBanner(preflightBannerMessage)
@@ -27,16 +28,15 @@ struct ChatTranscriptPaneView: View {
                     .padding(.bottom, ChatMetrics.sectionSpacing / 2)
             }
             ChatTranscriptView(
-                events: transcript.events,
+                rendering: rendererInput,
                 transcriptID: chatID.map(TranscriptID.chat),
-                timestamps: transcript.timestamps,
                 emptyStateMessage: transcript.emptyStateMessage,
-                isRunning: transcript.isRunning,
+                isStreaming: transcript.isAnswering,
                 onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
                 renderContext: { [weak store] in store?.renderContext() },
                 blobStore: store,
                 zoom: chatZoom,
-                scrollRequest: outlineScroll,
+                scrollRequest: rendererInput.webScrollRequest(for: outlineScroll),
                 quoteAnchor: quoteAnchor,
                 hideToolCalls: hideToolCalls
             )
@@ -51,11 +51,8 @@ struct ChatTranscriptPaneView: View {
                     .padding(.bottom, ChatMetrics.sectionSpacing / 2)
             }
             if let livePendingPermission {
-                PermissionApprovalView(permission: livePendingPermission) { optionId in
-                    let approve = livePendingPermission.options
-                        .first { $0.optionId == optionId }?
-                        .kind.hasPrefix("allow") ?? false
-                    onResolvePermission(optionId, approve)
+                PermissionApprovalView(permission: livePendingPermission) { intent in
+                    onResolvePermission(intent)
                 }
                 .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
                 .padding(.bottom, ChatMetrics.sectionSpacing / 2)

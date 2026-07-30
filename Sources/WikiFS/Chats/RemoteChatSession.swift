@@ -5,9 +5,8 @@ import Observation
 import WikiFSCore
 import WikiFSEngine
 
-/// Compatibility adapter over the Phase 4 reducer-owned chat client state.
-/// Call sites still bind the legacy launcher-shaped surface, but authoritative
-/// sync now flows through `ChatClientSyncReducer`.
+/// App-side observable mirror over reducer-owned chat client state. Transcript
+/// consumers bind `displayTranscript`, never launcher-shaped event arrays.
 @MainActor
 @Observable
 public final class RemoteChatSession {
@@ -22,16 +21,12 @@ public final class RemoteChatSession {
     public let instanceID = UUID()
 
     public private(set) var syncState: ChatClientSyncState?
-    public private(set) var events: [AgentEvent] = []
-    public private(set) var eventTimestamps: [Date?] = []
+    private(set) var displayTranscript: ChatDisplayTranscript = .empty
+    /// Compatibility only for the separate queue/activity-feed surface. Chat
+    /// presentation must use `displayTranscript`.
+    public private(set) var activityFeedEvents: [AgentEvent] = []
     public private(set) var runState: ChatRunState = .idle
     public var syncStatus: ChatClientSyncStatus? { syncState?.syncStatus }
-
-    public var isRunning: Bool { runState.isLive }
-    public var isGenerating: Bool { runState.isAnswering }
-    public var isAwaitingGenerationSlot: Bool { runState == .queued }
-    public var isInteractiveSession: Bool { runState.isLive }
-    public var activeChatID: ChatID? { runState.isLive ? chatID.chatID : nil }
 
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
@@ -124,14 +119,14 @@ public final class RemoteChatSession {
         if reduction.state.syncStatus == .synchronized {
             clearAuthoritativeSnapshotRetryBackoff()
         }
-        projectCompatibilitySurface()
+        projectDisplayState()
         runEffects(reduction.effects)
     }
 
-    private func projectCompatibilitySurface() {
+    private func projectDisplayState() {
         guard let syncState else {
-            events = []
-            eventTimestamps = []
+            displayTranscript = .empty
+            activityFeedEvents = []
             runState = .idle
             exitStatus = nil
             runningKind = nil
@@ -146,8 +141,17 @@ public final class RemoteChatSession {
             return
         }
 
-        events = syncState.displayEvents
-        eventTimestamps = syncState.displayEventTimestamps
+        let items = syncState.displayTranscriptItems
+        let activeContentBlock = syncState.projection.flatMap { projection in
+            projection.activeContentBlock.flatMap { block in
+                ChatDisplayActiveContentBlock(validating: block, among: items)
+            }
+        }
+        displayTranscript = ChatDisplayProjection.project(
+            items: items,
+            activeContentBlock: activeContentBlock
+        ).transcript
+        activityFeedEvents = items.map(ChatTranscriptProjection.project)
 
         guard let projection = syncState.projection else {
             runState = .idle
@@ -397,8 +401,8 @@ public final class RemoteChatSession {
 
     func reset() {
         syncState = chatID.chatID.map { ChatClientSyncState(chatID: $0) }
-        events = []
-        eventTimestamps = []
+        displayTranscript = .empty
+        activityFeedEvents = []
         runState = .idle
         exitStatus = nil
         runningKind = nil

@@ -28,7 +28,7 @@ import WikiFSCore
 /// reader's anchor-version pattern: `version` bumps to signal a new request;
 /// `turnIndex` is the 0-based index among the `.chat-user` rows the transcript
 /// renders. Consumed in `ChatWebView.updateNSView`.
-struct ChatScrollRequest: Equatable {
+struct ChatWebScrollRequest: Equatable {
     let version: Int
     let turnIndex: Int
 }
@@ -125,7 +125,7 @@ struct ChatWebView: NSViewRepresentable {
     var zoom: Double = Double(ZoomScale.defaultScale)
     /// Versioned request to scroll to a user turn (outline click). `nil` (default)
     /// never scrolls; consumed in `updateNSView`.
-    var scrollRequest: ChatScrollRequest? = nil
+    var scrollRequest: ChatWebScrollRequest? = nil
     /// Versioned request to highlight + scroll to a `[[chat:Title#"quote"]]`
     /// passage (issue #281). `nil` (default) never highlights; consumed in
     /// `updateNSView` (re-click on a loaded transcript) and `didFinish` (fresh
@@ -270,7 +270,7 @@ struct ChatWebView: NSViewRepresentable {
         ///
         /// `nonisolated`: a pure predicate over value types, so tests can call
         /// it without hopping to the main actor (same discipline as
-        /// `ChatDetailView.displayMessages`).
+        /// `ChatTranscriptRenderingInput`).
         nonisolated static func needsFullReload(
             transcriptID: TranscriptID?, renderedTranscriptID: TranscriptID?,
             showsInternals: Bool, renderedShowsInternals: Bool?,

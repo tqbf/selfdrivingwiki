@@ -1,32 +1,23 @@
 import SwiftUI
 import WikiFSCore
 
-/// The reusable chat-transcript component for BOTH the live (streaming) and the
-/// persisted (read-only) chat surfaces. Rendered from a caller-supplied `events`
-/// array (already `transcriptVisible`-filtered), so the live path feeds
-/// `launcher.events` and the persisted path feeds `store.chatMessages` through
-/// the same view — collapsing the old dual render sites in `ChatDetailView`.
+/// The reusable chat transcript renderer. Its input is a single renderer-only
+/// bridge from the typed app presentation model, not an app event contract.
 struct ChatTranscriptView: View {
-    /// The transcript-visible events to render (caller pre-filters via
-    /// `[AgentEvent].transcriptVisible`).
-    let events: [AgentEvent]
+    let rendering: ChatTranscriptRenderingInput
     /// Identity of the conversation `events` belongs to, forwarded to
     /// `ChatWebView` so its incremental differ rebuilds instead of splicing
     /// when this view is reused for a different chat (see
     /// `ChatWebView.transcriptID`). `nil` for the draft composer, which never
     /// reaches the web view (it renders the empty-state placeholder).
     var transcriptID: TranscriptID? = nil
-    /// Wall-clock timestamps parallel to `events` (after the same filtering).
-    /// `nil` entries produce no "Worked for" footer. Used to render the
-    /// duration metadata under assistant responses.
-    var timestamps: [Date?] = []
     /// Idle/fallback empty-state message. Overridden by "Waiting for the
-    /// Agent…" while `isRunning` (the live streaming case).
+    /// Agent…" while `isStreaming` (the live streaming case).
     var emptyStateMessage: String
     /// True while a live session is streaming into this transcript. Shows the
     /// "Waiting for the Agent…" placeholder and the streaming hint; the
     /// persisted surface passes `false` (it is never the active stream).
-    var isRunning: Bool = false
+    var isStreaming: Bool = false
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives (the parent `ChatDetailView`) and forwarded unchanged to
     /// the transcript web view.
@@ -43,7 +34,7 @@ struct ChatTranscriptView: View {
     /// `chat.zoom` AppStorage by the chat surface.
     var zoom: Double = Double(ZoomScale.defaultScale)
     /// Versioned scroll-to-turn request, forwarded to the transcript web view.
-    var scrollRequest: ChatScrollRequest? = nil
+    var scrollRequest: ChatWebScrollRequest? = nil
     /// Versioned quote-anchor highlight request (`[[chat:Title#"quote"]]`,
     /// issue #281), forwarded to the transcript web view.
     var quoteAnchor: ChatHighlightRequest? = nil
@@ -54,13 +45,18 @@ struct ChatTranscriptView: View {
         // Mirror the hideToolCalls filter on both events and timestamps so
         // they stay parallel. When hideToolCalls is on, remove tool-call
         // events and their corresponding timestamps.
-        let visibleEvents = hideToolCalls ? events.filter { !$0.isToolCall } : events
+        let transcriptIndices = rendering.events.transcriptVisibleIndices
+        let transcriptEvents = transcriptIndices.map { rendering.events[$0] }
+        let transcriptTimestamps = transcriptIndices.map { index in
+            index < rendering.timestamps.count ? rendering.timestamps[index] : nil
+        }
+        let visibleEvents = hideToolCalls ? transcriptEvents.filter { !$0.isToolCall } : transcriptEvents
         let visibleTimestamps = hideToolCalls
-            ? events.indices.compactMap { idx -> Date? in
-                guard !events[idx].isToolCall else { return nil }
-                return idx < timestamps.count ? timestamps[idx] : nil
+            ? transcriptEvents.indices.compactMap { idx -> Date? in
+                guard !transcriptEvents[idx].isToolCall else { return nil }
+                return idx < transcriptTimestamps.count ? transcriptTimestamps[idx] : nil
             }
-            : timestamps
+            : transcriptTimestamps
         return Group {
             if visibleEvents.isEmpty {
                 placeholder
@@ -85,14 +81,14 @@ struct ChatTranscriptView: View {
 
     private var placeholder: some View {
         VStack(spacing: 7) {
-            Text(isRunning ? "Waiting for the Agent..." : emptyStateMessage)
+            Text(isStreaming ? "Waiting for the Agent..." : emptyStateMessage)
                 .font(.headline)
                 .fontWeight(.medium)
                 .foregroundStyle(.primary)
             // The streaming hint only applies while the agent is actively
             // working this transcript; a persisted (read-only) empty state shows
             // just its message.
-            if isRunning {
+            if isStreaming {
                 Text("Answers appear here; one-line tool-call summaries show as the agent works. Full detail is available under “Show internals.”")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -105,6 +101,50 @@ struct ChatTranscriptView: View {
 
 private enum ChatTranscriptMetrics {
     static let emptyStatePadding: CGFloat = 24
+}
+
+/// Narrow renderer bridge retained until Phase 4 replaces the existing WebKit
+/// event renderer. Presentation state never stores these compatibility events
+/// or exposes a timestamp-array API.
+struct ChatTranscriptRenderingInput {
+    let rows: [ChatDisplayRow]
+    let events: [AgentEvent]
+    let timestamps: [Date?]
+
+    init(transcript: ChatDisplayTranscript) {
+        self.rows = transcript.rows
+        self.events = rows.map(Self.event)
+        self.timestamps = rows.map { $0.timestamp }
+    }
+
+    func webScrollRequest(for request: ChatScrollRequest?) -> ChatWebScrollRequest? {
+        guard let request,
+              case .turn(_, let promptRowID) = request.target,
+              let rowIndex = rows.firstIndex(where: { $0.id == promptRowID }) else {
+            return nil
+        }
+        let turnIndex = rows[..<rowIndex].reduce(into: 0) { count, row in
+            if row.isPrompt { count += 1 }
+        }
+        return ChatWebScrollRequest(version: request.version, turnIndex: turnIndex)
+    }
+
+    private static func event(for row: ChatDisplayRow) -> AgentEvent {
+        switch row {
+        case .userMessage(_, _, let text, _):
+            .userText(text)
+        case .assistantMessage(_, _, let text, _, _):
+            .assistantText(text)
+        case .reasoning(_, _, let text, _, _):
+            .thinking(text)
+        case .toolCall(_, _, let toolName, _, let detail, _, _):
+            .toolUse(name: toolName, inputSummary: detail ?? "")
+        case .notice(_, _, _, let title, let message, _):
+            .raw([title, message].joined(separator: "\n"))
+        case .failure(_, _, _, let message, _):
+            .turnFailed(reason: .agentError(message))
+        }
+    }
 }
 
 extension [AgentEvent] {

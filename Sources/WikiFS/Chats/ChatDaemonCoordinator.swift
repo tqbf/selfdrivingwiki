@@ -36,7 +36,7 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// daemon reports as running (from `chatState` envelopes), even for chats the
 /// app has not opened. `isChatGenerating(_:)` / `anyChatGenerating` back the sidebar
 /// + chats-list "responding…" indicators that previously read
-/// `chatLauncher.activeChatID` / `chatLauncher.isRunning`.
+    /// the session's `chatID` / `runState`.
 @MainActor
 @Observable
 public final class ChatDaemonCoordinator {
@@ -151,7 +151,7 @@ public final class ChatDaemonCoordinator {
     /// `isRunning` would pin the badge on for the life of the session).
     public func isChatGenerating(_ chatID: ChatID) -> Bool {
         if generatingChatIDs.contains(chatID) { return true }
-        if let s = sessions[.chat(chatID)], s.isGenerating { return true }
+        if let s = sessions[.chat(chatID)], s.runState.isAnswering { return true }
         return false
     }
 
@@ -159,7 +159,7 @@ public final class ChatDaemonCoordinator {
     /// app-level "is the agent busy" check (the ⌘Q confirmation).
     public var anyChatGenerating: Bool {
         if !generatingChatIDs.isEmpty { return true }
-        return sessions.values.contains { $0.isGenerating }
+        return sessions.values.contains { $0.runState.isAnswering }
     }
 
     // MARK: - Commands (wrap DaemonWorkloadClient)
@@ -179,10 +179,15 @@ public final class ChatDaemonCoordinator {
     }
 
     /// Resolve a pending permission request (approve/reject). Errors logged.
-    public func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
+    func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
         do {
             try await client.resolveChatPermission(
-                ChatPermissionResolveRequest(chatID: chatID, optionId: optionId, approve: approve))
+                ChatPermissionResolveRequest(
+                    chatID: chatID,
+                    optionId: intent.optionID.rawValue,
+                    approve: intent.isApproval
+                )
+            )
         } catch {
             DebugLog.agent("ChatDaemonCoordinator.resolvePermission failed for \(chatID.rawValue): \(error)")
         }

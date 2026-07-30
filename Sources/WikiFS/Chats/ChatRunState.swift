@@ -59,7 +59,7 @@ public enum ChatRunState: Sendable, Equatable {
     }
 
     /// True while the daemon holds a session for this chat — so the chat
-    /// surface should render the streaming mirror (`RemoteChatSession.events`)
+    /// surface should render the streaming mirror (`RemoteChatSession.displayTranscript`)
     /// rather than the persisted rows. Backs `isInteractiveSession` and
     /// `activeChatID != nil`.
     ///

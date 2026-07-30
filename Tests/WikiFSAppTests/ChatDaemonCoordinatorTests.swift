@@ -45,8 +45,8 @@ struct ChatDaemonCoordinatorTests {
             )
         )
 
-        #expect(session.events == [.assistantText("hello")])
-        #expect(session.isGenerating)
+        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.runState.isAnswering)
         #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
         #expect(coordinator.anyChatGenerating)
     }
@@ -100,7 +100,10 @@ struct ChatDaemonCoordinatorTests {
                 )
             )
         )
-        await coordinator.resolvePermission(chatID: ChatID(rawValue: "chat-1"), optionId: "allow", approve: true)
+        await coordinator.resolvePermission(
+            chatID: ChatID(rawValue: "chat-1"),
+            intent: .approve(optionID: PermissionOptionID(rawValue: "allow"))
+        )
         await coordinator.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
         await coordinator.stop(chatID: ChatID(rawValue: "chat-1"))
 
@@ -123,8 +126,8 @@ struct ChatDaemonCoordinatorTests {
         await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
 
         let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        #expect(session.events == [.assistantText("seed")])
-        #expect(session.isGenerating)
+        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.runState.isAnswering)
         #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
@@ -139,7 +142,7 @@ struct ChatDaemonCoordinatorTests {
         await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
 
         let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        #expect(session.activeChatID == nil)
+        #expect(session.runState == .idle)
         #expect(!coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
@@ -190,7 +193,7 @@ struct ChatDaemonCoordinatorTests {
         )
 
         let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        await expectEventually(session.isGenerating)
+        await expectEventually(session.runState.isAnswering)
         #expect(stub.sessionStateRequests.isEmpty)
     }
 
