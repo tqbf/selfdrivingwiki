@@ -196,6 +196,25 @@ struct DaemonChatHostTests {
         #expect(usesCheckpoint == false)
     }
 
+    @Test func idleControllerEvictionRemovesOnlyAQuiescentController() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "Test"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Idle")
+        let host = try await daemon.ensureChatHost()
+
+        _ = try await host.controllerUsesStreamingCheckpointForTesting(
+            chatID: chat.id,
+            wikiID: wiki.id
+        )
+        #expect(await host.hasLiveSession(chat.id))
+
+        #expect(await host.evictIdleControllerForTesting(chatID: chat.id))
+        #expect(await host.hasLiveSession(chat.id) == false)
+    }
+
     // MARK: - DaemonWikiState helper
 
     @Test func daemonWikiStateBuildsStateMarkdown() throws {

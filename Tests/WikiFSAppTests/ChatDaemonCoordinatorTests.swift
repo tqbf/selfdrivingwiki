@@ -84,14 +84,9 @@ struct ChatDaemonCoordinatorTests {
 
     @Test func commandMethodsForwardTypedRequests() async throws {
         let stub = StubChatDaemonCommands()
-        stub.nextStartChatID = ChatID(rawValue: "start-id")
         stub.nextSubmitChatID = ChatID(rawValue: "submit-id")
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
 
-        let startID = try await coordinator.startChat(
-            wikiID: WikiID(rawValue: "wiki-1"),
-            firstMessage: "hello"
-        )
         let submitID = try await coordinator.submitTurn(
             ChatSubmitRequest(
                 wikiID: WikiID(rawValue: "wiki-1"),
@@ -105,22 +100,12 @@ struct ChatDaemonCoordinatorTests {
                 )
             )
         )
-        try await coordinator.continueChat(
-            wikiID: WikiID(rawValue: "wiki-1"),
-            chatID: ChatID(rawValue: "chat-1"),
-            message: "continue"
-        )
-        try await coordinator.sendMessage(chatID: ChatID(rawValue: "chat-1"), message: "follow up")
         await coordinator.resolvePermission(chatID: ChatID(rawValue: "chat-1"), optionId: "allow", approve: true)
         await coordinator.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
         await coordinator.stop(chatID: ChatID(rawValue: "chat-1"))
 
-        #expect(startID == ChatID(rawValue: "start-id"))
         #expect(submitID == ChatID(rawValue: "submit-id"))
-        #expect(stub.startChatCalls.count == 1)
         #expect(stub.submitTurnCalls.count == 1)
-        #expect(stub.continueChatCalls.first?.message == "continue")
-        #expect(stub.sendCalls.first?.1 == "follow up")
         #expect(stub.resolveCalls.first?.optionId == "allow")
         #expect(stub.configOptionCalls.first?.value == "high")
         #expect(stub.stopCalls == [ChatID(rawValue: "chat-1")])
@@ -306,40 +291,20 @@ struct ChatDaemonCoordinatorTests {
 
 @MainActor
 final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
-    var startChatCalls: [ChatStartRequest] = []
     var submitTurnCalls: [ChatSubmitRequest] = []
-    var continueChatCalls: [ChatContinueRequest] = []
-    var sendCalls: [(ChatID, String)] = []
     var stopCalls: [ChatID] = []
     var resolveCalls: [ChatPermissionResolveRequest] = []
     var sessionStateRequests: [ChatID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
 
-    var nextStartChatID = ChatID(rawValue: "stub-chat-id")
     var nextSubmitChatID = ChatID(rawValue: "stub-submit-chat-id")
     var sessionState: ChatSyncSnapshot?
     var shouldThrow = false
-
-    func startChat(_ request: ChatStartRequest) async throws -> ChatID {
-        startChatCalls.append(request)
-        if shouldThrow { throw StubError.throwing }
-        return nextStartChatID
-    }
 
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
         submitTurnCalls.append(request)
         if shouldThrow { throw StubError.throwing }
         return nextSubmitChatID
-    }
-
-    func continueChat(_ request: ChatContinueRequest) async throws {
-        continueChatCalls.append(request)
-        if shouldThrow { throw StubError.throwing }
-    }
-
-    func sendChatMessage(chatID: ChatID, message: String) async throws {
-        sendCalls.append((chatID, message))
-        if shouldThrow { throw StubError.throwing }
     }
 
     func stopChat(_ chatID: ChatID) async throws {

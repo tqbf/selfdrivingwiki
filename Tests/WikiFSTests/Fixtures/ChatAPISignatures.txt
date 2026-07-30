@@ -57,14 +57,10 @@ Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
 Sources/WikiFSEngine/QueueEventEnvelope.swift	public let chatID: ChatID?
 Sources/WikiFS/Chats/ChatSessionKey.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatWebView.swift	    case chat(ChatID)
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func startChat(_ request: ChatStartRequest) async throws -> ChatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(_ chatID: ChatID) async throws
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func sendMessage(chatID: ChatID, message: String) async throws {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(chatID: ChatID) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func setThinkingEffort(chatID: ChatID, value: String) async {

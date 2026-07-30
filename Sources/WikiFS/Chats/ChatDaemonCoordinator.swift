@@ -10,10 +10,7 @@ import WikiFSEngine
 /// registry + routing + rehydration logic is unit-testable without a live XPC
 /// connection.
 public protocol ChatDaemonCommands: AnyObject, Sendable {
-    func startChat(_ request: ChatStartRequest) async throws -> ChatID
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-    func continueChat(_ request: ChatContinueRequest) async throws
-    func sendChatMessage(chatID: ChatID, message: String) async throws
     func stopChat(_ chatID: ChatID) async throws
     func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
@@ -25,7 +22,7 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// App-side coordinator for daemon-hosted chat sessions (Phase C4).
 ///
 /// Owns the per-chat `RemoteChatSession` registry, routes chat event envelopes
-/// demuxed by `DaemonQueueEventSink`, wraps the 7 chat XPC commands behind
+/// demuxed by `DaemonQueueEventSink`, wraps the five current chat XPC commands behind
 /// typed Swift methods, and rehydrates sessions from the daemon's live state.
 /// This is the replacement for the per-wiki chat `AgentLauncher` — after C4
 /// the app no longer runs chat in-process; the daemon owns every chat session.
@@ -127,9 +124,6 @@ public final class ChatDaemonCoordinator {
     /// stream — the sink already decoded it from the envelope's `chatID`
     /// field, so nothing past here handles a raw chat-id string.
     private func route(chatID: ChatID, update: ChatSyncUpdate) {
-        DebugLog.chatLive(
-            "2.app.route chat=\(chatID) live=\(update.projection.isLive) "
-            + "answering=\(update.projection.isAnswering) seq=\(update.projection.lastIncludedSequence.rawValue)")
         setChatGenerating(chatID, generating: update.projection.isAnswering)
         sessions[.chat(chatID)]?.ingest(update)
     }
@@ -147,10 +141,6 @@ public final class ChatDaemonCoordinator {
             ? generatingChatIDs.insert(chatID).inserted
             : generatingChatIDs.remove(chatID) != nil
         if didChange { runningStateToken &+= 1 }
-        // TEMPORARY (stuck "responding…" badge): seam 3 of 8.
-        DebugLog.chatLive(
-            "3.app.setGenerating chat=\(chatID) generating=\(generating) didChange=\(didChange) "
-            + "token=\(runningStateToken) set=[\(generatingChatIDs.map(\.rawValue).sorted().joined(separator: ","))]")
     }
 
     /// True while the daemon is actively answering this chat. Backs the sidebar
@@ -174,35 +164,12 @@ public final class ChatDaemonCoordinator {
 
     // MARK: - Commands (wrap DaemonWorkloadClient)
 
-    /// Start a new chat on the daemon. Returns the assigned chat ULID.
-    /// `providerId`/`modelId` thread a `.draft`-session `ProviderSelector` pick
-    /// (there's no `chats` row to write it to before the chat exists).
-    @discardableResult
-    public func startChat(
-        wikiID: WikiID, firstMessage: String,
-        providerId: ProviderID? = nil, modelId: ModelID? = nil
-    ) async throws -> ChatID {
-        try await client.startChat(ChatStartRequest(
-            wikiID: wikiID, firstMessage: firstMessage,
-            providerId: providerId, modelId: modelId))
-    }
-
     /// Submit one typed turn through the daemon's unified chat-submit path.
     /// The daemon creates a chat for draft submissions and decides whether an
     /// existing chat is warm, dead, or persisted-only.
     @discardableResult
     public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
         try await client.submitChatTurn(request)
-    }
-
-    /// Continue a persisted chat with a new user turn.
-    public func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
-        try await client.continueChat(ChatContinueRequest(wikiID: wikiID, chatID: chatID, message: message))
-    }
-
-    /// Send a follow-up turn to an active chat session.
-    public func sendMessage(chatID: ChatID, message: String) async throws {
-        try await client.sendChatMessage(chatID: chatID, message: message)
     }
 
     /// Stop/cancel the active chat turn. Errors are logged (best-effort).
@@ -260,7 +227,7 @@ public final class ChatDaemonCoordinator {
 
     /// Rehydrate a session from the daemon's live state. Call on view appear
     /// and whenever the active chat changes so the mirror reflects the
-    /// daemon's held-alive launcher (or the persisted rows once evicted).
+    /// daemon's live controller (or the persisted rows once evicted).
     public func rehydrate(chatID: ChatID) async {
         let session = self.session(for: chatID)
         do {
