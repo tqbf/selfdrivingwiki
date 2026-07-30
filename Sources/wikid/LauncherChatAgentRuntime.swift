@@ -42,8 +42,9 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     }
 
     private struct TranscriptTranslationState: Sendable {
-        struct StreamingMessageState: Sendable {
+        struct OpenContentBlock: Sendable {
             let messageID: ChatMessageID
+            let role: ChatTranscriptMessageRole
             let createdAt: Date
             var text: String
         }
@@ -53,8 +54,13 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             let toolName: String
         }
 
-        var assistantMessage: StreamingMessageState?
-        var reasoningMessage: StreamingMessageState?
+        enum ContentBlockState: Sendable {
+            case none
+            case open(OpenContentBlock)
+        }
+
+        var contentBlock: ContentBlockState = .none
+        var nextContentBlockOrdinal = 0
         var nextToolCallOrdinal = 0
         var runningToolCalls: [RunningToolCallState] = []
     }
@@ -484,6 +490,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         events.compactMap { event in
             switch event {
             case .userText(let text):
+                closeContentBlock(in: &translationState)
                 return .append(.message(ChatTranscriptMessageItem(
                     messageID: ChatMessageID(rawValue: ULID.generate()),
                     turnID: turnID,
@@ -492,84 +499,39 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     createdAt: Date()
                 )))
             case .assistantText(let text):
-                let current = translationState.assistantMessage
-                    ?? TranscriptTranslationState.StreamingMessageState(
-                        messageID: ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"),
-                        createdAt: Date(),
-                        text: ""
-                    )
-                translationState.assistantMessage = TranscriptTranslationState.StreamingMessageState(
-                    messageID: current.messageID,
-                    createdAt: current.createdAt,
-                    text: text
-                )
-                return .messageReplacement(
-                    messageID: current.messageID,
-                    turnID: turnID,
+                let delta = replacement(
+                    text,
                     role: .assistant,
-                    text: text,
-                    createdAt: current.createdAt
+                    turnID: turnID,
+                    translationState: &translationState
                 )
+                closeContentBlock(in: &translationState)
+                return delta
             case .thinking(let text):
-                let current = translationState.reasoningMessage
-                    ?? TranscriptTranslationState.StreamingMessageState(
-                        messageID: ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"),
-                        createdAt: Date(),
-                        text: ""
-                    )
-                translationState.reasoningMessage = TranscriptTranslationState.StreamingMessageState(
-                    messageID: current.messageID,
-                    createdAt: current.createdAt,
-                    text: text
-                )
-                return .messageReplacement(
-                    messageID: current.messageID,
-                    turnID: turnID,
+                let delta = replacement(
+                    text,
                     role: .reasoning,
-                    text: text,
-                    createdAt: current.createdAt
-                )
-            case .assistantTextDelta(let delta):
-                let current = translationState.assistantMessage
-                    ?? TranscriptTranslationState.StreamingMessageState(
-                        messageID: ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"),
-                        createdAt: Date(),
-                        text: ""
-                    )
-                let nextText = current.text + delta
-                translationState.assistantMessage = TranscriptTranslationState.StreamingMessageState(
-                    messageID: current.messageID,
-                    createdAt: current.createdAt,
-                    text: nextText
-                )
-                return .messageReplacement(
-                    messageID: current.messageID,
                     turnID: turnID,
+                    translationState: &translationState
+                )
+                closeContentBlock(in: &translationState)
+                return delta
+            case .assistantTextDelta(let delta):
+                return appending(
+                    delta,
                     role: .assistant,
-                    text: nextText,
-                    createdAt: current.createdAt
+                    turnID: turnID,
+                    translationState: &translationState
                 )
             case .thinkingDelta(let delta):
-                let current = translationState.reasoningMessage
-                    ?? TranscriptTranslationState.StreamingMessageState(
-                        messageID: ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"),
-                        createdAt: Date(),
-                        text: ""
-                    )
-                let nextText = current.text + delta
-                translationState.reasoningMessage = TranscriptTranslationState.StreamingMessageState(
-                    messageID: current.messageID,
-                    createdAt: current.createdAt,
-                    text: nextText
-                )
-                return .messageReplacement(
-                    messageID: current.messageID,
-                    turnID: turnID,
+                return appending(
+                    delta,
                     role: .reasoning,
-                    text: nextText,
-                    createdAt: current.createdAt
+                    turnID: turnID,
+                    translationState: &translationState
                 )
             case .toolUse(let name, let inputSummary):
+                closeContentBlock(in: &translationState)
                 let toolCallID = ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
                 translationState.nextToolCallOrdinal += 1
                 translationState.runningToolCalls.append(.init(toolCallID: toolCallID, toolName: name))
@@ -583,6 +545,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     updatedAt: Date()
                 ))
             case .toolResult(let isError, let summary):
+                closeContentBlock(in: &translationState)
                 let toolCall = translationState.runningToolCalls.isEmpty
                     ? TranscriptTranslationState.RunningToolCallState(
                         toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)"),
@@ -599,16 +562,88 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     updatedAt: Date()
                 ))
             case .turnFailed(let reason):
+                closeContentBlock(in: &translationState)
                 return .append(.turnFailure(ChatTranscriptTurnFailureItem(
                     turnID: turnID,
                     category: failureCategory(for: reason),
                     message: reason.description,
                     createdAt: Date()
                 )))
-            default:
+            case .systemInit, .subagent, .result, .messageStop, .raw:
+                closeContentBlock(in: &translationState)
                 return nil
             }
         }
+    }
+
+    private static func appending(
+        _ delta: String,
+        role: ChatTranscriptMessageRole,
+        turnID: ChatTurnID,
+        translationState: inout TranscriptTranslationState
+    ) -> ChatTranscriptDelta {
+        var block = compatibleOpenBlock(
+            role: role,
+            turnID: turnID,
+            translationState: &translationState
+        )
+        block.text += delta
+        translationState.contentBlock = .open(block)
+        return .messageReplacement(
+            messageID: block.messageID,
+            turnID: turnID,
+            role: role,
+            text: block.text,
+            createdAt: block.createdAt
+        )
+    }
+
+    private static func replacement(
+        _ text: String,
+        role: ChatTranscriptMessageRole,
+        turnID: ChatTurnID,
+        translationState: inout TranscriptTranslationState
+    ) -> ChatTranscriptDelta {
+        var block = compatibleOpenBlock(
+            role: role,
+            turnID: turnID,
+            translationState: &translationState
+        )
+        block.text = text
+        translationState.contentBlock = .open(block)
+        return .messageReplacement(
+            messageID: block.messageID,
+            turnID: turnID,
+            role: role,
+            text: text,
+            createdAt: block.createdAt
+        )
+    }
+
+    private static func compatibleOpenBlock(
+        role: ChatTranscriptMessageRole,
+        turnID: ChatTurnID,
+        translationState: inout TranscriptTranslationState
+    ) -> TranscriptTranslationState.OpenContentBlock {
+        if case .open(let block) = translationState.contentBlock, block.role == role {
+            return block
+        }
+        closeContentBlock(in: &translationState)
+        let block = TranscriptTranslationState.OpenContentBlock(
+            messageID: ChatMessageID(
+                rawValue: "\(role.rawValue)-\(turnID.rawValue)-block-\(translationState.nextContentBlockOrdinal)"
+            ),
+            role: role,
+            createdAt: Date(),
+            text: ""
+        )
+        translationState.nextContentBlockOrdinal += 1
+        translationState.contentBlock = .open(block)
+        return block
+    }
+
+    private static func closeContentBlock(in translationState: inout TranscriptTranslationState) {
+        translationState.contentBlock = .none
     }
 
     static func transcriptDeltasForTesting(from events: [AgentEvent], turnID: ChatTurnID) -> [ChatTranscriptDelta] {

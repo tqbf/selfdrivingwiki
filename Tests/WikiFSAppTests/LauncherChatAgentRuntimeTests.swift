@@ -78,12 +78,73 @@ struct LauncherChatAgentRuntimeTests {
         }
 
         #expect(messages.count == 2)
-        #expect(messages[0].messageID == ChatMessageID(rawValue: "assistant-\(turnID.rawValue)"))
+        #expect(messages[0].messageID == ChatMessageID(rawValue: "assistant-\(turnID.rawValue)-block-0"))
         #expect(messages[0].role == .assistant)
         #expect(messages[0].text == "Hello world")
-        #expect(messages[1].messageID == ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)"))
+        #expect(messages[1].messageID == ChatMessageID(rawValue: "reasoning-\(turnID.rawValue)-block-1"))
         #expect(messages[1].role == .reasoning)
         #expect(messages[1].text == "Need context")
+    }
+
+    @Test func assistantToolAssistantProducesDistinctMessageBlocks() {
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantTextDelta("I will inspect the page."),
+                .toolUse(name: "Read", inputSummary: "README.md"),
+                .toolResult(isError: false, summary: "read complete"),
+                .assistantTextDelta("The page is ready."),
+            ],
+            turnID: ChatTurnID(rawValue: "turn-block-boundary")
+        )
+
+        let messages = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.count == 2)
+        #expect(messages.map(\.role) == [.assistant, .assistant])
+        #expect(messages[0].messageID != messages[1].messageID)
+        #expect(messages.map(\.text) == ["I will inspect the page.", "The page is ready."])
+    }
+
+    @Test func reasoningAssistantReasoningProducesThreeOrderedContentBlocks() {
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .thinkingDelta("Need context."),
+                .assistantTextDelta("Here is the answer."),
+                .thinkingDelta("Check the cited source."),
+            ],
+            turnID: ChatTurnID(rawValue: "turn-role-boundary")
+        )
+
+        let messages = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.map(\.role) == [.reasoning, .assistant, .reasoning])
+        #expect(Set(messages.map(\.messageID)).count == 3)
+        #expect(messages.map(\.text) == ["Need context.", "Here is the answer.", "Check the cited source."])
+    }
+
+    @Test func deltaAfterFinalReplacementStartsANewContentBlock() {
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantTextDelta("Partial"),
+                .assistantText("Complete first block."),
+                .assistantTextDelta("Second block."),
+            ],
+            turnID: ChatTurnID(rawValue: "turn-finalized-block")
+        )
+
+        let messages = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.map(\.text) == ["Complete first block.", "Second block."])
+        #expect(messages[0].messageID != messages[1].messageID)
     }
 }
 #endif
