@@ -1,6 +1,7 @@
 // pattern: Imperative Shell
 
 import AppKit
+import Combine
 import SwiftUI
 import WikiFSCore
 import WikiFSEngine
@@ -63,7 +64,22 @@ struct ChatDetailView: View {
             remoteSession: remotePresentationState,
             persistedMessages: persistedMessages,
             queuedMessages: queuedMessages,
-            hasDraftText: hasDraftText
+            hasDraftText: hasDraftText,
+            isChatOperationConfigured: isChatOperationConfigured
+        )
+    }
+
+    private var isChatOperationConfigured: Bool {
+        let config = remoteSession.providersConfig()
+        let override: (providerId: ProviderID, modelId: ModelID?)?
+        if let chatSummary, let providerID = chatSummary.modelProviderId {
+            override = (providerID, chatSummary.modelId)
+        } else {
+            override = remoteSession.pendingModelOverride
+        }
+        return config.isChatOperationConfigured(
+            chatOverrideProviderId: override?.providerId,
+            chatOverrideModelId: override?.modelId
         )
     }
 
@@ -112,6 +128,13 @@ struct ChatDetailView: View {
             guard !isGenerating else { return }
             guard remoteSession.isRunning, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentProvidersConfigDidChange)) { notification in
+            guard let changedDirectory = notification.object as? URL,
+                  changedDirectory.standardizedFileURL
+                    == remoteSession.resolveProvidersContainerDirectory().standardizedFileURL
+            else { return }
+            remoteSession.refreshProvidersConfig()
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
@@ -449,6 +472,7 @@ struct ChatDetailView: View {
     }
 
     private func sendMessage() {
+        guard isChatOperationConfigured else { return }
         if remoteSession.isGenerating {
             queueMessage()
             return
@@ -463,7 +487,7 @@ struct ChatDetailView: View {
     }
 
     private func queueMessage() {
-        guard remoteSession.isGenerating else { return }
+        guard isChatOperationConfigured, remoteSession.isGenerating else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         queuedMessages.append(
@@ -493,7 +517,10 @@ struct ChatDetailView: View {
     }
 
     private func firePendingQueuedMessage() {
-        guard let pending = queuedMessages.first else { return }
+        // Retain the pending user message when Settings becomes invalid while
+        // another turn is running; only a valid resolved provider/model may
+        // consume it.
+        guard isChatOperationConfigured, let pending = queuedMessages.first else { return }
         queuedMessages.removeFirst()
         submitMessage(pending.wireMessage)
     }
@@ -506,6 +533,7 @@ struct ChatDetailView: View {
 
     private func submitMessage(_ wireMessage: String) {
         Task {
+            guard isChatOperationConfigured else { return }
             let submission = ChatTurnSubmission(
                 commandID: ChatCommandID(rawValue: ULID.generate()),
                 turnID: ChatTurnID(rawValue: ULID.generate()),
@@ -584,13 +612,15 @@ struct ChatDetailView: View {
         isAwaitingGenerationSlot: Bool,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isGenerating: Bool
+        isGenerating: Bool,
+        isChatOperationConfigured: Bool
     ) -> String? {
         ChatDetailPresentation.composerCaptionText(
             isAwaitingGenerationSlot: isAwaitingGenerationSlot,
             hasChatID: hasChatID,
             isLiveChat: isLiveChat,
-            isGenerating: isGenerating
+            isGenerating: isGenerating,
+            isChatOperationConfigured: isChatOperationConfigured
         )
     }
 
@@ -599,14 +629,16 @@ struct ChatDetailView: View {
         canType: Bool,
         isGenerating: Bool,
         isAwaitingSlot: Bool,
-        hasDraftText: Bool
+        hasDraftText: Bool,
+        isChatOperationConfigured: Bool
     ) -> Bool {
         ChatDetailPresentation.canSendPredicate(
             hasMount: hasMount,
             canType: canType,
             isGenerating: isGenerating,
             isAwaitingSlot: isAwaitingSlot,
-            hasDraftText: hasDraftText
+            hasDraftText: hasDraftText,
+            isChatOperationConfigured: isChatOperationConfigured
         )
     }
 }

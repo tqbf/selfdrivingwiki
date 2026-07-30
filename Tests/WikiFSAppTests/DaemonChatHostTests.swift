@@ -487,6 +487,7 @@ struct DaemonChatHostTests {
         }
 
         #expect(try store.listChats().isEmpty)
+        #expect(await host.liveControllerCountForTesting() == 0)
     }
 
     @Test func existingChatPreflightFailurePreservesRowAndPropagatesError() async throws {
@@ -514,6 +515,88 @@ struct DaemonChatHostTests {
 
         let chats = try store.listChats()
         #expect(chats.map(\.id) == [existing.id])
+    }
+
+    @Test func coldAndWarmConfigurationControllersKeepOneIdleEvictionTimer() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "Test"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Cold configuration")
+        let host = try await daemon.ensureChatHost()
+
+        try await host.setChatConfigOption(
+            chatID: chat.id,
+            option: "thought_level",
+            value: "high"
+        )
+
+        #expect(await host.hasLiveSession(chat.id))
+        #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id))
+        #expect(await host.idleEvictionTaskCountForTesting(chatID: chat.id) == 1)
+
+        // A warm acquire revokes the old task before the option reaches the
+        // controller, then re-arms exactly one timer for the idle controller.
+        try await host.setChatConfigOption(
+            chatID: chat.id,
+            option: "thought_level",
+            value: "low"
+        )
+        #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id))
+        #expect(await host.idleEvictionTaskCountForTesting(chatID: chat.id) == 1)
+        #expect(await host.evictIdleControllerForTesting(chatID: chat.id))
+        #expect(await host.hasLiveSession(chat.id) == false)
+        #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id) == false)
+    }
+
+    @Test func injectedIdleDelayExercisesTheProductionColdEvictionTimer() async throws {
+        let dir = makeTempDir()
+        let wikiID = WikiID(rawValue: "injected-timer-wiki")
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("wiki.sqlite"))
+        let chat = try store.createChat(kind: .edit, title: "Injected timer")
+        var wikiRegistry = WikiRegistry()
+        wikiRegistry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "Injected timer",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        try wikiRegistry.save(to: dir)
+        let coordinator = await MainActor.run {
+            ExtractionCoordinator(
+                containerDirectory: dir,
+                localExtractorFactory: { UnavailablePdf2MarkdownExtractor() }
+            )
+        }
+        let gate = await MainActor.run {
+            GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+        }
+        let host = DaemonChatHost(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            generationGate: gate,
+            storeResolver: { requestedWikiID in
+                requestedWikiID == wikiID ? store : nil
+            },
+            pushEvent: { _ in },
+            idleEvictionDelay: .zero
+        )
+
+        try await host.setChatConfigOption(
+            chatID: chat.id,
+            option: "thought_level",
+            value: "high"
+        )
+
+        for _ in 0..<50 {
+            if await host.hasLiveSession(chat.id) == false {
+                #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id) == false)
+                return
+            }
+            await Task.yield()
+        }
+        Issue.record("injected idle-eviction timer did not remove the cold controller")
     }
 
     // MARK: - AC.4a: DaemonWorkloadClient chat round-trip (RC6)

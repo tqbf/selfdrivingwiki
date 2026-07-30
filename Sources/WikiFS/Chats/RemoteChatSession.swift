@@ -57,15 +57,33 @@ public final class RemoteChatSession {
 
     public var pendingModelOverride: (providerId: ProviderID, modelId: ModelID?)?
 
+    /// Cached provider configuration observed by the composer. This changes
+    /// only at session creation or after an atomic Settings save; it must not
+    /// be decoded from disk while SwiftUI evaluates `ChatDetailView.body`.
+    public private(set) var providerConfiguration: AgentProvidersConfig
+
     @ObservationIgnored private var snapshotRequestTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotRetryTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotRetryAttempt = 0
     @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
     @ObservationIgnored private var historyLoadTarget: ChatTranscriptCursor = .zero
+    @ObservationIgnored private let providersConfigurationDirectory: URL
 
-    public init(chatID: ChatSessionKey) {
+    public convenience init(chatID: ChatSessionKey) {
+        self.init(
+            chatID: chatID,
+            providersConfigurationDirectory: Self.resolveProvidersContainerDirectory()
+        )
+    }
+
+    /// Internal injection keeps the file-backed cache deterministic in the
+    /// app-target regression suite without widening the public session API.
+    init(chatID: ChatSessionKey, providersConfigurationDirectory: URL) {
+        let directory = providersConfigurationDirectory.standardizedFileURL
         self.chatID = chatID
         self.syncState = chatID.chatID.map { ChatClientSyncState(chatID: $0) }
+        self.providersConfigurationDirectory = directory
+        self.providerConfiguration = AgentProvidersConfig.loadOrSeed(from: directory)
     }
 
     func markNotLive() {
@@ -300,13 +318,25 @@ public final class RemoteChatSession {
 
     // MARK: - Provider config surface
 
-    public func resolveProvidersContainerDirectory() -> URL {
+    public static func resolveProvidersContainerDirectory() -> URL {
         DebugLog.trying("resolve providers container", operation: { try DatabaseLocation.appGroupContainerDirectory() })
             ?? FileManager.default.temporaryDirectory
     }
 
+    public func resolveProvidersContainerDirectory() -> URL {
+        providersConfigurationDirectory
+    }
+
     public func providersConfig() -> AgentProvidersConfig {
-        AgentProvidersConfig.loadOrSeed(from: resolveProvidersContainerDirectory())
+        providerConfiguration
+    }
+
+    /// Refreshes the observable cache after Settings has atomically saved the
+    /// shared sidecar. Calling this outside `body` keeps render work pure.
+    public func refreshProvidersConfig() {
+        providerConfiguration = AgentProvidersConfig.loadOrSeed(
+            from: providersConfigurationDirectory
+        )
     }
 
     public func resolveSelectedProvider() -> AgentProvider {
@@ -319,10 +349,11 @@ public final class RemoteChatSession {
 
     @discardableResult
     public func toggleFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
-        let dir = resolveProvidersContainerDirectory()
+        let dir = providersConfigurationDirectory
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
         do {
             try updated.save(to: dir)
+            providerConfiguration = updated
         } catch {
             DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
         }

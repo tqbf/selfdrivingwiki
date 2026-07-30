@@ -114,6 +114,30 @@ import ACPModel
         #expect(config.selectedProvider().id == ProviderID(rawValue: "claude-acp"))
     }
 
+    @Test func chatOperationConfigurationRequiresEnabledResolvedProviderAndModel() {
+        let providerID = ProviderID(rawValue: "configured")
+        let modelID = ModelID(rawValue: "configured-model")
+        let missingModel = AgentProvidersConfig(providers: [
+            AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+        ])
+        let disabledProvider = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: providerID, label: "Configured", enabled: false, isDefault: true),
+            ],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+        let configured = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+            ],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+
+        #expect(missingModel.isChatOperationConfigured() == false)
+        #expect(disabledProvider.isChatOperationConfigured() == false)
+        #expect(configured.isChatOperationConfigured())
+    }
+
     // MARK: - Persistence round-trip
 
     @Test func persistenceRoundTrip() throws {

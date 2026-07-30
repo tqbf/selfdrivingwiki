@@ -24,9 +24,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
     private let sharedGate: GenerationGate
     private let registry = ControllerRegistry()
+    private let idleEvictionDelay: Duration
 
     private static let idleEvictionSeconds = 300
-    private static let idleEvictionDelay: Duration = .seconds(idleEvictionSeconds)
+    private static let defaultIdleEvictionDelay: Duration = .seconds(idleEvictionSeconds)
 
     // MARK: - Init
 
@@ -35,13 +36,15 @@ final class DaemonChatHost: @unchecked Sendable {
         extractionCoordinator: ExtractionCoordinator,
         generationGate: GenerationGate,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
-        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void
+        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
+        idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
         self.sharedGate = generationGate
         self.storeResolver = storeResolver
         self.pushEvent = pushEvent
+        self.idleEvictionDelay = idleEvictionDelay
     }
 
     // MARK: - Unified submit path
@@ -77,6 +80,13 @@ final class DaemonChatHost: @unchecked Sendable {
                let store = storeResolver(request.wikiID) {
                 do {
                     try store.deleteChat(id: resolvedChatID)
+                    let removed = await evictIdleController(chatID: resolvedChatID)
+                    if removed == false {
+                        // A close may be in flight. Keep a bounded retry for
+                        // this now-deleted draft instead of retaining its
+                        // controller until an unrelated state update occurs.
+                        await scheduleIdleEviction(for: resolvedChatID)
+                    }
                 } catch {
                     DebugLog.store("DaemonChatHost.submitTurn rollback failed: \(error)")
                 }
@@ -219,12 +229,25 @@ final class DaemonChatHost: @unchecked Sendable {
         await evictIdleController(chatID: chatID)
     }
 
+    func liveControllerCountForTesting() async -> Int {
+        await registry.count()
+    }
+
+    func isIdleEvictionScheduledForTesting(chatID: ChatID) async -> Bool {
+        await registry.isIdleEvictionScheduled(for: chatID)
+    }
+
+    func idleEvictionTaskCountForTesting(chatID: ChatID) async -> Int {
+        await registry.idleEvictionTaskCount(for: chatID)
+    }
+
     private func makeOrGetController(chatID: ChatID, wikiID: WikiID) async throws -> DaemonChatController {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
 
-        if let existing = await registry.controller(for: chatID) {
+        if let existing = await registry.acquireController(for: chatID) {
+            await scheduleIdleEviction(for: chatID)
             return existing
         }
 
@@ -280,15 +303,21 @@ final class DaemonChatHost: @unchecked Sendable {
             runtime: runtime,
             pushEvent: pushEvent
         )
-        return await registry.insertIfAbsent(controller, chatID: chatID, wikiID: wikiID)
+        let resolvedController = await registry.insertIfAbsent(
+            controller,
+            chatID: chatID,
+            wikiID: wikiID
+        )
+        await scheduleIdleEviction(for: chatID)
+        return resolvedController
     }
 
     private func resolveWikiID(for chatID: ChatID) async throws -> WikiID {
         if let wikiID = await registry.wikiID(for: chatID) {
             return wikiID
         }
-        let registry = WikiRegistry.load(from: containerDirectory)
-        for descriptor in registry.wikis {
+        let wikiRegistry = WikiRegistry.load(from: containerDirectory)
+        for descriptor in wikiRegistry.wikis {
             guard let store = storeResolver(descriptor.id) else { continue }
             do {
                 _ = try store.getChat(id: chatID)
@@ -326,7 +355,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private func scheduleIdleEviction(for chatID: ChatID) async {
         await registry.scheduleIdleEviction(
             for: chatID,
-            after: Self.idleEvictionDelay
+            after: idleEvictionDelay
         ) { [weak self] chatID in
             guard let self else { return }
             _ = await self.evictIdleController(chatID: chatID)
@@ -334,10 +363,23 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     private func evictIdleController(chatID: ChatID) async -> Bool {
-        guard let controller = await registry.controller(for: chatID) else { return false }
-        guard await controller.closeIfIdle() else { return false }
-        await registry.remove(controller, for: chatID)
-        return true
+        let reservation = await registry.reserveForIdleEviction(for: chatID)
+        guard case .reserved(let controller) = reservation else {
+            return false
+        }
+        guard await controller.closeIfIdle() else {
+            await registry.abandonIdleEviction(for: chatID, controller: controller)
+            await scheduleIdleEviction(for: chatID)
+            return false
+        }
+        let removed = await registry.removeIfIdleEvictionReserved(controller, for: chatID)
+        if removed == false {
+            // A command can revoke our reservation while `closeIfIdle` is
+            // awaiting the runtime. The warm path owns a new timer too, but
+            // re-arming here keeps direct eviction callers equally safe.
+            await scheduleIdleEviction(for: chatID)
+        }
+        return removed
     }
 
     // MARK: - Private: message summarization (RC5)
@@ -443,21 +485,50 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 }
 
-private actor ControllerRegistry {
+/// Internal only so the daemon-host regression suite can directly exercise
+/// reservation revocation; production access remains private to the host.
+actor ControllerRegistry {
     private struct Entry {
         let wikiID: WikiID
         let controller: DaemonChatController
+        var isIdleEvictionReserved = false
+    }
+
+    private struct IdleEvictionTask {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+
+    enum IdleEvictionReservation {
+        case missing
+        case alreadyReserved
+        case reserved(DaemonChatController)
     }
 
     private var entries: [ChatID: Entry] = [:]
-    private var idleEvictionTasks: [ChatID: Task<Void, Never>] = [:]
+    private var idleEvictionTasks: [ChatID: IdleEvictionTask] = [:]
 
     func controller(for chatID: ChatID) -> DaemonChatController? {
         entries[chatID]?.controller
     }
 
+    /// Acquiring a controller for a command revokes a pending eviction before
+    /// the caller can await the controller. This prevents an idle timer from
+    /// removing a controller between lookup and submit.
+    func acquireController(for chatID: ChatID) -> DaemonChatController? {
+        guard var entry = entries[chatID] else { return nil }
+        entry.isIdleEvictionReserved = false
+        entries[chatID] = entry
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        return entry.controller
+    }
+
     func wikiID(for chatID: ChatID) -> WikiID? {
         entries[chatID]?.wikiID
+    }
+
+    func count() -> Int {
+        entries.count
     }
 
     func insertIfAbsent(
@@ -477,8 +548,9 @@ private actor ControllerRegistry {
         after delay: Duration,
         eviction: @escaping @Sendable (ChatID) async -> Void
     ) {
-        idleEvictionTasks[chatID]?.cancel()
-        idleEvictionTasks[chatID] = Task {
+        let token = UUID()
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        let task = Task { [weak self] in
             do {
                 try await Task.sleep(for: delay)
             } catch is CancellationError {
@@ -487,18 +559,74 @@ private actor ControllerRegistry {
                 DebugLog.agent("DaemonChatHost idle eviction sleep failed: \(error)")
                 return
             }
-            await eviction(chatID)
+            await self?.runScheduledIdleEviction(
+                for: chatID,
+                token: token,
+                eviction: eviction
+            )
         }
+        idleEvictionTasks[chatID] = IdleEvictionTask(token: token, task: task)
     }
 
     func cancelIdleEviction(for chatID: ChatID) {
-        idleEvictionTasks.removeValue(forKey: chatID)?.cancel()
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
     }
 
-    func remove(_ controller: DaemonChatController, for chatID: ChatID) {
-        guard let current = entries[chatID], current.controller === controller else { return }
+    func isIdleEvictionScheduled(for chatID: ChatID) -> Bool {
+        idleEvictionTasks[chatID] != nil
+    }
+
+    func idleEvictionTaskCount(for chatID: ChatID) -> Int {
+        idleEvictionTasks[chatID] == nil ? 0 : 1
+    }
+
+    func reserveForIdleEviction(for chatID: ChatID) -> IdleEvictionReservation {
+        guard var entry = entries[chatID] else {
+            return .missing
+        }
+        guard entry.isIdleEvictionReserved == false else {
+            return .alreadyReserved
+        }
+        entry.isIdleEvictionReserved = true
+        entries[chatID] = entry
+        return .reserved(entry.controller)
+    }
+
+    /// Test-only observation of the actual reservation state; this is kept
+    /// separate from task state because a close may be active after its timer
+    /// has fired and been removed.
+    func isIdleEvictionReservedForTesting(for chatID: ChatID) -> Bool {
+        entries[chatID]?.isIdleEvictionReserved == true
+    }
+
+    func abandonIdleEviction(for chatID: ChatID, controller: DaemonChatController) {
+        guard var current = entries[chatID], current.controller === controller else { return }
+        current.isIdleEvictionReserved = false
+        entries[chatID] = current
+    }
+
+    func removeIfIdleEvictionReserved(_ controller: DaemonChatController, for chatID: ChatID) -> Bool {
+        guard let current = entries[chatID],
+              current.controller === controller,
+              current.isIdleEvictionReserved else {
+            return false
+        }
         entries.removeValue(forKey: chatID)
-        idleEvictionTasks.removeValue(forKey: chatID)?.cancel()
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        return true
+    }
+
+    private func runScheduledIdleEviction(
+        for chatID: ChatID,
+        token: UUID,
+        eviction: @escaping @Sendable (ChatID) async -> Void
+    ) async {
+        guard idleEvictionTasks[chatID]?.token == token else { return }
+        // The delayed task is complete before the host begins its async
+        // reservation/close work. A refusal can now reliably install exactly
+        // one replacement timer instead of leaving a completed task recorded.
+        idleEvictionTasks.removeValue(forKey: chatID)
+        await eviction(chatID)
     }
 }
 

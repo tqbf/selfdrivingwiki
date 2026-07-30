@@ -433,6 +433,213 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 
+    @Test func idleEvictionCloseDefersInterleavedSubmitAndKeepsControllerNonEvictable() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-idle-first", turnID: "turn-idle-first")
+        let second = harness.makeSubmission(commandID: "command-idle-second", turnID: "turn-idle-second", text: "arrived during close")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before eviction"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let eviction = Task { await controller.closeIfIdle() }
+        await harness.runtime.waitForCloseToStart()
+
+        let submittedDuringClose = Task {
+            try await controller.submit(harness.makeSubmitRequest(submission: second))
+        }
+        _ = try await submittedDuringClose.value
+        await harness.runtime.resumeClose()
+
+        #expect(await eviction.value == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect(turns.map(\.state) == [.completed, .providerSubmitted])
+    }
+
+    @Test func overlappingStopSessionLeavesTheOriginalCloseOwnerToRecoverQueuedTurn() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-overlap-first", turnID: "turn-overlap-first")
+        let second = harness.makeSubmission(commandID: "command-overlap-second", turnID: "turn-overlap-second", text: "arrived during nested close")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before overlapping close"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let idleEviction = Task { await controller.closeIfIdle() }
+        await harness.runtime.waitForCloseToStart()
+        let nestedStop = Task { await controller.stopSession() }
+        await nestedStop.value
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+        await harness.runtime.resumeClose()
+
+        #expect(await idleEviction.value == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect(turns.map(\.state) == [.completed, .providerSubmitted])
+    }
+
+    @Test func nestedTransportCloseCannotReleaseAnotherCloseOwnersGuard() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-transport-owner-first", turnID: "turn-transport-owner-first")
+        let second = harness.makeSubmission(commandID: "command-transport-owner-second", turnID: "turn-transport-owner-second", text: "arrived after nested transport close")
+        let nestedProviderID = ProviderID(rawValue: "nested-transport-provider")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before overlapping transport close"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let idleEviction = Task { await controller.closeIfIdle() }
+        await harness.runtime.waitForCloseToStart()
+
+        // AsyncStream preserves element order. Observing this later marker
+        // proves transportClosed returned while the original close still owns
+        // the lifecycle guard.
+        await harness.runtime.emit(.transportClosed(status: 9))
+        await harness.runtime.emit(.sessionReady(
+            capabilities: ChatCapabilitySet(
+                supportsResume: true,
+                supportsClose: true,
+                supportsReasoning: true,
+                supportsToolCalls: true,
+                supportsPermissions: true
+            ),
+            providerState: ChatProviderState(
+                providerID: nestedProviderID,
+                modelID: ModelID(rawValue: "nested-transport-model"),
+                providerSessionID: AcpSessionID(rawValue: "nested-transport-session")
+            )
+        ))
+        try await harness.waitUntilRuntimeSnapshot(
+            controller,
+            predicate: { $0.providerState.providerID == nestedProviderID },
+            failureMessage: "expected nested transport-close stream processing before resuming the owner"
+        )
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+        await harness.runtime.resumeClose()
+
+        #expect(await idleEviction.value == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect(turns.map(\.state) == [.completed, .providerSubmitted])
+    }
+
+    @Test func stopSessionRecoversTurnSubmittedWhileRuntimeCloseIsAwaiting() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-stop-recovery-first", turnID: "turn-stop-recovery-first")
+        let second = harness.makeSubmission(commandID: "command-stop-recovery-second", turnID: "turn-stop-recovery-second", text: "recover after stop")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before stopping"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let stop = Task { await controller.stopSession() }
+        await harness.runtime.waitForCloseToStart()
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+        await harness.runtime.resumeClose()
+        await stop.value
+
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect(turns.map(\.state) == [.completed, .providerSubmitted])
+    }
+
+    @Test func controllerRegistryAcquireRevokesAnIdleEvictionReservation() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let registry = ControllerRegistry()
+        _ = await registry.insertIfAbsent(
+            controller,
+            chatID: harness.chat.id,
+            wikiID: WikiID(rawValue: "wiki-controller")
+        )
+
+        guard case .reserved(let reserved) = await registry.reserveForIdleEviction(for: harness.chat.id) else {
+            Issue.record("expected the inserted controller to accept an idle-eviction reservation")
+            return
+        }
+        #expect(reserved === controller)
+        #expect(await registry.isIdleEvictionReservedForTesting(for: harness.chat.id))
+
+        guard let acquired = await registry.acquireController(for: harness.chat.id) else {
+            Issue.record("expected acquireController to return the registered controller")
+            return
+        }
+        #expect(acquired === controller)
+        #expect(await registry.isIdleEvictionReservedForTesting(for: harness.chat.id) == false)
+        #expect(await registry.removeIfIdleEvictionReserved(controller, for: harness.chat.id) == false)
+    }
+
+    @Test func controllerRegistryTimerClearsCompletedTaskBeforeEvictionCallback() async {
+        let registry = ControllerRegistry()
+        let chatID = ChatID(rawValue: "timer-chat")
+        let probe = IdleEvictionProbe()
+
+        await registry.scheduleIdleEviction(for: chatID, after: .seconds(60)) { id in
+            await probe.record(id)
+        }
+        await registry.scheduleIdleEviction(for: chatID, after: .zero) { id in
+            await probe.record(id)
+        }
+
+        #expect(await probe.waitForFirstRecord() == chatID)
+        #expect(await registry.isIdleEvictionScheduled(for: chatID) == false)
+    }
+
+    @Test func idleEvictionRefusesActiveDurableClaimAndQueuedTurn() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let active = harness.makeSubmission(commandID: "command-claim", turnID: "turn-claim")
+        let queued = harness.makeSubmission(commandID: "command-queued", turnID: "turn-queued", text: "wait for me")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: active))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: queued))
+
+        #expect(await controller.closeIfIdle() == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 0)
+        #expect(turns.map(\.state) == [.providerSubmitted, .queued])
+    }
+
     @Test func failedTurnAttentionDoesNotBlockNextQueuedTurn() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -659,6 +866,20 @@ private final class ControllerHarness {
         throw HarnessError.timedOut(failureMessage)
     }
 
+    func waitUntilRuntimeSnapshot(
+        _ controller: DaemonChatController,
+        predicate: @Sendable @escaping (ChatRuntimeSnapshot) -> Bool,
+        failureMessage: String
+    ) async throws {
+        for _ in 0..<50 {
+            if predicate(await controller.typedSnapshot()) {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw HarnessError.timedOut(failureMessage)
+    }
+
     func waitUntilOverlay(
         _ controller: DaemonChatController,
         matches predicate: @Sendable @escaping ([ChatTranscriptItem]) -> Bool,
@@ -696,6 +917,27 @@ private final class EventRecorder: @unchecked Sendable {
     }
 }
 
+private actor IdleEvictionProbe {
+    private var firstRecord: ChatID?
+    private var firstRecordWaiter: CheckedContinuation<ChatID, Never>?
+
+    func record(_ chatID: ChatID) {
+        guard firstRecord == nil else { return }
+        firstRecord = chatID
+        firstRecordWaiter?.resume(returning: chatID)
+        firstRecordWaiter = nil
+    }
+
+    func waitForFirstRecord() async -> ChatID {
+        if let firstRecord {
+            return firstRecord
+        }
+        return await withCheckedContinuation { continuation in
+            firstRecordWaiter = continuation
+        }
+    }
+}
+
 private actor StubControllerRuntime: ChatAgentRuntime {
     struct Snapshot: Sendable {
         let startRequests: [ChatRuntimeStartRequest]
@@ -712,6 +954,10 @@ private actor StubControllerRuntime: ChatAgentRuntime {
     private var cancelCalls: [ChatTurnID?] = []
     private var permissionResolutions: [ChatPermissionResolution] = []
     private var closeCallCount = 0
+    private var pausesNextClose = false
+    private var closeHasStarted = false
+    private var closeStartedWaiter: CheckedContinuation<Void, Never>?
+    private var closeResumeWaiter: CheckedContinuation<Void, Never>?
     private var streamContinuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation?
     private var stream: AsyncStream<ChatAgentRuntimeEventEnvelope>?
 
@@ -786,6 +1032,15 @@ private actor StubControllerRuntime: ChatAgentRuntime {
 
     func close(_ handle: ChatRuntimeHandle) async {
         closeCallCount += 1
+        if pausesNextClose {
+            pausesNextClose = false
+            closeHasStarted = true
+            closeStartedWaiter?.resume()
+            closeStartedWaiter = nil
+            await withCheckedContinuation { continuation in
+                closeResumeWaiter = continuation
+            }
+        }
         streamContinuation?.finish()
         streamContinuation = nil
         stream = nil
@@ -797,6 +1052,23 @@ private actor StubControllerRuntime: ChatAgentRuntime {
 
     func emit(_ event: ChatAgentRuntimeEvent, generation: ChatSessionGenerationID) {
         streamContinuation?.yield(.init(generation: generation, event: event))
+    }
+
+    func pauseNextClose() {
+        pausesNextClose = true
+        closeHasStarted = false
+    }
+
+    func waitForCloseToStart() async {
+        guard closeHasStarted == false else { return }
+        await withCheckedContinuation { continuation in
+            closeStartedWaiter = continuation
+        }
+    }
+
+    func resumeClose() {
+        closeResumeWaiter?.resume()
+        closeResumeWaiter = nil
     }
 
     func snapshot() -> Snapshot {

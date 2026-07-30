@@ -319,13 +319,21 @@ Phase 6 completion note for Wednesday, July 29, 2026
   through the single submit command
 - kept the legacy raw XPC start, continue, and send endpoints in `wikid` as
   compatibility adapters that delegate to the typed submit path
-- replaced host registry queue hops and launcher-side polling with an actor
-  registry that owns controller lookup, wiki resolution, idle timer
-  replacement, and controller removal
+- replaced host registry queue hops with an actor registry that owns controller
+  lookup, wiki resolution, idle timer replacement, and controller removal
+- retained `LauncherChatAgentRuntime` polling while it remains the production
+  compatibility runtime
 - added five-minute idle eviction for a controller only after its active claim
   and durable queue are empty; the timer is cancelled when generation starts
-- removed the obsolete launcher event/state emitters and temporary app badge
-  tracing, then updated the reviewed chat API signature manifest
+- removed obsolete launcher event/state emitters and updated the reviewed chat
+  API signature manifest; targeted chat badge diagnostics remain
+- the subsequent Phase 6 corrective audit record is
+  [`plans/chat-redesign-phase6-corrective.md`](chat-redesign-phase6-corrective.md)
+  with dated evidence in
+  [`progress/2026-07-30T101900Z-chat-redesign-phase6-corrective-982.md`](../progress/2026-07-30T101900Z-chat-redesign-phase6-corrective-982.md).
+  It narrows this completion note: `LauncherChatAgentRuntime` polling remains,
+  and the corrective work is limited to close ownership, idle-eviction
+  lifecycle, composer configuration gating, and documentation accuracy.
 - the current evidence is recorded in
   [`progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md`](../progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md)
 
@@ -718,9 +726,10 @@ work:
   live-overlay reconciliation
 - daemon/client compatibility migration to one typed submit path through the
   daemon contract, client wrapper, coordinator, and `ChatDetailView`
-- Phase 6 removal of migrated app shims, daemon registry queue hops, launcher
-  polling/event emitters, and temporary debug seams while preserving raw XPC
-  adapters and adding quiescent idle-controller eviction
+- Phase 6 removal of migrated app shims, daemon registry queue hops, and
+  obsolete launcher event/state emitters while preserving raw XPC adapters,
+  the live launcher polling compatibility path, targeted badge diagnostics,
+  and quiescent idle-controller eviction
 - Tantivy rebuild marker invalidation for destructive chat search resets
 - direct controller, host, coordinator, wire, reducer, and compatibility-adapter
   tests for Phase 3 lifecycle plus Phase 4 wire-version, reconnect,

@@ -9,6 +9,11 @@ import WikiFSCore
 import WikiFSEngine
 
 actor DaemonChatController {
+    private enum RuntimeCloseState {
+        case open
+        case closing
+    }
+
     private static let replayCapacity = 128
     private static let liveEventOverlayCapacity = 512
 
@@ -30,6 +35,12 @@ actor DaemonChatController {
     private var pendingCancellationTurnID: ChatTurnID?
     private var activePermission: ChatPendingPermissionRequest?
     private var isProcessingQueue = false
+    /// The sole close owner has released this actor while `runtime.close` is
+    /// in flight. Re-entrant lifecycle events must leave this state alone:
+    /// only that owner may rotate the generation and reopen queue processing.
+    private var runtimeCloseState: RuntimeCloseState = .open
+    private var isIdleEvictionAttempt = false
+    private var idleEvictionWasCancelled = false
     private var latestStateUpdate = ChatStateUpdate(
         isRunning: false,
         isGenerating: false,
@@ -70,6 +81,9 @@ actor DaemonChatController {
     }
 
     func submit(_ request: ChatSubmitRequest) async throws -> ChatID {
+        if isIdleEvictionAttempt {
+            idleEvictionWasCancelled = true
+        }
         let existingTurns = try store.listPersistedChatTurns(chatID: chatID)
         if existingTurns.contains(where: { $0.submission.commandID == request.submission.commandID }) {
             return chatID
@@ -124,7 +138,10 @@ actor DaemonChatController {
         guard runtimeHandle != nil else { return }
         record(.sessionClosed)
         activePermission = nil
-        await closeRuntimeAndRotateGeneration()
+        let didCloseRuntime = await closeRuntimeAndRotateGeneration()
+        if didCloseRuntime {
+            await recoverQueuedTurnsAfterRuntimeClose(context: "stopSession")
+        }
     }
 
     /// Closes a warm runtime only after its durable queue and active turn are
@@ -132,15 +149,27 @@ actor DaemonChatController {
     func closeIfIdle() async -> Bool {
         guard currentClaimID == nil,
               snapshot.queuedTurns.isEmpty,
-              snapshot.activeTurn?.state.isTerminal != false else {
+              snapshot.activeTurn?.state.isTerminal != false,
+              runtimeCloseState == .open else {
             return false
         }
         guard runtimeHandle != nil else { return true }
+        isIdleEvictionAttempt = true
+        idleEvictionWasCancelled = false
         if snapshot.lifecycle != .closed {
             record(.sessionClosed)
         }
         activePermission = nil
-        await closeRuntimeAndRotateGeneration()
+        _ = await closeRuntimeAndRotateGeneration()
+        isIdleEvictionAttempt = false
+
+        let remainsQuiescent = currentClaimID == nil
+            && snapshot.queuedTurns.isEmpty
+            && snapshot.activeTurn?.state.isTerminal != false
+        guard idleEvictionWasCancelled == false, remainsQuiescent else {
+            await recoverQueuedTurnsAfterRuntimeClose(context: "closeIfIdle")
+            return false
+        }
         return true
     }
 
@@ -223,7 +252,7 @@ actor DaemonChatController {
     }
 
     private func processQueueIfPossible() async throws {
-        guard isProcessingQueue == false else { return }
+        guard isProcessingQueue == false, runtimeCloseState == .open else { return }
         isProcessingQueue = true
         defer { isProcessingQueue = false }
 
@@ -411,11 +440,9 @@ actor DaemonChatController {
                 record(.sessionClosed)
             }
             activePermission = nil
-            await closeRuntimeAndRotateGeneration()
-            do {
-                try await processQueueIfPossible()
-            } catch {
-                DebugLog.agent("DaemonChatController.transportClosed queue advance failed: \(error)")
+            let didCloseRuntime = await closeRuntimeAndRotateGeneration()
+            if didCloseRuntime {
+                await recoverQueuedTurnsAfterRuntimeClose(context: "transportClosed")
             }
 
         case .resumed(let providerSessionID):
@@ -644,7 +671,13 @@ actor DaemonChatController {
         )
     }
 
-    private func closeRuntimeAndRotateGeneration() async {
+    /// Acquires the single close-owner role. A re-entrant lifecycle path can
+    /// observe that close but cannot perform teardown or clear its guard.
+    @discardableResult
+    private func closeRuntimeAndRotateGeneration() async -> Bool {
+        guard runtimeCloseState == .open else { return false }
+        runtimeCloseState = .closing
+        defer { runtimeCloseState = .open }
         if let handle = runtimeHandle {
             await runtime.close(handle)
         }
@@ -670,6 +703,18 @@ actor DaemonChatController {
             transientTranscriptOverlay: [],
             lastIncludedSequence: snapshot.lastIncludedSequence
         )
+        return true
+    }
+
+    /// A turn can be durably queued while the close owner is awaiting a
+    /// runtime. Recover only after that owner has restored an open lifecycle,
+    /// so a queued turn can never be stranded behind a completed close.
+    private func recoverQueuedTurnsAfterRuntimeClose(context: String) async {
+        do {
+            try await processQueueIfPossible()
+        } catch {
+            DebugLog.agent("DaemonChatController.\(context) queue recovery failed: \(error)")
+        }
     }
 
     static func bootstrapSnapshot(

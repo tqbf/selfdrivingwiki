@@ -29,11 +29,10 @@ public enum DebugLog {
     /// events surface cleanly in Console.app.
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
     /// The chat run-state → sidebar "responding…" badge pipeline, end to end:
-    /// the daemon's `pushStateUpdate`, the app's envelope `route`, the
-    /// coordinator's `runningChatIDs` membership + `runningStateToken` bump,
-    /// and the sidebar table's re-render path. Its own category so the trace
-    /// reads as one ordered story instead of being interleaved with `agent`
-    /// (per-event streaming) and `store` (everything else).
+    /// a typed `ChatSyncUpdate`, `ChatDaemonCoordinator` state derivation,
+    /// `generatingChatIDs` membership + `runningStateToken` bump, and the sidebar
+    /// table's re-render path. Its own category keeps this trace separate from
+    /// `agent` (runtime events) and `store` (persistence).
     ///
     ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatlive"' \
     ///              --style compact --info --last 10m

@@ -17,7 +17,8 @@ struct ChatDetailPresentationTests {
             remoteSession: .fixture(isGenerating: true, runningKind: .query),
             persistedMessages: [],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
 
         #expect(presentation.contentState == .internals)
@@ -32,7 +33,8 @@ struct ChatDetailPresentationTests {
             remoteSession: .fixture(),
             persistedMessages: [],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
 
         #expect(presentation.contentState == .missingChat)
@@ -62,7 +64,8 @@ struct ChatDetailPresentationTests {
                 ChatMessage.fixture(seq: 0, event: .userText("persisted")),
             ],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
 
         #expect(presentation.transcript.events == [.userText("hello"), .assistantText("world")])
@@ -92,7 +95,8 @@ struct ChatDetailPresentationTests {
             remoteSession: .fixture(activeChatID: liveChatID, pendingPermissions: [request]),
             persistedMessages: [],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
         let persisted = ChatDetailPresentation.make(
             chatID: liveChatID,
@@ -101,7 +105,8 @@ struct ChatDetailPresentationTests {
             remoteSession: .fixture(pendingPermissions: [request]),
             persistedMessages: [],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
 
         #expect(live.livePendingPermission?.toolCallId == request.toolCallId)
@@ -121,7 +126,8 @@ struct ChatDetailPresentationTests {
             ),
             persistedMessages: [],
             queuedMessages: [],
-            hasDraftText: true
+            hasDraftText: true,
+            isChatOperationConfigured: true
         )
 
         #expect(presentation.composer.showsStopButton)
@@ -143,12 +149,30 @@ struct ChatDetailPresentationTests {
             ),
             persistedMessages: [],
             queuedMessages: [.fixture(preview: "next up")],
-            hasDraftText: true
+            hasDraftText: true,
+            isChatOperationConfigured: true
         )
 
         #expect(presentation.composer.showsStopButton)
         #expect(presentation.composer.showsQueueButton == false)
         #expect(presentation.composer.sendButtonTitle == "Queued — will send when the response finishes")
+    }
+
+    @Test func composerProjectionDisablesInputAndSendWhenChatOperationIsNotConfigured() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: nil,
+            chatSummary: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedMessages: [],
+            queuedMessages: [],
+            hasDraftText: true,
+            isChatOperationConfigured: false
+        )
+
+        #expect(presentation.composer.isEnabled == false)
+        #expect(presentation.composer.canSend == false)
+        #expect(presentation.composer.caption == "Configure an enabled provider and model in Settings → Providers before sending.")
     }
 
     @Test func outlineProjectionUsesCachedPersistedSummaryWhenAvailable() throws {
@@ -169,7 +193,8 @@ struct ChatDetailPresentationTests {
                 ),
             ],
             queuedMessages: [],
-            hasDraftText: false
+            hasDraftText: false,
+            isChatOperationConfigured: true
         )
 
         let entry = try #require(presentation.outlineEntries.first)

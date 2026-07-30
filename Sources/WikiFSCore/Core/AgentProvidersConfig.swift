@@ -1,5 +1,13 @@
 import Foundation
 
+public extension Notification.Name {
+    /// Emitted after `agent-providers.json` is atomically replaced so cached
+    /// chat-composer state can refresh outside SwiftUI's render path.
+    static let agentProvidersConfigDidChange = Notification.Name(
+        "org.selfdrivingwiki.agentProvidersConfigDidChange"
+    )
+}
+
 /// The persisted list of configured agent providers (slice of #324 — provider
 /// model). Mirrors `AgentCommandConfig` / `ACPAgentConfig`'s persistence pattern:
 /// atomic JSON in the App Group container, loaded fresh at spawn time. Replaces
@@ -293,6 +301,30 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         return modelId(forStage: stage, fallbackProvider: p.id)
     }
 
+    /// The chat composer may enable submission only when the same resolved
+    /// provider/model pair that the launcher validates is available. This keeps
+    /// an all-disabled provider list or a missing selected model from reaching
+    /// the daemon as a preflight failure.
+    public func isChatOperationConfigured(
+        chatOverrideProviderId: ProviderID? = nil,
+        chatOverrideModelId: ModelID? = nil
+    ) -> Bool {
+        guard enabledProviders.isEmpty == false else { return false }
+        let provider = provider(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderId
+        )
+        guard provider.enabled else { return false }
+        guard let modelID = modelId(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderId,
+            chatOverrideModelId: chatOverrideModelId
+        ) else {
+            return false
+        }
+        return modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
     // MARK: - Per-stage model selection (per-stage-model-selection plan)
 
     /// The model id to use for `stage` when the run resolves `providerId` as
@@ -537,6 +569,22 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     }
 
     // MARK: - Persistence
+
+    /// Persists the provider configuration and announces the completed write.
+    /// The notification is intentionally post-write: listeners always reload a
+    /// whole, atomically written sidecar rather than observing an in-progress
+    /// edit.
+    public func save(to directory: URL) throws {
+        let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(self)
+        try data.write(to: url, options: .atomic)
+        NotificationCenter.default.post(
+            name: .agentProvidersConfigDidChange,
+            object: directory.standardizedFileURL
+        )
+    }
 
     /// Load `agent-providers.json` from `directory`. If missing OR empty, seed
     /// from `seed(discovered:)` (running real PATH discovery) AND persist the
