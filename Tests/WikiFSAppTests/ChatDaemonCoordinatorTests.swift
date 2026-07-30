@@ -181,6 +181,34 @@ struct ChatDaemonCoordinatorTests {
         #expect(stub.sessionStateRequests.count >= 2)
     }
 
+    @Test func persistedOnlyBaselineAcceptsFirstLiveUpdateWithoutSnapshotRoundTrip() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = makeSnapshot(
+            sequence: 0,
+            generation: "persisted-chat-1",
+            activeTurn: nil
+        )
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        stub.sessionStateRequests.removeAll()
+
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(
+                    sequence: 1,
+                    generation: "generation-live",
+                    activeTurn: makeActiveTurn(state: .responding),
+                    overlay: [makeMessage(role: .assistant, text: "live")]
+                )
+            )
+        )
+
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        await expectEventually(session.isGenerating)
+        #expect(stub.sessionStateRequests.isEmpty)
+    }
+
     @Test func draftSessionDoesNotWireConfigCallback() {
         let coordinator = makeCoordinator()
         #expect(coordinator.session(for: nil).onSetChatConfigOption == nil)
@@ -192,6 +220,7 @@ struct ChatDaemonCoordinatorTests {
 
     private func makeSnapshot(
         sequence: Int64,
+        generation: String = "generation-1",
         activeTurn: ChatTurnSnapshot? = nil,
         overlay: [ChatTranscriptItem] = [],
         runMetadata: ChatRunMetadata = .empty
@@ -199,7 +228,7 @@ struct ChatDaemonCoordinatorTests {
         ChatSyncSnapshot(
             projection: ChatSyncProjection(
                 chatID: ChatID(rawValue: "chat-1"),
-                generation: ChatSessionGenerationID(rawValue: "generation-1"),
+                generation: ChatSessionGenerationID(rawValue: generation),
                 lifecycle: activeTurn == nil ? .closed : .ready,
                 activeTurn: activeTurn,
                 queuedTurns: [],
@@ -223,6 +252,7 @@ struct ChatDaemonCoordinatorTests {
 
     private func makeUpdate(
         sequence: Int64,
+        generation: String = "generation-1",
         activeTurn: ChatTurnSnapshot? = nil,
         overlay: [ChatTranscriptItem] = []
     ) -> ChatSyncUpdate {
@@ -230,6 +260,7 @@ struct ChatDaemonCoordinatorTests {
             reason: .sessionEvent(.started(turnID: ChatTurnID(rawValue: "turn-1"))),
             projection: makeSnapshot(
                 sequence: sequence,
+                generation: generation,
                 activeTurn: activeTurn,
                 overlay: overlay
             ).projection

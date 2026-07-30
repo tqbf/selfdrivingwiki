@@ -181,7 +181,84 @@ struct ChatClientSyncReducerTests {
         #expect(second == first)
     }
 
-    @Test func terminalSequenceUpdateClearsAnsweringState() {
+    @Test func optimisticSubmitFailurePreservesAuthoritativeReadyLifecycle() {
+        let submission = makeSubmission()
+        let base = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(sequence: 2, lifecycle: .ready),
+            syncStatus: .synchronized
+        )
+
+        let optimistic = ChatClientSyncReducer.reduce(base, .optimisticSubmit(submission)).state
+        let reduction = ChatClientSyncReducer.reduce(optimistic, .optimisticSubmitFailed(submission.turnID))
+
+        #expect(reduction.state.projection?.lifecycle == .ready)
+        #expect(reduction.state.projection?.activeTurn == nil)
+        #expect(reduction.state.projection?.queuedTurns.isEmpty == true)
+        #expect(reduction.state.projection?.transcriptOverlay.isEmpty == true)
+    }
+
+    @Test func persistedOnlyBaselineAcceptsFirstLiveGenerationUpdate() {
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(
+                sequence: 0,
+                generation: "persisted-chat-1",
+                lifecycle: .closed
+            ),
+            syncStatus: .synchronized
+        )
+
+        let update = makeUpdate(
+            sequence: 1,
+            generation: "generation-live",
+            reason: .sessionEvent(.started(turnID: ChatTurnID(rawValue: "turn-1")))
+        )
+        let reduction = ChatClientSyncReducer.reduce(state, .applyUpdate(update))
+
+        #expect(reduction.state.projection == update.projection)
+        #expect(reduction.state.syncStatus == .synchronized)
+        #expect(reduction.effects.isEmpty)
+    }
+
+    @Test func duplicateCommittedUserRowsDoNotCollapseOrTrap() {
+        let first = makePersisted(
+            cursor: 1,
+            item: makeMessage(role: .user, text: "first")
+        )
+        let second = PersistedChatTranscriptItem(
+            cursor: ChatTranscriptCursor(rawValue: 2),
+            item: .message(
+                ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "user-duplicate"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .user,
+                    text: "first retry",
+                    createdAt: Date(timeIntervalSince1970: 31)
+                )
+            ),
+            projectedEventJSON: nil,
+            projectedPlainText: "first retry",
+            createdAt: Date(timeIntervalSince1970: 31)
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            ChatClientSyncState(
+                chatID: ChatID(rawValue: "chat-1"),
+                projection: makeProjection(sequence: 2),
+                syncStatus: .synchronized
+            ),
+            .appendCommittedHistory(
+                items: [first, second],
+                loadedCursor: ChatTranscriptCursor(rawValue: 2)
+            )
+        )
+
+        #expect(reduction.state.committedItems.map(\.cursor.rawValue) == [1, 2])
+        #expect(reduction.state.displayTranscriptItems.count == 2)
+    }
+
+    @Test func terminalSequenceUpdateReplacesRespondingProjectionWithClosedProjection() {
         let state = ChatClientSyncState(
             chatID: ChatID(rawValue: "chat-1"),
             projection: makeProjection(sequence: 4, activeTurn: makeActiveTurn(state: .responding)),
@@ -196,6 +273,7 @@ struct ChatClientSyncReducerTests {
 
         #expect(reduction.state.projection == terminal)
         #expect(reduction.state.syncStatus == .synchronized)
+        #expect(reduction.state.projection?.activeTurn == nil)
     }
 
     private func makeSnapshot(

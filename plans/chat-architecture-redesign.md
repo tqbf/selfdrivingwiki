@@ -1,6 +1,6 @@
 # Chat Architecture Redesign
 
-Last updated: July 30, 2026
+Last updated: July 29, 2026 (America/Los_Angeles)
 
 ## Status
 
@@ -39,7 +39,8 @@ Remediation note for PR #990 on Wednesday, July 29, 2026:
 - the current exact-head evidence is recorded in
   [`progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`](../progress/2026-07-29T201105Z-chat-redesign-phase3-982.md)
 
-Phase 4 implementation note for Thursday, July 30, 2026:
+Phase 4 implementation note for Wednesday, July 29, 2026
+(America/Los_Angeles; timestamp `2026-07-30T010000Z`):
 
 - the chat XPC payload is now versioned as typed sequenced snapshot/update
   envelopes while preserving JSON-encoded `Data` transport at the daemon
@@ -48,6 +49,17 @@ Phase 4 implementation note for Thursday, July 30, 2026:
   the app no longer silently accepts future chat wire payloads
 - `RemoteChatSession` is reduced to a narrow compatibility adapter over a pure
   reducer-owned client sync state machine
+- the exact-head corrective pass repairs the Phase 4 audit regressions in
+  committed-history paging, optimistic lifecycle rollback, gap-triggered
+  snapshot retry, duplicate committed-row reconciliation, persisted-only
+  baseline handoff, real controller sequence coverage, and compatibility
+  refresh suppression
+- remaining launcher-era host cleanup (`DaemonChatHost` registry sync hops,
+  idle eviction, wiki-resolution cleanup, and dead host/debug seams) is
+  explicitly re-parked to `Phase 6` compatibility cleanup rather than implied
+  as fixed here
+- `ChatDetailView` follow-up queue ownership remains explicitly deferred to
+  `Phase 5` UI decomposition
 - the current exact-head evidence is recorded in
   [`progress/2026-07-30T010000Z-chat-redesign-phase4-982.md`](../progress/2026-07-30T010000Z-chat-redesign-phase4-982.md)
 

@@ -22,6 +22,7 @@ actor DaemonChatController {
     private var snapshot: ChatRuntimeSnapshot
     private var replayBuffer: ChatUpdateReplayBuffer
     private var nextSequence = ChatUpdateSequence.initial
+    private var committedCursor: ChatTranscriptCursor
     private var runtimeHandle: ChatRuntimeHandle?
     private var eventTask: Task<Void, Never>?
     private var currentClaimID: ChatTurnClaimID?
@@ -58,6 +59,7 @@ actor DaemonChatController {
         self.generation = ChatSessionGenerationID(rawValue: ULID.generate())
         self.replayBuffer = ChatUpdateReplayBuffer(capacity: Self.replayCapacity)
         self.snapshot = try Self.bootstrapSnapshot(chatID: chatID, store: store, generation: generation)
+        self.committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
         if case .permissionRequired = snapshot.attention {
             self.activePermission = nil
         }
@@ -83,7 +85,6 @@ actor DaemonChatController {
                 createdAt: request.submission.submittedAt
             ))
         ])
-        pushEvent(.chatEvent(chatID: chatID, event: .userText(request.submission.userText)))
         record(.queued(ChatQueuedTurn(
             ordinal: persistedTurn.ordinal,
             submission: persistedTurn.submission,
@@ -192,7 +193,7 @@ actor DaemonChatController {
             "DaemonChatController.didUpdateCompatibilityState.nextProjection",
             operation: { try syncProjection() }
         )
-        guard previousProjection != nextProjection else { return }
+        guard compatibilityMeaningfullyChanged(from: previousProjection, to: nextProjection) else { return }
         pushSyncUpdate(reason: .compatibilityRefreshed)
     }
 
@@ -417,7 +418,10 @@ actor DaemonChatController {
 
     private func appendTranscriptItems(_ items: [ChatTranscriptItem]) throws {
         guard items.isEmpty == false else { return }
-        _ = try store.appendChatTranscriptItems(chatID: chatID, items: items)
+        let inserted = try store.appendChatTranscriptItems(chatID: chatID, items: items)
+        if let latestCursor = inserted.last?.cursor {
+            committedCursor = max(committedCursor, latestCursor)
+        }
     }
 
     @discardableResult
@@ -529,7 +533,6 @@ actor DaemonChatController {
     }
 
     private func syncProjection() throws -> ChatSyncProjection {
-        let committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
         return ChatSyncProjection.from(
             snapshot: snapshot,
             committedCursor: committedCursor,
@@ -537,6 +540,41 @@ actor DaemonChatController {
             runMetadata: compatibilityRunMetadata(),
             usage: compatibilityUsage() ?? snapshot.usage,
             diagnostics: compatibilityDiagnostics()
+        )
+    }
+
+    private func compatibilityMeaningfullyChanged(
+        from previousProjection: ChatSyncProjection?,
+        to nextProjection: ChatSyncProjection?
+    ) -> Bool {
+        compatibilityProjectionIgnoringLastActivity(previousProjection)
+            != compatibilityProjectionIgnoringLastActivity(nextProjection)
+    }
+
+    private func compatibilityProjectionIgnoringLastActivity(
+        _ projection: ChatSyncProjection?
+    ) -> ChatSyncProjection? {
+        guard let projection else { return nil }
+        return ChatSyncProjection(
+            chatID: projection.chatID,
+            generation: projection.generation,
+            lifecycle: projection.lifecycle,
+            activeTurn: projection.activeTurn,
+            queuedTurns: projection.queuedTurns,
+            attention: projection.attention,
+            capabilities: projection.capabilities,
+            providerState: projection.providerState,
+            usage: projection.usage,
+            diagnostics: ChatDiagnosticsState(
+                stderr: projection.diagnostics.stderr,
+                lastActivityAt: nil,
+                currentProcessID: projection.diagnostics.currentProcessID
+            ),
+            transcriptOverlay: projection.transcriptOverlay,
+            committedCursor: projection.committedCursor,
+            lastIncludedSequence: projection.lastIncludedSequence,
+            pendingPermission: projection.pendingPermission,
+            runMetadata: projection.runMetadata
         )
     }
 

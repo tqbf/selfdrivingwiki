@@ -63,6 +63,18 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls == [submission])
     }
 
+    @Test func submitDoesNotEmitLegacyChatEventEnvelope() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let submission = harness.makeSubmission(commandID: "command-envelope", turnID: "turn-envelope")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
+
+        let kinds = harness.recordedEnvelopes().map(\.kind)
+        #expect(kinds.contains(.chatEvent) == false)
+        #expect(kinds.contains(.chatSyncUpdate))
+    }
+
     @Test func queuedCancellationTargetIsRejectedAndFollowerIsPreserved() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -211,6 +223,60 @@ struct DaemonChatControllerTests {
         } else {
             Issue.record("expected replay updates to remain available after completion and transport close")
         }
+    }
+
+    @Test func syncUpdatesUseConsecutiveSequencesAndIgnoreLastActivityOnlyCompatibilityRefresh() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let submission = harness.makeSubmission(commandID: "command-sequence", turnID: "turn-sequence")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
+        await controller.didUpdateCompatibilityState(ChatStateUpdate(
+            isRunning: true,
+            isGenerating: true,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: "query",
+            runStartedAt: Date(timeIntervalSince1970: 100),
+            stderr: "stderr",
+            lastActivityAt: Date(timeIntervalSince1970: 200),
+            currentProcessID: 123
+        ))
+        await controller.didUpdateCompatibilityState(ChatStateUpdate(
+            isRunning: true,
+            isGenerating: true,
+            isAwaitingGenerationSlot: false,
+            preflightError: nil,
+            thinkingOption: nil,
+            usageData: nil,
+            logFileURL: nil,
+            debugFolderURL: nil,
+            runKindRaw: "query",
+            runStartedAt: Date(timeIntervalSince1970: 100),
+            stderr: "stderr",
+            lastActivityAt: Date(timeIntervalSince1970: 201),
+            currentProcessID: 123
+        ))
+
+        let updates = try harness.recordedEnvelopes()
+            .filter { $0.kind == .chatSyncUpdate }
+            .map { try $0.decodedChatSyncUpdate() }
+        let sessionEventSequences = updates.compactMap { update -> Int64? in
+            guard case .sessionEvent = update.reason else { return nil }
+            return update.projection.lastIncludedSequence.rawValue
+        }
+        let compatibilitySequences = updates.compactMap { update -> Int64? in
+            guard case .compatibilityRefreshed = update.reason else { return nil }
+            return update.projection.lastIncludedSequence.rawValue
+        }
+
+        #expect(sessionEventSequences == Array(1...Int64(sessionEventSequences.count)))
+        #expect(compatibilitySequences.count == 1)
+        #expect(compatibilitySequences.first == sessionEventSequences.last)
     }
 
     @Test func restartRecoveryPreservesQueuedOrderWithoutAutoResubmit() async throws {
@@ -447,6 +513,36 @@ struct DaemonChatControllerTests {
         #expect(persistedTools.first?.toolName == "Edit")
         #expect(persistedTools.first?.status == .completed)
     }
+
+    @Test func completedTurnClearsTransientTranscriptOverlay() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let submission = harness.makeSubmission(commandID: "command-overlay", turnID: "turn-overlay")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
+        await harness.runtime.emit(.transcript(
+            LauncherChatAgentRuntime.transcriptDeltasForTesting(
+                from: [
+                    .assistantTextDelta("Hello"),
+                    .assistantText("Hello"),
+                ],
+                turnID: submission.turnID
+            )
+        ))
+        try await harness.waitUntilOverlay(
+            controller,
+            matches: { $0.isEmpty == false },
+            failureMessage: "expected transcript overlay to appear after streamed assistant output"
+        )
+
+        await harness.runtime.emit(.turnCompleted(submission.turnID))
+
+        try await harness.waitUntilOverlay(
+            controller,
+            matches: \.isEmpty,
+            failureMessage: "expected transcript overlay to clear after turn completion"
+        )
+    }
 }
 
 private final class ControllerHarness {
@@ -458,6 +554,7 @@ private final class ControllerHarness {
     let store: GRDBWikiStore
     let chat: ChatSummary
     let runtime: StubControllerRuntime
+    private let eventRecorder = EventRecorder()
 
     init() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
@@ -483,7 +580,9 @@ private final class ControllerHarness {
             wikiID: WikiID(rawValue: "wiki-controller"),
             store: store,
             runtime: runtime,
-            pushEvent: { _ in }
+            pushEvent: { [eventRecorder] envelope in
+                eventRecorder.record(envelope)
+            }
         )
     }
 
@@ -558,6 +657,42 @@ private final class ControllerHarness {
             try await Task.sleep(for: .milliseconds(10))
         }
         throw HarnessError.timedOut(failureMessage)
+    }
+
+    func waitUntilOverlay(
+        _ controller: DaemonChatController,
+        matches predicate: @Sendable @escaping ([ChatTranscriptItem]) -> Bool,
+        failureMessage: String
+    ) async throws {
+        for _ in 0..<50 {
+            if predicate(await controller.typedSnapshot().transientTranscriptOverlay) {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw HarnessError.timedOut(failureMessage)
+    }
+
+    func recordedEnvelopes() -> [QueueEventEnvelope] {
+        eventRecorder.snapshot()
+    }
+}
+
+private final class EventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var envelopes: [QueueEventEnvelope] = []
+
+    func record(_ envelope: QueueEventEnvelope) {
+        lock.lock()
+        envelopes.append(envelope)
+        lock.unlock()
+    }
+
+    func snapshot() -> [QueueEventEnvelope] {
+        lock.lock()
+        let snapshot = envelopes
+        lock.unlock()
+        return snapshot
     }
 }
 

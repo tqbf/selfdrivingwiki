@@ -11,7 +11,12 @@ import WikiFSEngine
 @MainActor
 @Observable
 public final class RemoteChatSession {
-    private static let transcriptPageSize = 200
+    static let committedHistoryPageSize = 200
+    private static let authoritativeSnapshotRetryDelays: [Duration] = [
+        .milliseconds(50),
+        .milliseconds(100),
+        .milliseconds(250),
+    ]
 
     public let chatID: ChatSessionKey
     public let instanceID = UUID()
@@ -52,6 +57,8 @@ public final class RemoteChatSession {
     public var pendingModelOverride: (providerId: ProviderID, modelId: ModelID?)?
 
     @ObservationIgnored private var snapshotRequestTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotRetryAttempt = 0
 
     public init(chatID: ChatSessionKey) {
         self.chatID = chatID
@@ -72,6 +79,7 @@ public final class RemoteChatSession {
     }
 
     func hydrate(from snapshot: ChatSyncSnapshot) {
+        clearAuthoritativeSnapshotRetryBackoff()
         apply(.applySnapshot(snapshot))
     }
 
@@ -87,6 +95,9 @@ public final class RemoteChatSession {
         guard let state = syncState else { return }
         let reduction = ChatClientSyncReducer.reduce(state, action)
         syncState = reduction.state
+        if reduction.state.syncStatus == .synchronized {
+            clearAuthoritativeSnapshotRetryBackoff()
+        }
         projectCompatibilitySurface()
         runEffects(reduction.effects)
     }
@@ -155,29 +166,58 @@ public final class RemoteChatSession {
         guard snapshotRequestTask == nil else { return }
         guard let loader = onRequestAuthoritativeSnapshot else { return }
         snapshotRequestTask = Task { [weak self] in
-            defer {
-                Task { @MainActor [weak self] in
-                    self?.snapshotRequestTask = nil
-                }
-            }
             do {
                 let snapshot = try await loader()
                 await MainActor.run {
+                    self?.snapshotRequestTask = nil
+                    self?.clearAuthoritativeSnapshotRetryBackoff()
                     self?.hydrate(from: snapshot)
                 }
             } catch {
                 await MainActor.run {
+                    self?.snapshotRequestTask = nil
                     let sessionKey = self.map { String(describing: $0.chatID) } ?? "unknown"
                     DebugLog.agent("RemoteChatSession snapshot request failed for \(sessionKey): \(error)")
+                    self?.scheduleAuthoritativeSnapshotRetryIfNeeded()
                 }
             }
         }
     }
 
+    private func scheduleAuthoritativeSnapshotRetryIfNeeded() {
+        guard syncState?.syncStatus != .synchronized else { return }
+        guard snapshotRetryTask == nil else { return }
+        guard snapshotRetryAttempt < Self.authoritativeSnapshotRetryDelays.count else { return }
+
+        let delay = Self.authoritativeSnapshotRetryDelays[snapshotRetryAttempt]
+        snapshotRetryAttempt += 1
+        snapshotRetryTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                await MainActor.run {
+                    self?.snapshotRetryTask = nil
+                }
+                return
+            }
+            await MainActor.run {
+                self?.snapshotRetryTask = nil
+                self?.requestAuthoritativeSnapshotIfNeeded()
+            }
+        }
+    }
+
+    private func clearAuthoritativeSnapshotRetryBackoff() {
+        snapshotRetryTask?.cancel()
+        snapshotRetryTask = nil
+        snapshotRetryAttempt = 0
+    }
+
     private func loadCommittedHistory(to target: ChatTranscriptCursor) async {
         guard let loader = onLoadCommittedHistoryPage else { return }
+        var targetCursor = target
 
-        while let syncState, syncState.loadedCommittedCursor < target {
+        while let syncState, syncState.loadedCommittedCursor < targetCursor {
             let afterCursor: ChatTranscriptCursor? = syncState.loadedCommittedCursor == .zero
                 ? nil
                 : syncState.loadedCommittedCursor
@@ -189,8 +229,12 @@ public final class RemoteChatSession {
                 return
             }
 
-            apply(.appendCommittedHistory(items: page.items, loadedCursor: page.checkpoint))
-            if page.checkpoint >= target || page.nextCursor == nil {
+            let loadedCursor = page.nextCursor
+                ?? page.items.last?.cursor
+                ?? syncState.loadedCommittedCursor
+            apply(.appendCommittedHistory(items: page.items, loadedCursor: loadedCursor))
+            targetCursor = max(targetCursor, page.checkpoint)
+            if loadedCursor >= targetCursor || loadedCursor == syncState.loadedCommittedCursor {
                 return
             }
         }
@@ -314,6 +358,9 @@ public final class RemoteChatSession {
         currentProcessID = nil
         snapshotRequestTask?.cancel()
         snapshotRequestTask = nil
+        snapshotRetryTask?.cancel()
+        snapshotRetryTask = nil
+        snapshotRetryAttempt = 0
     }
 }
 #endif

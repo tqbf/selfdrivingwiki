@@ -13,19 +13,22 @@ public struct ChatClientSyncState: Sendable, Equatable {
     public let committedItems: [PersistedChatTranscriptItem]
     public let loadedCommittedCursor: ChatTranscriptCursor
     public let syncStatus: ChatClientSyncStatus
+    let optimisticBaseLifecycles: [ChatTurnID: ChatSessionLifecycle]
 
     public init(
         chatID: ChatID,
         projection: ChatSyncProjection? = nil,
         committedItems: [PersistedChatTranscriptItem] = [],
         loadedCommittedCursor: ChatTranscriptCursor = .init(rawValue: 0),
-        syncStatus: ChatClientSyncStatus = .awaitingAuthoritativeSnapshot
+        syncStatus: ChatClientSyncStatus = .awaitingAuthoritativeSnapshot,
+        optimisticBaseLifecycles: [ChatTurnID: ChatSessionLifecycle] = [:]
     ) {
         self.chatID = chatID
         self.projection = projection
         self.committedItems = committedItems
         self.loadedCommittedCursor = loadedCommittedCursor
         self.syncStatus = syncStatus
+        self.optimisticBaseLifecycles = optimisticBaseLifecycles
     }
 }
 
@@ -108,9 +111,11 @@ public enum ChatClientSyncReducer {
             projection: preservedProjection,
             committedItems: state.committedItems,
             loadedCommittedCursor: state.loadedCommittedCursor,
-            syncStatus: .synchronized
+            syncStatus: .synchronized,
+            optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = pruningCommittedOverlay(in: next)
+        next = retainingActiveOptimisticLifecycleBackups(in: next)
 
         let effects: [ChatClientSyncEffect] =
             preservedProjection.committedCursor > state.loadedCommittedCursor
@@ -141,7 +146,8 @@ public enum ChatClientSyncReducer {
                 projection: nil,
                 committedItems: state.committedItems,
                 loadedCommittedCursor: state.loadedCommittedCursor,
-                syncStatus: .awaitingAuthoritativeSnapshot
+                syncStatus: .awaitingAuthoritativeSnapshot,
+                optimisticBaseLifecycles: state.optimisticBaseLifecycles
             )
             return ChatClientSyncReduction(
                 state: next,
@@ -149,13 +155,15 @@ public enum ChatClientSyncReducer {
             )
         }
 
-        guard update.projection.generation == currentProjection.generation else {
+        guard update.projection.generation == currentProjection.generation
+                || shouldAcceptIncomingGenerationSwitch(from: currentProjection, to: update.projection) else {
             let next = ChatClientSyncState(
                 chatID: state.chatID,
                 projection: currentProjection,
                 committedItems: state.committedItems,
                 loadedCommittedCursor: state.loadedCommittedCursor,
-                syncStatus: .awaitingAuthoritativeSnapshot
+                syncStatus: .awaitingAuthoritativeSnapshot,
+                optimisticBaseLifecycles: state.optimisticBaseLifecycles
             )
             return ChatClientSyncReduction(
                 state: next,
@@ -176,9 +184,11 @@ public enum ChatClientSyncReducer {
                     ),
                     committedItems: state.committedItems,
                     loadedCommittedCursor: state.loadedCommittedCursor,
-                    syncStatus: .synchronized
+                    syncStatus: .synchronized,
+                    optimisticBaseLifecycles: state.optimisticBaseLifecycles
                 )
                 next = pruningCommittedOverlay(in: next)
+                next = retainingActiveOptimisticLifecycleBackups(in: next)
                 let effects: [ChatClientSyncEffect] =
                     update.projection.committedCursor > state.loadedCommittedCursor
                     ? [.loadCommittedHistory(to: update.projection.committedCursor)]
@@ -202,7 +212,8 @@ public enum ChatClientSyncReducer {
                 syncStatus: .gapDetected(
                     expected: ChatUpdateSequence(rawValue: currentSequence.rawValue + 1),
                     received: incomingSequence
-                )
+                ),
+                optimisticBaseLifecycles: state.optimisticBaseLifecycles
             )
             return ChatClientSyncReduction(
                 state: next,
@@ -218,9 +229,11 @@ public enum ChatClientSyncReducer {
             ),
             committedItems: state.committedItems,
             loadedCommittedCursor: state.loadedCommittedCursor,
-            syncStatus: .synchronized
+            syncStatus: .synchronized,
+            optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = pruningCommittedOverlay(in: next)
+        next = retainingActiveOptimisticLifecycleBackups(in: next)
 
         let effects: [ChatClientSyncEffect] =
             update.projection.committedCursor > state.loadedCommittedCursor
@@ -251,9 +264,11 @@ public enum ChatClientSyncReducer {
             projection: state.projection,
             committedItems: ordered,
             loadedCommittedCursor: max(state.loadedCommittedCursor, loadedCursor),
-            syncStatus: state.syncStatus
+            syncStatus: state.syncStatus,
+            optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = pruningCommittedOverlay(in: next)
+        next = retainingActiveOptimisticLifecycleBackups(in: next)
         return ChatClientSyncReduction(state: next)
     }
 
@@ -282,6 +297,8 @@ public enum ChatClientSyncReducer {
             ordinal: projection.queuedTurns.count + 1,
             submission: submission
         )
+        var optimisticBaseLifecycles = state.optimisticBaseLifecycles
+        optimisticBaseLifecycles[submission.turnID] = projection.lifecycle
 
         let nextProjection: ChatSyncProjection
         if let activeTurn = projection.activeTurn,
@@ -339,7 +356,8 @@ public enum ChatClientSyncReducer {
                 projection: nextProjection,
                 committedItems: state.committedItems,
                 loadedCommittedCursor: state.loadedCommittedCursor,
-                syncStatus: state.syncStatus
+                syncStatus: state.syncStatus,
+                optimisticBaseLifecycles: optimisticBaseLifecycles
             )
         )
     }
@@ -365,11 +383,13 @@ public enum ChatClientSyncReducer {
             } else {
                 projection.activeTurn
             }
+        var optimisticBaseLifecycles = state.optimisticBaseLifecycles
+        let restoredLifecycle = optimisticBaseLifecycles.removeValue(forKey: turnID) ?? projection.lifecycle
 
         let nextProjection = ChatSyncProjection(
             chatID: projection.chatID,
             generation: projection.generation,
-            lifecycle: nextActiveTurn == nil && filteredQueue.isEmpty ? .closed : projection.lifecycle,
+            lifecycle: nextActiveTurn == nil && filteredQueue.isEmpty ? restoredLifecycle : projection.lifecycle,
             activeTurn: nextActiveTurn,
             queuedTurns: filteredQueue,
             attention: projection.attention,
@@ -390,7 +410,8 @@ public enum ChatClientSyncReducer {
                 projection: nextProjection,
                 committedItems: state.committedItems,
                 loadedCommittedCursor: state.loadedCommittedCursor,
-                syncStatus: state.syncStatus
+                syncStatus: state.syncStatus,
+                optimisticBaseLifecycles: optimisticBaseLifecycles
             )
         )
     }
@@ -447,13 +468,10 @@ public enum ChatClientSyncReducer {
         in state: ChatClientSyncState
     ) -> ChatClientSyncState {
         guard let projection = state.projection else { return state }
-        let committed = Dictionary(
-            uniqueKeysWithValues: state.committedItems.map {
-                (transcriptIdentity(for: $0.item), $0.item)
-            }
-        )
         let filteredOverlay = projection.transcriptOverlay.filter { overlayItem in
-            guard let committedItem = committed[transcriptIdentity(for: overlayItem)] else {
+            guard let committedItem = state.committedItems.last(where: {
+                transcriptIdentity(for: $0.item) == transcriptIdentity(for: overlayItem)
+            })?.item else {
                 return true
             }
             return !transcriptItemsMatchForDisplay(committedItem, overlayItem)
@@ -482,7 +500,45 @@ public enum ChatClientSyncReducer {
             ),
             committedItems: state.committedItems,
             loadedCommittedCursor: state.loadedCommittedCursor,
-            syncStatus: state.syncStatus
+            syncStatus: state.syncStatus,
+            optimisticBaseLifecycles: state.optimisticBaseLifecycles
+        )
+    }
+
+    private static func shouldAcceptIncomingGenerationSwitch(
+        from currentProjection: ChatSyncProjection,
+        to incomingProjection: ChatSyncProjection
+    ) -> Bool {
+        currentProjection.isLive == false
+            && currentProjection.lastIncludedSequence == .initial
+            && incomingProjection.lastIncludedSequence > currentProjection.lastIncludedSequence
+    }
+
+    private static func retainingActiveOptimisticLifecycleBackups(
+        in state: ChatClientSyncState
+    ) -> ChatClientSyncState {
+        guard let projection = state.projection, state.optimisticBaseLifecycles.isEmpty == false else {
+            return state
+        }
+
+        var liveTurnIDs = Set(projection.queuedTurns.map(\.submission.turnID))
+        if let activeTurn = projection.activeTurn {
+            liveTurnIDs.insert(activeTurn.turnID)
+        }
+        for item in projection.transcriptOverlay {
+            guard case .message(let message) = item, message.role == .user else { continue }
+            liveTurnIDs.insert(message.turnID)
+        }
+
+        let retained = state.optimisticBaseLifecycles.filter { liveTurnIDs.contains($0.key) }
+        guard retained != state.optimisticBaseLifecycles else { return state }
+        return ChatClientSyncState(
+            chatID: state.chatID,
+            projection: state.projection,
+            committedItems: state.committedItems,
+            loadedCommittedCursor: state.loadedCommittedCursor,
+            syncStatus: state.syncStatus,
+            optimisticBaseLifecycles: retained
         )
     }
 

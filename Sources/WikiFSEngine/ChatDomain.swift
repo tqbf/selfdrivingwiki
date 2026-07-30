@@ -619,6 +619,7 @@ public enum ChatSessionMachine {
                     activeTurn: replacingState(of: activeTurn, with: .terminal(.completed)),
                     queuedTurns: next.queuedTurns,
                     attention: .none,
+                    overlay: [],
                     sequence: update.sequence
                 )
             )
@@ -648,7 +649,7 @@ public enum ChatSessionMachine {
                 activeTurn: replacingState(of: activeTurn, with: .terminal(terminalOutcome)),
                 queuedTurns: next.queuedTurns,
                 attention: attention,
-                overlay: next.transientTranscriptOverlay + [
+                overlay: [
                     .turnFailure(
                         ChatTranscriptTurnFailureItem(
                             turnID: turnID,
@@ -676,6 +677,7 @@ public enum ChatSessionMachine {
                     activeTurn: replacingState(of: activeTurn, with: .terminal(.cancelled)),
                     queuedTurns: next.queuedTurns,
                     attention: .none,
+                    overlay: [],
                     sequence: update.sequence
                 )
             )

@@ -98,7 +98,7 @@ struct RemoteChatSessionTests {
         #expect(session.activeChatID == ChatID(rawValue: "chat-1"))
     }
 
-    @Test func optimisticSubmitFailedRollsBackOptimisticState() {
+    @Test func optimisticSubmitFailedPreservesAuthoritativeReadyLifecycle() {
         let session = makeSession()
         session.hydrate(from: makeSnapshot(lifecycle: .ready))
 
@@ -115,8 +115,119 @@ struct RemoteChatSessionTests {
         session.optimisticSubmitFailed(turnID: turnID)
 
         #expect(session.events.isEmpty)
-        #expect(session.runState == .idle)
-        #expect(session.activeChatID == nil)
+        #expect(session.runState == .warm)
+        #expect(session.activeChatID == ChatID(rawValue: "chat-1"))
+        #expect(session.isRunning)
+    }
+
+    @Test func committedHistoryPagingUsesSuccessiveAfterCursorsUntilTargetReached() async {
+        let session = makeSession()
+        let turn1 = ChatTurnID(rawValue: "turn-1")
+        let turn2 = ChatTurnID(rawValue: "turn-2")
+        var afterCursors: [ChatTranscriptCursor?] = []
+        session.installHistoryLoader { after in
+            afterCursors.append(after)
+            switch after?.rawValue {
+            case nil:
+                return ChatTranscriptPage(
+                    items: [
+                        PersistedChatTranscriptItem(
+                            cursor: ChatTranscriptCursor(rawValue: 1),
+                            item: makeMessage(role: .user, turnID: turn1, text: "first"),
+                            projectedEventJSON: nil,
+                            projectedPlainText: "first",
+                            createdAt: Date(timeIntervalSince1970: 21)
+                        ),
+                        PersistedChatTranscriptItem(
+                            cursor: ChatTranscriptCursor(rawValue: 2),
+                            item: makeMessage(role: .assistant, turnID: turn1, text: "reply"),
+                            projectedEventJSON: nil,
+                            projectedPlainText: "reply",
+                            createdAt: Date(timeIntervalSince1970: 22)
+                        ),
+                    ],
+                    checkpoint: ChatTranscriptCursor(rawValue: 5),
+                    nextCursor: ChatTranscriptCursor(rawValue: 2)
+                )
+            case 2:
+                return ChatTranscriptPage(
+                    items: [
+                        PersistedChatTranscriptItem(
+                            cursor: ChatTranscriptCursor(rawValue: 3),
+                            item: makeMessage(role: .user, turnID: turn2, text: "second"),
+                            projectedEventJSON: nil,
+                            projectedPlainText: "second",
+                            createdAt: Date(timeIntervalSince1970: 23)
+                        ),
+                        PersistedChatTranscriptItem(
+                            cursor: ChatTranscriptCursor(rawValue: 4),
+                            item: makeMessage(role: .assistant, turnID: turn2, text: "more"),
+                            projectedEventJSON: nil,
+                            projectedPlainText: "more",
+                            createdAt: Date(timeIntervalSince1970: 24)
+                        ),
+                        PersistedChatTranscriptItem(
+                            cursor: ChatTranscriptCursor(rawValue: 5),
+                            item: makeMessage(role: .assistant, turnID: turn2, text: "done"),
+                            projectedEventJSON: nil,
+                            projectedPlainText: "done",
+                            createdAt: Date(timeIntervalSince1970: 25)
+                        ),
+                    ],
+                    checkpoint: ChatTranscriptCursor(rawValue: 5),
+                    nextCursor: ChatTranscriptCursor(rawValue: 5)
+                )
+            default:
+                Issue.record("unexpected after cursor \(String(describing: after))")
+                return ChatTranscriptPage(items: [], checkpoint: .zero, nextCursor: nil)
+            }
+        }
+
+        session.hydrate(from: makeSnapshot(sequence: 1, committedCursor: ChatTranscriptCursor(rawValue: 5)))
+
+        await expectEventually((session.syncState?.committedItems.count ?? 0) == 5)
+        #expect(session.syncState?.loadedCommittedCursor == ChatTranscriptCursor(rawValue: 5))
+        #expect(afterCursors.map { $0?.rawValue } == [nil, 2])
+    }
+
+    @Test func gapUpdateRetriesAuthoritativeSnapshotAfterFailure() async {
+        actor AttemptCounter {
+            private var value = 0
+
+            func increment() -> Int {
+                value += 1
+                return value
+            }
+
+            func current() -> Int { value }
+        }
+
+        let session = makeSession()
+        session.hydrate(from: makeSnapshot(sequence: 1))
+
+        let authoritative = makeSnapshot(
+            sequence: 3,
+            runMetadata: ChatRunMetadata(preflightError: "authoritative")
+        )
+        let attempts = AttemptCounter()
+        session.onRequestAuthoritativeSnapshot = {
+            let nextAttempt = await attempts.increment()
+            if nextAttempt == 1 {
+                struct RetryError: Error {}
+                throw RetryError()
+            }
+            return authoritative
+        }
+
+        session.ingest(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(sequence: 3)
+            )
+        )
+
+        await expectEventually(session.preflightError == "authoritative")
+        #expect(await attempts.current() == 2)
     }
 
     @Test func pendingPermissionMapsToCompatibilitySurface() throws {
@@ -342,9 +453,9 @@ struct RemoteChatSessionTests {
     private func expectEventually(
         _ condition: @autoclosure @escaping @MainActor () -> Bool
     ) async {
-        for _ in 0..<50 {
+        for _ in 0..<100 {
             if condition() { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Condition was not met before timeout.")
     }
