@@ -193,6 +193,45 @@ struct ChatClientSyncReducerTests {
         #expect(state.displayTranscriptItems == [canonical])
     }
 
+    @Test func legacyOverlayWithoutProvenanceIsAnomalousAndCanonicalWins() {
+        let timestamp = Date(timeIntervalSince1970: 1)
+        let canonical = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-transcript-v47:systemNotice:chat-1:1"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let unprovenancedLegacy = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-wire-v1:systemNotice:chat-1:generation-1:1:0"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(sequence: 2, overlay: [unprovenancedLegacy]),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .appendCommittedHistory(
+                items: [makePersisted(cursor: 1, item: canonical)],
+                loadedCursor: ChatTranscriptCursor(rawValue: 1)
+            )
+        )
+
+        #expect(reduction.anomalies == [
+            .legacyOverlayWithoutProvenance(itemKind: .systemNotice, sourceOrdinal: 0),
+        ])
+        #expect(reduction.state.projection?.transcriptOverlay.isEmpty == true)
+        #expect(reduction.state.displayTranscriptItems == [canonical])
+    }
+
     @Test func appendCommittedHistoryPrunesMatchingOverlay() {
         let overlayItem = makeMessage(role: .user, text: "hello")
         let state = ChatClientSyncState(

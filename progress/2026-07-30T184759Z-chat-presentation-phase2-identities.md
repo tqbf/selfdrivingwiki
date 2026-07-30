@@ -19,12 +19,19 @@ Added active content-block metadata to projection snapshots and compact updates.
 
 The client keeps active metadata only when a matching typed message exists.
 
+Corrected legacy projection reconciliation. Repaired wire payloads now carry
+typed `LegacyTranscriptOccurrence` provenance. An older synthetic legacy
+overlay without that proof emits `ChatClientSyncAnomaly` and is discarded when
+equivalent canonical persisted history arrives.
+
 ## Verification
 
 Passed `make build`.
 
-Passed `swift test --filter 'ChatPhase2PersistenceTests|ChatSyncWireTests|ChatClientSyncReducerTests'`.
+Passed `swift test --filter 'ChatPhase2PersistenceTests|ChatSyncWireTests|ChatClientSyncReducerTests'` with 45 tests.
 
 Passed `make test`.
+
+Passed `git diff --check`.
 
 The hosted AppKit gate did not run. This slice changes persistence, sync, and daemon code only.

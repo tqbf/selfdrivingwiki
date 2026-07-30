@@ -104,6 +104,10 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
     public let usage: SessionUsage?
     public let diagnostics: ChatDiagnosticsState
     public let activeContentBlock: ChatActiveContentBlock?
+    /// Compatibility provenance for legacy non-message overlay items repaired
+    /// by a versioned wire envelope. `nil` distinguishes older envelopes that
+    /// could not supply this proof from envelopes with no legacy items.
+    public let legacyTranscriptOccurrences: [LegacyTranscriptOccurrence]?
     public let transcriptOverlay: [ChatTranscriptItem]
     public let committedCursor: ChatTranscriptCursor
     public let lastIncludedSequence: ChatUpdateSequence
@@ -122,6 +126,7 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
         usage: SessionUsage?,
         diagnostics: ChatDiagnosticsState,
         activeContentBlock: ChatActiveContentBlock? = nil,
+        legacyTranscriptOccurrences: [LegacyTranscriptOccurrence]? = nil,
         transcriptOverlay: [ChatTranscriptItem],
         committedCursor: ChatTranscriptCursor,
         lastIncludedSequence: ChatUpdateSequence,
@@ -139,6 +144,7 @@ public struct ChatSyncProjection: Sendable, Codable, Equatable {
         self.usage = usage
         self.diagnostics = diagnostics
         self.activeContentBlock = activeContentBlock
+        self.legacyTranscriptOccurrences = legacyTranscriptOccurrences
         self.transcriptOverlay = transcriptOverlay
         self.committedCursor = committedCursor
         self.lastIncludedSequence = lastIncludedSequence
@@ -155,7 +161,8 @@ public extension ChatSyncProjection {
         runMetadata: ChatRunMetadata,
         usage: SessionUsage?,
         diagnostics: ChatDiagnosticsState,
-        activeContentBlock: ChatActiveContentBlock? = nil
+        activeContentBlock: ChatActiveContentBlock? = nil,
+        legacyTranscriptOccurrences: [LegacyTranscriptOccurrence]? = nil
     ) -> ChatSyncProjection {
         ChatSyncProjection(
             chatID: snapshot.chatID,
@@ -169,6 +176,7 @@ public extension ChatSyncProjection {
             usage: usage,
             diagnostics: diagnostics,
             activeContentBlock: activeContentBlock,
+            legacyTranscriptOccurrences: legacyTranscriptOccurrences,
             transcriptOverlay: snapshot.transientTranscriptOverlay,
             committedCursor: committedCursor,
             lastIncludedSequence: snapshot.lastIncludedSequence,
@@ -289,7 +297,8 @@ private enum ChatSyncWire {
         let chatID = ChatID(rawValue: chatRaw)
         let generation = ChatSessionGenerationID(rawValue: generationRaw)
         let sequence = ChatUpdateSequence(rawValue: sequenceNumber.int64Value)
-        var changed = false
+        var repairedOccurrences = projection["legacyTranscriptOccurrences"] as? [[String: Any]] ?? []
+        var didRepair = false
         for sourceOrdinal in overlay.indices {
             for itemKind in LegacyTranscriptOccurrence.ItemKind.allCases {
                 guard var associated = overlay[sourceOrdinal][itemKind.rawValue] as? [String: Any],
@@ -307,11 +316,19 @@ private enum ChatSyncWire {
                 payload[identityKey] = occurrence.durableIDRawValue
                 associated["_0"] = payload
                 overlay[sourceOrdinal][itemKind.rawValue] = associated
-                changed = true
+                repairedOccurrences.append([
+                    "chatID": chatRaw,
+                    "generation": generationRaw,
+                    "sequence": sequenceNumber,
+                    "sourceOrdinal": sourceOrdinal,
+                    "itemKind": itemKind.rawValue,
+                ])
+                didRepair = true
             }
         }
-        guard changed else { return data }
+        guard didRepair else { return data }
         projection["transcriptOverlay"] = overlay
+        projection["legacyTranscriptOccurrences"] = repairedOccurrences
         envelope["projection"] = projection
         root[envelopeKey] = envelope
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
@@ -410,6 +427,7 @@ public struct ChatSyncUpdateEnvelope: Sendable, Codable, Equatable {
                     usage: update.projection.usage,
                     diagnostics: update.projection.diagnostics,
                     activeContentBlock: update.projection.activeContentBlock,
+                    legacyTranscriptOccurrences: update.projection.legacyTranscriptOccurrences,
                     transcriptOverlay: [],
                     committedCursor: update.projection.committedCursor,
                     lastIncludedSequence: update.projection.lastIncludedSequence,

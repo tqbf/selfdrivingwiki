@@ -131,6 +131,15 @@ struct ChatSyncWireTests {
         let first = try ChatSyncSnapshotEnvelope.decodeData(legacyData)
         let second = try ChatSyncSnapshotEnvelope.decodeData(legacyData)
         #expect(first == second)
+        #expect(first.projection.legacyTranscriptOccurrences == [
+            LegacyTranscriptOccurrence(
+                chatID: ChatID(rawValue: "chat-1"),
+                generation: ChatSessionGenerationID(rawValue: "generation-1"),
+                sequence: ChatUpdateSequence(rawValue: 9),
+                sourceOrdinal: 0,
+                itemKind: .systemNotice
+            ),
+        ])
         guard case .systemNotice(let repaired) = first.projection.transcriptOverlay[0] else {
             Issue.record("Expected a repaired system notice.")
             return
