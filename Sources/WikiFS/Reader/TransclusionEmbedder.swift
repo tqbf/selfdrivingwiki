@@ -55,16 +55,20 @@ enum TransclusionEmbedder {
         context: WikiRenderContext
     ) throws -> String {
         let raw: String?
+        let contentKind: ReaderMarkdown.ContentKind
         switch target {
         case .page(let id):
             let page = try store.getPage(id: id)
             raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            contentKind = .document
         case .source(let id):
             raw = try sourceEmbedBody(store: store, id: id)
+            contentKind = .source
         }
         guard let raw, !raw.isEmpty else { return emptySentinel }
         let prepared = ReaderMarkdown.prepared(
             raw,
+            contentKind: contentKind,
             isResolved: context.isResolved,
             embedInfo: context.embedInfo,
             displayName: context.displayName,
