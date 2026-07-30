@@ -46,6 +46,10 @@ struct QuotaFallbackIntegrationTests {
         }
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir
+        launcher.makeQuotaFallbackCoordinator = {
+            QuotaFallbackCoordinator(
+                quotaStateURL: tempDir.appendingPathComponent("quota-state.json"))
+        }
         return launcher
     }
 

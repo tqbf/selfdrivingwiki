@@ -707,11 +707,11 @@ struct DaemonChatControllerTests {
             return toolCall
         }
         #expect(persistedAssistant.contains {
-            $0.messageID == ChatMessageID(rawValue: "assistant-\(submission.turnID.rawValue)")
+            $0.messageID == ChatMessageID(rawValue: "assistant-\(submission.turnID.rawValue)-block-0")
                 && $0.text == "Hello world"
         })
         #expect(persistedReasoning.contains {
-            $0.messageID == ChatMessageID(rawValue: "reasoning-\(submission.turnID.rawValue)")
+            $0.messageID == ChatMessageID(rawValue: "reasoning-\(submission.turnID.rawValue)-block-1")
                 && $0.text == "Need context"
         })
         #expect(persistedAssistant.count == 1)

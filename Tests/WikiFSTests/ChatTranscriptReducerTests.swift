@@ -142,6 +142,142 @@ struct ChatTranscriptReducerTests {
         #expect(item.text == "Hello")
     }
 
+    @Test func rejectsReplacementThatReusesAMessageIDForAnotherTurn() {
+        let original = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "message-1"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant,
+            text: "Original",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let reduction = ChatTranscriptReducer.reducingWithDiagnostics(
+            items: [original],
+            with: [
+                .messageReplacement(
+                    messageID: ChatMessageID(rawValue: "message-1"),
+                    turnID: ChatTurnID(rawValue: "turn-2"),
+                    role: .assistant,
+                    text: "Incorrect replacement",
+                    createdAt: Date(timeIntervalSince1970: 2)
+                )
+            ]
+        )
+
+        #expect(reduction.items == [original])
+        #expect(reduction.anomalies == [
+            .messageIdentityMismatch(
+                messageID: ChatMessageID(rawValue: "message-1"),
+                existingTurnID: ChatTurnID(rawValue: "turn-1"),
+                receivedTurnID: ChatTurnID(rawValue: "turn-2"),
+                existingRole: .assistant,
+                receivedRole: .assistant
+            )
+        ])
+    }
+
+    @Test func rejectsDeltaThatReusesAMessageIDForAnotherTurn() {
+        let original = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "message-1"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant,
+            text: "Original",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let reduction = ChatTranscriptReducer.reducingWithDiagnostics(
+            items: [original],
+            with: [
+                .messageDelta(
+                    messageID: ChatMessageID(rawValue: "message-1"),
+                    turnID: ChatTurnID(rawValue: "turn-2"),
+                    role: .assistant,
+                    delta: "Incorrect delta",
+                    createdAt: Date(timeIntervalSince1970: 2)
+                )
+            ]
+        )
+
+        #expect(reduction.items == [original])
+        #expect(reduction.anomalies == [
+            .messageIdentityMismatch(
+                messageID: ChatMessageID(rawValue: "message-1"),
+                existingTurnID: ChatTurnID(rawValue: "turn-1"),
+                receivedTurnID: ChatTurnID(rawValue: "turn-2"),
+                existingRole: .assistant,
+                receivedRole: .assistant
+            )
+        ])
+    }
+
+    @Test func rejectsDeltaThatReusesAMessageIDForAnotherRole() {
+        let original = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "message-1"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant,
+            text: "Original",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let reduction = ChatTranscriptReducer.reducingWithDiagnostics(
+            items: [original],
+            with: [
+                .messageDelta(
+                    messageID: ChatMessageID(rawValue: "message-1"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .reasoning,
+                    delta: "Incorrect delta",
+                    createdAt: Date(timeIntervalSince1970: 2)
+                )
+            ]
+        )
+
+        #expect(reduction.items == [original])
+        #expect(reduction.anomalies == [
+            .messageIdentityMismatch(
+                messageID: ChatMessageID(rawValue: "message-1"),
+                existingTurnID: ChatTurnID(rawValue: "turn-1"),
+                receivedTurnID: ChatTurnID(rawValue: "turn-1"),
+                existingRole: .assistant,
+                receivedRole: .reasoning
+            )
+        ])
+    }
+
+    @Test func rejectsReplacementThatReusesAMessageIDForAnotherRole() {
+        let original = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "message-1"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant,
+            text: "Original",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let reduction = ChatTranscriptReducer.reducingWithDiagnostics(
+            items: [original],
+            with: [
+                .messageReplacement(
+                    messageID: ChatMessageID(rawValue: "message-1"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .reasoning,
+                    text: "Incorrect replacement",
+                    createdAt: Date(timeIntervalSince1970: 2)
+                )
+            ]
+        )
+
+        #expect(reduction.items == [original])
+        #expect(reduction.anomalies == [
+            .messageIdentityMismatch(
+                messageID: ChatMessageID(rawValue: "message-1"),
+                existingTurnID: ChatTurnID(rawValue: "turn-1"),
+                receivedTurnID: ChatTurnID(rawValue: "turn-1"),
+                existingRole: .assistant,
+                receivedRole: .reasoning
+            )
+        ])
+    }
+
     @Test func toolCallStatusUpsertKeepsStableRowIdentity() {
         let pending = ChatTranscriptToolCallItem(
             toolCallID: ToolCallID(rawValue: "tool-1"),

@@ -1,3 +1,5 @@
+// pattern: Functional Core
+
 import Foundation
 import WikiFSCore
 
@@ -25,14 +27,31 @@ public enum ChatTranscriptReducer {
         items: [ChatTranscriptItem],
         with deltas: [ChatTranscriptDelta]
     ) -> [ChatTranscriptItem] {
-        deltas.reduce(items, apply)
+        reducingWithDiagnostics(items: items, with: deltas).items
+    }
+
+    public static func reducingWithDiagnostics(
+        items: [ChatTranscriptItem],
+        with deltas: [ChatTranscriptDelta]
+    ) -> ChatTranscriptReduction {
+        deltas.reduce(ChatTranscriptReduction(items: items)) { reduction, delta in
+            apply(reduction, delta)
+        }
     }
 
     public static func apply(
         _ items: [ChatTranscriptItem],
         _ delta: ChatTranscriptDelta
     ) -> [ChatTranscriptItem] {
-        var next = items
+        apply(ChatTranscriptReduction(items: items), delta).items
+    }
+
+    private static func apply(
+        _ reduction: ChatTranscriptReduction,
+        _ delta: ChatTranscriptDelta
+    ) -> ChatTranscriptReduction {
+        var next = reduction.items
+        var anomalies = reduction.anomalies
 
         switch delta {
         case .append(let item):
@@ -43,13 +62,22 @@ public enum ChatTranscriptReducer {
                 guard case .message(let message) = item else { return false }
                 return message.messageID == messageID
             }), case .message(let existing) = next[index] {
-                next[index] = .message(ChatTranscriptMessageItem(
-                    messageID: existing.messageID,
-                    turnID: existing.turnID,
-                    role: existing.role,
-                    text: existing.text + deltaText,
-                    createdAt: existing.createdAt
-                ))
+                if existing.turnID == turnID, existing.role == role {
+                    next[index] = .message(ChatTranscriptMessageItem(
+                        messageID: existing.messageID,
+                        turnID: existing.turnID,
+                        role: existing.role,
+                        text: existing.text + deltaText,
+                        createdAt: existing.createdAt
+                    ))
+                } else {
+                    anomalies.append(messageIdentityMismatch(
+                        messageID: messageID,
+                        existing: existing,
+                        receivedTurnID: turnID,
+                        receivedRole: role
+                    ))
+                }
             } else {
                 next.append(.message(ChatTranscriptMessageItem(
                     messageID: messageID,
@@ -71,8 +99,17 @@ public enum ChatTranscriptReducer {
             if let index = next.lastIndex(where: { item in
                 guard case .message(let message) = item else { return false }
                 return message.messageID == messageID
-            }) {
-                next[index] = replacement
+            }), case .message(let existing) = next[index] {
+                if existing.turnID == turnID, existing.role == role {
+                    next[index] = replacement
+                } else {
+                    anomalies.append(messageIdentityMismatch(
+                        messageID: messageID,
+                        existing: existing,
+                        receivedTurnID: turnID,
+                        receivedRole: role
+                    ))
+                }
             } else {
                 next.append(replacement)
             }
@@ -89,6 +126,44 @@ public enum ChatTranscriptReducer {
             }
         }
 
-        return next
+        return ChatTranscriptReduction(items: next, anomalies: anomalies)
     }
+
+    private static func messageIdentityMismatch(
+        messageID: ChatMessageID,
+        existing: ChatTranscriptMessageItem,
+        receivedTurnID: ChatTurnID,
+        receivedRole: ChatTranscriptMessageRole
+    ) -> ChatTranscriptReductionAnomaly {
+        .messageIdentityMismatch(
+            messageID: messageID,
+            existingTurnID: existing.turnID,
+            receivedTurnID: receivedTurnID,
+            existingRole: existing.role,
+            receivedRole: receivedRole
+        )
+    }
+}
+
+public struct ChatTranscriptReduction: Hashable, Sendable {
+    public let items: [ChatTranscriptItem]
+    public let anomalies: [ChatTranscriptReductionAnomaly]
+
+    public init(
+        items: [ChatTranscriptItem],
+        anomalies: [ChatTranscriptReductionAnomaly] = []
+    ) {
+        self.items = items
+        self.anomalies = anomalies
+    }
+}
+
+public enum ChatTranscriptReductionAnomaly: Hashable, Sendable {
+    case messageIdentityMismatch(
+        messageID: ChatMessageID,
+        existingTurnID: ChatTurnID,
+        receivedTurnID: ChatTurnID,
+        existingRole: ChatTranscriptMessageRole,
+        receivedRole: ChatTranscriptMessageRole
+    )
 }
