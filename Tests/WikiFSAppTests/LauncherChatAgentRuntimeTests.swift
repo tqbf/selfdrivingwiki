@@ -146,5 +146,48 @@ struct LauncherChatAgentRuntimeTests {
         #expect(messages.map(\.text) == ["Complete first block.", "Second block."])
         #expect(messages[0].messageID != messages[1].messageID)
     }
+
+    @Test func terminalProviderAssistantBlocksInOneTurnReceiveDistinctMessageIDs() {
+        let turnID = ChatTurnID(rawValue: "turn-terminal-provider-blocks")
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantText("First provider block."),
+                .assistantText("Second provider block."),
+            ],
+            turnID: turnID
+        )
+
+        let messages = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.map(\.messageID) == [
+            ChatMessageID(rawValue: "assistant-\(turnID.rawValue)-block-0"),
+            ChatMessageID(rawValue: "assistant-\(turnID.rawValue)-block-1"),
+        ])
+        #expect(messages.map(\.text) == ["First provider block.", "Second provider block."])
+    }
+
+    @Test func duplicateTerminalEventsDoNotReopenAFinalizedContentBlock() {
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: [
+                .assistantTextDelta("Partial"),
+                .assistantText("Final block."),
+                .messageStop,
+                .messageStop,
+            ],
+            turnID: ChatTurnID(rawValue: "turn-duplicate-terminal")
+        )
+
+        let messages = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptMessageItem? in
+            guard case .message(let message) = item else { return nil }
+            return message
+        }
+
+        #expect(messages.count == 1)
+        #expect(messages.first?.text == "Final block.")
+        #expect(messages.first?.messageID == ChatMessageID(rawValue: "assistant-turn-duplicate-terminal-block-0"))
+    }
 }
 #endif

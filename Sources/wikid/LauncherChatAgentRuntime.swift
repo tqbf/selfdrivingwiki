@@ -546,6 +546,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 ))
             case .toolResult(let isError, let summary):
                 closeContentBlock(in: &translationState)
+                // Compatibility fallback: provider events do not expose the
+                // result-to-use call ID, so pair unmatched results FIFO.
                 let toolCall = translationState.runningToolCalls.isEmpty
                     ? TranscriptTranslationState.RunningToolCallState(
                         toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)"),
@@ -629,6 +631,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             return block
         }
         closeContentBlock(in: &translationState)
+        // Compatibility fallback: provider events do not expose a durable
+        // content-block identity, so derive one from role, turn, and ordinal.
         let block = TranscriptTranslationState.OpenContentBlock(
             messageID: ChatMessageID(
                 rawValue: "\(role.rawValue)-\(turnID.rawValue)-block-\(translationState.nextContentBlockOrdinal)"
