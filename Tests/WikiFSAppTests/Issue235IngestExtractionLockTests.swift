@@ -67,7 +67,8 @@ struct Issue235IngestExtractionLockTests {
         // text (was previously only a hidden .help() tooltip).
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: true, isLiveChat: true, isGenerating: false)
+            hasChatID: true, isLiveChat: true, isGenerating: false,
+            isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 
@@ -75,14 +76,16 @@ struct Issue235IngestExtractionLockTests {
         // Even in draft state (chatID == nil), the waiting caption shows.
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: false, isLiveChat: false, isGenerating: false)
+            hasChatID: false, isLiveChat: false, isGenerating: false,
+            isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 
     @Test func captionNilWhenIdle() {
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: true, isGenerating: false)
+            hasChatID: true, isLiveChat: true, isGenerating: false,
+            isChatOperationConfigured: true)
         #expect(caption == nil)
     }
 
@@ -91,7 +94,8 @@ struct Issue235IngestExtractionLockTests {
         // chat shows the "Another chat is responding" caption.
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: false, isGenerating: true)
+            hasChatID: true, isLiveChat: false, isGenerating: true,
+            isChatOperationConfigured: true)
         #expect(caption == "Another chat is responding — wait or stop it.")
     }
 
@@ -100,7 +104,8 @@ struct Issue235IngestExtractionLockTests {
         // responding…" caption (replaces the old orange banner).
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: false,
-            hasChatID: true, isLiveChat: true, isGenerating: true)
+            hasChatID: true, isLiveChat: true, isGenerating: true,
+            isChatOperationConfigured: true)
         #expect(caption == "Agent is responding…")
     }
 
@@ -109,7 +114,8 @@ struct Issue235IngestExtractionLockTests {
         // wait message takes priority (it's the more actionable state).
         let caption = ChatDetailView.composerCaptionText(
             isAwaitingGenerationSlot: true,
-            hasChatID: true, isLiveChat: false, isGenerating: true)
+            hasChatID: true, isLiveChat: false, isGenerating: true,
+            isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
 }

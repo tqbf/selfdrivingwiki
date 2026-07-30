@@ -387,6 +387,53 @@ struct RemoteChatSessionTests {
         #expect(try decoded.decodedChatSyncUpdate().projection.lastIncludedSequence == ChatUpdateSequence(rawValue: 2))
     }
 
+    @Test func providerConfigurationCacheRefreshesAfterSettingsSave() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "remote-chat-provider-cache-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: directory)
+            } catch {
+                DebugLog.store("RemoteChatSessionTests cleanup failed: \(error)")
+            }
+        }
+
+        let providerID = ProviderID(rawValue: "session-cache-provider")
+        let modelID = ModelID(rawValue: "session-cache-model")
+        let configured = AgentProvidersConfig(
+            providers: [AgentProvider(
+                id: providerID,
+                label: "Session cache",
+                enabled: true,
+                isDefault: true
+            )],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+        try configured.save(to: directory)
+        let session = RemoteChatSession(
+            chatID: .chat(ChatID(rawValue: "chat-1")),
+            providersConfigurationDirectory: directory
+        )
+        #expect(session.providersConfig().isChatOperationConfigured())
+
+        let invalid = AgentProvidersConfig(
+            providers: [AgentProvider(
+                id: providerID,
+                label: "Session cache",
+                enabled: false,
+                isDefault: true
+            )],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+        try invalid.save(to: directory)
+        session.refreshProvidersConfig()
+        #expect(session.providerConfiguration == invalid)
+        #expect(session.providersConfig().isChatOperationConfigured() == false)
+    }
+
     private func makeSession() -> RemoteChatSession {
         RemoteChatSession(chatID: .chat(ChatID(rawValue: "chat-1")))
     }

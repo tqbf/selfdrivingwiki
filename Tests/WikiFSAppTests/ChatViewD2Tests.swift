@@ -319,7 +319,8 @@ struct ChatViewD2Tests {
             canType: true,
             isGenerating: false,
             isAwaitingSlot: false,
-            hasDraftText: true) == true)
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
     }
 
     /// `canSendPredicate` returns true even when the mount is NOT available —
@@ -330,7 +331,8 @@ struct ChatViewD2Tests {
             canType: true,
             isGenerating: false,
             isAwaitingSlot: false,
-            hasDraftText: true) == true)
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
     }
 
     /// `canSendPredicate` returns false when generating (can't send mid-response).
@@ -340,7 +342,8 @@ struct ChatViewD2Tests {
             canType: true,
             isGenerating: true,
             isAwaitingSlot: false,
-            hasDraftText: true) == false)
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
     }
 
     /// `canSendPredicate` returns false when the composer is disabled.
@@ -350,7 +353,8 @@ struct ChatViewD2Tests {
             canType: false,
             isGenerating: false,
             isAwaitingSlot: false,
-            hasDraftText: true) == false)
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
     }
 
     /// `canSendPredicate` returns false with no draft text.
@@ -360,7 +364,8 @@ struct ChatViewD2Tests {
             canType: true,
             isGenerating: false,
             isAwaitingSlot: false,
-            hasDraftText: false) == false)
+            hasDraftText: false,
+            isChatOperationConfigured: true) == false)
     }
 
 }#endif

@@ -327,6 +327,13 @@ Phase 6 completion note for Wednesday, July 29, 2026
   and durable queue are empty; the timer is cancelled when generation starts
 - removed obsolete launcher event/state emitters and updated the reviewed chat
   API signature manifest; targeted chat badge diagnostics remain
+- the subsequent Phase 6 corrective audit record is
+  [`plans/chat-redesign-phase6-corrective.md`](chat-redesign-phase6-corrective.md)
+  with dated evidence in
+  [`progress/2026-07-30T101900Z-chat-redesign-phase6-corrective-982.md`](../progress/2026-07-30T101900Z-chat-redesign-phase6-corrective-982.md).
+  It narrows this completion note: `LauncherChatAgentRuntime` polling remains,
+  and the corrective work is limited to close ownership, idle-eviction
+  lifecycle, composer configuration gating, and documentation accuracy.
 - the current evidence is recorded in
   [`progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md`](../progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md)
 

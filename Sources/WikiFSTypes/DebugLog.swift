@@ -30,7 +30,7 @@ public enum DebugLog {
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
     /// The chat run-state → sidebar "responding…" badge pipeline, end to end:
     /// a typed `ChatSyncUpdate`, `ChatDaemonCoordinator` state derivation,
-    /// `runningChatIDs` membership + `runningStateToken` bump, and the sidebar
+    /// `generatingChatIDs` membership + `runningStateToken` bump, and the sidebar
     /// table's re-render path. Its own category keeps this trace separate from
     /// `agent` (runtime events) and `store` (persistence).
     ///

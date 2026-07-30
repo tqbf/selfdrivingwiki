@@ -66,7 +66,7 @@ struct ChatDetailPresentation {
         persistedMessages: [ChatMessage],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
-        isChatOperationConfigured: Bool = true
+        isChatOperationConfigured: Bool
     ) -> Self {
         let isLiveChat = chatID.map { remoteSession.activeChatID == $0 } ?? false
         let displayEvents = displayMessages(
@@ -344,7 +344,7 @@ struct ChatDetailPresentation {
         hasChatID: Bool,
         isLiveChat: Bool,
         isGenerating: Bool,
-        isChatOperationConfigured: Bool = true
+        isChatOperationConfigured: Bool
     ) -> String? {
         _ = hasChatID
         if isChatOperationConfigured == false {
@@ -367,7 +367,7 @@ struct ChatDetailPresentation {
         isGenerating: Bool,
         isAwaitingSlot: Bool,
         hasDraftText: Bool,
-        isChatOperationConfigured: Bool = true
+        isChatOperationConfigured: Bool
     ) -> Bool {
         _ = hasMount
         return isChatOperationConfigured && canType && !isGenerating && !isAwaitingSlot && hasDraftText
