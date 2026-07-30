@@ -8,7 +8,7 @@ Issue: #982
 
 State: In progress
 
-Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4
+Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
@@ -16,9 +16,8 @@ submission, queuing, lifecycle, permissions, cancellation, recovery,
 persistence, and client synchronization.
 
 This branch implements the Phase 0/1 foundation, the Phase 2 persistence
-rebuild, the Phase 3 per-chat daemon-controller move, and the Phase 4 XPC
-wire / client-sync redesign. It does not implement the Phase 5 UI
-decomposition.
+rebuild, the Phase 3 per-chat daemon-controller move, the Phase 4 XPC
+wire / client-sync redesign, and the Phase 5 chat UI decomposition.
 
 Remediation note for PR #990 on Wednesday, July 29, 2026:
 
@@ -64,6 +63,25 @@ Phase 4 implementation note for Wednesday, July 29, 2026
   `Phase 5` UI decomposition
 - the current exact-head evidence is recorded in
   [`progress/2026-07-30T010000Z-chat-redesign-phase4-982.md`](../progress/2026-07-30T010000Z-chat-redesign-phase4-982.md)
+
+Phase 5 implementation note for Wednesday, July 29, 2026
+(America/Los_Angeles; timestamp `2026-07-30T050641Z`):
+
+- `ChatDetailPresentation` is the pure app-side projection from Phase 4
+  client-sync compatibility state, persisted messages, local draft state, and
+  queued follow-ups into content routing, transcript display, composer actions,
+  permission visibility, preflight banner text, and outline entries
+- `ChatDetailView` is reduced to a composition root that owns view-local state,
+  hydration, sidebar registration, queued follow-up delivery, permission
+  resolution, cancellation, sharing/reveal actions, and submit/retry effects
+- focused macOS child views now own rendering for the header/action bar,
+  transcript pane, composer pane, and debug controls without reading
+  `RemoteChatSession` or `WikiStoreModel` as hidden authority
+- the queue remains view-owned in this phase; broader queue ownership cleanup
+  and launcher-era compatibility cleanup remain outside Phase 5
+- the current evidence, including the local app-hosted full-suite teardown
+  blocker, is recorded in
+  [`progress/2026-07-30T050641Z-chat-redesign-phase5-ui-982.md`](../progress/2026-07-30T050641Z-chat-redesign-phase5-ui-982.md)
 
 ## Problem
 
@@ -271,7 +289,20 @@ Phase 4 is implemented on this branch with these concrete contracts:
 Reduce `ChatDetailView` to a composition root over focused child views and a
 pure presentation projection.
 
-This phase is out of scope for this branch.
+Phase 5 is implemented on this branch with these concrete contracts:
+
+- `ChatDetailPresentation` performs the pure content, transcript, composer,
+  permission, preflight, and outline projection from already-shaped inputs
+- `ChatDetailView` keeps only view-local state and effectful user intents:
+  hydration, tab retargeting, queue delivery, submit/retry, stop, permission
+  resolution, sharing, reveal-in-Finder, and right-inspector registration
+- `ChatHeaderSectionView`, `ChatTranscriptPaneView`,
+  `ChatComposerPaneView`, and `ChatDetailControlsView` receive data and
+  explicit closures instead of consulting daemon/store authority directly
+- existing transcript rendering, composer behavior, cancellation, retry/queue
+  behavior, wiki-link syntax, raw identifier formats, File Provider/CLI shapes,
+  JSON-encoded `Data` transport, and Phase 4 synchronization semantics are
+  preserved
 
 ### Phase 6: Remove compatibility layers and update documentation
 

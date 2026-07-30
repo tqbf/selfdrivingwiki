@@ -1,36 +1,19 @@
+// pattern: Imperative Shell
+
 import AppKit
-import WikiFSEngine
 import SwiftUI
 import WikiFSCore
+import WikiFSEngine
 
-/// The unified chat surface (D2, pillar 2). One view replaces the split
-/// between the live `ChatDetailView` and the read-only
-/// `ChatHistoryDetailView`. Whether you see streaming deltas or a persisted
-/// transcript depends on the **source-of-truth rule**: if this chat is the
-/// launcher's active live session (`activeChatID == chatID`), render
-/// `remoteSession.events` (in-memory, streaming). Otherwise render the persisted
-/// `store.chatMessages(chatID:)`.
-///
-/// The `.newChat` draft state also routes here (with `chatID == nil`),
-/// showing the empty-composer state until the first send retargets the tab to
-/// `.chat(id)` (the draft-state morph, handled by `AgentOperationRunner`).
-/// Chats are always write-capable (the read-only Ask mode was removed).
+/// The unified chat surface (D2, pillar 2). Phase 5 reduces this file to a
+/// composition root: it owns view-local state and side effects, while
+/// `ChatDetailPresentation` and focused child views own rendering.
 struct ChatDetailView: View {
-    /// The persisted chat id, or `nil` for the draft state (.newChat). When
-    /// non-nil AND equal to `remoteSession.activeChatID`, the view renders live.
     let chatID: ChatID?
 
     @Bindable var store: WikiStoreModel
-    /// The daemon-mirrored chat session (replaces the in-process chat
-    /// `AgentLauncher` after Phase C4). Run state is sourced from the daemon's
-    /// live launcher via chat envelopes (`DaemonQueueEventSink`) + rehydration
-    /// (`ChatDaemonCoordinator.rehydrate`); commands route through
-    /// `coordinator` → `DaemonWorkloadClient` → XPC.
     var remoteSession: RemoteChatSession
-    /// The app-wide chat daemon coordinator — owns the per-chat
-    /// `RemoteChatSession` registry + wraps the 6 chat XPC commands.
     var coordinator: ChatDaemonCoordinator
-    /// The per-active-wiki session (store + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
     @Environment(WindowRightInspectorController.self) private var rightInspector
@@ -38,146 +21,78 @@ struct ChatDetailView: View {
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
     @State private var persistedMessages: [ChatMessage] = []
-    /// Items dragged from the sidebar onto the chat composer, attached as
-    /// context for the next message (issue #385).
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .outline
     @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
-    /// Per-view collapse state for the header. Starts collapsed; persists
-    /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
-    /// Persisted toggle to hide tool-call rows from the chat transcript
-    /// (issue #381). Independent of "Show internals" which gates the full
-    /// raw activity feed.
     @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
-    /// #740: messages the user queued while the agent was generating a
-    /// response. **Playlist semantics:** on turn completion, only the FIRST
-    /// queued message fires as the next turn's input; the rest stay queued
-    /// and each fires in order as subsequent turns complete (one per turn).
-    /// Separate from the D3 generation-gate queue
-    /// (`isAwaitingGenerationSlot`, which gates *another* chat's send) because
-    /// this is the *same* chat's "type the next message now" path.
     @State private var queuedMessages: [PendingQueuedMessage] = []
-    /// The chat's always-ask/yolo mode (shared with the launcher, read at spawn).
-    /// v1 app-wide, default off (yolo). Applies to the next conversation.
-    ///
-    /// #607: chat reads its OWN `chatPermissionMode` key (was the shared
-    /// `agentPermissionMode` before the per-operation split). Ingest/lint have
-    /// their own pickers in Settings → Providers → Permissions. This chip governs
-    /// interactive chat only.
     @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
-    /// True when this surface is rendering the active live session (D2
-    /// source-of-truth rule). The view sources from `remoteSession.events`; when
-    /// false, it sources from the persisted `store.chatMessages(chatID:)`.
     private var isLiveChat: Bool {
         guard let chatID else { return false }
         return remoteSession.activeChatID == chatID
     }
 
-    /// TEMPORARY (chat transcript freezes mid-stream): seam 7 of 8 — which
-    /// SOURCE this surface is rendering from. This is the discriminator the
-    /// other seams can't give: `live=false` means the transcript is coming from
-    /// `persistedMessages` (which only reloads on `.task(id:)` /
-    /// `store.messageVersion`), so a frozen transcript is a liveness bug in the
-    /// mirror. `live=true` with a growing `liveEvents` but a frozen screen is a
-    /// differ bug, and seam 8 says which.
+    private var chatSummary: ChatSummary? {
+        store.chats.first { $0.id == chatID }
+    }
+
+    private var remotePresentationState: ChatDetailPresentation.RemoteState {
+        .init(
+            runState: remoteSession.runState,
+            activeChatID: remoteSession.activeChatID,
+            runningKind: remoteSession.runningKind,
+            preflightError: remoteSession.preflightError,
+            pendingPermissions: remoteSession.pendingPermissions,
+            runStartedAt: remoteSession.runStartedAt,
+            events: remoteSession.events,
+            eventTimestamps: remoteSession.eventTimestamps,
+            exitStatus: remoteSession.exitStatus
+        )
+    }
+
+    private var presentation: ChatDetailPresentation {
+        ChatDetailPresentation.make(
+            chatID: chatID,
+            chatSummary: chatSummary,
+            showsInternals: showsInternals,
+            remoteSession: remotePresentationState,
+            persistedMessages: persistedMessages,
+            queuedMessages: queuedMessages,
+            hasDraftText: hasDraftText
+        )
+    }
+
     private var liveDebugKey: String {
-        // Built in steps: as one chained interpolation the type checker times
-        // out (`unable to type-check this expression in reasonable time`).
         let id = chatID?.rawValue ?? "draft"
         let active = remoteSession.activeChatID?.rawValue ?? "nil"
         let state = String(describing: remoteSession.runState)
-        let liveCount = remoteSession.events.count
-        let persistedCount = persistedMessages.count
-        let displayCount = displayMessages.count
         return "chat=\(id) live=\(isLiveChat) activeChatID=\(active) runState=\(state) "
-            + "liveEvents=\(liveCount) persisted=\(persistedCount) display=\(displayCount)"
+            + "liveEvents=\(remoteSession.events.count) persisted=\(persistedMessages.count) display=\(presentation.transcript.events.count)"
     }
 
-    /// Pure source-of-truth selector (D2): the live session streams from
-    /// `remoteSession.events`; everything else renders the persisted rows. Both are
-    /// `transcriptVisible`-filtered. Extracted as a static func so the selection
-    /// logic is unit-testable without a SwiftUI view tree.
-    ///
-    /// `nonisolated`: this is a pure array selector (no view/actor state), so it
-    /// can be called from nonisolated test contexts without crossing the main actor.
-    nonisolated static func displayMessages(
-        isLiveChat: Bool,
-        launcherEvents: [AgentEvent],
-        persistedEvents: [AgentEvent]
-    ) -> [AgentEvent] {
-        (isLiveChat ? launcherEvents : persistedEvents).transcriptVisible
-    }
-
-    /// The transcript-visible events this surface renders — `remoteSession.events`
-    /// when live, the persisted rows otherwise. Fed to the single
-    /// `ChatTranscriptView` (replacing the old live/persisted dual render sites).
     private var displayMessages: [AgentEvent] {
-        Self.displayMessages(
-            isLiveChat: isLiveChat,
-            launcherEvents: remoteSession.events,
-            persistedEvents: persistedMessages.map(\.event))
+        presentation.transcript.events
     }
-
-    /// Wall-clock timestamps parallel to `displayMessages`. Live path:
-    /// `remoteSession.eventTimestamps` (same indices as `remoteSession.events`); persisted
-    /// path: `persistedMessages.map(\.createdAt)`. Filtered through
-    /// `transcriptVisibleIndices` to stay parallel after tool-call/etc.
-    /// filtering. `nil` entries (misaligned arrays from test setups or partial
-    /// state) are preserved — they produce no footer.
-    private var displayTimestamps: [Date?] {
-        let indices: [Int]
-        if isLiveChat {
-            let events = remoteSession.events
-            indices = events.transcriptVisibleIndices
-            return indices.map { idx in
-                idx < remoteSession.eventTimestamps.count ? remoteSession.eventTimestamps[idx] : nil
-            }
-        } else {
-            let events = persistedMessages.map(\.event)
-            indices = events.transcriptVisibleIndices
-            return indices.map { idx in
-                idx < persistedMessages.count ? persistedMessages[idx].createdAt : nil
-            }
-        }
-    }
-
-    /// Empty-state message for the transcript placeholder. The live streaming
-    /// case overlays "Waiting for the Agent…" via `transcriptIsRunning`; the
-    /// idle/persisted cases show their own message here.
-    private var transcriptEmptyMessage: String {
-        if chatID == nil {
-            return "Ask a question, or ask the Agent to update the wiki…"
-        }
-        return isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
-    }
-
-    /// True only when THIS surface is the active live stream — so a persisted
-    /// chat never shows the "Waiting for the Agent…" placeholder even while its
-    /// launcher is generating a different chat.
-    /// Keys off `isAnswering`, not `isLive`: a warm session between turns is
-    /// live (its transcript is the mirror's) but nothing is running, so it must
-    /// not show "Waiting for the Agent…". This is the same conflation that
-    /// pinned the sidebar "responding…" badge on for the life of a session.
-    private var transcriptIsRunning: Bool {
-        isLiveChat && remoteSession.runState.isAnswering
-    }
-
-    private var chatInspectorAvailable: Bool { !chatOutlineEntries.isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
                 content
-                if showsDebugControls {
-                    controls
-                        .padding(.top, ChatMetrics.debugTopInset)
-                        .padding(.trailing, ChatMetrics.contentInset)
-                }
+                ChatDetailControlsView(
+                    showsDebugControls: presentation.controls.showsDebugControls,
+                    isGenerating: remoteSession.isGenerating,
+                    showsInternals: $showsInternals,
+                    hideToolCalls: $hideToolCalls,
+                    exitStatus: remoteSession.exitStatus,
+                    debugFolderURL: remoteSession.debugFolderURL
+                )
+                .padding(.top, ChatMetrics.debugTopInset)
+                .padding(.trailing, ChatMetrics.contentInset)
             }
             .frame(minWidth: PageEditorMetrics.detailMinWidth)
             .background(Color(nsColor: .textBackgroundColor))
@@ -188,44 +103,17 @@ struct ChatDetailView: View {
             composerHeight = ComposerTextView.oneLineHeight(for: composerFont)
         }
         .onChange(of: remoteSession.isRunning) { _, isRunning in
-            // Belt-and-suspenders: clear the internals toggle when a run ends so a
-            // later ingest/lint run doesn't inherit it and strand the view on
-            // `AgentQueueView`. (AC.1)
             if !isRunning { showsInternals = false }
-            // #759: covers the session-end-between-turns case — when the whole
-            // process exits with a queued message still pending, deliver it as the
-            // next turn via the same `submitMessage` path used by a normal Send.
-            // (Per-turn completion is handled by the `isGenerating` observer below;
-            // both observers are safe to co-fire because `firePendingQueuedMessage`
-            // drains exactly one item and then the queue is empty — the second
-            // observer's guard no-ops.)
             if !isRunning, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
         }
-        // #759: the per-turn completion signal. An interactive session keeps
-        // `isRunning == true` across turns (the claude process stays alive), so the
-        // observer above would never fire between turns — the queued message would
-        // sit forever until the session ended. The real "turn done, ready for next
-        // input" transition is `isGenerating` going false (set in `setGenerating(false)`
-        // at the `endsGeneration` event, or in `finish()` on process death). Fire the
-        // first queued message there, one per turn. Only fires what was explicitly
-        // queued via the Queue button / Return-during-generation — a half-typed draft
-        // stays in the composer untouched (it isn't part of `queuedMessages`).
         .onChange(of: remoteSession.isGenerating) { _, isGenerating in
             guard !isGenerating else { return }
-            // Skip the initial "not generating" state and any transition that isn't
-            // a turn boundary: only fire while the session is still alive. (When the
-            // process dies, `isRunning` goes false too and the observer above handles
-            // delivery — this guard avoids a redundant dispatch on that path.)
             guard remoteSession.isRunning, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
-            // Reload persisted messages whenever the chatID changes (or the store
-            // changes them). The live path doesn't use these, but a persisted chat
-            // needs them, and a session-end flip from live→persisted must pick up
-            // the committed transcript.
             if let chatID {
                 persistedMessages = store.chatMessages(chatID: chatID)
                 remoteSession.installHistoryLoader { afterCursor in
@@ -235,17 +123,9 @@ struct ChatDetailView: View {
                         limit: RemoteChatSession.committedHistoryPageSize
                     )
                 }
-                // Phase C4: hydrate the RemoteChatSession from the daemon's live
-                // state on appear / chat change so the mirror reflects the
-                // daemon's held-alive launcher (or the persisted rows once the
-                // launcher was evicted). Best-effort — a rehydrate failure
-                // leaves the session on its last-known state.
                 await coordinator.rehydrate(chatID: chatID)
             } else {
                 persistedMessages = []
-                // Omnibox "Ask" action (#288): if a pending question was set
-                // (from the omnibox Ask action), pre-fill the composer and
-                // auto-send it. This starts a new chat with the question.
                 if let question = store.pendingChatQuestion {
                     store.pendingChatQuestion = nil
                     store.draftChatMessage = question
@@ -255,48 +135,28 @@ struct ChatDetailView: View {
         .onAppear {
             updateRightSidebarRegistration()
         }
-        .onChange(of: chatInspectorAvailable) { _, _ in
+        .onChange(of: presentation.chatInspectorAvailable) { _, _ in
             updateRightSidebarRegistration()
         }
-        // D2: when the live session ends (activeChatID clears), re-read from the
-        // store so the view flips source WITHOUT a visible change (the final
-        // flush has already committed by the time activeChatID clears — see the
-        // flip-timing gate in AgentLauncher.finish).
         .onChange(of: remoteSession.activeChatID) { _, _ in
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
             updateRightSidebarRegistration()
         }
-        // TEMPORARY (chat transcript freezes mid-stream): seam 7 of 8. Keyed on
-        // a composed string so it emits one line per real transition rather
-        // than one per body pass; `initial: true` captures the state the
-        // surface opened in.
         .onChange(of: liveDebugKey, initial: true) { _, key in
             DebugLog.chatLive("7.detail \(key)")
         }
-        // Reload persisted messages when the store changes (e.g. a new message
-        // appended to a persisted chat — D3 continues append here, and this keeps
-        // the persisted view live for renames/count updates when not live).
-        // Keyed on `messageVersion` (not `chats`) because `ChatSummary` doesn't
-        // carry per-message fields — a `chat_messages.summary` write leaves the
-        // `chats` array `==`, so `.onChange(of: chats)` would miss it (#858).
-        // `messageVersion` bumps unconditionally in `reloadChats()`.
         .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {
                 persistedMessages = store.chatMessages(chatID: chatID)
             }
         }
-        // Resolve a `[[chat:Title#"quote"]]` quote anchor (issue #281) to a
-        // message highlight. Keyed on (chatID, anchorVersion, messageCount):
-        // the anchorVersion dimension re-fires on a re-click to the same chat,
-        // and the messageCount dimension re-fires once a persisted chat's
-        // messages load — so the set-once anchor is consumed only when the
-        // transcript is ready (it survives the 0→N load).
         .task(id: ChatAnchorTaskKey(
             chatID: chatID,
             anchorVersion: store.pendingScrollAnchorVersion,
-            messageCount: displayMessages.count)) {
+            messageCount: displayMessages.count
+        )) {
             guard let chatID, !displayMessages.isEmpty else { return }
             guard let fragment = store.consumePendingScrollAnchor(for: .chat(chatID)) else { return }
             let quote = ChatQuoteResolver.quoteText(fragment)
@@ -305,228 +165,147 @@ struct ChatDetailView: View {
             else { return }
             quoteAnchor = ChatHighlightRequest(
                 version: (quoteAnchor?.version ?? 0) + 1,
-                quote: quote)
+                quote: quote
+            )
         }
     }
-
-    // MARK: - Controls (debug cluster + new chat)
-
-    private var controls: some View {
-        // Only the live chat gets the debug cluster + new chat button.
-        // A persisted non-live chat is read-only — no controls.
-        HStack(spacing: 8) {
-            if showsDebugControls {
-                if remoteSession.isGenerating {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Menu {
-                    Toggle("Show internals", isOn: $showsInternals)
-                    Toggle("Hide tool calls", isOn: $hideToolCalls)
-                    if let status = remoteSession.exitStatus {
-                        Label(status == 0 ? "Ended" : "Exited \(status)", systemImage: status == 0 ? "checkmark.circle" : "xmark.circle")
-                    }
-                    if let debugURL = remoteSession.debugFolderURL {
-                        Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-                            NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-                        }
-                        .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
-                    }
-                } label: {
-                    Label("Activity", systemImage: "ellipsis.circle")
-                }
-                .labelStyle(.iconOnly)
-                .menuStyle(.borderlessButton)
-                .help("Show activity and transcript internals")
-            }
-        }
-    }
-
-    private var showsDebugControls: Bool {
-        (remoteSession.isGenerating || remoteSession.isAwaitingGenerationSlot)
-            && remoteSession.runningKind == .query
-    }
-
-    /// The pending permission to surface as an inline Approve/Reject affordance,
-    /// or nil when nothing is awaiting approval. Only the LIVE chat renders it
-    /// (a persisted chat can't resolve a request); the first pending request is
-    /// shown — ACP agents gate one write at a time, so there is at most one.
-    private var livePendingPermission: PendingPermission? {
-        guard isLiveChat, let first = remoteSession.pendingPermissions.first else { return nil }
-        return first
-    }
-
-    // MARK: - Thinking indicator
-
-    /// An inline "thinking" row shown in the transcript area while the agent is
-    /// generating. Displays an animated spinner and an incrementing elapsed-time
-    /// counter so it's obvious the agent is actively working (issue #384).
-    private var thinkingIndicator: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                if let startedAt = remoteSession.runStartedAt {
-                    Text("Thinking… \(durationString(context.date.timeIntervalSince(startedAt)))")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Thinking…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        }
-    }
-
-    /// Formats a time interval as a compact duration string (e.g. "7s", "2m 30s").
-    private func durationString(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval.rounded(.down)))
-        if seconds < 60 {
-            return "\(seconds)s"
-        }
-        let minutes = seconds / 60
-        let remainingSeconds = seconds % 60
-        if minutes < 60 {
-            return remainingSeconds == 0 ? "\(minutes)m" : "\(minutes)m \(remainingSeconds)s"
-        }
-        let hours = minutes / 60
-        let remainingMinutes = minutes % 60
-        return remainingMinutes == 0 ? "\(hours)h" : "\(hours)h \(remainingMinutes)m"
-    }
-
-    // MARK: - Content routing
 
     @ViewBuilder
     private var content: some View {
-        if showsInternals && remoteSession.isRunning && remoteSession.runningKind == .query {
-            AgentQueueView(remoteSession: remoteSession, showsResultEvents: false, showsInternals: true, onWikiLink: WikiReaderView.onWikiLinkHandler(for: store))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(ChatMetrics.contentInset)
-        } else if chatID != nil && !isLiveChat && chatSummary == nil {
-            // Persisted chat that no longer exists in the store.
-            ContentUnavailableView {
-                Label("Chat Missing", systemImage: ResourceKind.chat.systemImageName)
-            } description: {
-                Text("This chat is no longer available.")
-            }
-        } else {
-            // Live, persisted, or draft (.newChat) chat: one transcript + one
-            // composer (the D2 source-of-truth rule selects remoteSession.events vs
-            // persisted rows). The draft state shows the empty-transcript
-            // placeholder + composer at the bottom (no centered "Ask X" page).
-            chatSurface
+        switch presentation.contentState {
+        case .internals:
+            internalsContent
+
+        case .missingChat:
+            missingChatContent
+
+        case .chatSurface:
+            chatSurfaceContent
         }
     }
 
-    // MARK: - Unified chat surface (live + persisted)
+    private var internalsContent: some View {
+        AgentQueueView(
+            remoteSession: remoteSession,
+            showsResultEvents: false,
+            showsInternals: true,
+            onWikiLink: WikiReaderView.onWikiLinkHandler(for: store)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(ChatMetrics.contentInset)
+    }
 
-    /// One transcript + one composer for both the live (streaming) and persisted
-    /// (read-only) chat. The D2 source-of-truth rule picks the event source via
-    /// `displayMessages`; only the empty-state message + the composer's caption
-    /// differ (persisted shows "No messages…" / the "another chat is responding"
-    /// caption; live shows the streaming placeholder).
-    @ViewBuilder
-    private var chatSurface: some View {
+    private var missingChatContent: some View {
+        ContentUnavailableView {
+            Label("Chat Missing", systemImage: ResourceKind.chat.systemImageName)
+        } description: {
+            Text("This chat is no longer available.")
+        }
+    }
+
+    private var chatSurfaceContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let chat = chatSummary {
-                header(for: chat)
-                Divider().opacity(PageEditorMetrics.dividerOpacity)
-            }
+            headerContent
             VStack(spacing: 0) {
-                    // Pre-spawn failure banner (#613): surfaces a previously
-                    // captured `remoteSession.preflightError` so a rolled-back chat
-                    // doesn't silently revert to the empty draft composer. The
-                    // rollback (deleting the dead chat row) still happens — this
-                    // only explains WHY the draft is visible. Mirrors the amber
-                    // turn-failed banner visual from `ChatWebView`.
-                    if let bannerError = preflightBannerMessage {
-                        preflightBanner(bannerError)
-                            .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                            .padding(.top, chatSummary != nil ? ChatMetrics.sectionSpacing / 2 : ChatMetrics.chatTopInset)
-                            .padding(.bottom, ChatMetrics.sectionSpacing / 2)
-                    }
-                    ChatTranscriptView(
-                        events: displayMessages,
-                        transcriptID: chatID.map(TranscriptID.chat),
-                        timestamps: displayTimestamps,
-                        emptyStateMessage: transcriptEmptyMessage,
-                        isRunning: transcriptIsRunning,
-                        onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
-                        renderContext: { [weak store] in store?.renderContext() },
-                        blobStore: store,
-                        zoom: chatZoom,
-                        scrollRequest: outlineScroll,
-                        quoteAnchor: quoteAnchor,
-                        hideToolCalls: hideToolCalls
-                    )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                        .padding(.top, preflightBannerMessage == nil
-                            ? (chatSummary != nil ? 0 : ChatMetrics.chatTopInset)
-                            : 0)
-                    if transcriptIsRunning && remoteSession.isGenerating {
-                        thinkingIndicator
-                            .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                            .padding(.bottom, ChatMetrics.sectionSpacing / 2)
-                    }
-                    if let pending = livePendingPermission, let chatID {
-                        PermissionApprovalView(permission: pending) { optionId in
-                            // The chosen optionId encodes approve/reject: an
-                            // `allow_*` option is an approve; anything else is
-                            // a reject. The daemon currently resolves on
-                            // optionId alone but we pass the correct intent.
-                            let approve = pending.options
-                                .first { $0.optionId == optionId }?
-                                .kind.hasPrefix("allow") ?? false
-                            Task {
-                                await coordinator.resolvePermission(
-                                    chatID: chatID,
-                                    optionId: optionId,
-                                    approve: approve)
-                            }
-                        }
-                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                        .padding(.bottom, ChatMetrics.sectionSpacing / 2)
-                    }
-                    chatComposer
-                        .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
-                        .padding(.top, ChatMetrics.sectionSpacing)
-                        .padding(.bottom, ChatMetrics.contentInset)
+                transcriptContent
+                composerContent
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    /// The composer, placed once as a VStack sibling below the transcript (the
-    /// live placement). For a persisted (non-live) chat it also carries the
-    /// "another chat is responding" caption when the kind's launcher is busy.
-    ///
-    /// #759: the queued-message list renders ABOVE the composer text field so
-    /// stacked "up next" items read as a playlist feeding into the input,
-    /// not as an afterthought dangling below it. (macos-design: muted,
-    /// above the affordance they feed, clearly secondary.)
-    private var chatComposer: some View {
-        VStack(spacing: 4) {
-            if !queuedMessages.isEmpty {
-                queuedMessagesList
-            }
-            composer(enabled: isComposerEnabled)
-            if let caption = composerCaption {
-                Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+    @ViewBuilder
+    private var headerContent: some View {
+        if let chatSummary {
+            ChatHeaderSectionView(
+                chat: chatSummary,
+                isHeaderExpanded: $isHeaderExpanded,
+                fileProviderAvailable: fileProvider.path != nil,
+                revealDebugFolderEnabled: currentDebugFolderURL != nil,
+                revealDebugFolderHelp: Self.debugFolderButtonHelpText(debugURL: currentDebugFolderURL),
+                onRename: { store.renameChat(id: chatSummary.id, to: $0) },
+                onShowInList: showInList,
+                onShare: shareChat,
+                onRevealInFinder: revealChatInFinder,
+                onRevealDebugFolder: revealDebugFolder
+            )
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+        }
+    }
+
+    private var transcriptContent: some View {
+        ChatTranscriptPaneView(
+            chatID: chatID,
+            transcript: presentation.transcript,
+            preflightBannerMessage: presentation.preflightBannerMessage,
+            livePendingPermission: presentation.livePendingPermission,
+            showsThinkingIndicator: presentation.showsThinkingIndicator,
+            runStartedAt: remoteSession.runStartedAt,
+            store: store,
+            chatZoom: chatZoom,
+            outlineScroll: outlineScroll,
+            quoteAnchor: quoteAnchor,
+            hideToolCalls: hideToolCalls
+        ) { optionID, approve in
+            guard let chatID else { return }
+            Task {
+                await coordinator.resolvePermission(
+                    chatID: chatID,
+                    optionId: optionID,
+                    approve: approve
+                )
             }
         }
-        // #740: animate the queued list in/out (macos-design: every state
-        // change gets a transition). `[PendingQueuedMessage]` is Equatable.
-        .animation(.snappy, value: queuedMessages)
+    }
+
+    private var composerContent: some View {
+        let props = makeComposerPaneProps()
+        return AnyView(ChatComposerPaneView(props: props))
+            .padding(
+                EdgeInsets(
+                    top: ChatMetrics.sectionSpacing,
+                    leading: PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin,
+                    bottom: ChatMetrics.contentInset,
+                    trailing: PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin
+                )
+            )
+    }
+
+    private func makeComposerPaneProps() -> ChatComposerPaneProps {
+        let onSubmit: () -> Void = { sendMessage() }
+        let onQueue: () -> Void = { queueMessage() }
+        let onStop: () -> Void = { stopActiveResponse() }
+        let onRecallQueued: (() -> Void)? = queuedMessages.isEmpty ? nil : { recallQueuedMessage() }
+        let onEditQueuedMessage: (Int) -> Void = { index in editQueuedMessage(index) }
+        let onRemoveQueuedMessage: (Int) -> Void = { index in removeQueuedMessage(index) }
+        let onAddAttachment: (ChatAttachment) -> Void = { attachment in addAttachment(attachment) }
+        let onRemoveAttachment: (ChatAttachment) -> Void = { attachment in removeAttachment(attachment) }
+        let composerHeightBinding = $composerHeight
+        let permissionModeBinding = $permissionModeRaw
+        return ChatComposerPaneProps(
+            composer: presentation.composer,
+            queuedMessages: queuedMessages,
+            autoFocus: chatID == nil,
+            attachments: attachments,
+            remoteSession: remoteSession,
+            store: store,
+            composerHeight: composerHeightBinding,
+            composerFont: composerFont,
+            permissionModeRaw: permissionModeBinding,
+            autocomplete: chatAutocompleteHooks,
+            onSubmit: onSubmit,
+            onQueue: onQueue,
+            onStop: onStop,
+            onRecallQueued: onRecallQueued,
+            onEditQueuedMessage: onEditQueuedMessage,
+            onRemoveQueuedMessage: onRemoveQueuedMessage,
+            onAddAttachment: onAddAttachment,
+            onRemoveAttachment: onRemoveAttachment
+        )
     }
 
     private func updateRightSidebarRegistration() {
-        guard chatInspectorAvailable else {
+        guard presentation.chatInspectorAvailable else {
             rightInspector.updateRegistration(nil)
             return
         }
@@ -542,10 +321,11 @@ struct ChatDetailView: View {
                 onCompareVersions: nil,
                 outline: {
                     AnyView(
-                        ChatInspectorOutlineView(entries: chatOutlineEntries) { turnIndex in
+                        ChatInspectorOutlineView(entries: presentation.outlineEntries) { turnIndex in
                             outlineScroll = ChatScrollRequest(
                                 version: (outlineScroll?.version ?? 0) + 1,
-                                turnIndex: turnIndex)
+                                turnIndex: turnIndex
+                            )
                         }
                     )
                 }
@@ -553,501 +333,11 @@ struct ChatDetailView: View {
         )
     }
 
-    /// #740: the per-item "Queued" affordance shown under the composer while
-    /// one or more messages are stashed for delivery. Playlist semantics: the
-    /// first item fires when the current turn completes; subsequent items fire
-    /// one per turn. Each row is its own muted capsule with a clock glyph,
-    /// truncated preview, and per-item cancel (✕). The first row gets a badge
-    /// "Next" so the user knows which one fires next. Unobtrusive by design
-    /// (macos-design discipline: muted, `.secondary`, capsule).
-    @ViewBuilder
-    private var queuedMessagesList: some View {
-        VStack(spacing: 3) {
-            ForEach(Array(queuedMessages.enumerated()), id: \.element.id) { (index: Int, pending: PendingQueuedMessage) in
-                queuedMessageRow(pending, isFirst: index == 0, index: index)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func queuedMessageRow(_ pending: PendingQueuedMessage, isFirst: Bool, index: Int) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if isFirst {
-                Text("Next:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fontWeight(.medium)
-            } else {
-                Text("#\(index + 1):")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            Text(pending.preview)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            // #759: edit-before-fires affordance. Pulls this message back into
-            // the composer draft for editing, removing it from the queue. Only
-            // acts when the draft is empty — a half-typed draft is preserved
-            // (write rules: never lose the user's in-flight text). The user can
-            // finish/discard their draft first and then edit the queued item.
-            Button {
-                editQueuedMessage(at: index)
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Edit this queued message")
-            .disabled(hasDraftText)
-            Button {
-                queuedMessages.remove(at: index)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Cancel this queued message")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
-        .transition(.opacity)
-    }
-
-    /// The paseo-style toolbar row that sits INSIDE the composer box, along its
-    /// bottom edge: the provider/model chip + the permission-mode chip on the
-    /// leading side, then the send button on the trailing side. The selector
-    /// chips are hidden when no wiki is active (no provider context); the send
-    /// button is always present.
-    @ViewBuilder
-    private func composerToolbar(sendActive: Bool) -> some View {
-        HStack(spacing: 10) {
-            // Click-to-add context: a "+" that opens a searchable picker of the
-            // wiki's pages/sources/chats. Selecting one attaches it as context
-            // (same currency as the sidebar drag-and-drop path, issue #385).
-            AddContextPicker(store: store) { payload in
-                let attachment = ChatAttachment(payload: payload, store: store)
-                if !attachments.contains(attachment) {
-                    attachments.append(attachment)
-                }
-            }
-            // Inside ContentView the session is always non-nil (a wiki is
-            // open), so the provider/model chips are always shown.
-            ProviderSelector(remoteSession: remoteSession, store: store)
-            ThinkingEffortSelector(remoteSession: remoteSession)
-            PermissionModeSelector(rawValue: $permissionModeRaw)
-            Spacer(minLength: 0)
-            if showsStopButton {
-                // #740: during a running turn the stop button stays primary (red,
-                // trailing). When the user has drafted a follow-up and nothing is
-                // queued yet, a secondary "Queue" button appears just before it so
-                // the next message is captured for delivery the moment this turn
-                // ends. ⌘↩ routes here (not Send) while generating.
-                if showsQueueButton && hasDraftText {
-                    queueButton
-                }
-                stopButton
-            } else if hasDraftText {
-                // Paseo: the send button appears only once there's something to
-                // send — an empty composer shows no action glyph at all.
-                sendButton(active: sendActive)
-            }
-        }
-        // Reserve the button's height so the box doesn't grow on the first
-        // keystroke when the button appears.
-        .frame(minHeight: ChatMetrics.sendButtonSize)
-    }
-
-    // MARK: - Persisted chat summary
-
-    private var chatSummary: ChatSummary? {
-        store.chats.first { $0.id == chatID }
-    }
-
-    /// Paired (question, response summary) entries for the chat outline. Each
-    /// user turn is paired with the first assistant text that follows it
-    /// (extracted to one sentence, elided), so the outline shows both sides of
-    /// the conversation. Sourced from `displayMessages` (same events as the
-    /// transcript).
-    ///
-    /// **Per-message summary (chat-summary plan §6.3):** for persisted chats,
-    /// a cached `chat_messages.summary` wins over on-the-fly extraction — read
-    /// once, never recomputed. The live (streaming) path has no row yet, so it
-    /// always computes the default truncation on the fly (free); the summary is
-    /// cached after the turn persists.
-    private var chatOutlineEntries: [ChatOutlineEntry] {
-        let msgs = displayMessages
-        let timestamps = displayTimestamps
-        // Align cached per-message summaries with `displayMessages` for the
-        // persisted path. `visiblePersistedMessages` applies the same
-        // `.transcriptVisible` filter as `displayMessages`, so indices match.
-        // The live path returns all-nil (no row yet).
-        let cachedSummaries: [String?] = isLiveChat
-            ? Array(repeating: nil, count: msgs.count)
-            : visiblePersistedMessages.map(\.summary)
-        var entries: [ChatOutlineEntry] = []
-        var pendingQuestion: String?
-        var pendingQuestionTS: Date?
-        for (i, event) in msgs.enumerated() {
-            let ts = i < timestamps.count ? timestamps[i] : nil
-            switch event {
-            case .userText(let text):
-                if let q = pendingQuestion {
-                    entries.append(ChatOutlineEntry(question: q, response: nil,
-                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: nil))
-                }
-                pendingQuestion = humanizeAttachmentRefs(in: text)
-                pendingQuestionTS = ts
-            case .assistantText(let text):
-                if let q = pendingQuestion {
-                    let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
-                    let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
-                    if cached != nil {
-                        DebugLog.ingest("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
-                    } else {
-                        DebugLog.ingest("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
-                    }
-                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
-                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
-                    pendingQuestion = nil
-                    pendingQuestionTS = nil
-                }
-            case .result(_, let text):
-                if let q = pendingQuestion {
-                    let cached = i < cachedSummaries.count ? cachedSummaries[i] : nil
-                    let summary = cached ?? ChatSummary.summaryExtract(from: text, maxLength: 200)
-                    if cached != nil {
-                        DebugLog.ingest("chatOutlineEntries: seq=\(i) using cached summary (kind=\(visiblePersistedMessages[i].summaryKind?.rawValue ?? "unknown"))")
-                    } else {
-                        DebugLog.ingest("chatOutlineEntries: seq=\(i) no cache, using truncation fallback")
-                    }
-                    entries.append(ChatOutlineEntry(question: q, response: summary.isEmpty ? nil : summary,
-                                                    questionTimestamp: pendingQuestionTS, responseTimestamp: ts))
-                    pendingQuestion = nil
-                    pendingQuestionTS = nil
-                }
-            default:
-                break
-            }
-        }
-        if let q = pendingQuestion {
-            entries.append(ChatOutlineEntry(question: q, response: nil,
-                                            questionTimestamp: pendingQuestionTS, responseTimestamp: nil))
-        }
-        return entries
-    }
-
-    /// The `.transcriptVisible` subset of `persistedMessages`, aligned with
-    /// `displayMessages` for the persisted path (chat-summary plan §6.3). Used
-    /// to read cached per-message summaries. Empty on the live path (no row
-    /// exists yet — the view sources from `remoteSession.events`).
-    private var visiblePersistedMessages: [ChatMessage] {
-        guard !isLiveChat else { return [] }
-        let indices = persistedMessages.map(\.event).transcriptVisibleIndices
-        return indices.compactMap { idx in
-            idx < persistedMessages.count ? persistedMessages[idx] : nil
-        }
-    }
-
-    @ViewBuilder
-    private func header(for chat: ChatSummary) -> some View {
-        // The header is split into two rows:
-        //
-        //   1. Title row — full view width (the `.hoverRowBackground()` pill
-        //      stretches edge-to-edge). The expanded content (date) is capped
-        //      at `readableContentWidth` internally by `CollapsibleDetailHeader`.
-        //
-        //   2. The action toolbar row (Show in List / Share / Reveal in
-        //      Finder / Reveal Debug Folder + outline toggle) — rendered as
-        //      a SIBLING of `CollapsibleDetailHeader`, NOT inside its
-        //      expanded content, so it can span the FULL view width. The
-        //      outline toggle (pinned to the trailing edge via `Spacer`)
-        //      therefore aligns to the view edge, not the readable column
-        //      edge. Previously this HStack lived inside the
-        //      `readableContentWidth` frame, so the Spacer only reached the
-        //      right edge of that constrained column and the toggle appeared
-        //      wedged in the middle-right.
-        //
-        // Both rows are still gated on `isHeaderExpanded` so the collapse
-        // chevron hides the actions exactly as before.
-        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
-            CollapsibleDetailHeader(
-                systemImage: ResourceKind.chat.systemImageName,
-                title: chat.title,
-                placeholder: "Untitled Chat",
-                titleLineLimit: 1,
-                isExpanded: $isHeaderExpanded,
-                onTitleCommit: { newTitle in
-                    store.renameChat(id: chat.id, to: newTitle)
-                }
-            ) {
-                Text(chat.updatedAt, style: .date)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            if isHeaderExpanded {
-                chatActionBar
-                    .transition(.opacity)
-            }
-        }
-        .padding(.horizontal, PageEditorMetrics.contentInset)
-        .padding(.top, PageEditorMetrics.contentInset)
-        .padding(.bottom, ChatMetrics.sectionSpacing)
-    }
-
-    // MARK: - Header action bar (full-width toolbar row)
-
-    /// The chat detail action toolbar row. Rendered as a sibling of
-    /// `CollapsibleDetailHeader` — NOT inside its expanded content — so this
-    /// HStack spans the FULL view width. The trailing `Spacer(minLength: 0)`
-    /// therefore pushes the outline toggle all the way to the view's right
-    /// edge (Bug 1 fix), instead of only the readable-column edge.
-    @ViewBuilder
-    private var chatActionBar: some View {
-        HStack(spacing: 10) {
-            if let chatID {
-                Button("Show in List", systemImage: "sidebar.left") {
-                    DebugLog.tabs("ChatDetailView: Show in List tapped — id=\(chatID.rawValue)")
-                    store.requestSidebarReveal(.chat(chatID))
-                }
-                .help("Reveal this chat in the sidebar")
-            }
-            if fileProvider.path != nil, let chatID {
-                Button("Share", systemImage: "square.and.arrow.up") {
-                    DebugLog.fileprovider("ChatDetailView: Share tapped — id=\(chatID.rawValue)")
-                    Task {
-                        guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
-                            DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
-                            return
-                        }
-                        DebugLog.fileprovider("Share chat detail: \(url.lastPathComponent)")
-                        let picker = NSSharingServicePicker(items: [url])
-                        let mouseScreen = NSEvent.mouseLocation
-                        guard let window = NSApplication.shared.keyWindow,
-                              let contentView = window.contentView else { return }
-                        let windowPoint = window.convertPoint(fromScreen: mouseScreen)
-                        let viewPoint = contentView.convert(windowPoint, from: nil)
-                        picker.show(
-                            relativeTo: NSRect(origin: viewPoint,
-                                               size: NSSize(width: 1, height: 1)),
-                            of: contentView, preferredEdge: .minY)
-                    }
-                }
-                .help("Share this chat")
-                Button("Reveal in Finder", systemImage: "folder") {
-                    DebugLog.fileprovider("ChatDetailView: Reveal in Finder tapped — id=\(chatID.rawValue)")
-                    Task { await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID) }
-                }
-                .help("Reveal this chat file in Finder")
-            }
-            revealDebugFolderButton
-            Spacer(minLength: 0)
-        }
-    }
-
-    // MARK: - Reveal Debug Folder button (#671)
-
-    /// The "Reveal Debug Folder" button. ALWAYS rendered when there is a
-    /// `chatID` — previously the button was gated on
-    /// `remoteSession.debugFolderURL(forChat:) ?? remoteSession.debugFolderURL`,
-    /// which read from an in-memory map populated only at spawn commit. A
-    /// persisted chat reopened from history (that ran in a previous app
-    /// session) had no entry, so the button never appeared — the operator
-    /// couldn't tell the feature existed (Bug 2, #671).
-    ///
-    /// #681 made `debugFolderURL(forChat:)` a pure function of chatID: it
-    /// resolves `<Caches>/Self Driving Wiki-agent/<chatULID>/runs/<latest>/debug/`
-    /// from disk at read time. So a chat that ran in ANY prior session now
-    /// resolves correctly after restart — the only disabled case is a chat
-    /// that has never spawn-committed (no `<chatULID>/runs/` directory on
-    /// disk: a draft chat, or one whose preflight failed before scratch-dir
-    /// creation).
-    ///
-    /// When the launcher resolves a debug URL for this chat (from the
-    /// disk-derived pure function, with a fallback to the live session's
-    /// `debugFolderURL` while a spawn is in progress), the button is enabled
-    /// and reveals the folder. When there is no URL, the button is DISABLED
-    /// with a help tooltip explaining the limitation — so the feature is
-    /// always discoverable.
-    @ViewBuilder
-    private var revealDebugFolderButton: some View {
-        if let chatID {
-            revealDebugFolderButton(
-                chatID: chatID,
-                debugURL: remoteSession.debugFolderURL(forChat: chatID.rawValue)
-                    ?? (isLiveChat ? remoteSession.debugFolderURL : nil))
-        }
-    }
-
-    @ViewBuilder
-    private func revealDebugFolderButton(chatID: ChatID, debugURL: URL?) -> some View {
-        Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
-            DebugLog.agent("ChatDetailView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
-            if let debugURL {
-                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-            } else {
-                // No debug URL for this chat — no `<chatULID>/runs/`
-                // directory exists on disk. The chat was either created but
-                // never spawn-committed (draft / preflight failure), or the
-                // spawn's createDirectory hasn't completed yet (extremely
-                // brief; the disabled state should already prevent this).
-                // Log so the click is visible in Console.app (belt-and-
-                // suspenders).
-                DebugLog.agent("ChatDetailView: no debug folder available for chat — id=\(chatID.rawValue) (no runs on disk)")
-            }
-        }
-        .disabled(debugURL == nil)
-        .help(Self.debugFolderButtonHelpText(debugURL: debugURL))
-    }
-
-    /// Pure predicate returning the help tooltip text for the Reveal Debug
-    /// Folder button. Extracted as a static func so the visibility/help-text
-    /// contract is unit-testable without a SwiftUI view tree (following the
-    /// `composerCaptionText` / `canSendPredicate` / `preflightBannerMessage`
-    /// pattern). Returns the disabled-state explanation when `debugURL` is
-    /// nil, or the enabled-state description when a folder is available.
-    nonisolated static func debugFolderButtonHelpText(debugURL: URL?) -> String {
-        if debugURL != nil {
-            return "Open the complete debug trace folder (ACP messages, permissions, usage)"
-        }
-        return "No debug folder on disk for this chat"
-    }
-
-    // MARK: - Preflight-error banner (issue #613)
-
-    /// Pure predicate for whether the chat surface should render a preflight-error
-    /// banner. Returns true when `remoteSession.preflightError` is non-empty AND the
-    /// surface is NOT the active live session — i.e. the chat reverted to the
-    /// draft composer after `AgentOperationRunner.startChat` rolled back a dead
-    /// chat row. A live chat never shows a preflight banner because a live
-    /// session implies the spawn succeeded (`preflightError` would be nil).
-    ///
-    /// Mirrors the existing pattern in `AgentQueueView.preflightBanner` (the
-    /// ingest activity window) but applies it to the chat surface so a failed
-    /// Ask/Edit spawn doesn't silently revert to an empty composer. The banner
-    /// surface is purely additive — the rollback (deleting the dead chat row)
-    /// still happens in `AgentOperationRunner.startChat:114`; this only
-    /// explains WHY the draft is visible.
-    nonisolated static func shouldShowPreflightBanner(
-        preflightError: String?,
-        chatID: ChatID?,
-        isLiveChat: Bool
-    ) -> Bool {
-        guard let message = preflightError, !message.isEmpty else { return false }
-        return chatID == nil || !isLiveChat
-    }
-
-    /// The preflight error message to surface in the banner, or nil when the
-    /// banner should not render. Forwards `preflightError` verbatim — the textual
-    /// content the user sees is the message captured at the spawn choke-point
-    /// (`AgentLauncher.startInteractiveQuery` / `backend.start` catch). Kept
-    /// static so tests can verify the text-pass-through without a SwiftUI view
-    /// tree (following the `composerCaptionText` / `canSendPredicate` pattern).
-    nonisolated static func preflightBannerMessage(
-        preflightError: String?,
-        chatID: ChatID?,
-        isLiveChat: Bool
-    ) -> String? {
-        guard shouldShowPreflightBanner(
-            preflightError: preflightError,
-            chatID: chatID,
-            isLiveChat: isLiveChat) else { return nil }
-        return preflightError
-    }
-
-    /// The instance-level read of the banner message used by `chatSurface`.
-    private var preflightBannerMessage: String? {
-        Self.preflightBannerMessage(
-            preflightError: remoteSession.preflightError,
-            chatID: chatID,
-            isLiveChat: isLiveChat)
-    }
-
-    /// Pre-spawn failure banner for the chat surface. Mirrors the amber
-    /// turn-failed banner visual from `ChatWebView.turnFailedBannerHTML`
-    /// (`rgba(255, 159, 10, 0.12)` background, 3pt amber left border, amber
-    /// warning icon, amber bold label + primary body) so this reads as a
-    /// sibling of the chat's existing turn-failure banner rather than the
-    /// red `AgentQueueView.preflightBanner` (the ingest activity window's
-    /// separate visual language).
-    @ViewBuilder
-    private func preflightBanner(_ error: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .font(.system(size: 14))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Couldn't start the chat")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.orange)
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color.orange)
-                .frame(width: 3)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
-
-    // MARK: - Composer caption predicates
-
-    /// Pure predicate for the composer caption. Returns the visible caption text
-    /// shown under the composer, or nil when nothing is queued/busy. Kept static
-    /// so tests can verify the full state matrix without a view tree.
-    static func composerCaptionText(
-        isAwaitingGenerationSlot: Bool,
-        hasChatID: Bool,
-        isLiveChat: Bool,
-        isGenerating: Bool
-    ) -> String? {
-        if isAwaitingGenerationSlot {
-            return "Waiting for the other session to finish before sending…"
-        }
-        if isGenerating {
-            // Live chat: agent is responding. Persisted chat: a different chat
-            // is generating and the launcher is busy.
-            return isLiveChat
-                ? "Agent is responding…"
-                : "Another chat is responding — wait or stop it."
-        }
-        return nil
-    }
-
-    // MARK: - Composer
-
-    /// The composer's AppKit font, scaled by the persisted chat zoom so
-    /// ⌘+/⌘− resize the input alongside the transcript (parity with the page
-    /// editor's `editor.zoom`).
     private var composerFont: NSFont {
         let base = ChatMetrics.composerFont
         return base.withSize(base.pointSize * CGFloat(chatZoom))
     }
 
-    /// Wiki-link autocomplete hooks (#436 / #638). Returns `nil` when no
-    /// Tantivy service is attached (no wiki open) — the composer then behaves
-    /// exactly as before. The `fetch` closure runs the distance-2 fuzzy query
-    /// on the live Tantivy index; `format` builds the canonical
-    /// `[[kind:ULID|Title]]` form via `DroppedLinkFormatter`. The coordinator
-    /// wraps `fetch` in a debounced + cancellable Task (AC #5).
     private var chatAutocompleteHooks: ComposerTextView.AutocompleteHooks? {
         guard let search = store.tantivySearch else { return nil }
         return ComposerTextView.AutocompleteHooks(
@@ -1057,251 +347,113 @@ struct ChatDetailView: View {
                     partial: partial,
                     kinds: [tantivyKind],
                     distance: 2,
-                    limit: 8)
+                    limit: 8
+                )
             },
             format: { hit in
-                // Map the search hit back to a ParsedLink.LinkType for the
-                // formatter (single source of truth for the `[[kind:ULID|…]]`
-                // prefix string).
                 let linkType = Self.linkType(for: hit.kind)
                 return DroppedLinkFormatter.link(
                     for: linkType,
                     id: hit.ulid,
-                    displayName: hit.title)
+                    displayName: hit.title
+                )
             }
         )
     }
 
-    /// Pure: map `ParsedLink.LinkType` (the prefix vocabulary) →
-    /// `TantivyDocumentKind` (the search index vocabulary). Single source of
-    /// truth so a prefix-rename hits both sides. `nonisolated` for test reach.
     nonisolated static func tantivyKind(for kind: ParsedLink.LinkType) -> TantivyDocumentKind {
         switch kind {
-        case .page:   return .page
+        case .page: return .page
         case .source: return .source
-        case .chat:   return .chat
+        case .chat: return .chat
         }
     }
 
-    /// Pure inverse of ``tantivyKind(for:)``. Same single-source-of-truth goal.
     nonisolated static func linkType(for kind: TantivyDocumentKind) -> ParsedLink.LinkType {
         switch kind {
-        case .page:   return .page
+        case .page: return .page
         case .source: return .source
-        case .chat:   return .chat
+        case .chat: return .chat
         }
     }
 
-    private func composer(enabled: Bool) -> some View {
-        let sendActive = canSend && enabled
-        // #740: wire the Arrow ↑ recall only when a message is actually queued.
-        // Built as an explicit closure so the type checker doesn't struggle with
-        // a method-reference ternary.
-        let recallAction: (() -> Void)? = {
-            guard !queuedMessages.isEmpty else { return nil }
-            return { recallQueuedMessage() }
-        }()
-        // Paseo-style: ONE rounded box wrapping the text (top) and a toolbar row
-        // (bottom) — model chip · permission chip · send button. Replaces the old
-        // capsule-with-inline-send + separate selector bar below.
-        return VStack(alignment: .leading, spacing: ChatMetrics.composerRowSpacing) {
-            if !attachments.isEmpty {
-                attachmentChips
+    private var currentDebugFolderURL: URL? {
+        guard let chatID else { return nil }
+        return remoteSession.debugFolderURL(forChat: chatID.rawValue)
+            ?? (isLiveChat ? remoteSession.debugFolderURL : nil)
+    }
+
+    private func showInList() {
+        guard let chatID else { return }
+        DebugLog.tabs("ChatDetailView: Show in List tapped — id=\(chatID.rawValue)")
+        store.requestSidebarReveal(.chat(chatID))
+    }
+
+    private func shareChat() {
+        guard let chatID else { return }
+        DebugLog.fileprovider("ChatDetailView: Share tapped — id=\(chatID.rawValue)")
+        Task {
+            guard let url = await fileProvider.resolveChatByNameURL(id: chatID, wikiID: session.wikiID) else {
+                DebugLog.fileprovider("Share chat detail: resolveChatByNameURL returned nil — id=\(chatID.rawValue) wikiID=\(session.wikiID)")
+                return
             }
-            ComposerTextView(
-                text: $store.draftChatMessage,
-                isEditable: enabled,
-                font: composerFont,
-                onSubmit: sendMessage,
-                measuredHeight: $composerHeight,
-                autoFocus: chatID == nil,
-                autocomplete: chatAutocompleteHooks,
-                onRecallQueued: recallAction
+            let picker = NSSharingServicePicker(items: [url])
+            let mouseScreen = NSEvent.mouseLocation
+            guard let window = NSApplication.shared.keyWindow,
+                  let contentView = window.contentView else { return }
+            let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+            let viewPoint = contentView.convert(windowPoint, from: nil)
+            picker.show(
+                relativeTo: NSRect(origin: viewPoint, size: NSSize(width: 1, height: 1)),
+                of: contentView,
+                preferredEdge: .minY
             )
-                .frame(height: composerHeight)
-                .frame(maxWidth: .infinity)
-                .overlay(alignment: .topLeading) {
-                    if store.draftChatMessage.isEmpty {
-                        Text("Ask a question, or ask to update the wiki…")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                            .allowsHitTesting(false)
-                            // Zero leading padding: `lineFragmentPadding=0` +
-                            // `textContainerInset.width=0` mean typed text starts
-                            // at the text view's left edge, so the overlay must too.
-                            .padding(.vertical, ComposerTextView.Metrics.verticalInsetPerSide)
-                    }
-                }
-
-            composerToolbar(sendActive: sendActive)
-        }
-        .padding(.horizontal, ChatMetrics.composerHorizontalPadding)
-        .padding(.top, ChatMetrics.composerTopPadding)
-        .padding(.bottom, ChatMetrics.composerBottomPadding)
-        .background(
-            Color(nsColor: .textBackgroundColor),
-            in: RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: ChatMetrics.composerCornerRadius, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.9), lineWidth: 1.5)
-        }
-        .shadow(color: Color.black.opacity(0.10), radius: 20, x: 0, y: 8)
-        .frame(maxWidth: .infinity)
-        // Accept sidebar drags anywhere in the composer box. This is the
-        // innermost drop target for SidebarDragPayloadList — it intercepts the
-        // drag before WikiDetailView's broader drop destination (which opens a
-        // new tab) can handle it. Must be on the composer container (not just
-        // attachmentChips) so it exists even when there are no attachments yet
-        // (issue #385 regression).
-        .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
-            let payloads = lists.flatMap(\.items)
-            for payload in payloads {
-                let attachment = ChatAttachment(payload: payload, store: store)
-                if !attachments.contains(attachment) {
-                    attachments.append(attachment)
-                }
-            }
-            return !payloads.isEmpty
         }
     }
 
-    /// True while the agent is actively generating or queued for the generation
-    /// slot — the stop button replaces the send button in the composer toolbar.
-    private var showsStopButton: Bool {
-        (remoteSession.isGenerating || remoteSession.isAwaitingGenerationSlot)
-            && remoteSession.runningKind == .query
-    }
-
-    /// The stop button shown in the composer toolbar while the agent is
-    /// responding. Sits in the same position as the send button (trailing edge
-    /// of the composer's bottom toolbar row).
-    private var stopButton: some View {
-        Button(action: {
-            if let chatID {
-                Task { await coordinator.stop(chatID: chatID) }
-            }
-        }) {
-            Image(systemName: "stop.circle.fill")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
-                .background(Color.red.opacity(0.85), in: Circle())
-        }
-        .buttonStyle(.borderless)
-        .help("Stop the current response")
-    }
-
-    /// #740: whether the "Queue" affordance should appear next to the stop
-    /// button. Shown only during THIS chat's query generation (not while
-    /// merely awaiting a generation slot — that's another session's turn) and
-    /// only when nothing is already queued.
-    private var showsQueueButton: Bool {
-        remoteSession.isGenerating
-            && remoteSession.runningKind == .query
-            && queuedMessages.isEmpty
-    }
-
-    /// #740: the "Queue" button — sits just before the stop button during a
-    /// running turn. Stylistically a sibling of the send button (filled
-    /// circle + up-arrow) but tinted accent (blue) so it reads as "queue
-    /// next" rather than "send now". Inherits ⌘↩ so keyboard users can queue
-    /// without reaching for the mouse; the normal Send button's ⌘↩ shortcut
-    /// is hidden during generation so there's no conflict.
-    private var queueButton: some View {
-        Button(action: queueMessage) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
-                .background(Color.accentColor.opacity(0.9), in: Circle())
-        }
-        .buttonStyle(.borderless)
-        .disabled(!hasDraftText)
-        .keyboardShortcut(.return, modifiers: .command)
-        .help("Queue for when the response finishes")
-    }
-
-    /// The trailing send button in the composer's bottom toolbar — a green
-    /// circle with a white up-arrow (paseo). Only shown when the composer has
-    /// text (see `composerToolbar`).
-    private func sendButton(active: Bool) -> some View {
-        Button(action: sendMessage) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: ChatMetrics.sendButtonSize, height: ChatMetrics.sendButtonSize)
-                .background(sendButtonBackground(active: active), in: Circle())
-        }
-        .buttonStyle(.borderless)
-        .disabled(!active)
-        .keyboardShortcut(.return, modifiers: .command)
-        .help(sendButtonTitle)
-    }
-
-    // MARK: - Attachments
-
-    /// Attachment chips shown above the composer. Each chip shows the item's
-    /// name + a remove button. Drop sidebar items here to attach them as
-    /// context for the next message (issue #385).
-    private var attachmentChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(attachments) { attachment in
-                    HStack(spacing: 4) {
-                        Image(systemName: attachment.systemImage)
-                            .font(.caption2)
-                        Text(attachment.displayName)
-                            .font(.caption)
-                            .lineLimit(1)
-                        Button {
-                            attachments.removeAll { $0.id == attachment.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.1), in: Capsule())
-                }
-            }
-            .padding(.horizontal, 2)
+    private func revealChatInFinder() {
+        guard let chatID else { return }
+        DebugLog.fileprovider("ChatDetailView: Reveal in Finder tapped — id=\(chatID.rawValue)")
+        Task {
+            await fileProvider.revealChatInFinder(id: chatID, wikiID: session.wikiID)
         }
     }
 
-    // MARK: - Send logic
+    private func revealDebugFolder() {
+        guard let chatID else { return }
+        DebugLog.agent("ChatDetailView: Reveal Debug Folder tapped — id=\(chatID.rawValue)")
+        if let currentDebugFolderURL {
+            NSWorkspace.shared.activateFileViewerSelecting([currentDebugFolderURL])
+        } else {
+            DebugLog.agent("ChatDetailView: no debug folder available for chat — id=\(chatID.rawValue) (no runs on disk)")
+        }
+    }
 
-    /// True once the composer holds non-whitespace text — drives the send
-    /// button's visibility (paseo shows no glyph until you type).
+    private func addAttachment(_ attachment: ChatAttachment) {
+        if !attachments.contains(attachment) {
+            attachments.append(attachment)
+        }
+    }
+
+    private func removeAttachment(_ attachment: ChatAttachment) {
+        attachments.removeAll { $0.id == attachment.id }
+    }
+
     private var hasDraftText: Bool {
         !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Green when the message can be sent, a muted grey while it can't (e.g. a
-    /// response is still generating). The button is only visible with text, so
-    /// green is the usual state.
-    private func sendButtonBackground(active: Bool) -> Color {
-        active ? Color.green : Color(nsColor: .quaternaryLabelColor).opacity(0.4)
+    private func stopActiveResponse() {
+        guard let chatID else { return }
+        Task { await coordinator.stop(chatID: chatID) }
     }
 
     private func sendMessage() {
-        // #740: during generation, plain Return (via onSubmit) queues instead of
-        // being a silent no-op — the user types + hits Enter, the message is
-        // queued for delivery when the turn completes. The guard below still
-        // protects the non-generating send path (issue #380).
         if remoteSession.isGenerating {
             queueMessage()
             return
         }
-        // Guard: don't clear the draft or attempt to send when the agent is
-        // generating or waiting for a slot. The Send button is already gated
-        // by `canSend`, but the Return key in ComposerTextView calls this
-        // unconditionally — so the same guard here prevents the message from
-        // being silently dropped (issue #380). The draft is preserved so the
-        // user can send it once the agent finishes.
-        guard canSend else { return }
+        guard presentation.composer.canSend else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         let wireMessage = buildWireMessage(from: message)
@@ -1310,75 +462,48 @@ struct ChatDetailView: View {
         submitMessage(wireMessage)
     }
 
-    /// #740: stash the composer's current draft as the queued message — fires
-    /// automatically when the active turn completes (see the
-    /// `remoteSession.isRunning` observer). Clears the draft + attachments exactly
-    /// like `sendMessage` would at send time, so the composer is free for the
-    /// user to draft a *different* follow-up while the queued one waits. Only
-    /// valid during THIS chat's generation (see `showsQueueButton`); the
-    /// `guard` here defends against an out-of-band invocation.
     private func queueMessage() {
         guard remoteSession.isGenerating else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        // Append to the playlist — the first item fires when the current turn
-        // completes; subsequent items fire one per turn.
-        queuedMessages.append(PendingQueuedMessage(
-            wireMessage: buildWireMessage(from: message),
-            preview: message))
+        queuedMessages.append(
+            PendingQueuedMessage(
+                wireMessage: buildWireMessage(from: message),
+                preview: message
+            )
+        )
         store.clearActiveChatDraft()
         attachments = []
     }
 
-    /// #740: recall the most-recently queued message back into the composer
-    /// draft for editing. Triggered by Arrow ↑ on an empty composer (see
-    /// `ComposerTextView`'s `onRecallQueued`). Pops the last item so the user
-    /// edits the one they just typed; the queue shrinks by one. The draft is
-    /// restored as-is (user text only, not the `[[kind:…]]`` wire refs — those
-    /// are rebuilt from current attachments on the next queue/send).
     private func recallQueuedMessage() {
         guard let pending = queuedMessages.popLast() else { return }
         store.draftChatMessage = pending.preview
     }
 
-    /// #759: pull a specific queued message back into the composer draft for
-    /// editing, removing it from its slot in the queue. The remaining items
-    /// shift down (the first still fires next). Only acts when the draft is
-    /// empty (guarded by the row's `.disabled(hasDraftText)`) — a half-typed
-    /// draft is never overwritten. The user re-queues the edited text via
-    /// Send/Queue as normal.
-    private func editQueuedMessage(at index: Int) {
+    private func editQueuedMessage(_ index: Int) {
         guard !hasDraftText, queuedMessages.indices.contains(index) else { return }
         let pending = queuedMessages.remove(at: index)
         store.draftChatMessage = pending.preview
     }
 
-    /// Delivers the FIRST queued message as the next turn's input when the
-    /// current turn completes (playlist: one per turn). Pops from the front;
-    /// the remaining items stay queued and the next turn completion fires the
-    /// next one. Routes through `submitMessage` (so it reuses the
-    /// interactive/continue/start routing) WITHOUT touching the composer's
-    /// draft — a half-typed follow-up the user may be mid-edit on is preserved
-    /// (#740 guardrail).
+    private func removeQueuedMessage(_ index: Int) {
+        guard queuedMessages.indices.contains(index) else { return }
+        queuedMessages.remove(at: index)
+    }
+
     private func firePendingQueuedMessage() {
         guard let pending = queuedMessages.first else { return }
         queuedMessages.removeFirst()
         submitMessage(pending.wireMessage)
     }
 
-    /// Builds the wire message exactly like the legacy `sendMessage` body:
-    /// prepend attachment reference text (issue #385) so the agent has the
-    /// dragged-in context. Extracted so the queue path reuses the same shaping.
     private func buildWireMessage(from message: String) -> String {
         guard !attachments.isEmpty else { return message }
-        let refs = attachments.map { $0.referenceText }.joined(separator: "\n")
+        let refs = attachments.map(\.referenceText).joined(separator: "\n")
         return "\(refs)\n\n\(message)"
     }
 
-    /// Dispatches a fully-shaped wire message to the agent without touching the
-    /// composer draft or attachments. Shared by `sendMessage` (normal Send)
-    /// and `firePendingQueuedMessage` (#740 auto-fire), so the queued deliver
-    /// path is identical to a manual send — only the *timing* differs.
     private func submitMessage(_ wireMessage: String) {
         Task {
             let submission = ChatTurnSubmission(
@@ -1415,99 +540,60 @@ struct ChatDetailView: View {
         }
     }
 
-    /// Start a new chat: clear the launcher's live state and retarget
-    /// the tab back to the draft state (.newChat). The old chat stays
-    /// in history.
-    private func startNewChat() {
-        // #830: Clear the old chat's ACP session ID — the old session is gone,
-        // and a future continue of the old chat should start fresh (not retry
-        // a dead resume). Per C8: the caller clears before transitioning.
-        if let chatID {
-            store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
-        }
-        // Reset the app-side draft mirror (the daemon's old session is
-        // unaffected). The next send from the draft composer starts a fresh
-        // chat on the daemon.
-        coordinator.resetDraft()
-        // D2 retarget-back: morph the active tab from .chat(id) back to the draft
-        // state so the user sees a fresh composer.
-        if let activeID = store.activeTabID {
-            store.retargetTab(id: activeID, to: .newChat)
-        }
-    }
-
-    // MARK: - Derived state
-
-    /// Composer is enabled for the live chat AND for a persisted (non-live) chat
-    /// whose kind's launcher is idle (D3: continue a persisted chat). A
-    /// persisted chat whose launcher is mid-generation (a DIFFERENT chat
-    /// is responding) disables the composer — the takeover rules refuse a
-    /// mid-generation interrupt, so the composer reflects that.
-    private var isComposerEnabled: Bool {
-        // Draft state (.newChat with chatID == nil): always enabled (a wiki
-        // is open inside ContentView; nothing is generating).
-        guard chatID != nil else {
-            // #740: allow drafting the first question even while some (unlikely)
-            // non-interactive generation is in flight.
-            return remoteSession.isInteractiveSession || !remoteSession.isRunning
-                || remoteSession.isGenerating
-        }
-        // The active live chat: #740 — editable during THIS chat's generation so
-        // the user can draft the next message; the Send button queues instead of
-        // firing immediately while `isGenerating` (see `composerToolbar`).
-        if isLiveChat {
-            return remoteSession.isInteractiveSession || !remoteSession.isRunning
-                || remoteSession.isGenerating
-        }
-        // D3: a persisted (non-live) chat is continuable when its kind's launcher
-        // is idle (`!isGenerating && !isAwaitingGenerationSlot`). If that launcher
-        // is mid-generation (a different chat), the composer stays
-        // disabled — `continueChat`'s takeover guard would refuse anyway.
-        // (A session is only alive when a wiki is open, so the activeWikiID
-        // check the old code had is always true here.)
-        return !remoteSession.isGenerating
-            && !remoteSession.isAwaitingGenerationSlot
-    }
-
-    /// Visible caption shown under the composer when the session is waiting or
-    /// busy. Covers both the generation-gate queue (any session) and the
-    /// persisted-chat "another chat is responding" case. Empty (no caption)
-    /// when the composer is enabled and nothing is queued (issue #235).
-    private var composerCaption: String? {
-        Self.composerCaptionText(
-            isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
-            hasChatID: chatID != nil,
+    nonisolated static func displayMessages(
+        isLiveChat: Bool,
+        launcherEvents: [AgentEvent],
+        persistedEvents: [AgentEvent]
+    ) -> [AgentEvent] {
+        ChatDetailPresentation.displayMessages(
             isLiveChat: isLiveChat,
-            isGenerating: remoteSession.isGenerating)
-    }
-
-    private var canType: Bool {
-        // A session is always alive when ChatDetailView is rendered inside
-        // ContentView, so the old `activeWikiID != nil` check is
-        // always true here.
-        // #740: typing (drafting) is allowed during generation so the user can
-        // compose the next message while the agent responds. Sending during
-        // generation is still gated by `canSendPredicate` (via `!isGenerating`),
-        // so this only enables drafting — the Send button routes to Queue.
-        remoteSession.isInteractiveSession || !remoteSession.isRunning
-            || remoteSession.isGenerating
-    }
-
-    private var canSend: Bool {
-        Self.canSendPredicate(
-            hasMount: fileProvider.path != nil,
-            canType: canType,
-            isGenerating: remoteSession.isGenerating,
-            isAwaitingSlot: remoteSession.isAwaitingGenerationSlot,
-            hasDraftText: !store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            launcherEvents: launcherEvents,
+            persistedEvents: persistedEvents
         )
     }
 
-    /// Pure predicate for whether the composer can send a message. Extracted as a
-    /// static func so it is unit-testable without a SwiftUI view tree (following
-    /// the `composerCaptionText` pattern). The `hasMount` parameter is accepted
-    /// for API clarity but intentionally ignored — the mount guard was removed
-    /// (issue #441): the agent reads via `wikictl` (DB-direct), not the mount.
+    nonisolated static func debugFolderButtonHelpText(debugURL: URL?) -> String {
+        ChatDetailPresentation.debugFolderButtonHelpText(debugURL: debugURL)
+    }
+
+    nonisolated static func shouldShowPreflightBanner(
+        preflightError: String?,
+        chatID: ChatID?,
+        isLiveChat: Bool
+    ) -> Bool {
+        ChatDetailPresentation.shouldShowPreflightBanner(
+            preflightError: preflightError,
+            chatID: chatID,
+            isLiveChat: isLiveChat
+        )
+    }
+
+    nonisolated static func preflightBannerMessage(
+        preflightError: String?,
+        chatID: ChatID?,
+        isLiveChat: Bool
+    ) -> String? {
+        ChatDetailPresentation.preflightBannerMessage(
+            preflightError: preflightError,
+            chatID: chatID,
+            isLiveChat: isLiveChat
+        )
+    }
+
+    static func composerCaptionText(
+        isAwaitingGenerationSlot: Bool,
+        hasChatID: Bool,
+        isLiveChat: Bool,
+        isGenerating: Bool
+    ) -> String? {
+        ChatDetailPresentation.composerCaptionText(
+            isAwaitingGenerationSlot: isAwaitingGenerationSlot,
+            hasChatID: hasChatID,
+            isLiveChat: isLiveChat,
+            isGenerating: isGenerating
+        )
+    }
+
     nonisolated static func canSendPredicate(
         hasMount: Bool,
         canType: Bool,
@@ -1515,50 +601,29 @@ struct ChatDetailView: View {
         isAwaitingSlot: Bool,
         hasDraftText: Bool
     ) -> Bool {
-        canType
-            && !isGenerating
-            && !isAwaitingSlot
-            && hasDraftText
-    }
-
-    private var sendButtonTitle: String {
-        if remoteSession.isAwaitingGenerationSlot {
-            return "Waiting for the other session to finish before sending…"
-        }
-        // #740: the send button (Queue) is now actionable during generation —
-        // it queues the draft for delivery when the turn completes. The tooltip
-        // reflects that rather than telling the user to wait.
-        if remoteSession.isGenerating {
-            return queuedMessages.isEmpty
-                ? "Queue for when the response finishes"
-                : "Queued — will send when the response finishes"
-        }
-        return remoteSession.isInteractiveSession ? "Send" : "Start Query"
+        ChatDetailPresentation.canSendPredicate(
+            hasMount: hasMount,
+            canType: canType,
+            isGenerating: isGenerating,
+            isAwaitingSlot: isAwaitingSlot,
+            hasDraftText: hasDraftText
+        )
     }
 }
 
-/// #740: a message the user *queued* while the agent was generating a
-/// response (Send during a running turn). `wireMessage` carries attachment
-/// references (built at queue time, exactly like `sendMessage`); `preview` is
-/// the trimmed user text shown in the muted "Queued" affordance (without the
-/// prepended `[[kind:…]]` refs). Auto-fires via `submitMessage` when the turn
-/// completes; the user may cancel it before it fires.
-private struct PendingQueuedMessage: Identifiable, Equatable {
+struct PendingQueuedMessage: Identifiable, Equatable {
     let id = UUID()
     let wireMessage: String
     let preview: String
 }
 
-/// A sidebar item dragged onto the chat composer as context for the next
-/// message (issue #385). Resolves the display name and builds a reference
-/// string prepended to the wire message so the agent knows about the
-/// attached page/source/chat.
-private struct ChatAttachment: Identifiable, Hashable {
+struct ChatAttachment: Identifiable, Hashable {
     let kind: SidebarDragPayload.Kind
     let itemID: String
     let displayName: String
 
     var hashableID: String { "\(kind.rawValue):\(itemID)" }
+    var id: String { hashableID }
 
     @MainActor
     init(payload: SidebarDragPayload, store: WikiStoreModel) {
@@ -1567,9 +632,9 @@ private struct ChatAttachment: Identifiable, Hashable {
         self.displayName = store.resolveAttachmentName(for: payload) ?? payload.id
     }
 
-    var id: String { hashableID }
-
-    func hash(into hasher: inout Hasher) { hasher.combine(hashableID) }
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(hashableID)
+    }
 
     static func == (lhs: ChatAttachment, rhs: ChatAttachment) -> Bool {
         lhs.hashableID == rhs.hashableID
@@ -1583,24 +648,15 @@ private struct ChatAttachment: Identifiable, Hashable {
         }
     }
 
-    /// The reference text prepended to the wire message so the agent knows
-    /// which wiki resource to use as context. Uses the display name (not the
-    /// raw ULID) so the agent can understand the reference — the system prompt
-    /// instructs the agent to use `[[source:DisplayName]]` / `[[page:Title]]` /
-    /// `[[chat:Title]]` wikilinks with human-readable names.
     var referenceText: String {
         switch kind {
-        case .page:   return "[[page:\(displayName)]]"
+        case .page: return "[[page:\(displayName)]]"
         case .source: return "[[source:\(displayName)]]"
-        case .chat:   return "[[chat:\(displayName)]]"
+        case .chat: return "[[chat:\(displayName)]]"
         }
     }
 }
 
-/// `Hashable` key for the `ChatDetailView` quote-anchor consume task (issue #281).
-/// Re-fires the task when the chat changes, a new anchor is pending, or the
-/// transcript's message count changes (so the anchor is consumed only once the
-/// persisted messages have loaded).
 private struct ChatAnchorTaskKey: Hashable {
     let chatID: ChatID?
     let anchorVersion: Int
@@ -1612,42 +668,21 @@ private struct ChatHydrationTaskKey: Hashable {
     let sessionID: UUID
 }
 
-// Shared metrics for the chat surface (mirrors the original
-// QueryChatMetrics, now shared between draft and persisted states).
 enum ChatMetrics {
     static let contentInset: CGFloat = 28
     static let sectionSpacing: CGFloat = 16
     static let debugTopInset: CGFloat = 18
-    static let controlsBandHeight: CGFloat = 28
     static let chatTopInset: CGFloat = 56
-    /// Extra horizontal breathing room added to the transcript + composer on
-    /// top of `PageEditorMetrics.contentInset`, so the chat content (numbered
-    /// lists especially) sits well clear of the window edges.
     static let extraHorizontalMargin: CGFloat = 18
-    /// Horizontal inset of the composer box's contents (paseo-style). Also the
-    /// effective left margin for the text, since `ComposerTextView` uses zero
-    /// line-fragment padding.
     static let composerHorizontalPadding: CGFloat = 18
-    /// Top inset above the text inside the composer box.
     static let composerTopPadding: CGFloat = 14
-    /// Bottom inset below the toolbar row inside the composer box.
     static let composerBottomPadding: CGFloat = 12
-    /// Vertical gap between the text and the toolbar row inside the box.
     static let composerRowSpacing: CGFloat = 10
-    /// Corner radius of the unified composer box (paseo uses a soft rounded
-    /// rectangle, not a full pill).
     static let composerCornerRadius: CGFloat = 18
     static let sendButtonSize: CGFloat = 34
-    /// Font for `ComposerTextView` — matches the previous `TextField`'s
-    /// `.font(.body)`, expressed as an `NSFont` since the composer is
-    /// AppKit-backed.
     static var composerFont: NSFont { .preferredFont(forTextStyle: .body) }
 }
 
-/// One entry in the chat outline: a user question paired with a one-line
-/// summary of the model's response (if any). The `question` is the
-/// humanized user text; `response` is the first-sentence extract of the
-/// first `.assistantText` or `.result` that followed, elided to 60 chars.
 struct ChatOutlineEntry: Hashable {
     let question: String
     let response: String?
@@ -1655,123 +690,12 @@ struct ChatOutlineEntry: Hashable {
     let responseTimestamp: Date?
 }
 
-/// Right-side outline for a chat: lists the user's turns (questions) in
-/// order, each paired with a one-line summary of the model's response.
-/// Clicking a turn scrolls the transcript web view to that message via a
-/// versioned `ChatScrollRequest`. Mirrors the page outline's shape (divider +
-/// "Outline" header + scrollable list).
-struct ChatOutlineView: View {
-    let entries: [ChatOutlineEntry]
-    let onSelect: (Int) -> Void
-
-    @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
-    @State private var dragStartWidth: Double? = nil
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Draggable divider on the outline's leading edge. A 1pt separator
-            // line with a wider invisible hit area so it's easy to grab.
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal, 4)
-                .contentShape(Rectangle())
-                .onHover { isHovering in
-                    if isHovering {
-                        NSCursor.resizeLeftRight.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            if dragStartWidth == nil {
-                                dragStartWidth = outlineWidth
-                            }
-                            if let start = dragStartWidth {
-                                let newWidth = start - Double(value.translation.width)
-                                outlineWidth = max(60, min(600, newWidth))
-                            }
-                        }
-                        .onEnded { _ in
-                            dragStartWidth = nil
-                        }
-                )
-                .zIndex(1)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Outline")
-                    .font(.headline)
-                    .padding()
-
-                Divider()
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
-                            Button {
-                                onSelect(index)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    // Timestamp header for the turn
-                                    if let ts = entry.questionTimestamp {
-                                        Text(ts, format: .dateTime.hour().minute())
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                            .padding(.bottom, 2)
-                                    }
-                                    // User question line item
-                                    HStack(alignment: .top, spacing: 4) {
-                                        Text("•")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text(entry.question.isEmpty ? "(empty)" : entry.question)
-                                            .font(.callout)
-                                            .foregroundStyle(.primary)
-                                            .multilineTextAlignment(.leading)
-                                    }
-                                    // Agent response line item
-                                    if let response = entry.response {
-                                        HStack(alignment: .top, spacing: 4) {
-                                            Text("•")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                            Text(response)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .multilineTextAlignment(.leading)
-                                        }
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 4)
-                                .padding(.horizontal, 8)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-            }
-            .frame(width: outlineWidth)
-            .background(Color(nsColor: .windowBackgroundColor))
-        }
-    }
-}
-
-/// Humanize the leading `[[page:…]]` / `[[source:…]]` / `[[chat:…]]`
-/// wikilink lines that `sendMessage` prepends as attachment references, so
-/// the chat outline shows readable names instead of raw `[[…]]` syntax.
-/// In the transcript WebView, user text is run through the markdown renderer
-/// so wikilinks render as clickable links there; this helper is only used by
-/// the plain-text outline (issue #385).
 func humanizeAttachmentRefs(in text: String) -> String {
     let pattern = #"\[\[(page|source|chat):([^\]]+)\]\]"#
-    let result = text.replacingOccurrences(of: pattern,
-                                            with: "$2",
-                                            options: .regularExpression)
+    let result = text.replacingOccurrences(
+        of: pattern,
+        with: "$2",
+        options: .regularExpression
+    )
     return result.trimmingCharacters(in: .whitespacesAndNewlines)
 }
