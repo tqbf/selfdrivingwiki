@@ -716,6 +716,7 @@ final class WikiDaemon: @unchecked Sendable {
                 try ChatSyncSnapshotEnvelope(snapshot: state).encodedData()
             })) ?? Data()
         } catch {
+            DebugLog.agent("WikiDaemon.chatSessionStateData failed for \(chatID.rawValue): \(error)")
             return Data()
         }
         #else

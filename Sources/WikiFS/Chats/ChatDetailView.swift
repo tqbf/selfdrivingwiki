@@ -232,7 +232,7 @@ struct ChatDetailView: View {
                     store.readChatTranscriptPage(
                         chatID: chatID,
                         after: afterCursor,
-                        limit: 200
+                        limit: RemoteChatSession.committedHistoryPageSize
                     )
                 }
                 // Phase C4: hydrate the RemoteChatSession from the daemon's live

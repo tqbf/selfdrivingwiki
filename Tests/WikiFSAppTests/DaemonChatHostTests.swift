@@ -326,7 +326,58 @@ struct DaemonChatHostTests {
             }
         }
 
-        #expect(replyData.count <= 1 || replyData.isEmpty)
+        #expect(replyData.isEmpty)
+    }
+
+    @Test func persistedOnlyChatSessionStateReadPerformsOneBoundedRecoveryWriteThenStabilizes() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "ChatTest"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
+        let claimID = ChatTurnClaimID(rawValue: "claim-read-recovery")
+        let turn = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "command-read-recovery"),
+                turnID: ChatTurnID(rawValue: "turn-read-recovery"),
+                userText: "resume me",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id,
+            claimID: claimID,
+            claimedAt: Date(timeIntervalSince1970: 11)
+        )
+        _ = try store.markPersistedChatTurnProviderSubmitted(
+            chatID: chat.id,
+            turnID: turn.submission.turnID,
+            claimID: claimID,
+            providerSessionID: AcpSessionID(rawValue: "session-read-recovery"),
+            submittedAt: Date(timeIntervalSince1970: 12)
+        )
+
+        let host = try await daemon.ensureChatHost()
+        let first = try await host.chatSessionState(chatID: chat.id)
+        let second = try await host.chatSessionState(chatID: chat.id)
+        let third = try await host.chatSessionState(chatID: chat.id)
+        let turns = try store.listPersistedChatTurns(chatID: chat.id)
+
+        if case .interruptedTurn(let turnID) = first.projection.attention {
+            #expect(turnID == turn.submission.turnID)
+        } else {
+            Issue.record("expected first persisted-only read to surface the interrupted turn")
+        }
+        #expect(first.projection.activeTurn?.turnID == turn.submission.turnID)
+        #expect(second == third)
+        #expect(second.projection.activeTurn == nil)
+        #expect(second.projection.attention == .none)
+        #expect(turns.count == 1)
+        #expect(turns[0].state == .failed)
+        #expect(turns[0].terminalMessage == "This turn was interrupted when the daemon restarted.")
     }
 
     @Test func xpcStopChatRoundTrip() async throws {

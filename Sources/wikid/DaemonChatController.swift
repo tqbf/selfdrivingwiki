@@ -155,7 +155,7 @@ actor DaemonChatController {
     }
 
     func chatSyncSnapshot() throws -> ChatSyncSnapshot {
-        ChatSyncSnapshot(projection: try syncProjection())
+        ChatSyncSnapshot(projection: syncProjection())
     }
 
     func typedSnapshot() -> ChatRuntimeSnapshot { snapshot }
@@ -184,15 +184,9 @@ actor DaemonChatController {
 
     func didUpdateCompatibilityState(_ update: ChatStateUpdate) {
         guard update != latestStateUpdate else { return }
-        let previousProjection = DebugLog.trying(
-            "DaemonChatController.didUpdateCompatibilityState.previousProjection",
-            operation: { try syncProjection() }
-        )
+        let previousProjection = syncProjection()
         latestStateUpdate = update
-        let nextProjection = DebugLog.trying(
-            "DaemonChatController.didUpdateCompatibilityState.nextProjection",
-            operation: { try syncProjection() }
-        )
+        let nextProjection = syncProjection()
         guard compatibilityMeaningfullyChanged(from: previousProjection, to: nextProjection) else { return }
         pushSyncUpdate(reason: .compatibilityRefreshed)
     }
@@ -521,19 +515,15 @@ actor DaemonChatController {
     }
 
     private func pushSyncUpdate(reason: ChatSyncUpdateReason) {
-        do {
-            let update = ChatSyncUpdate(
-                reason: reason,
-                projection: try syncProjection()
-            )
-            pushEvent(.chatSyncUpdate(chatID: chatID, update: update))
-        } catch {
-            DebugLog.agent("DaemonChatController failed to build chat sync update for \(chatID.rawValue): \(error)")
-        }
+        let update = ChatSyncUpdate(
+            reason: reason,
+            projection: syncProjection()
+        )
+        pushEvent(.chatSyncUpdate(chatID: chatID, update: update))
     }
 
-    private func syncProjection() throws -> ChatSyncProjection {
-        return ChatSyncProjection.from(
+    private func syncProjection() -> ChatSyncProjection {
+        ChatSyncProjection.from(
             snapshot: snapshot,
             committedCursor: committedCursor,
             pendingPermission: activePermission,

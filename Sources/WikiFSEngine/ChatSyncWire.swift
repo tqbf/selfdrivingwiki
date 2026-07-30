@@ -244,17 +244,71 @@ public struct ChatSyncUpdateEnvelope: Sendable, Codable, Equatable {
     }
 
     public func encodedData() throws -> Data {
-        try JSONEncoder().encode(self)
+        try JSONEncoder().encode(WireEnvelope(update: update, wireVersion: wireVersion))
     }
 
     public static func decodeData(_ data: Data) throws -> ChatSyncUpdate {
         do {
             try ChatSyncWire.validateVersion(in: data, malformed: ChatSyncWireError.malformedUpdate)
-            return try JSONDecoder().decode(ChatSyncUpdateEnvelope.self, from: data).update
+            return try JSONDecoder().decode(WireEnvelope.self, from: data).decodedUpdate
         } catch let error as ChatSyncWireError {
             throw error
         } catch {
             throw ChatSyncWireError.malformedUpdate(error.localizedDescription)
+        }
+    }
+
+    private enum TranscriptOverlayMode: String, Codable {
+        case rebuildFromReasonDeltas
+    }
+
+    private struct WireEnvelope: Codable, Equatable {
+        let wireVersion: Int
+        let update: WireUpdate
+
+        init(update: ChatSyncUpdate, wireVersion: Int) {
+            self.wireVersion = wireVersion
+            self.update = WireUpdate(update: update)
+        }
+
+        var decodedUpdate: ChatSyncUpdate { update.decodedUpdate }
+    }
+
+    private struct WireUpdate: Codable, Equatable {
+        let reason: ChatSyncUpdateReason
+        let projection: ChatSyncProjection
+        let transcriptOverlayMode: TranscriptOverlayMode?
+
+        init(update: ChatSyncUpdate) {
+            self.reason = update.reason
+            if case .sessionEvent(.transcriptChanged(let deltas)) = update.reason,
+               deltas.isEmpty == false {
+                self.projection = ChatSyncProjection(
+                    chatID: update.projection.chatID,
+                    generation: update.projection.generation,
+                    lifecycle: update.projection.lifecycle,
+                    activeTurn: update.projection.activeTurn,
+                    queuedTurns: update.projection.queuedTurns,
+                    attention: update.projection.attention,
+                    capabilities: update.projection.capabilities,
+                    providerState: update.projection.providerState,
+                    usage: update.projection.usage,
+                    diagnostics: update.projection.diagnostics,
+                    transcriptOverlay: [],
+                    committedCursor: update.projection.committedCursor,
+                    lastIncludedSequence: update.projection.lastIncludedSequence,
+                    pendingPermission: update.projection.pendingPermission,
+                    runMetadata: update.projection.runMetadata
+                )
+                self.transcriptOverlayMode = .rebuildFromReasonDeltas
+            } else {
+                self.projection = update.projection
+                self.transcriptOverlayMode = nil
+            }
+        }
+
+        var decodedUpdate: ChatSyncUpdate {
+            ChatSyncUpdate(reason: reason, projection: projection)
         }
     }
 }

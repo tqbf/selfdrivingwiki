@@ -117,8 +117,8 @@ public final class ChatDaemonCoordinator {
         routerTask?.cancel()
         routerTask = Task { [weak self] in
             guard let self else { return }
-            for await (chatID, envelope) in self.eventSink.chatEnvelopes {
-                self.route(chatID: chatID, envelope: envelope)
+            for await (chatID, update) in self.eventSink.chatEnvelopes {
+                self.route(chatID: chatID, update: update)
             }
         }
     }
@@ -126,21 +126,12 @@ public final class ChatDaemonCoordinator {
     /// chatID arrives in wire form (a `ChatID`) off the daemon's envelope
     /// stream — the sink already decoded it from the envelope's `chatID`
     /// field, so nothing past here handles a raw chat-id string.
-    private func route(chatID: ChatID, envelope: QueueEventEnvelope) {
-        if envelope.kind == .chatSyncUpdate {
-            do {
-                let update = try envelope.decodedChatSyncUpdate()
-                DebugLog.chatLive(
-                    "2.app.route chat=\(chatID) live=\(update.projection.isLive) "
-                    + "answering=\(update.projection.isAnswering) seq=\(update.projection.lastIncludedSequence.rawValue)")
-                setChatGenerating(chatID, generating: update.projection.isAnswering)
-            } catch {
-                DebugLog.agent("ChatDaemonCoordinator.route rejected chat sync update for \(chatID): \(error)")
-                return
-            }
-        }
-        // Deliver to the open session if one exists.
-        sessions[.chat(chatID)]?.ingest(envelope)
+    private func route(chatID: ChatID, update: ChatSyncUpdate) {
+        DebugLog.chatLive(
+            "2.app.route chat=\(chatID) live=\(update.projection.isLive) "
+            + "answering=\(update.projection.isAnswering) seq=\(update.projection.lastIncludedSequence.rawValue)")
+        setChatGenerating(chatID, generating: update.projection.isAnswering)
+        sessions[.chat(chatID)]?.ingest(update)
     }
 
     // MARK: - Sidebar liveness aggregate
@@ -295,7 +286,11 @@ public final class ChatDaemonCoordinator {
     /// Direct event injection (tests). Routes exactly like a daemon envelope.
     func ingestForTesting(_ envelope: QueueEventEnvelope) {
         guard let chatID = envelope.chatID else { return }
-        route(chatID: chatID, envelope: envelope)
+        do {
+            route(chatID: chatID, update: try envelope.decodedChatSyncUpdate())
+        } catch {
+            DebugLog.agent("ChatDaemonCoordinator.ingestForTesting rejected chat sync update for \(chatID): \(error)")
+        }
     }
 }
 

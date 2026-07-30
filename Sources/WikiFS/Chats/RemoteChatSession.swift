@@ -25,6 +25,7 @@ public final class RemoteChatSession {
     public private(set) var events: [AgentEvent] = []
     public private(set) var eventTimestamps: [Date?] = []
     public private(set) var runState: ChatRunState = .idle
+    public var syncStatus: ChatClientSyncStatus? { syncState?.syncStatus }
 
     public var isRunning: Bool { runState.isLive }
     public var isGenerating: Bool { runState.isAnswering }
@@ -59,6 +60,8 @@ public final class RemoteChatSession {
     @ObservationIgnored private var snapshotRequestTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotRetryTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotRetryAttempt = 0
+    @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var historyLoadTarget: ChatTranscriptCursor = .zero
 
     public init(chatID: ChatSessionKey) {
         self.chatID = chatID
@@ -69,10 +72,15 @@ public final class RemoteChatSession {
         runState = .idle
     }
 
+    func ingest(_ update: ChatSyncUpdate) {
+        guard update.projection.chatID == chatID.chatID else { return }
+        apply(.applyUpdate(update))
+    }
+
     func ingest(_ envelope: QueueEventEnvelope) {
         guard envelope.chatID == chatID.chatID else { return }
         do {
-            apply(.applyUpdate(try envelope.decodedChatSyncUpdate()))
+            ingest(try envelope.decodedChatSyncUpdate())
         } catch {
             DebugLog.agent("RemoteChatSession.ingest rejected envelope for \(chatID): \(error)")
         }
@@ -157,7 +165,7 @@ public final class RemoteChatSession {
             case .requestAuthoritativeSnapshot:
                 requestAuthoritativeSnapshotIfNeeded()
             case .loadCommittedHistory(let cursor):
-                Task { await loadCommittedHistory(to: cursor) }
+                scheduleCommittedHistoryLoad(to: cursor)
             }
         }
     }
@@ -213,11 +221,25 @@ public final class RemoteChatSession {
         snapshotRetryAttempt = 0
     }
 
-    private func loadCommittedHistory(to target: ChatTranscriptCursor) async {
-        guard let loader = onLoadCommittedHistoryPage else { return }
-        var targetCursor = target
+    private func scheduleCommittedHistoryLoad(to target: ChatTranscriptCursor) {
+        historyLoadTarget = max(historyLoadTarget, target)
+        guard historyLoadTask == nil else { return }
+        historyLoadTask = Task { [weak self] in
+            await self?.drainCommittedHistoryLoads()
+        }
+    }
 
-        while let syncState, syncState.loadedCommittedCursor < targetCursor {
+    private func drainCommittedHistoryLoads() async {
+        defer {
+            historyLoadTask = nil
+            historyLoadTarget = .zero
+        }
+
+        guard let loader = onLoadCommittedHistoryPage else { return }
+
+        while Task.isCancelled == false,
+              let syncState,
+              syncState.loadedCommittedCursor < historyLoadTarget {
             let afterCursor: ChatTranscriptCursor? = syncState.loadedCommittedCursor == .zero
                 ? nil
                 : syncState.loadedCommittedCursor
@@ -228,13 +250,14 @@ public final class RemoteChatSession {
                 DebugLog.store("RemoteChatSession.loadCommittedHistory failed for \(chatID): \(error)")
                 return
             }
+            guard Task.isCancelled == false else { return }
 
             let loadedCursor = page.nextCursor
                 ?? page.items.last?.cursor
                 ?? syncState.loadedCommittedCursor
             apply(.appendCommittedHistory(items: page.items, loadedCursor: loadedCursor))
-            targetCursor = max(targetCursor, page.checkpoint)
-            if loadedCursor >= targetCursor || loadedCursor == syncState.loadedCommittedCursor {
+            historyLoadTarget = max(historyLoadTarget, page.checkpoint)
+            if loadedCursor >= historyLoadTarget || loadedCursor == syncState.loadedCommittedCursor {
                 return
             }
         }
@@ -361,6 +384,9 @@ public final class RemoteChatSession {
         snapshotRetryTask?.cancel()
         snapshotRetryTask = nil
         snapshotRetryAttempt = 0
+        historyLoadTask?.cancel()
+        historyLoadTask = nil
+        historyLoadTarget = .zero
     }
 }
 #endif

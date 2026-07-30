@@ -52,6 +52,35 @@ struct ChatSyncWireTests {
         #expect(decoded == update)
     }
 
+    @Test func transcriptUpdateEnvelopeCompactsAccumulatedOverlayPayload() throws {
+        let chunk = String(repeating: "abcdefghij", count: 4)
+        let streamedText = Array(repeating: chunk, count: 300).joined()
+        let update = makeUpdate(
+            sequence: 5,
+            reason: .sessionEvent(.transcriptChanged([
+                .messageReplacement(
+                    messageID: ChatMessageID(rawValue: "assistant-stream"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .assistant,
+                    text: streamedText,
+                    createdAt: Date(timeIntervalSince1970: 20)
+                )
+            ])),
+            overlay: [
+                makeMessage(
+                    messageID: "assistant-stream",
+                    role: .assistant,
+                    text: streamedText
+                )
+            ]
+        )
+
+        let compact = try ChatSyncUpdateEnvelope(update: update).encodedData()
+        let full = try JSONEncoder().encode(LegacyLikeUpdateEnvelope(wireVersion: 1, update: update))
+
+        #expect(compact.count < full.count)
+    }
+
     @Test func snapshotEnvelopeRejectsMissingWireVersion() throws {
         let snapshot = makeSnapshot(sequence: 1)
         let encoded = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
@@ -202,18 +231,24 @@ struct ChatSyncWireTests {
     }
 
     private func makeMessage(
+        messageID: String? = nil,
         role: ChatTranscriptMessageRole,
         text: String
     ) -> ChatTranscriptItem {
         .message(
             ChatTranscriptMessageItem(
-                messageID: ChatMessageID(rawValue: "\(role.rawValue)-\(text)"),
+                messageID: ChatMessageID(rawValue: messageID ?? "\(role.rawValue)-\(text)"),
                 turnID: ChatTurnID(rawValue: "turn-1"),
                 role: role,
                 text: text,
                 createdAt: Date(timeIntervalSince1970: 20)
             )
         )
+    }
+
+    private struct LegacyLikeUpdateEnvelope: Codable {
+        let wireVersion: Int
+        let update: ChatSyncUpdate
     }
 }
 #endif

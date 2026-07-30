@@ -158,6 +158,147 @@ struct ChatClientSyncReducerTests {
         #expect(reduction.state.displayTranscriptItems == [overlayItem])
     }
 
+    @Test func completedTerminalUpdatePreservesLongerOverlayUntilCommittedHistoryReloads() {
+        let partialCommitted = makePersisted(
+            cursor: 1,
+            item: makeMessage(
+                messageID: "assistant-stream",
+                role: .assistant,
+                text: "Hel"
+            )
+        )
+        let longerOverlay = makeMessage(
+            messageID: "assistant-stream",
+            role: .assistant,
+            text: "Hello world"
+        )
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(
+                sequence: 4,
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .responding),
+                overlay: [longerOverlay],
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ),
+            committedItems: [partialCommitted],
+            loadedCommittedCursor: ChatTranscriptCursor(rawValue: 1),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .applyUpdate(makeUpdate(
+                sequence: 5,
+                reason: .sessionEvent(.completed(turnID: ChatTurnID(rawValue: "turn-1"))),
+                lifecycle: .closed,
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ))
+        )
+
+        #expect(reduction.state.displayTranscriptItems == [longerOverlay])
+    }
+
+    @Test func failedTerminalUpdatePreservesLongerOverlayAndFailureUntilCommittedHistoryReloads() {
+        let partialCommitted = makePersisted(
+            cursor: 1,
+            item: makeMessage(
+                messageID: "assistant-stream",
+                role: .assistant,
+                text: "Par"
+            )
+        )
+        let longerOverlay = makeMessage(
+            messageID: "assistant-stream",
+            role: .assistant,
+            text: "Partial answer"
+        )
+        let failure = ChatTranscriptItem.turnFailure(
+            ChatTranscriptTurnFailureItem(
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                category: .runtimeError,
+                message: "boom",
+                createdAt: Date(timeIntervalSince1970: 40)
+            )
+        )
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(
+                sequence: 4,
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .responding),
+                overlay: [longerOverlay],
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ),
+            committedItems: [partialCommitted],
+            loadedCommittedCursor: ChatTranscriptCursor(rawValue: 1),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .applyUpdate(makeUpdate(
+                sequence: 5,
+                reason: .sessionEvent(.failed(
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    category: .runtimeError,
+                    message: "boom",
+                    createdAt: Date(timeIntervalSince1970: 40)
+                )),
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .terminal(.failed(
+                    category: .runtimeError,
+                    message: "boom"
+                ))),
+                overlay: [failure],
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ))
+        )
+
+        #expect(reduction.state.displayTranscriptItems == [longerOverlay, failure])
+    }
+
+    @Test func cancelledTerminalUpdatePreservesLongerOverlayUntilCommittedHistoryReloads() {
+        let partialCommitted = makePersisted(
+            cursor: 1,
+            item: makeMessage(
+                messageID: "assistant-stream",
+                role: .assistant,
+                text: "Can"
+            )
+        )
+        let longerOverlay = makeMessage(
+            messageID: "assistant-stream",
+            role: .assistant,
+            text: "Cancelled answer"
+        )
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(
+                sequence: 4,
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .responding),
+                overlay: [longerOverlay],
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ),
+            committedItems: [partialCommitted],
+            loadedCommittedCursor: ChatTranscriptCursor(rawValue: 1),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .applyUpdate(makeUpdate(
+                sequence: 5,
+                reason: .sessionEvent(.cancelled(turnID: ChatTurnID(rawValue: "turn-1"))),
+                lifecycle: .closed,
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ))
+        )
+
+        #expect(reduction.state.displayTranscriptItems == [longerOverlay])
+    }
+
     @Test func optimisticSubmitDeduplicatesRepeatedSubmission() {
         let submission = makeSubmission()
         let base = ChatClientSyncState(
@@ -196,6 +337,96 @@ struct ChatClientSyncReducerTests {
         #expect(reduction.state.projection?.activeTurn == nil)
         #expect(reduction.state.projection?.queuedTurns.isEmpty == true)
         #expect(reduction.state.projection?.transcriptOverlay.isEmpty == true)
+    }
+
+    @Test func authoritativeQueuedTurnPreventsOptimisticRollbackFromRemovingDurableTurn() {
+        let submission = makeSubmission()
+        let base = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(sequence: 2, lifecycle: .ready),
+            syncStatus: .synchronized
+        )
+
+        let optimistic = ChatClientSyncReducer.reduce(base, .optimisticSubmit(submission)).state
+        let authoritative = ChatClientSyncReducer.reduce(
+            optimistic,
+            .applyUpdate(makeUpdate(
+                sequence: 3,
+                reason: .sessionEvent(.submitted(turnID: submission.turnID)),
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .queued),
+                overlay: [
+                    makeMessage(
+                        messageID: "authoritative-user",
+                        role: .user,
+                        text: submission.userText
+                    )
+                ]
+            ))
+        ).state
+        let rolledBack = ChatClientSyncReducer.reduce(
+            authoritative,
+            .optimisticSubmitFailed(submission.turnID)
+        ).state
+
+        #expect(rolledBack.projection?.lifecycle == .ready)
+        #expect(rolledBack.projection?.activeTurn?.turnID == submission.turnID)
+        #expect(rolledBack.projection?.activeTurn?.state == .queued)
+        #expect(rolledBack.displayTranscriptItems == [
+            makeMessage(
+                messageID: "authoritative-user",
+                role: .user,
+                text: submission.userText
+            )
+        ])
+    }
+
+    @Test func compactTranscriptUpdateRebuildsProjectionOverlayFromTranscriptDelta() {
+        let currentOverlay = makeMessage(
+            messageID: "assistant-stream",
+            role: .assistant,
+            text: "Hel"
+        )
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(
+                sequence: 4,
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .responding),
+                overlay: [currentOverlay],
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ),
+            committedItems: [makePersisted(cursor: 1, item: currentOverlay)],
+            loadedCommittedCursor: ChatTranscriptCursor(rawValue: 1),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .applyUpdate(makeUpdate(
+                sequence: 5,
+                reason: .sessionEvent(.transcriptChanged([
+                    .messageReplacement(
+                        messageID: ChatMessageID(rawValue: "assistant-stream"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .assistant,
+                        text: "Hello world",
+                        createdAt: Date(timeIntervalSince1970: 20)
+                    )
+                ])),
+                lifecycle: .ready,
+                activeTurn: makeActiveTurn(state: .responding),
+                committedCursor: ChatTranscriptCursor(rawValue: 1)
+            ))
+        )
+
+        #expect(reduction.state.displayTranscriptItems == [
+            makeMessage(
+                messageID: "assistant-stream",
+                role: .assistant,
+                text: "Hello world"
+            )
+        ])
     }
 
     @Test func persistedOnlyBaselineAcceptsFirstLiveGenerationUpdate() {
@@ -334,14 +565,20 @@ struct ChatClientSyncReducerTests {
         sequence: Int64,
         generation: String = "generation-1",
         reason: ChatSyncUpdateReason = .sessionEvent(.started(turnID: ChatTurnID(rawValue: "turn-1"))),
-        overlay: [ChatTranscriptItem] = []
+        lifecycle: ChatSessionLifecycle = .ready,
+        activeTurn: ChatTurnSnapshot? = nil,
+        overlay: [ChatTranscriptItem] = [],
+        committedCursor: ChatTranscriptCursor = .zero
     ) -> ChatSyncUpdate {
         ChatSyncUpdate(
             reason: reason,
             projection: makeProjection(
                 sequence: sequence,
                 generation: generation,
-                overlay: overlay
+                lifecycle: lifecycle,
+                activeTurn: activeTurn,
+                overlay: overlay,
+                committedCursor: committedCursor
             )
         )
     }
@@ -368,12 +605,13 @@ struct ChatClientSyncReducerTests {
     }
 
     private func makeMessage(
+        messageID: String? = nil,
         role: ChatTranscriptMessageRole,
         text: String
     ) -> ChatTranscriptItem {
         .message(
             ChatTranscriptMessageItem(
-                messageID: ChatMessageID(rawValue: "\(role.rawValue)-\(text)"),
+                messageID: ChatMessageID(rawValue: messageID ?? "\(role.rawValue)-\(text)"),
                 turnID: ChatTurnID(rawValue: "turn-1"),
                 role: role,
                 text: text,

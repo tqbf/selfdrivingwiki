@@ -343,6 +343,36 @@ struct RemoteChatSessionTests {
         #expect(session.activeChatID == nil)
     }
 
+    @Test func resetCancelsPendingHistoryLoadBeforeStalePageApplies() async {
+        let session = makeSession()
+        var afterCursors: [ChatTranscriptCursor?] = []
+        session.installHistoryLoader { after in
+            afterCursors.append(after)
+            if after == nil {
+                session.reset()
+            }
+            return ChatTranscriptPage(
+                items: [
+                    PersistedChatTranscriptItem(
+                        cursor: ChatTranscriptCursor(rawValue: 1),
+                        item: makeMessage(role: .assistant, text: "stale"),
+                        projectedEventJSON: nil,
+                        projectedPlainText: "stale",
+                        createdAt: Date(timeIntervalSince1970: 21)
+                    )
+                ],
+                checkpoint: ChatTranscriptCursor(rawValue: 2),
+                nextCursor: ChatTranscriptCursor(rawValue: 1)
+            )
+        }
+
+        session.hydrate(from: makeSnapshot(sequence: 1, committedCursor: ChatTranscriptCursor(rawValue: 2)))
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(afterCursors.map { $0?.rawValue } == [nil])
+        #expect(session.syncState?.committedItems.isEmpty == true)
+    }
+
     @Test func chatSyncUpdateEnvelopeRoundTrips() throws {
         let envelope = QueueEventEnvelope.chatSyncUpdate(
             chatID: ChatID(rawValue: "chat-1"),

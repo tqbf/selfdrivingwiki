@@ -50,10 +50,12 @@ Phase 4 implementation note for Wednesday, July 29, 2026
 - `RemoteChatSession` is reduced to a narrow compatibility adapter over a pure
   reducer-owned client sync state machine
 - the exact-head corrective pass repairs the Phase 4 audit regressions in
-  committed-history paging, optimistic lifecycle rollback, gap-triggered
-  snapshot retry, duplicate committed-row reconciliation, persisted-only
-  baseline handoff, real controller sequence coverage, and compatibility
-  refresh suppression
+  terminal transcript convergence after streamed updates, transcript-update
+  wire amplification and repeated app-side decoding, optimistic rollback over
+  authoritative queued turns, and reset-safe committed-history paging while
+  preserving the previously fixed paging, retry, transcript identity,
+  baseline-generation acceptance, controller sequence, and wire-version
+  behaviors
 - remaining launcher-era host cleanup (`DaemonChatHost` registry sync hops,
   idle eviction, wiki-resolution cleanup, and dead host/debug seams) is
   explicitly re-parked to `Phase 6` compatibility cleanup rather than implied
