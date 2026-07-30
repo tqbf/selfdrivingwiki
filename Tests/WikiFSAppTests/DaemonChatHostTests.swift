@@ -487,6 +487,7 @@ struct DaemonChatHostTests {
         }
 
         #expect(try store.listChats().isEmpty)
+        #expect(await host.liveControllerCountForTesting() == 0)
     }
 
     @Test func existingChatPreflightFailurePreservesRowAndPropagatesError() async throws {
@@ -514,6 +515,28 @@ struct DaemonChatHostTests {
 
         let chats = try store.listChats()
         #expect(chats.map(\.id) == [existing.id])
+    }
+
+    @Test func coldConfigurationControllerArmsAndCancelsIdleEviction() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "Test"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Cold configuration")
+        let host = try await daemon.ensureChatHost()
+
+        try await host.setChatConfigOption(
+            chatID: chat.id,
+            option: "thought_level",
+            value: "high"
+        )
+
+        #expect(await host.hasLiveSession(chat.id))
+        #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id))
+        #expect(await host.evictIdleControllerForTesting(chatID: chat.id))
+        #expect(await host.hasLiveSession(chat.id) == false)
+        #expect(await host.isIdleEvictionScheduledForTesting(chatID: chat.id) == false)
     }
 
     // MARK: - AC.4a: DaemonWorkloadClient chat round-trip (RC6)

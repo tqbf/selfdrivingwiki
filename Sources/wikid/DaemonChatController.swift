@@ -30,6 +30,12 @@ actor DaemonChatController {
     private var pendingCancellationTurnID: ChatTurnID?
     private var activePermission: ChatPendingPermissionRequest?
     private var isProcessingQueue = false
+    /// An idle-eviction close has released this actor while `runtime.close` is
+    /// in flight. A submit must make that close ineligible to remove the
+    /// controller, and must not submit into the handle that is closing.
+    private var isRuntimeClosing = false
+    private var isIdleEvictionAttempt = false
+    private var idleEvictionWasCancelled = false
     private var latestStateUpdate = ChatStateUpdate(
         isRunning: false,
         isGenerating: false,
@@ -70,6 +76,9 @@ actor DaemonChatController {
     }
 
     func submit(_ request: ChatSubmitRequest) async throws -> ChatID {
+        if isIdleEvictionAttempt {
+            idleEvictionWasCancelled = true
+        }
         let existingTurns = try store.listPersistedChatTurns(chatID: chatID)
         if existingTurns.contains(where: { $0.submission.commandID == request.submission.commandID }) {
             return chatID
@@ -132,15 +141,31 @@ actor DaemonChatController {
     func closeIfIdle() async -> Bool {
         guard currentClaimID == nil,
               snapshot.queuedTurns.isEmpty,
-              snapshot.activeTurn?.state.isTerminal != false else {
+              snapshot.activeTurn?.state.isTerminal != false,
+              isRuntimeClosing == false else {
             return false
         }
         guard runtimeHandle != nil else { return true }
+        isIdleEvictionAttempt = true
+        idleEvictionWasCancelled = false
         if snapshot.lifecycle != .closed {
             record(.sessionClosed)
         }
         activePermission = nil
         await closeRuntimeAndRotateGeneration()
+        isIdleEvictionAttempt = false
+
+        let remainsQuiescent = currentClaimID == nil
+            && snapshot.queuedTurns.isEmpty
+            && snapshot.activeTurn?.state.isTerminal != false
+        guard idleEvictionWasCancelled == false, remainsQuiescent else {
+            do {
+                try await processQueueIfPossible()
+            } catch {
+                DebugLog.agent("DaemonChatController.closeIfIdle queue recovery failed: \(error)")
+            }
+            return false
+        }
         return true
     }
 
@@ -223,7 +248,7 @@ actor DaemonChatController {
     }
 
     private func processQueueIfPossible() async throws {
-        guard isProcessingQueue == false else { return }
+        guard isProcessingQueue == false, isRuntimeClosing == false else { return }
         isProcessingQueue = true
         defer { isProcessingQueue = false }
 
@@ -645,6 +670,7 @@ actor DaemonChatController {
     }
 
     private func closeRuntimeAndRotateGeneration() async {
+        isRuntimeClosing = true
         if let handle = runtimeHandle {
             await runtime.close(handle)
         }
@@ -670,6 +696,7 @@ actor DaemonChatController {
             transientTranscriptOverlay: [],
             lastIncludedSequence: snapshot.lastIncludedSequence
         )
+        isRuntimeClosing = false
     }
 
     static func bootstrapSnapshot(

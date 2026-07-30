@@ -63,7 +63,22 @@ struct ChatDetailView: View {
             remoteSession: remotePresentationState,
             persistedMessages: persistedMessages,
             queuedMessages: queuedMessages,
-            hasDraftText: hasDraftText
+            hasDraftText: hasDraftText,
+            isChatOperationConfigured: isChatOperationConfigured
+        )
+    }
+
+    private var isChatOperationConfigured: Bool {
+        let config = remoteSession.providersConfig()
+        let override: (providerId: ProviderID, modelId: ModelID?)?
+        if let chatSummary, let providerID = chatSummary.modelProviderId {
+            override = (providerID, chatSummary.modelId)
+        } else {
+            override = remoteSession.pendingModelOverride
+        }
+        return config.isChatOperationConfigured(
+            chatOverrideProviderId: override?.providerId,
+            chatOverrideModelId: override?.modelId
         )
     }
 

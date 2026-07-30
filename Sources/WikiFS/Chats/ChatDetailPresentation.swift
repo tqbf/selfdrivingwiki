@@ -65,7 +65,8 @@ struct ChatDetailPresentation {
         remoteSession: RemoteState,
         persistedMessages: [ChatMessage],
         queuedMessages: [PendingQueuedMessage],
-        hasDraftText: Bool
+        hasDraftText: Bool,
+        isChatOperationConfigured: Bool = true
     ) -> Self {
         let isLiveChat = chatID.map { remoteSession.activeChatID == $0 } ?? false
         let displayEvents = displayMessages(
@@ -93,7 +94,8 @@ struct ChatDetailPresentation {
         let composerEnabled = isComposerEnabled(
             chatID: chatID,
             isLiveChat: isLiveChat,
-            remoteSession: remoteSession
+            remoteSession: remoteSession,
+            isChatOperationConfigured: isChatOperationConfigured
         )
         let canType = canType(remoteSession: remoteSession)
         let canSend = canSendPredicate(
@@ -101,7 +103,8 @@ struct ChatDetailPresentation {
             canType: canType,
             isGenerating: remoteSession.isGenerating,
             isAwaitingSlot: remoteSession.isAwaitingGenerationSlot,
-            hasDraftText: hasDraftText
+            hasDraftText: hasDraftText,
+            isChatOperationConfigured: isChatOperationConfigured
         )
         let outlineEntries = buildOutlineEntries(
             displayMessages: displayEvents,
@@ -133,7 +136,8 @@ struct ChatDetailPresentation {
                     isAwaitingGenerationSlot: remoteSession.isAwaitingGenerationSlot,
                     hasChatID: chatID != nil,
                     isLiveChat: isLiveChat,
-                    isGenerating: remoteSession.isGenerating
+                    isGenerating: remoteSession.isGenerating,
+                    isChatOperationConfigured: isChatOperationConfigured
                 ),
                 canSend: canSend,
                 sendButtonTitle: sendButtonTitle(
@@ -318,8 +322,10 @@ struct ChatDetailPresentation {
     private static func isComposerEnabled(
         chatID: ChatID?,
         isLiveChat: Bool,
-        remoteSession: RemoteState
+        remoteSession: RemoteState,
+        isChatOperationConfigured: Bool
     ) -> Bool {
+        guard isChatOperationConfigured else { return false }
         guard chatID != nil else {
             return remoteSession.isInteractiveSession || !remoteSession.isRunning || remoteSession.isGenerating
         }
@@ -337,9 +343,13 @@ struct ChatDetailPresentation {
         isAwaitingGenerationSlot: Bool,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isGenerating: Bool
+        isGenerating: Bool,
+        isChatOperationConfigured: Bool = true
     ) -> String? {
         _ = hasChatID
+        if isChatOperationConfigured == false {
+            return "Configure an enabled provider and model in Settings → Providers before sending."
+        }
         if isAwaitingGenerationSlot {
             return "Waiting for the other session to finish before sending…"
         }
@@ -356,10 +366,11 @@ struct ChatDetailPresentation {
         canType: Bool,
         isGenerating: Bool,
         isAwaitingSlot: Bool,
-        hasDraftText: Bool
+        hasDraftText: Bool,
+        isChatOperationConfigured: Bool = true
     ) -> Bool {
         _ = hasMount
-        return canType && !isGenerating && !isAwaitingSlot && hasDraftText
+        return isChatOperationConfigured && canType && !isGenerating && !isAwaitingSlot && hasDraftText
     }
 
     private static func showsStopButton(

@@ -151,6 +151,23 @@ struct ChatDetailPresentationTests {
         #expect(presentation.composer.sendButtonTitle == "Queued — will send when the response finishes")
     }
 
+    @Test func composerProjectionDisablesInputAndSendWhenChatOperationIsNotConfigured() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: nil,
+            chatSummary: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedMessages: [],
+            queuedMessages: [],
+            hasDraftText: true,
+            isChatOperationConfigured: false
+        )
+
+        #expect(presentation.composer.isEnabled == false)
+        #expect(presentation.composer.canSend == false)
+        #expect(presentation.composer.caption == "Configure an enabled provider and model in Settings → Providers before sending.")
+    }
+
     @Test func outlineProjectionUsesCachedPersistedSummaryWhenAvailable() throws {
         let chatID = ChatID(rawValue: "01J" + String(repeating: "G", count: 22))
         let presentation = ChatDetailPresentation.make(

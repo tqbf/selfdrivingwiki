@@ -23,7 +23,8 @@ Completed the reviewed Phase 6 compatibility cleanup on
   owns lookup, wiki resolution, timer replacement, cancellation, and removal.
 - Added quiescent five-minute controller eviction. A controller remains alive
   while it has an active claim or a durable queued turn.
-- Removed obsolete launcher event/state polling and temporary app badge logs.
+- Removed obsolete launcher event/state emitters. The live
+  `LauncherChatAgentRuntime` polling path and targeted badge diagnostics remain.
 - Updated the chat API signature manifest after removing migrated commands.
 - Added hosted coverage for deterministic quiescent controller eviction.
 

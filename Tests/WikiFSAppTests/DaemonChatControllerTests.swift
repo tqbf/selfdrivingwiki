@@ -433,6 +433,55 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 
+    @Test func idleEvictionCloseDefersInterleavedSubmitAndKeepsControllerNonEvictable() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-idle-first", turnID: "turn-idle-first")
+        let second = harness.makeSubmission(commandID: "command-idle-second", turnID: "turn-idle-second", text: "arrived during close")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before eviction"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let eviction = Task { await controller.closeIfIdle() }
+        await harness.runtime.waitForCloseToStart()
+
+        let submittedDuringClose = Task {
+            try await controller.submit(harness.makeSubmitRequest(submission: second))
+        }
+        _ = try await submittedDuringClose.value
+        await harness.runtime.resumeClose()
+
+        #expect(await eviction.value == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+        #expect(turns.map(\.state) == [.completed, .providerSubmitted])
+    }
+
+    @Test func idleEvictionRefusesActiveDurableClaimAndQueuedTurn() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let active = harness.makeSubmission(commandID: "command-claim", turnID: "turn-claim")
+        let queued = harness.makeSubmission(commandID: "command-queued", turnID: "turn-queued", text: "wait for me")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: active))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: queued))
+
+        #expect(await controller.closeIfIdle() == false)
+        let runtime = await harness.runtime.snapshot()
+        let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        #expect(runtime.closeCallCount == 0)
+        #expect(turns.map(\.state) == [.providerSubmitted, .queued])
+    }
+
     @Test func failedTurnAttentionDoesNotBlockNextQueuedTurn() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -712,6 +761,10 @@ private actor StubControllerRuntime: ChatAgentRuntime {
     private var cancelCalls: [ChatTurnID?] = []
     private var permissionResolutions: [ChatPermissionResolution] = []
     private var closeCallCount = 0
+    private var pausesNextClose = false
+    private var closeHasStarted = false
+    private var closeStartedWaiter: CheckedContinuation<Void, Never>?
+    private var closeResumeWaiter: CheckedContinuation<Void, Never>?
     private var streamContinuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation?
     private var stream: AsyncStream<ChatAgentRuntimeEventEnvelope>?
 
@@ -786,6 +839,15 @@ private actor StubControllerRuntime: ChatAgentRuntime {
 
     func close(_ handle: ChatRuntimeHandle) async {
         closeCallCount += 1
+        if pausesNextClose {
+            pausesNextClose = false
+            closeHasStarted = true
+            closeStartedWaiter?.resume()
+            closeStartedWaiter = nil
+            await withCheckedContinuation { continuation in
+                closeResumeWaiter = continuation
+            }
+        }
         streamContinuation?.finish()
         streamContinuation = nil
         stream = nil
@@ -797,6 +859,23 @@ private actor StubControllerRuntime: ChatAgentRuntime {
 
     func emit(_ event: ChatAgentRuntimeEvent, generation: ChatSessionGenerationID) {
         streamContinuation?.yield(.init(generation: generation, event: event))
+    }
+
+    func pauseNextClose() {
+        pausesNextClose = true
+        closeHasStarted = false
+    }
+
+    func waitForCloseToStart() async {
+        guard closeHasStarted == false else { return }
+        await withCheckedContinuation { continuation in
+            closeStartedWaiter = continuation
+        }
+    }
+
+    func resumeClose() {
+        closeResumeWaiter?.resume()
+        closeResumeWaiter = nil
     }
 
     func snapshot() -> Snapshot {

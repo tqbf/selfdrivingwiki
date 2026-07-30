@@ -293,6 +293,30 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         return modelId(forStage: stage, fallbackProvider: p.id)
     }
 
+    /// The chat composer may enable submission only when the same resolved
+    /// provider/model pair that the launcher validates is available. This keeps
+    /// an all-disabled provider list or a missing selected model from reaching
+    /// the daemon as a preflight failure.
+    public func isChatOperationConfigured(
+        chatOverrideProviderId: ProviderID? = nil,
+        chatOverrideModelId: ModelID? = nil
+    ) -> Bool {
+        guard enabledProviders.isEmpty == false else { return false }
+        let provider = provider(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderId
+        )
+        guard provider.enabled else { return false }
+        guard let modelID = modelId(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderId,
+            chatOverrideModelId: chatOverrideModelId
+        ) else {
+            return false
+        }
+        return modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
     // MARK: - Per-stage model selection (per-stage-model-selection plan)
 
     /// The model id to use for `stage` when the run resolves `providerId` as

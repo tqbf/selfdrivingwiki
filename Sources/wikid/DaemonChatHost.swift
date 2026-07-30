@@ -77,6 +77,7 @@ final class DaemonChatHost: @unchecked Sendable {
                let store = storeResolver(request.wikiID) {
                 do {
                     try store.deleteChat(id: resolvedChatID)
+                    _ = await evictIdleController(chatID: resolvedChatID)
                 } catch {
                     DebugLog.store("DaemonChatHost.submitTurn rollback failed: \(error)")
                 }
@@ -219,12 +220,20 @@ final class DaemonChatHost: @unchecked Sendable {
         await evictIdleController(chatID: chatID)
     }
 
+    func liveControllerCountForTesting() async -> Int {
+        await registry.count()
+    }
+
+    func isIdleEvictionScheduledForTesting(chatID: ChatID) async -> Bool {
+        await registry.isIdleEvictionScheduled(for: chatID)
+    }
+
     private func makeOrGetController(chatID: ChatID, wikiID: WikiID) async throws -> DaemonChatController {
         guard let store = storeResolver(wikiID) else {
             throw DaemonChatError.noStore(wikiID)
         }
 
-        if let existing = await registry.controller(for: chatID) {
+        if let existing = await registry.acquireController(for: chatID) {
             return existing
         }
 
@@ -280,15 +289,21 @@ final class DaemonChatHost: @unchecked Sendable {
             runtime: runtime,
             pushEvent: pushEvent
         )
-        return await registry.insertIfAbsent(controller, chatID: chatID, wikiID: wikiID)
+        let resolvedController = await registry.insertIfAbsent(
+            controller,
+            chatID: chatID,
+            wikiID: wikiID
+        )
+        await scheduleIdleEviction(for: chatID)
+        return resolvedController
     }
 
     private func resolveWikiID(for chatID: ChatID) async throws -> WikiID {
         if let wikiID = await registry.wikiID(for: chatID) {
             return wikiID
         }
-        let registry = WikiRegistry.load(from: containerDirectory)
-        for descriptor in registry.wikis {
+        let wikiRegistry = WikiRegistry.load(from: containerDirectory)
+        for descriptor in wikiRegistry.wikis {
             guard let store = storeResolver(descriptor.id) else { continue }
             do {
                 _ = try store.getChat(id: chatID)
@@ -334,10 +349,14 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 
     private func evictIdleController(chatID: ChatID) async -> Bool {
-        guard let controller = await registry.controller(for: chatID) else { return false }
-        guard await controller.closeIfIdle() else { return false }
-        await registry.remove(controller, for: chatID)
-        return true
+        guard let controller = await registry.reserveForIdleEviction(for: chatID) else {
+            return false
+        }
+        guard await controller.closeIfIdle() else {
+            await registry.abandonIdleEviction(for: chatID, controller: controller)
+            return false
+        }
+        return await registry.removeIfIdleEvictionReserved(controller, for: chatID)
     }
 
     // MARK: - Private: message summarization (RC5)
@@ -443,10 +462,11 @@ final class DaemonChatHost: @unchecked Sendable {
     }
 }
 
-private actor ControllerRegistry {
+actor ControllerRegistry {
     private struct Entry {
         let wikiID: WikiID
         let controller: DaemonChatController
+        var isIdleEvictionReserved = false
     }
 
     private var entries: [ChatID: Entry] = [:]
@@ -456,8 +476,23 @@ private actor ControllerRegistry {
         entries[chatID]?.controller
     }
 
+    /// Acquiring a controller for a command revokes a pending eviction before
+    /// the caller can await the controller. This prevents an idle timer from
+    /// removing a controller between lookup and submit.
+    func acquireController(for chatID: ChatID) -> DaemonChatController? {
+        guard var entry = entries[chatID] else { return nil }
+        entry.isIdleEvictionReserved = false
+        entries[chatID] = entry
+        idleEvictionTasks.removeValue(forKey: chatID)?.cancel()
+        return entry.controller
+    }
+
     func wikiID(for chatID: ChatID) -> WikiID? {
         entries[chatID]?.wikiID
+    }
+
+    func count() -> Int {
+        entries.count
     }
 
     func insertIfAbsent(
@@ -495,10 +530,34 @@ private actor ControllerRegistry {
         idleEvictionTasks.removeValue(forKey: chatID)?.cancel()
     }
 
-    func remove(_ controller: DaemonChatController, for chatID: ChatID) {
-        guard let current = entries[chatID], current.controller === controller else { return }
+    func isIdleEvictionScheduled(for chatID: ChatID) -> Bool {
+        idleEvictionTasks[chatID] != nil
+    }
+
+    func reserveForIdleEviction(for chatID: ChatID) -> DaemonChatController? {
+        guard var entry = entries[chatID], entry.isIdleEvictionReserved == false else {
+            return nil
+        }
+        entry.isIdleEvictionReserved = true
+        entries[chatID] = entry
+        return entry.controller
+    }
+
+    func abandonIdleEviction(for chatID: ChatID, controller: DaemonChatController) {
+        guard var current = entries[chatID], current.controller === controller else { return }
+        current.isIdleEvictionReserved = false
+        entries[chatID] = current
+    }
+
+    func removeIfIdleEvictionReserved(_ controller: DaemonChatController, for chatID: ChatID) -> Bool {
+        guard let current = entries[chatID],
+              current.controller === controller,
+              current.isIdleEvictionReserved else {
+            return false
+        }
         entries.removeValue(forKey: chatID)
         idleEvictionTasks.removeValue(forKey: chatID)?.cancel()
+        return true
     }
 }
 
