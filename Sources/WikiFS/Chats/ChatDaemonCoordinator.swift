@@ -15,7 +15,7 @@ public protocol ChatDaemonCommands: AnyObject, Sendable {
     func continueChat(_ request: ChatContinueRequest) async throws
     func sendChatMessage(chatID: ChatID, message: String) async throws
     func stopChat(_ chatID: ChatID) async throws
-    func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState
+    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -106,7 +106,9 @@ public final class ChatDaemonCoordinator {
 
     /// Replace the draft session with a fresh one (used by "start new chat").
     public func resetDraft() {
-        sessions[.draft] = RemoteChatSession(chatID: .draft)
+        let session = RemoteChatSession(chatID: .draft)
+        wireSessionCallbacks(session)
+        sessions[.draft] = session
     }
 
     // MARK: - Event routing
@@ -125,16 +127,17 @@ public final class ChatDaemonCoordinator {
     /// stream — the sink already decoded it from the envelope's `chatID`
     /// field, so nothing past here handles a raw chat-id string.
     private func route(chatID: ChatID, envelope: QueueEventEnvelope) {
-        // Track the running set from state envelopes so the sidebar can badge
-        // chats the daemon is running even without an open app session.
-        if envelope.kind == .chatState, let update = envelope.chatStateUpdate {
-            // TEMPORARY (stuck "responding…" badge): seam 2 of 6. Seam 1 firing
-            // without this one means the envelope never crossed XPC into the
-            // app — an event-sink blackout, not a UI bug (cf. #904/#907).
-            DebugLog.chatLive(
-                "2.app.route chat=\(chatID) running=\(update.isRunning) "
-                + "gen=\(update.isGenerating) awaiting=\(update.isAwaitingGenerationSlot)")
-            setChatGenerating(chatID, generating: update.isGenerating)
+        if envelope.kind == .chatSyncUpdate {
+            do {
+                let update = try envelope.decodedChatSyncUpdate()
+                DebugLog.chatLive(
+                    "2.app.route chat=\(chatID) live=\(update.projection.isLive) "
+                    + "answering=\(update.projection.isAnswering) seq=\(update.projection.lastIncludedSequence.rawValue)")
+                setChatGenerating(chatID, generating: update.projection.isAnswering)
+            } catch {
+                DebugLog.agent("ChatDaemonCoordinator.route rejected chat sync update for \(chatID): \(error)")
+                return
+            }
         }
         // Deliver to the open session if one exists.
         sessions[.chat(chatID)]?.ingest(envelope)
@@ -259,6 +262,9 @@ public final class ChatDaemonCoordinator {
                 DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
             }
         }
+        session.onRequestAuthoritativeSnapshot = {
+            try await client.chatSessionState(chatID)
+        }
     }
 
     /// Rehydrate a session from the daemon's live state. Call on view appear
@@ -269,7 +275,7 @@ public final class ChatDaemonCoordinator {
         do {
             let state = try await client.chatSessionState(chatID)
             session.hydrate(from: state)
-            setChatGenerating(chatID, generating: state.isGenerating)
+            setChatGenerating(chatID, generating: state.projection.isAnswering)
         } catch {
             // A rehydrate failure (e.g. the daemon evicted the session, so
             // `chatSessionState` throws `noSession`) is non-fatal — but the

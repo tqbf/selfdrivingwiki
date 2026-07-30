@@ -54,7 +54,21 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
         guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }
 
         // Route chat envelopes to the chat stream.
-        if envelope.isChatEnvelope, let chatID = envelope.chatID {
+        if envelope.isChatEnvelope {
+            guard let chatID = envelope.chatID else {
+                DebugLog.agent("DaemonQueueEventSink rejected chat envelope without chatID kind=\(envelope.kind.rawValue)")
+                return
+            }
+            guard envelope.kind == .chatSyncUpdate else {
+                DebugLog.agent("DaemonQueueEventSink rejected legacy chat envelope kind=\(envelope.kind.rawValue) chat=\(chatID.rawValue)")
+                return
+            }
+            do {
+                _ = try envelope.decodedChatSyncUpdate()
+            } catch {
+                DebugLog.agent("DaemonQueueEventSink rejected malformed chat sync update chat=\(chatID.rawValue): \(error)")
+                return
+            }
             chatContinuation.yield((chatID, envelope))
             return
         }

@@ -409,7 +409,6 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         guard var state = runtimeState,
               let turnID = state.activeTurnID else { return }
         await onLiveEvents([event])
-        pushCompatibilityTranscript([event])
         var translationState = state.translationStateByTurn[turnID] ?? TranscriptTranslationState()
         let deltas = Self.transcriptDeltas(
             from: [event],
@@ -434,7 +433,6 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     }
 
     private func handlePendingPermission(_ permission: PendingPermission?) async {
-        pushEvent(.chatPendingPermission(chatID: chatID, permission: permission))
         guard var state = runtimeState else { return }
         guard permission?.toolCallId != state.pendingPermission?.toolCallId else { return }
         state.pendingPermission = permission
@@ -454,13 +452,6 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         state.lastFingerprint = fingerprint
         runtimeState = state
         await onStateUpdate(update)
-        pushEvent(.chatState(chatID: chatID, update: update))
-    }
-
-    private func pushCompatibilityTranscript(_ events: [AgentEvent]) {
-        for event in events {
-            pushEvent(.chatEvent(chatID: chatID, event: event))
-        }
     }
 
     private func updateLatestProviderSessionID(_ sessionID: AcpSessionID?) {

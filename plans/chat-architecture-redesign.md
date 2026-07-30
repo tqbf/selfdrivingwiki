@@ -1,6 +1,6 @@
 # Chat Architecture Redesign
 
-Last updated: July 29, 2026
+Last updated: July 30, 2026
 
 ## Status
 
@@ -8,7 +8,7 @@ Issue: #982
 
 State: In progress
 
-Scope of this branch: Phase 0, Phase 1, Phase 2, and Phase 3
+Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
@@ -16,9 +16,9 @@ submission, queuing, lifecycle, permissions, cancellation, recovery,
 persistence, and client synchronization.
 
 This branch implements the Phase 0/1 foundation, the Phase 2 persistence
-rebuild, and the Phase 3 per-chat daemon-controller move. It does not
-implement the Phase 4 XPC wire redesign, the Phase 4 client sync replacement,
-or the Phase 5 UI decomposition.
+rebuild, the Phase 3 per-chat daemon-controller move, and the Phase 4 XPC
+wire / client-sync redesign. It does not implement the Phase 5 UI
+decomposition.
 
 Remediation note for PR #990 on Wednesday, July 29, 2026:
 
@@ -38,6 +38,18 @@ Remediation note for PR #990 on Wednesday, July 29, 2026:
   disabled in this path
 - the current exact-head evidence is recorded in
   [`progress/2026-07-29T201105Z-chat-redesign-phase3-982.md`](../progress/2026-07-29T201105Z-chat-redesign-phase3-982.md)
+
+Phase 4 implementation note for Thursday, July 30, 2026:
+
+- the chat XPC payload is now versioned as typed sequenced snapshot/update
+  envelopes while preserving JSON-encoded `Data` transport at the daemon
+  contract boundary
+- unknown or malformed wire versions are rejected explicitly at decode time;
+  the app no longer silently accepts future chat wire payloads
+- `RemoteChatSession` is reduced to a narrow compatibility adapter over a pure
+  reducer-owned client sync state machine
+- the current exact-head evidence is recorded in
+  [`progress/2026-07-30T010000Z-chat-redesign-phase4-982.md`](../progress/2026-07-30T010000Z-chat-redesign-phase4-982.md)
 
 ## Problem
 
@@ -223,7 +235,22 @@ runtime lifecycle.
 Version the wire payload, keep `Data` transport, add typed snapshots and
 updates, and replace `RemoteChatSession` with a reducer-owned client store.
 
-This phase is out of scope for this branch.
+Phase 4 is implemented on this branch with these concrete contracts:
+
+- `ChatSyncSnapshotEnvelope` and `ChatSyncUpdateEnvelope` version the wire while
+  preserving JSON-encoded `Data` transport across XPC and queue envelopes
+- the transport boundary rejects unknown/missing wire versions with explicit
+  `ChatSyncWireError`s instead of silently accepting future payloads
+- the daemon emits typed snapshots and sequenced updates covering identity,
+  generation, sequence, lifecycle, active/queued turns, attention,
+  capabilities, provider state, usage/diagnostics, transcript overlay,
+  committed cursor, and `lastIncludedSequence`
+- the app owns projection through `ChatClientSyncReducer`, which explicitly
+  handles duplicates, stale generation, stale turn state, missing-sequence
+  gaps, reconnect snapshots, authoritative catch-up, optimistic submit, live
+  overlay reconciliation, and durable-history preservation
+- `RemoteChatSession` remains only as a compatibility adapter while the
+  existing `ChatDetailView` call sites continue to render the same surface
 
 ### Phase 5: Decompose the chat UI around the presentation model
 
@@ -597,7 +624,8 @@ Before and during implementation:
 
 ## Branch scope for this PR
 
-This PR implements the foundation, persistence, and controller work:
+This PR implements the foundation, persistence, controller, and client-sync
+work:
 
 - this design record and the `PLAN.md` index entry
 - strong Foundation-only chat identifiers
@@ -620,18 +648,22 @@ This PR implements the foundation, persistence, and controller work:
 - per-chat daemon controllers with generation-guarded runtime event handling,
   durable queue recovery, restart interruption marking, terminal-outcome
   winner enforcement, typed snapshot production, and bounded replay
+- versioned chat XPC snapshot/update DTOs with explicit transport-boundary wire
+  validation and rejection
+- pure reducer-owned client synchronization with duplicate/stale/gap handling,
+  authoritative snapshot catch-up, optimistic submit, and durable-history /
+  live-overlay reconciliation
 - daemon/client compatibility migration to one typed submit path through the
   daemon contract, client wrapper, coordinator, and `ChatDetailView`
 - Tantivy rebuild marker invalidation for destructive chat search resets
-- direct controller, host, and coordinator tests for Phase 3 lifecycle,
-  restart, stale-event, replay, and compatibility cases
-- tests for AC.1, AC.2, AC.3, AC.4, AC.5, AC.6, AC.7, AC.8, AC.9, AC.13,
-  AC.14, and AC.15
+- direct controller, host, coordinator, wire, reducer, and compatibility-adapter
+  tests for Phase 3 lifecycle plus Phase 4 wire-version, reconnect,
+  gap-recovery, optimistic-overlay, and compatibility cases
+- tests for AC.1, AC.2, AC.3, AC.4, AC.5, AC.6, AC.7, AC.8, AC.9, AC.10,
+  AC.13, AC.14, and AC.15
 
 Out of scope for this PR:
 
-- XPC wire redesign
-- client synchronization migration
 - UI decomposition
 
 ## Verification commands

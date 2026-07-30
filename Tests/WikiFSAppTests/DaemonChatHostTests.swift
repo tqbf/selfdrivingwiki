@@ -263,7 +263,44 @@ struct DaemonChatHostTests {
         // The key assertion: the XPC plumbing works end-to-end.
     }
 
-    @Test func xpcChatSessionStateRoundTrip() async throws {
+    @Test func xpcChatSessionStateRoundTripsVersionedSnapshot() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let created = try #require(daemon.createWiki(name: "ChatTest"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
+        let exporter = WikiDaemonExporter(daemon: daemon)
+
+        let listener = NSXPCListener.anonymous()
+        let delegate = ChatTestListenerDelegate(exporter: exporter)
+        listener.delegate = delegate
+        listener.resume()
+        let endpoint = listener.endpoint
+        defer { listener.invalidate() }
+
+        let connection = NSXPCConnection(listenerEndpoint: endpoint)
+        let daemonInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        connection.remoteObjectInterface = daemonInterface
+        connection.resume()
+        defer { connection.invalidate() }
+
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
+
+        let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+            proxy.chatSessionState(chatID: chat.id.rawValue) { data in
+                cont.resume(returning: data)
+            }
+        }
+
+        let decoded = try ChatSyncSnapshotEnvelope.decodeData(replyData)
+
+        #expect(decoded.projection.chatID == chat.id)
+        #expect(decoded.projection.lastIncludedSequence == .initial)
+        #expect(decoded.projection.committedCursor == .zero)
+    }
+
+    @Test func xpcChatSessionStateMissingChatReturnsEmptyData() async throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
         let exporter = WikiDaemonExporter(daemon: daemon)
@@ -283,14 +320,12 @@ struct DaemonChatHostTests {
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
-        // Query session state for a non-existent chat
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
             proxy.chatSessionState(chatID: "nonexistent") { data in
                 cont.resume(returning: data)
             }
         }
 
-        // Should return empty Data (no session) without crashing
         #expect(replyData.count <= 1 || replyData.isEmpty)
     }
 
@@ -446,33 +481,48 @@ struct DaemonChatHostTests {
         #expect(decoded.firstMessage == "test message")
     }
 
-    @Test func chatSessionStateEncodingDecoding() throws {
-        let state = ChatSessionState(
+    @Test func chatSyncSnapshotEnvelopeEncodingDecoding() throws {
+        let snapshot = makeChatSyncSnapshot(
             chatID: ChatID(rawValue: "chat-abc"),
-            events: [.userText("hello"), .assistantText("hi there")],
-            isRunning: true,
-            isGenerating: false,
-            isAwaitingGenerationSlot: false,
-            preflightError: nil,
-            thinkingOption: ThinkingEffortOption(
-                configId: "thought_level",
-                currentValue: "high",
-                choices: [ThinkingEffortOption.Choice(value: "high", label: "High")]),
-            usageData: nil,
-            logFileURL: nil,
-            debugFolderURL: nil,
-            runKindRaw: "queryChat",
-            runStartedAt: Date(timeIntervalSince1970: 1000))
+            sequence: 3,
+            activeTurn: ChatTurnSnapshot(
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                commandID: ChatCommandID(rawValue: "command-1"),
+                visibleText: "hello",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 1000),
+                state: .responding
+            ),
+            overlay: [
+                .message(
+                    ChatTranscriptMessageItem(
+                        messageID: ChatMessageID(rawValue: "message-1"),
+                        turnID: ChatTurnID(rawValue: "turn-1"),
+                        role: .user,
+                        text: "hello",
+                        createdAt: Date(timeIntervalSince1970: 1001)
+                    )
+                )
+            ],
+            runMetadata: ChatRunMetadata(
+                thinkingOption: ThinkingEffortOption(
+                    configId: "thought_level",
+                    currentValue: "high",
+                    choices: [ThinkingEffortOption.Choice(value: "high", label: "High")]
+                ),
+                runKindRaw: "queryChat",
+                runStartedAt: Date(timeIntervalSince1970: 1000)
+            )
+        )
 
-        let data = try JSONEncoder().encode(state)
-        let decoded = try JSONDecoder().decode(ChatSessionState.self, from: data)
+        let data = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
+        let decoded = try ChatSyncSnapshotEnvelope.decodeData(data)
 
-        #expect(decoded.chatID == ChatID(rawValue: "chat-abc"))
-        #expect(decoded.events.count == 2)
-        #expect(decoded.isRunning == true)
-        #expect(decoded.thinkingOption?.currentValue == "high")
-        #expect(decoded.thinkingOption?.choices.count == 1)
-        #expect(decoded.runKindRaw == "queryChat")
+        #expect(decoded.projection.chatID == ChatID(rawValue: "chat-abc"))
+        #expect(decoded.projection.activeTurn?.state == .responding)
+        #expect(decoded.projection.transcriptOverlay.count == 1)
+        #expect(decoded.projection.runMetadata.thinkingOption?.currentValue == "high")
+        #expect(decoded.projection.runMetadata.runKindRaw == "queryChat")
     }
 
     // MARK: - Phase C4 follow-up: setChatConfigOption XPC round-trip
@@ -528,32 +578,64 @@ struct DaemonChatHostTests {
         #expect(decoded.value == "medium")
     }
 
-    @Test func chatSessionStateRoundTripsNewEnvelopeFields() throws {
-        // Verify the three new fields (stderr, lastActivityAt, currentProcessID)
-        // survive JSON encode/decode through the XPC envelope.
-        let state = ChatSessionState(
+    @Test func chatSyncSnapshotEnvelopeRoundTripsDiagnosticsAndMetadata() throws {
+        let snapshot = makeChatSyncSnapshot(
             chatID: ChatID(rawValue: "chat-fields"),
-            events: [],
-            isRunning: true,
-            isGenerating: false,
-            isAwaitingGenerationSlot: false,
-            preflightError: nil,
-            thinkingOption: nil,
-            usageData: nil,
-            logFileURL: nil,
-            debugFolderURL: nil,
-            runKindRaw: nil,
-            runStartedAt: nil,
-            stderr: "stderr capture",
-            lastActivityAt: Date(timeIntervalSince1970: 3333),
-            currentProcessID: 6789)
+            sequence: 2,
+            diagnostics: ChatDiagnosticsState(
+                stderr: "stderr capture",
+                lastActivityAt: Date(timeIntervalSince1970: 3333),
+                currentProcessID: 6789
+            ),
+            runMetadata: ChatRunMetadata(
+                preflightError: "preflight",
+                logFileURL: URL(string: "file:///tmp/log")!,
+                debugFolderURL: URL(string: "file:///tmp/debug")!
+            )
+        )
 
-        let data = try JSONEncoder().encode(state)
-        let decoded = try JSONDecoder().decode(ChatSessionState.self, from: data)
+        let data = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
+        let decoded = try ChatSyncSnapshotEnvelope.decodeData(data)
 
-        #expect(decoded.stderr == "stderr capture")
-        #expect(decoded.lastActivityAt?.timeIntervalSince1970 == 3333)
-        #expect(decoded.currentProcessID == 6789)
+        #expect(decoded.projection.diagnostics.stderr == "stderr capture")
+        #expect(decoded.projection.diagnostics.lastActivityAt?.timeIntervalSince1970 == 3333)
+        #expect(decoded.projection.diagnostics.currentProcessID == 6789)
+        #expect(decoded.projection.runMetadata.preflightError == "preflight")
+        #expect(decoded.projection.runMetadata.logFileURL?.absoluteString == "file:///tmp/log")
+        #expect(decoded.projection.runMetadata.debugFolderURL?.absoluteString == "file:///tmp/debug")
+    }
+
+    private func makeChatSyncSnapshot(
+        chatID: ChatID,
+        sequence: Int64,
+        activeTurn: ChatTurnSnapshot? = nil,
+        overlay: [ChatTranscriptItem] = [],
+        diagnostics: ChatDiagnosticsState = ChatDiagnosticsState(),
+        runMetadata: ChatRunMetadata = .empty
+    ) -> ChatSyncSnapshot {
+        ChatSyncSnapshot(
+            projection: ChatSyncProjection(
+                chatID: chatID,
+                generation: ChatSessionGenerationID(rawValue: "generation-\(chatID.rawValue)"),
+                lifecycle: activeTurn == nil ? .closed : .ready,
+                activeTurn: activeTurn,
+                queuedTurns: [],
+                attention: .none,
+                capabilities: .unavailable,
+                providerState: ChatProviderState(
+                    providerID: ProviderID(rawValue: "provider-1"),
+                    modelID: ModelID(rawValue: "model-1"),
+                    providerSessionID: nil
+                ),
+                usage: nil,
+                diagnostics: diagnostics,
+                transcriptOverlay: overlay,
+                committedCursor: .zero,
+                lastIncludedSequence: ChatUpdateSequence(rawValue: sequence),
+                pendingPermission: nil,
+                runMetadata: runMetadata
+            )
+        )
     }
 }
 

@@ -61,7 +61,7 @@ Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func startChat(_ request: C
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(_ chatID: ChatID) async throws
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func sendMessage(chatID: ChatID, message: String) async throws {
@@ -79,5 +79,5 @@ Sources/wikid/DaemonChatHost.swift	    ) async throws -> ChatID {
 Sources/wikid/DaemonChatHost.swift	    func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
 Sources/wikid/DaemonChatHost.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws {
 Sources/wikid/DaemonChatHost.swift	    func stopChat(chatID: ChatID) async {
-Sources/wikid/DaemonChatHost.swift	    func chatSessionState(chatID: ChatID) async throws -> ChatSessionState {
+Sources/wikid/DaemonChatHost.swift	    func chatSessionState(chatID: ChatID) async throws -> ChatSyncSnapshot {
 Sources/wikid/DaemonChatHost.swift	    func setChatConfigOption(chatID: ChatID, option: String, value: String) async throws {

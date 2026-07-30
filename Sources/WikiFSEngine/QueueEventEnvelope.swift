@@ -15,7 +15,9 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case enqueued, started, completed, failed, cancelled, reordered
         case progress, transcript, usage, liveUsage
         case runPaths, runStateChanged, pendingPermission
-        // Chat kinds (Phase C)
+        // Chat sync kinds (Phase 4)
+        case chatSyncUpdate
+        // Legacy chat kinds (rejected at the app transport boundary)
         case chatEvent, chatState, chatAcpSessionId, chatPendingPermission
     }
 
@@ -32,7 +34,8 @@ public struct QueueEventEnvelope: Codable, Sendable {
     public let runState: QueueRunState?
     public let pendingPermissionJSON: String?
 
-    // Chat-specific fields (Phase C). nil for queue kinds.
+    // Chat-specific fields. `chatStateData` now carries the versioned chat-sync
+    // payload for `chatSyncUpdate`, preserving the existing Data transport.
     public let chatID: ChatID?
     public let acpSessionId: AcpSessionID?
     public let chatStateData: Data?
@@ -153,7 +156,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case .pendingPermission:
             guard let itemID else { return nil }
             return .pendingPermission(itemID, nil)
-        case .chatEvent, .chatState, .chatAcpSessionId, .chatPendingPermission:
+        case .chatSyncUpdate, .chatEvent, .chatState, .chatAcpSessionId, .chatPendingPermission:
             return nil
         }
     }
@@ -163,11 +166,35 @@ public struct QueueEventEnvelope: Codable, Sendable {
     /// Whether this envelope is a chat kind (vs a queue kind).
     public var isChatEnvelope: Bool {
         switch kind {
-        case .chatEvent, .chatState, .chatAcpSessionId, .chatPendingPermission:
+        case .chatSyncUpdate, .chatEvent, .chatState, .chatAcpSessionId, .chatPendingPermission:
             return true
         default:
             return false
         }
+    }
+
+    /// Build a versioned `.chatSyncUpdate` envelope carrying the authoritative
+    /// projection after one sequenced or compatibility-only change.
+    public static func chatSyncUpdate(
+        chatID: ChatID,
+        update: ChatSyncUpdate
+    ) -> QueueEventEnvelope {
+        let data = DebugLog.trying("encode chat sync update", operation: {
+            try ChatSyncUpdateEnvelope(update: update).encodedData()
+        }) ?? Data()
+        return QueueEventEnvelope(
+            kind: .chatSyncUpdate,
+            chatID: chatID,
+            chatStateData: data
+        )
+    }
+
+    /// Decode the versioned `ChatSyncUpdate` from a `.chatSyncUpdate` envelope.
+    public func decodedChatSyncUpdate() throws -> ChatSyncUpdate {
+        guard kind == .chatSyncUpdate, let chatStateData else {
+            throw ChatSyncWireError.legacyEnvelopeKind(kind.rawValue)
+        }
+        return try ChatSyncUpdateEnvelope.decodeData(chatStateData)
     }
 
     /// Build a `.chatEvent` envelope carrying one streamed `AgentEvent` for a chat.
@@ -239,7 +266,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
 /// A run-flag change for a live chat session, streamed to the client so its
 /// `RemoteChatSession` mirror stays in sync with the daemon's launcher.
-public struct ChatStateUpdate: Codable, Sendable {
+public struct ChatStateUpdate: Codable, Sendable, Equatable {
     public let isRunning: Bool
     public let isGenerating: Bool
     public let isAwaitingGenerationSlot: Bool
