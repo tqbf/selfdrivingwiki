@@ -23,7 +23,7 @@ struct ChatPresentationAPIManifestTests {
         #expect(remoteSession.contains("var activeChatID:") == false)
     }
 
-    @Test func onlyAllowlistedCompatibilityAdaptersMayExposeAgentEventRows() throws {
+    @Test func typedChatRendererDoesNotReintroduceAgentEventRows() throws {
         let displaySources = [
             try source(named: "ChatDetailPresentation.swift"),
             try source(named: "ChatDetailView.swift"),
@@ -35,7 +35,8 @@ struct ChatPresentationAPIManifestTests {
 
         #expect(displaySources.allSatisfy { $0.contains("AgentEvent") == false })
         #expect(rendererAdapter.contains("struct ChatTranscriptRenderingInput"))
-        #expect(rendererAdapter.contains("AgentEvent"))
+        #expect(rendererAdapter.contains("AgentEvent") == false)
+        #expect(rendererAdapter.contains("ChatDisplayRow"))
         // The queue/activity surface intentionally adapts legacy agent rows;
         // it is not part of the display transcript API.
         #expect(remoteSession.contains("activityFeedEvents"))

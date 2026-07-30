@@ -254,24 +254,34 @@ struct ChatDetailView: View {
 
     private var transcriptContent: some View {
         ChatTranscriptPaneView(
-            chatID: chatID,
-            transcript: presentation.transcript,
-            preflightBannerMessage: presentation.preflightBannerMessage,
-            livePendingPermission: presentation.livePendingPermission,
-            showsThinkingIndicator: presentation.showsThinkingIndicator,
-            runStartedAt: remoteSession.runStartedAt,
-            store: store,
-            chatZoom: chatZoom,
-            outlineScroll: outlineScroll,
-            quoteAnchor: quoteAnchor,
-            hideToolCalls: hideToolCalls
-        ) { intent in
+            presentation: ChatTranscriptPanePresentation(
+                chatID: chatID,
+                transcript: presentation.transcript,
+                preflightBannerMessage: presentation.preflightBannerMessage,
+                livePendingPermission: presentation.livePendingPermission,
+                showsThinkingIndicator: presentation.showsThinkingIndicator,
+                runStartedAt: remoteSession.runStartedAt,
+                chatZoom: chatZoom,
+                outlineScroll: outlineScroll,
+                quoteAnchor: quoteAnchor,
+                hideToolCalls: hideToolCalls
+            ),
+            renderer: ChatTranscriptRendererEnvironment(
+                renderContext: { [weak store] in store?.renderContext() },
+                blobStore: store
+            ),
+            onIntent: handleTranscriptIntent
+        )
+    }
+
+    private func handleTranscriptIntent(_ intent: ChatTranscriptIntent) {
+        switch intent {
+        case .openWikiLink(let url, let inNewTab):
+            WikiReaderView.onWikiLinkHandler(for: store)(url, inNewTab)
+        case .resolvePermission(let resolution):
             guard let chatID else { return }
             Task {
-                await coordinator.resolvePermission(
-                    chatID: chatID,
-                    intent: intent
-                )
+                await coordinator.resolvePermission(chatID: chatID, intent: resolution)
             }
         }
     }
