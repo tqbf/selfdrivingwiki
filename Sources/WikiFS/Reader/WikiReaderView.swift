@@ -1058,8 +1058,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // The rendered source's own sibling map (nil for pages — no sibling
             // images). Selection-specific, so it stays here, not in the context.
             var renderedSourceMap: [String: SourceID]? = nil
+            let contentKind: ReaderMarkdown.ContentKind
             if case .source(let sourceID) = currentSelection {
                 renderedSourceMap = context?.siblingMaps[sourceID]
+                contentKind = .source
+            } else {
+                contentKind = .document
             }
 
             let loadStartVal = loadStart
@@ -1097,6 +1101,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     pinnedExtractionID = nil
                 }
                 let prepared = ReaderMarkdown.prepared(markdown,
+                    contentKind: contentKind,
                     isResolved: isResolved,
                     embedInfo: embedInfo,
                     displayName: displayName,

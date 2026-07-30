@@ -10,6 +10,28 @@ import Testing
 /// these feed standard Markdown and assert the HTML structure.
 struct MarkdownHTMLRendererTests {
 
+    @Test func sourceFrontmatterIsExcludedBeforeRendering() {
+        let markdown = """
+        ---
+        title: Example source
+        tags:
+          - demo
+        ---
+
+        # Hello
+
+        This is the source body.
+        """
+
+        let prepared = ReaderMarkdown.prepared(
+            markdown,
+            contentKind: .source,
+            isResolved: { _, _ in true })
+        let html = MarkdownHTMLRenderer.render(prepared)
+
+        #expect(html == "<h1 id=\"hello\">Hello</h1><p>This is the source body.</p>")
+    }
+
     @Test func headingWithSlug() {
         #expect(MarkdownHTMLRenderer.render("# Hello") == "<h1 id=\"hello\">Hello</h1>")
     }

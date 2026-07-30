@@ -4,6 +4,23 @@ import WikiFSCore
 
 struct PageMarkdownFormatTests {
 
+    // MARK: - source frontmatter
+
+    @Test func sourceStripsBalancedLeadingFrontmatter() {
+        let body = "---\ntitle: Example source\n---\n\n# Hello"
+        #expect(SourceMarkdownFormat.stripped(body: body) == "# Hello")
+    }
+
+    @Test func sourceRetainsUnterminatedFrontmatter() {
+        let body = "---\ntitle: Example source\n\n# Hello"
+        #expect(SourceMarkdownFormat.stripped(body: body) == body)
+    }
+
+    @Test func sourceWithoutFrontmatterIsUnchanged() {
+        let body = "# Hello\n\nThis is the source body."
+        #expect(SourceMarkdownFormat.stripped(body: body) == body)
+    }
+
     // MARK: - stripped: H1 present
 
     @Test func stripsMatchingH1() {

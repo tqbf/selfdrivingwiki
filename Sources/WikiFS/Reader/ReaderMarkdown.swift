@@ -11,14 +11,29 @@ import WikiFSCore
 /// so missing links aren't dimmed there yet — ghost coloring for the web reader
 /// is a follow-up.
 enum ReaderMarkdown {
+    /// The document class selects source-specific normalization while keeping
+    /// chat and page Markdown verbatim.
+    enum ContentKind {
+        case document
+        case source
+    }
+
     static func prepared(
         _ raw: String,
+        contentKind: ContentKind = .document,
         isResolved: (String, ParsedLink.LinkType) -> Bool,
         embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)? = nil,
         displayName: (String, ParsedLink.LinkType) -> String? = { _, _ in nil },
         pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)? = nil
     ) -> String {
-        let renderedFootnotes = WikiFootnoteMarkdown.rendered(raw)
+        let markdown: String
+        switch contentKind {
+        case .document:
+            markdown = raw
+        case .source:
+            markdown = SourceMarkdownFormat.stripped(body: raw)
+        }
+        let renderedFootnotes = WikiFootnoteMarkdown.rendered(markdown)
         let body = WikiLinkMarkdown.linkified(renderedFootnotes.bodyMarkdown,
                                               isResolved: isResolved,
                                               embedInfo: embedInfo,
