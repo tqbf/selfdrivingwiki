@@ -111,6 +111,7 @@ struct ChatDomainAuditRegressionTests {
                 sequence: 1,
                 payload: .failed(
                     turnID: ChatTurnID(rawValue: "turn-1"),
+                    failureID: ChatTranscriptFailureID(rawValue: "failure-failed"),
                     category: .runtimeError,
                     message: "boom",
                     createdAt: timestamp
@@ -227,6 +228,7 @@ struct ChatDomainAuditRegressionTests {
                 sequence: 1,
                 payload: .failed(
                     turnID: ChatTurnID(rawValue: "turn-1"),
+                    failureID: ChatTranscriptFailureID(rawValue: "failure-queued"),
                     category: .runtimeError,
                     message: "boom",
                     createdAt: Date(timeIntervalSince1970: 20)
@@ -523,6 +525,7 @@ struct ChatDomainAuditRegressionTests {
         ChatSessionEventPayload.completed(turnID: ChatTurnID(rawValue: "turn-1")),
         .failed(
             turnID: ChatTurnID(rawValue: "turn-1"),
+            failureID: ChatTranscriptFailureID(rawValue: "failure-terminal"),
             category: .runtimeError,
             message: "boom",
             createdAt: Date(timeIntervalSince1970: 2)
@@ -559,6 +562,7 @@ struct ChatDomainAuditRegressionTests {
         .completed(turnID: ChatTurnID(rawValue: "turn-stale")),
         .failed(
             turnID: ChatTurnID(rawValue: "turn-stale"),
+            failureID: ChatTranscriptFailureID(rawValue: "failure-stale"),
             category: .runtimeError,
             message: "boom",
             createdAt: Date(timeIntervalSince1970: 2)
@@ -668,6 +672,7 @@ struct ChatDomainAuditRegressionTests {
             queuedTurns: [queued],
             attention: .turnFailed(ChatTurnID(rawValue: "turn-1")),
             overlay: [.systemNotice(ChatTranscriptSystemNoticeItem(
+                noticeID: ChatTranscriptNoticeID(rawValue: "notice-recovering"),
                 turnID: nil,
                 kind: .session,
                 title: "Recovering",
@@ -783,6 +788,7 @@ struct ChatDomainAuditRegressionTests {
             updatedAt: Date(timeIntervalSince1970: 2)
         )),
         ChatTranscriptItem.systemNotice(ChatTranscriptSystemNoticeItem(
+            noticeID: ChatTranscriptNoticeID(rawValue: "notice-turn"),
             turnID: ChatTurnID(rawValue: "turn-3"),
             kind: .diagnostics,
             title: "Notice",
@@ -790,6 +796,7 @@ struct ChatDomainAuditRegressionTests {
             createdAt: Date(timeIntervalSince1970: 3)
         )),
         ChatTranscriptItem.turnFailure(ChatTranscriptTurnFailureItem(
+            failureID: ChatTranscriptFailureID(rawValue: "failure-turn"),
             turnID: ChatTurnID(rawValue: "turn-4"),
             category: .transportError,
             message: "socket closed",

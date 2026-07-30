@@ -133,6 +133,105 @@ struct ChatClientSyncReducerTests {
         #expect(reduction.effects.isEmpty)
     }
 
+    @Test func reconnectSnapshotClearsInvalidActiveContentBlock() {
+        let state = ChatClientSyncState(chatID: ChatID(rawValue: "chat-1"))
+        let invalid = ChatActiveContentBlock(
+            messageID: ChatMessageID(rawValue: "missing"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .applySnapshot(makeSnapshot(sequence: 1, activeContentBlock: invalid))
+        )
+
+        #expect(reduction.state.projection?.activeContentBlock == nil)
+    }
+
+    @Test func snapshotKeepsMatchingActiveContentBlock() {
+        let message = makeMessage(messageID: "assistant-stream", role: .assistant, text: "Hello")
+        let block = ChatActiveContentBlock(
+            messageID: ChatMessageID(rawValue: "assistant-stream"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant
+        )
+        let reduction = ChatClientSyncReducer.reduce(
+            ChatClientSyncState(chatID: ChatID(rawValue: "chat-1")),
+            .applySnapshot(makeSnapshot(sequence: 1, overlay: [message], activeContentBlock: block))
+        )
+
+        #expect(reduction.state.projection?.activeContentBlock == block)
+    }
+
+    @Test func canonicalHistoryReplacesOverlappingLegacyOverlay() {
+        let timestamp = Date(timeIntervalSince1970: 1)
+        let canonical = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-transcript-v47:systemNotice:chat-1:1"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let legacy = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-wire-v1:systemNotice:chat-1:generation-1:1:0"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(sequence: 1, overlay: [legacy]),
+            committedItems: [makePersisted(cursor: 1, item: canonical)],
+            loadedCommittedCursor: ChatTranscriptCursor(rawValue: 1),
+            syncStatus: .synchronized
+        )
+
+        #expect(state.displayTranscriptItems == [canonical])
+    }
+
+    @Test func legacyOverlayWithoutProvenanceIsAnomalousAndCanonicalWins() {
+        let timestamp = Date(timeIntervalSince1970: 1)
+        let canonical = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-transcript-v47:systemNotice:chat-1:1"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let unprovenancedLegacy = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "chat-wire-v1:systemNotice:chat-1:generation-1:1:0"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let state = ChatClientSyncState(
+            chatID: ChatID(rawValue: "chat-1"),
+            projection: makeProjection(sequence: 2, overlay: [unprovenancedLegacy]),
+            syncStatus: .synchronized
+        )
+
+        let reduction = ChatClientSyncReducer.reduce(
+            state,
+            .appendCommittedHistory(
+                items: [makePersisted(cursor: 1, item: canonical)],
+                loadedCursor: ChatTranscriptCursor(rawValue: 1)
+            )
+        )
+
+        #expect(reduction.anomalies == [
+            .legacyOverlayWithoutProvenance(itemKind: .systemNotice, sourceOrdinal: 0),
+        ])
+        #expect(reduction.state.projection?.transcriptOverlay.isEmpty == true)
+        #expect(reduction.state.displayTranscriptItems == [canonical])
+    }
+
     @Test func appendCommittedHistoryPrunesMatchingOverlay() {
         let overlayItem = makeMessage(role: .user, text: "hello")
         let state = ChatClientSyncState(
@@ -215,6 +314,7 @@ struct ChatClientSyncReducerTests {
         )
         let failure = ChatTranscriptItem.turnFailure(
             ChatTranscriptTurnFailureItem(
+                failureID: ChatTranscriptFailureID(rawValue: "failure-1"),
                 turnID: ChatTurnID(rawValue: "turn-1"),
                 category: .runtimeError,
                 message: "boom",
@@ -241,6 +341,7 @@ struct ChatClientSyncReducerTests {
                 sequence: 5,
                 reason: .sessionEvent(.failed(
                     turnID: ChatTurnID(rawValue: "turn-1"),
+                    failureID: ChatTranscriptFailureID(rawValue: "failure-1"),
                     category: .runtimeError,
                     message: "boom",
                     createdAt: Date(timeIntervalSince1970: 40)
@@ -514,7 +615,8 @@ struct ChatClientSyncReducerTests {
         activeTurn: ChatTurnSnapshot? = nil,
         overlay: [ChatTranscriptItem] = [],
         committedCursor: ChatTranscriptCursor = .zero,
-        diagnostics: ChatDiagnosticsState = ChatDiagnosticsState()
+        diagnostics: ChatDiagnosticsState = ChatDiagnosticsState(),
+        activeContentBlock: ChatActiveContentBlock? = nil
     ) -> ChatSyncSnapshot {
         ChatSyncSnapshot(
             projection: makeProjection(
@@ -524,7 +626,8 @@ struct ChatClientSyncReducerTests {
                 activeTurn: activeTurn,
                 overlay: overlay,
                 committedCursor: committedCursor,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                activeContentBlock: activeContentBlock
             )
         )
     }
@@ -536,7 +639,8 @@ struct ChatClientSyncReducerTests {
         activeTurn: ChatTurnSnapshot? = nil,
         overlay: [ChatTranscriptItem] = [],
         committedCursor: ChatTranscriptCursor = .zero,
-        diagnostics: ChatDiagnosticsState = ChatDiagnosticsState()
+        diagnostics: ChatDiagnosticsState = ChatDiagnosticsState(),
+        activeContentBlock: ChatActiveContentBlock? = nil
     ) -> ChatSyncProjection {
         ChatSyncProjection(
             chatID: ChatID(rawValue: "chat-1"),
@@ -553,6 +657,7 @@ struct ChatClientSyncReducerTests {
             ),
             usage: nil,
             diagnostics: diagnostics,
+            activeContentBlock: activeContentBlock,
             transcriptOverlay: overlay,
             committedCursor: committedCursor,
             lastIncludedSequence: ChatUpdateSequence(rawValue: sequence),

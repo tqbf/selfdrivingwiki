@@ -641,14 +641,15 @@ struct PageVersionTests {
     }
 
     /// AC.8 (migration ladder sanity) — a fresh DB must report the current
-    /// `user_version`. The v46 step is the destructive chat-only rebuild for
+    /// `user_version`. The v46 step is the destructive chat-only rebuild and
+    /// v47 adds durable non-message transcript identities.
     /// issue #982 Phase 2.
     @Test func v44SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 46,
+        #expect(GRDBWikiStore.schemaVersion == 47,
                 "schemaVersion must report 46 after the Phase 2 chat rebuild")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "46", "fresh DB stamps user_version = 46 (got \(v))")
+        #expect(v == "47", "fresh DB stamps user_version = 47 (got \(v))")
     }
 
     // MARK: - #817: pageVersionBody (read arbitrary version body)

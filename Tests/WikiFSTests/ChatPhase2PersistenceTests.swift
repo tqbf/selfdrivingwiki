@@ -333,6 +333,7 @@ struct ChatPhase2PersistenceTests {
                 updatedAt: Date(timeIntervalSince1970: 2)
             )),
             .turnFailure(.init(
+                failureID: ChatTranscriptFailureID(rawValue: "failure-1"),
                 turnID: ChatTurnID(rawValue: "turn-1"),
                 category: .runtimeError,
                 message: "boom",
@@ -359,6 +360,7 @@ struct ChatPhase2PersistenceTests {
         let chat = try store.createChat(kind: .edit, title: "Transcript")
         try store.appendChatTranscriptItems(chatID: chat.id, items: [
             .systemNotice(.init(
+                noticeID: ChatTranscriptNoticeID(rawValue: "notice-1"),
                 turnID: nil,
                 kind: .session,
                 title: "Started",
@@ -391,6 +393,129 @@ struct ChatPhase2PersistenceTests {
         #expect(second.checkpoint == ChatTranscriptCursor(rawValue: 3))
         #expect(second.nextCursor == ChatTranscriptCursor(rawValue: 3))
         #expect(try store.chatTranscriptCheckpoint(chatID: chat.id) == ChatTranscriptCursor(rawValue: 3))
+    }
+
+    @Test func duplicateEqualNoticeAndFailureItemsKeepDistinctDurableCursors() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Duplicate durable items")
+        let timestamp = Date(timeIntervalSince1970: 1)
+        let firstNotice = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "notice-1"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let secondNotice = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "notice-2"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: timestamp
+        ))
+        let firstFailure = ChatTranscriptItem.turnFailure(.init(
+            failureID: ChatTranscriptFailureID(rawValue: "failure-1"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            category: .runtimeError,
+            message: "Failed",
+            createdAt: timestamp
+        ))
+        let secondFailure = ChatTranscriptItem.turnFailure(.init(
+            failureID: ChatTranscriptFailureID(rawValue: "failure-2"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            category: .runtimeError,
+            message: "Failed",
+            createdAt: timestamp
+        ))
+
+        let inserted = try store.appendChatTranscriptItems(
+            chatID: chat.id,
+            items: [firstNotice, secondNotice, firstFailure, secondFailure]
+        )
+
+        #expect(inserted.map(\.cursor.rawValue) == [1, 2, 3, 4])
+        #expect(try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10).items.map(\.item)
+            == [firstNotice, secondNotice, firstFailure, secondFailure])
+    }
+
+    @Test func legacyStoreMigrationAssignsCanonicalIDs() throws {
+        let url = try fileURL(prefix: "chat-transcript-id-migration")
+        var store: GRDBWikiStore? = try GRDBWikiStore(databaseURL: url)
+        let chat = try #require(try store?.createChat(kind: .edit, title: "Legacy"))
+        let notice = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "temporary-notice"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+        let failure = ChatTranscriptItem.turnFailure(.init(
+            failureID: ChatTranscriptFailureID(rawValue: "temporary-failure"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            category: .runtimeError,
+            message: "Failed",
+            createdAt: Date(timeIntervalSince1970: 2)
+        ))
+        _ = try store?.appendChatTranscriptItems(chatID: chat.id, items: [notice, failure])
+        store = nil
+
+        let legacyNoticeJSON = try legacyJSON(from: notice, removing: "noticeID")
+        let legacyFailureJSON = try legacyJSON(from: failure, removing: "failureID")
+        try execute(
+            """
+            UPDATE chat_transcript_items SET item_json = '\(legacyNoticeJSON)' WHERE chat_id = '\(chat.id.rawValue)' AND cursor = 1;
+            UPDATE chat_transcript_items SET item_json = '\(legacyFailureJSON)' WHERE chat_id = '\(chat.id.rawValue)' AND cursor = 2;
+            PRAGMA user_version = 46;
+            """,
+            at: url
+        )
+
+        let migrated = try GRDBWikiStore(databaseURL: url)
+        let items = try migrated.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10).items.map(\.item)
+        guard case .systemNotice(let migratedNotice) = items[0],
+              case .turnFailure(let migratedFailure) = items[1]
+        else {
+            Issue.record("Expected migrated notice and failure items.")
+            return
+        }
+        #expect(migratedNotice.noticeID.rawValue == "chat-transcript-v47:systemNotice:\(chat.id.rawValue):1")
+        #expect(migratedFailure.failureID.rawValue == "chat-transcript-v47:turnFailure:\(chat.id.rawValue):2")
+        #expect(migrated.pragmaValue("user_version") == "47")
+    }
+
+    @Test func legacyStoreMigrationIsIdempotent() throws {
+        // The preceding migration test proves the initial rewrite. A current
+        // database must retain those exact values on the next open.
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Stable IDs")
+        let item = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "notice-stable"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+        _ = try store.appendChatTranscriptItems(chatID: chat.id, items: [item])
+        let first = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 1)
+        let second = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 1)
+        #expect(first == second)
+        #expect(store.pragmaValue("user_version") == "47")
+    }
+
+    private func legacyJSON(from item: ChatTranscriptItem, removing key: String) throws -> String {
+        let data = try JSONEncoder().encode(item)
+        var root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let itemCase = key == "noticeID" ? "systemNotice" : "turnFailure"
+        var associated = try #require(root[itemCase] as? [String: Any])
+        var payload = try #require(associated["_0"] as? [String: Any])
+        payload.removeValue(forKey: key)
+        associated["_0"] = payload
+        root[itemCase] = associated
+        return String(decoding: try JSONSerialization.data(withJSONObject: root), as: UTF8.self)
     }
 
     @Test func phase2MigrationPreservesNonChatRowsAndMarksTantivyRebuild() throws {
@@ -470,7 +595,7 @@ struct ChatPhase2PersistenceTests {
         )
 
         let store = try GRDBWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "46")
+        #expect(store.pragmaValue("user_version") == "47")
         let page = try store.getPage(id: PageID(rawValue: "page-1"))
         #expect(page.title == "Preserved")
         #expect(try store.listChats().isEmpty)

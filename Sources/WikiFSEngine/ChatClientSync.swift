@@ -1,3 +1,5 @@
+// pattern: Functional Core
+
 import Foundation
 import WikiFSCore
 
@@ -53,6 +55,15 @@ public enum ChatClientSyncEffect: Sendable, Equatable {
     case requestAuthoritativeSnapshot
 }
 
+/// A compatibility condition detected while reconciling a wire projection with
+/// authoritative persisted transcript history.
+public enum ChatClientSyncAnomaly: Sendable, Equatable {
+    case legacyOverlayWithoutProvenance(
+        itemKind: LegacyTranscriptOccurrence.ItemKind,
+        sourceOrdinal: Int
+    )
+}
+
 public enum ChatClientSyncAction: Sendable, Equatable {
     case applySnapshot(ChatSyncSnapshot)
     case applyUpdate(ChatSyncUpdate)
@@ -64,10 +75,16 @@ public enum ChatClientSyncAction: Sendable, Equatable {
 public struct ChatClientSyncReduction: Sendable, Equatable {
     public let state: ChatClientSyncState
     public let effects: [ChatClientSyncEffect]
+    public let anomalies: [ChatClientSyncAnomaly]
 
-    public init(state: ChatClientSyncState, effects: [ChatClientSyncEffect] = []) {
+    public init(
+        state: ChatClientSyncState,
+        effects: [ChatClientSyncEffect] = [],
+        anomalies: [ChatClientSyncAnomaly] = []
+    ) {
         self.state = state
         self.effects = effects
+        self.anomalies = anomalies
     }
 }
 
@@ -102,9 +119,12 @@ public enum ChatClientSyncReducer {
             return ChatClientSyncReduction(state: state)
         }
 
-        let preservedProjection = preservingLoadedHistory(
+        let preservedProjection = validatingActiveContentBlock(
+            in: preservingLoadedHistory(
             snapshot.projection,
             loadedCommittedCursor: state.loadedCommittedCursor
+            ),
+            committedItems: state.committedItems
         )
         var next = ChatClientSyncState(
             chatID: state.chatID,
@@ -115,7 +135,8 @@ public enum ChatClientSyncReducer {
             optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = discardingAuthoritativeOptimisticLifecycleBackups(in: next)
-        next = pruningCommittedOverlay(in: next)
+        let pruning = pruningCommittedOverlay(in: next)
+        next = pruning.state
         next = retainingActiveOptimisticLifecycleBackups(in: next)
 
         let effects: [ChatClientSyncEffect] =
@@ -123,7 +144,7 @@ public enum ChatClientSyncReducer {
             ? [.loadCommittedHistory(to: preservedProjection.committedCursor)]
             : []
 
-        return ChatClientSyncReduction(state: next, effects: effects)
+        return ChatClientSyncReduction(state: next, effects: effects, anomalies: pruning.anomalies)
     }
 
     private static func apply(
@@ -195,13 +216,14 @@ public enum ChatClientSyncReducer {
                     optimisticBaseLifecycles: state.optimisticBaseLifecycles
                 )
                 next = discardingAuthoritativeOptimisticLifecycleBackups(in: next)
-                next = pruningCommittedOverlay(in: next)
+                let pruning = pruningCommittedOverlay(in: next)
+                next = pruning.state
                 next = retainingActiveOptimisticLifecycleBackups(in: next)
                 let effects: [ChatClientSyncEffect] =
                     normalizedProjection.committedCursor > state.loadedCommittedCursor
                     ? [.loadCommittedHistory(to: normalizedProjection.committedCursor)]
                     : []
-                return ChatClientSyncReduction(state: next, effects: effects)
+                return ChatClientSyncReduction(state: next, effects: effects, anomalies: pruning.anomalies)
             case .sessionEvent:
                 return ChatClientSyncReduction(state: state)
             }
@@ -241,14 +263,15 @@ public enum ChatClientSyncReducer {
             optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = discardingAuthoritativeOptimisticLifecycleBackups(in: next)
-        next = pruningCommittedOverlay(in: next)
+        let pruning = pruningCommittedOverlay(in: next)
+        next = pruning.state
         next = retainingActiveOptimisticLifecycleBackups(in: next)
 
         let effects: [ChatClientSyncEffect] =
             normalizedProjection.committedCursor > state.loadedCommittedCursor
             ? [.loadCommittedHistory(to: normalizedProjection.committedCursor)]
             : []
-        return ChatClientSyncReduction(state: next, effects: effects)
+        return ChatClientSyncReduction(state: next, effects: effects, anomalies: pruning.anomalies)
     }
 
     private static func appendCommittedHistory(
@@ -277,9 +300,10 @@ public enum ChatClientSyncReducer {
             optimisticBaseLifecycles: state.optimisticBaseLifecycles
         )
         next = discardingAuthoritativeOptimisticLifecycleBackups(in: next)
-        next = pruningCommittedOverlay(in: next)
+        let pruning = pruningCommittedOverlay(in: next)
+        next = pruning.state
         next = retainingActiveOptimisticLifecycleBackups(in: next)
-        return ChatClientSyncReduction(state: next)
+        return ChatClientSyncReduction(state: next, anomalies: pruning.anomalies)
     }
 
     private static func optimisticSubmit(
@@ -327,6 +351,8 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
+                legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
                 transcriptOverlay: projection.transcriptOverlay + [optimisticMessage],
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -352,6 +378,8 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
+                legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
                 transcriptOverlay: projection.transcriptOverlay + [optimisticMessage],
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -410,6 +438,8 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
+            legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
             transcriptOverlay: filteredOverlay,
             committedCursor: projection.committedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
@@ -439,10 +469,14 @@ public enum ChatClientSyncReducer {
             reason: update.reason,
             currentProjection: currentProjection
         )
-        return preservingTerminalOverlayIfNeeded(
+        let terminalNormalized = preservingTerminalOverlayIfNeeded(
             currentProjection: currentProjection,
             incomingProjection: compactNormalized,
             reason: update.reason,
+            committedItems: committedItems
+        )
+        return validatingActiveContentBlock(
+            in: terminalNormalized,
             committedItems: committedItems
         )
     }
@@ -521,12 +555,55 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
+            legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
             transcriptOverlay: overlay,
             committedCursor: projection.committedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
             pendingPermission: projection.pendingPermission,
             runMetadata: projection.runMetadata
         )
+    }
+
+    /// The wire may carry an old envelope or an out-of-order block reference.
+    /// A client never treats metadata as live until the matching typed message
+    /// is present with the same role and turn.
+    private static func validatingActiveContentBlock(
+        in projection: ChatSyncProjection,
+        committedItems: [PersistedChatTranscriptItem]
+    ) -> ChatSyncProjection {
+        guard let activeContentBlock = projection.activeContentBlock else {
+            return projection
+        }
+        let allItems = committedItems.map(\.item) + projection.transcriptOverlay
+        let isValid = allItems.contains { item in
+            guard case .message(let message) = item else { return false }
+            return message.messageID == activeContentBlock.messageID
+                && message.turnID == activeContentBlock.turnID
+                && message.role == activeContentBlock.role
+        }
+        guard isValid else {
+            return ChatSyncProjection(
+                chatID: projection.chatID,
+                generation: projection.generation,
+                lifecycle: projection.lifecycle,
+                activeTurn: projection.activeTurn,
+                queuedTurns: projection.queuedTurns,
+                attention: projection.attention,
+                capabilities: projection.capabilities,
+                providerState: projection.providerState,
+                usage: projection.usage,
+                diagnostics: projection.diagnostics,
+                activeContentBlock: nil,
+                legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
+                transcriptOverlay: projection.transcriptOverlay,
+                committedCursor: projection.committedCursor,
+                lastIncludedSequence: projection.lastIncludedSequence,
+                pendingPermission: projection.pendingPermission,
+                runMetadata: projection.runMetadata
+            )
+        }
+        return projection
     }
 
     private static func mergingOverlay(
@@ -585,6 +662,8 @@ public enum ChatClientSyncReducer {
             providerState: projection.providerState,
             usage: projection.usage,
             diagnostics: projection.diagnostics,
+            activeContentBlock: projection.activeContentBlock,
+            legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
             transcriptOverlay: projection.transcriptOverlay,
             committedCursor: loadedCommittedCursor,
             lastIncludedSequence: projection.lastIncludedSequence,
@@ -593,22 +672,44 @@ public enum ChatClientSyncReducer {
         )
     }
 
+    private struct OverlayPruningResult: Sendable {
+        let state: ChatClientSyncState
+        let anomalies: [ChatClientSyncAnomaly]
+    }
+
     private static func pruningCommittedOverlay(
         in state: ChatClientSyncState
-    ) -> ChatClientSyncState {
-        guard let projection = state.projection else { return state }
-        let filteredOverlay = projection.transcriptOverlay.filter { overlayItem in
+    ) -> OverlayPruningResult {
+        guard let projection = state.projection else {
+            return OverlayPruningResult(state: state, anomalies: [])
+        }
+        var anomalies: [ChatClientSyncAnomaly] = []
+        let filteredOverlay: [ChatTranscriptItem] = projection.transcriptOverlay.enumerated().compactMap { sourceOrdinal, overlayItem in
+            if let itemKind = legacyItemKindWithoutProvenance(
+                overlayItem,
+                in: projection
+            ) {
+                anomalies.append(.legacyOverlayWithoutProvenance(
+                    itemKind: itemKind,
+                    sourceOrdinal: sourceOrdinal
+                ))
+                if state.committedItems.contains(where: {
+                    canonicalItem($0.item, replacesLegacyOverlay: overlayItem)
+                }) {
+                    return nil
+                }
+            }
             guard let committedItem = state.committedItems.last(where: {
                 transcriptIdentity(for: $0.item) == transcriptIdentity(for: overlayItem)
             })?.item else {
-                return true
+                return overlayItem
             }
-            return !transcriptItemsMatchForDisplay(committedItem, overlayItem)
+            return transcriptItemsMatchForDisplay(committedItem, overlayItem) ? nil : overlayItem
         }
         guard filteredOverlay != projection.transcriptOverlay else {
-            return state
+            return OverlayPruningResult(state: state, anomalies: anomalies)
         }
-        return ChatClientSyncState(
+        return OverlayPruningResult(state: ChatClientSyncState(
             chatID: state.chatID,
             projection: ChatSyncProjection(
                 chatID: projection.chatID,
@@ -621,6 +722,8 @@ public enum ChatClientSyncReducer {
                 providerState: projection.providerState,
                 usage: projection.usage,
                 diagnostics: projection.diagnostics,
+                activeContentBlock: projection.activeContentBlock,
+                legacyTranscriptOccurrences: projection.legacyTranscriptOccurrences,
                 transcriptOverlay: filteredOverlay,
                 committedCursor: projection.committedCursor,
                 lastIncludedSequence: projection.lastIncludedSequence,
@@ -631,7 +734,32 @@ public enum ChatClientSyncReducer {
             loadedCommittedCursor: state.loadedCommittedCursor,
             syncStatus: state.syncStatus,
             optimisticBaseLifecycles: state.optimisticBaseLifecycles
-        )
+        ), anomalies: anomalies)
+    }
+
+    private static func legacyItemKindWithoutProvenance(
+        _ item: ChatTranscriptItem,
+        in projection: ChatSyncProjection
+    ) -> LegacyTranscriptOccurrence.ItemKind? {
+        let identity: (rawValue: String, itemKind: LegacyTranscriptOccurrence.ItemKind)? = switch item {
+        case .systemNotice(let notice):
+            (notice.noticeID.rawValue, .systemNotice)
+        case .turnFailure(let failure):
+            (failure.failureID.rawValue, .turnFailure)
+        default:
+            nil
+        }
+        guard let identity, identity.rawValue.hasPrefix("chat-wire-v1:") else {
+            return nil
+        }
+        let hasProvenance = projection.legacyTranscriptOccurrences?.contains { occurrence in
+            occurrence.chatID == projection.chatID
+                && occurrence.generation == projection.generation
+                && occurrence.sequence == projection.lastIncludedSequence
+                && occurrence.itemKind == identity.itemKind
+                && occurrence.durableIDRawValue == identity.rawValue
+        } ?? false
+        return hasProvenance ? nil : identity.itemKind
     }
 
     private static func shouldAcceptIncomingGenerationSwitch(
@@ -712,11 +840,41 @@ public enum ChatClientSyncReducer {
             let identity = transcriptIdentity(for: item)
             if let index = merged.lastIndex(where: { transcriptIdentity(for: $0) == identity }) {
                 merged[index] = item
+            } else if merged.contains(where: {
+                canonicalItem($0, replacesLegacyOverlay: item)
+            }) {
+                // A legacy wire adapter has only envelope provenance. Its
+                // synthetic identity must never displace canonical migrated
+                // history that describes the same notice or failure.
+                continue
             } else {
                 merged.append(item)
             }
         }
         return merged
+    }
+
+    private static func canonicalItem(
+        _ canonical: ChatTranscriptItem,
+        replacesLegacyOverlay overlay: ChatTranscriptItem
+    ) -> Bool {
+        switch (canonical, overlay) {
+        case let (.systemNotice(history), .systemNotice(live)):
+            guard live.noticeID.rawValue.hasPrefix("chat-wire-v1:") else { return false }
+            return history.turnID == live.turnID
+                && history.kind == live.kind
+                && history.title == live.title
+                && history.message == live.message
+                && history.createdAt == live.createdAt
+        case let (.turnFailure(history), .turnFailure(live)):
+            guard live.failureID.rawValue.hasPrefix("chat-wire-v1:") else { return false }
+            return history.turnID == live.turnID
+                && history.category == live.category
+                && history.message == live.message
+                && history.createdAt == live.createdAt
+        default:
+            return false
+        }
     }
 
     private enum TranscriptIdentity: Hashable {

@@ -52,6 +52,101 @@ struct ChatSyncWireTests {
         #expect(decoded == update)
     }
 
+    @Test func activeContentBlockRoundTripsSnapshotAndCompactUpdate() throws {
+        let block = ChatActiveContentBlock(
+            messageID: ChatMessageID(rawValue: "assistant-stream"),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            role: .assistant
+        )
+        let snapshot = makeSnapshot(
+            sequence: 1,
+            overlay: [makeMessage(messageID: "assistant-stream", role: .assistant, text: "Hello")],
+            activeContentBlock: block
+        )
+        #expect(try ChatSyncSnapshotEnvelope.decodeData(
+            ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
+        ) == snapshot)
+
+        let update = makeUpdate(
+            sequence: 2,
+            reason: .sessionEvent(.transcriptChanged([
+                .messageReplacement(
+                    messageID: block.messageID,
+                    turnID: block.turnID,
+                    role: block.role,
+                    text: "Hello world",
+                    createdAt: Date(timeIntervalSince1970: 2)
+                ),
+            ])),
+            overlay: [makeMessage(messageID: "assistant-stream", role: .assistant, text: "Hello world")],
+            activeContentBlock: block
+        )
+        let decodedUpdate = try ChatSyncUpdateEnvelope.decodeData(
+            ChatSyncUpdateEnvelope(update: update).encodedData()
+        )
+        #expect(decodedUpdate.reason == update.reason)
+        #expect(decodedUpdate.projection.activeContentBlock == block)
+        #expect(decodedUpdate.projection.transcriptOverlay.isEmpty)
+    }
+
+    @Test func oldProjectionPayloadDecodesWithoutActiveContentBlock() throws {
+        let snapshot = makeSnapshot(sequence: 1)
+        let encoded = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var snapshotObject = try #require(object["snapshot"] as? [String: Any])
+        var projection = try #require(snapshotObject["projection"] as? [String: Any])
+        projection.removeValue(forKey: "activeContentBlock")
+        snapshotObject["projection"] = projection
+        object["snapshot"] = snapshotObject
+        let oldPayload = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+
+        #expect(try ChatSyncSnapshotEnvelope.decodeData(oldPayload).projection.activeContentBlock == nil)
+    }
+
+    @Test func legacyProjectionDecodeIsRepeatable() throws {
+        let notice = ChatTranscriptItem.systemNotice(.init(
+            noticeID: ChatTranscriptNoticeID(rawValue: "new-notice"),
+            turnID: nil,
+            kind: .session,
+            title: "Started",
+            message: "Ready",
+            createdAt: Date(timeIntervalSince1970: 1)
+        ))
+        let snapshot = makeSnapshot(sequence: 9, overlay: [notice])
+        let encoded = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var envelope = try #require(root["snapshot"] as? [String: Any])
+        var projection = try #require(envelope["projection"] as? [String: Any])
+        var overlay = try #require(projection["transcriptOverlay"] as? [[String: Any]])
+        var associated = try #require(overlay[0]["systemNotice"] as? [String: Any])
+        var payload = try #require(associated["_0"] as? [String: Any])
+        payload.removeValue(forKey: "noticeID")
+        associated["_0"] = payload
+        overlay[0]["systemNotice"] = associated
+        projection["transcriptOverlay"] = overlay
+        envelope["projection"] = projection
+        root["snapshot"] = envelope
+        let legacyData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+
+        let first = try ChatSyncSnapshotEnvelope.decodeData(legacyData)
+        let second = try ChatSyncSnapshotEnvelope.decodeData(legacyData)
+        #expect(first == second)
+        #expect(first.projection.legacyTranscriptOccurrences == [
+            LegacyTranscriptOccurrence(
+                chatID: ChatID(rawValue: "chat-1"),
+                generation: ChatSessionGenerationID(rawValue: "generation-1"),
+                sequence: ChatUpdateSequence(rawValue: 9),
+                sourceOrdinal: 0,
+                itemKind: .systemNotice
+            ),
+        ])
+        guard case .systemNotice(let repaired) = first.projection.transcriptOverlay[0] else {
+            Issue.record("Expected a repaired system notice.")
+            return
+        }
+        #expect(repaired.noticeID.rawValue == "chat-wire-v1:systemNotice:chat-1:generation-1:9:0")
+    }
+
     @Test func transcriptUpdateEnvelopeCompactsAccumulatedOverlayPayload() throws {
         let chunk = String(repeating: "abcdefghij", count: 4)
         let streamedText = Array(repeating: chunk, count: 300).joined()
@@ -177,7 +272,8 @@ struct ChatSyncWireTests {
         overlay: [ChatTranscriptItem] = [],
         committedCursor: ChatTranscriptCursor = .zero,
         diagnostics: ChatDiagnosticsState = ChatDiagnosticsState(),
-        runMetadata: ChatRunMetadata = .empty
+        runMetadata: ChatRunMetadata = .empty,
+        activeContentBlock: ChatActiveContentBlock? = nil
     ) -> ChatSyncSnapshot {
         ChatSyncSnapshot(
             projection: ChatSyncProjection(
@@ -195,6 +291,7 @@ struct ChatSyncWireTests {
                 ),
                 usage: nil,
                 diagnostics: diagnostics,
+                activeContentBlock: activeContentBlock,
                 transcriptOverlay: overlay,
                 committedCursor: committedCursor,
                 lastIncludedSequence: ChatUpdateSequence(rawValue: sequence),
@@ -207,14 +304,16 @@ struct ChatSyncWireTests {
     private func makeUpdate(
         sequence: Int64,
         reason: ChatSyncUpdateReason = .sessionEvent(.started(turnID: ChatTurnID(rawValue: "turn-1"))),
-        overlay: [ChatTranscriptItem] = []
+        overlay: [ChatTranscriptItem] = [],
+        activeContentBlock: ChatActiveContentBlock? = nil
     ) -> ChatSyncUpdate {
         ChatSyncUpdate(
             reason: reason,
             projection: makeSnapshot(
                 sequence: sequence,
                 activeTurn: nil,
-                overlay: overlay
+                overlay: overlay,
+                activeContentBlock: activeContentBlock
             ).projection
         )
     }

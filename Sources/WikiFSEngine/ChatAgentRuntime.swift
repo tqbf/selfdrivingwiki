@@ -59,10 +59,17 @@ public enum ChatAgentRuntimeEvent: Hashable, Sendable, Codable {
 public struct ChatAgentRuntimeEventEnvelope: Hashable, Sendable, Codable {
     public let generation: ChatSessionGenerationID
     public let event: ChatAgentRuntimeEvent
+    /// Live-only block state carried atomically with a transcript transition.
+    public let activeContentBlock: ChatActiveContentBlock?
 
-    public init(generation: ChatSessionGenerationID, event: ChatAgentRuntimeEvent) {
+    public init(
+        generation: ChatSessionGenerationID,
+        event: ChatAgentRuntimeEvent,
+        activeContentBlock: ChatActiveContentBlock? = nil
+    ) {
         self.generation = generation
         self.event = event
+        self.activeContentBlock = activeContentBlock
     }
 }
 

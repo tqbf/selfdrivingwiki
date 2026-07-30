@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 46)
+        #expect(GRDBWikiStore.schemaVersion == 47)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -293,11 +293,11 @@ import SQLite3
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 42;", nil, nil, nil) == SQLITE_OK)
 
         // Open via GRDBWikiStore — triggers the migration ladder
-        // (v42→v43→v44→v45→v46).
+        // (v42→v43→v44→v45→v46→v47).
         let store = try GRDBWikiStore(databaseURL: url)
 
-        // After the full ladder, version is 46 and every migration step ran.
-        #expect(store.pragmaValue("user_version") == "46")
+        // After the full ladder, version is 47 and every migration step ran.
+        #expect(store.pragmaValue("user_version") == "47")
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -317,7 +317,7 @@ import SQLite3
     /// A fresh schema has the `model_provider_id`/`model_id` columns on `chats`.
     @Test func freshSchemaHasChatModelOverrideColumns() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 46)
+        #expect(GRDBWikiStore.schemaVersion == 47)
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
@@ -406,9 +406,9 @@ import SQLite3
         sqlite3_close(raw)
         raw = nil
 
-        // Open via GRDBWikiStore — triggers the v44→v45→v46 migration steps.
+        // Open via GRDBWikiStore — triggers the v44→v45→v46→v47 migration steps.
         let store = try GRDBWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "46")
+        #expect(store.pragmaValue("user_version") == "47")
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
