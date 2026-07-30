@@ -8,7 +8,8 @@ Issue: #982
 
 State: In progress
 
-Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5
+Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5,
+and Phase 6
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
@@ -17,7 +18,8 @@ persistence, and client synchronization.
 
 This branch implements the Phase 0/1 foundation, the Phase 2 persistence
 rebuild, the Phase 3 per-chat daemon-controller move, the Phase 4 XPC
-wire / client-sync redesign, and the Phase 5 chat UI decomposition.
+wire / client-sync redesign, the Phase 5 chat UI decomposition, and the
+Phase 6 compatibility cleanup.
 
 Remediation note for PR #990 on Wednesday, July 29, 2026:
 
@@ -309,7 +311,23 @@ Phase 5 is implemented on this branch with these concrete contracts:
 Delete old shims after all call sites migrate. Keep only raw boundary adapters
 that remain required.
 
-This phase is out of scope for this branch.
+Phase 6 completion note for Wednesday, July 29, 2026
+(America/Los_Angeles; timestamp `2026-07-30T062603Z`):
+
+- removed the unused app-side start, continue, and send command shims from
+  `ChatDaemonCoordinator`; app callers now use typed `ChatSubmitRequest`
+  through the single submit command
+- kept the legacy raw XPC start, continue, and send endpoints in `wikid` as
+  compatibility adapters that delegate to the typed submit path
+- replaced host registry queue hops and launcher-side polling with an actor
+  registry that owns controller lookup, wiki resolution, idle timer
+  replacement, and controller removal
+- added five-minute idle eviction for a controller only after its active claim
+  and durable queue are empty; the timer is cancelled when generation starts
+- removed the obsolete launcher event/state emitters and temporary app badge
+  tracing, then updated the reviewed chat API signature manifest
+- the current evidence is recorded in
+  [`progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md`](../progress/2026-07-30T062603Z-chat-redesign-phase6-integration-982.md)
 
 ### Phase 7: Execute with coordinated Paseo agents
 
@@ -700,6 +718,9 @@ work:
   live-overlay reconciliation
 - daemon/client compatibility migration to one typed submit path through the
   daemon contract, client wrapper, coordinator, and `ChatDetailView`
+- Phase 6 removal of migrated app shims, daemon registry queue hops, launcher
+  polling/event emitters, and temporary debug seams while preserving raw XPC
+  adapters and adding quiescent idle-controller eviction
 - Tantivy rebuild marker invalidation for destructive chat search resets
 - direct controller, host, coordinator, wire, reducer, and compatibility-adapter
   tests for Phase 3 lifecycle plus Phase 4 wire-version, reconnect,
@@ -709,7 +730,7 @@ work:
 
 Out of scope for this PR:
 
-- UI decomposition
+- Phase 7 coordinated-agent execution
 
 ## Verification commands
 

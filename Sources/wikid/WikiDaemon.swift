@@ -596,12 +596,6 @@ final class WikiDaemon: @unchecked Sendable {
             extractionCoordinator: coordinator,
             generationGate: generationGate,
             storeResolver: storeResolver,
-            resolveSelectedProvider: {
-                AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
-            },
-            resolveProviderConfig: {
-                AgentProvidersConfig.loadOrSeed(from: dir)
-            },
             pushEvent: { [weak self] envelope in
                 self?.pushChatEnvelope(envelope)
             })

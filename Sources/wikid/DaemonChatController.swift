@@ -127,6 +127,23 @@ actor DaemonChatController {
         await closeRuntimeAndRotateGeneration()
     }
 
+    /// Closes a warm runtime only after its durable queue and active turn are
+    /// quiescent. The host uses this before removing an idle controller.
+    func closeIfIdle() async -> Bool {
+        guard currentClaimID == nil,
+              snapshot.queuedTurns.isEmpty,
+              snapshot.activeTurn?.state.isTerminal != false else {
+            return false
+        }
+        guard runtimeHandle != nil else { return true }
+        if snapshot.lifecycle != .closed {
+            record(.sessionClosed)
+        }
+        activePermission = nil
+        await closeRuntimeAndRotateGeneration()
+        return true
+    }
+
     func resolvePermission(optionID: String) async {
         guard let permission = activePermission,
               let handle = runtimeHandle else { return }
