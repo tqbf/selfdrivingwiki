@@ -221,13 +221,20 @@ struct ChatDetailView: View {
             guard remoteSession.isRunning, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
-        .task(id: chatID) {
+        .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             // Reload persisted messages whenever the chatID changes (or the store
             // changes them). The live path doesn't use these, but a persisted chat
             // needs them, and a session-end flip from live→persisted must pick up
             // the committed transcript.
             if let chatID {
                 persistedMessages = store.chatMessages(chatID: chatID)
+                remoteSession.installHistoryLoader { afterCursor in
+                    store.readChatTranscriptPage(
+                        chatID: chatID,
+                        after: afterCursor,
+                        limit: RemoteChatSession.committedHistoryPageSize
+                    )
+                }
                 // Phase C4: hydrate the RemoteChatSession from the daemon's live
                 // state on appear / chat change so the mirror reflects the
                 // daemon's held-alive launcher (or the persisted rows once the
@@ -1374,15 +1381,18 @@ struct ChatDetailView: View {
     /// path is identical to a manual send — only the *timing* differs.
     private func submitMessage(_ wireMessage: String) {
         Task {
+            let submission = ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: ULID.generate()),
+                turnID: ChatTurnID(rawValue: ULID.generate()),
+                userText: wireMessage,
+                contextReferences: [],
+                submittedAt: Date()
+            )
+            if chatID != nil {
+                remoteSession.optimisticSubmit(submission)
+            }
             do {
                 let override = remoteSession.pendingModelOverride
-                let submission = ChatTurnSubmission(
-                    commandID: ChatCommandID(rawValue: ULID.generate()),
-                    turnID: ChatTurnID(rawValue: ULID.generate()),
-                    userText: wireMessage,
-                    contextReferences: [],
-                    submittedAt: Date()
-                )
                 let resolvedChatID = try await coordinator.submitTurn(
                     ChatSubmitRequest(
                         wikiID: session.wikiID,
@@ -1396,6 +1406,9 @@ struct ChatDetailView: View {
                     store.retargetActiveTabToChat(chatID: resolvedChatID)
                 }
             } catch {
+                if chatID != nil {
+                    remoteSession.optimisticSubmitFailed(turnID: submission.turnID)
+                }
                 DebugLog.agent("ChatDetailView.submitMessage failed: \(error)")
                 remoteSession.preflightError = error.localizedDescription
             }
@@ -1592,6 +1605,11 @@ private struct ChatAnchorTaskKey: Hashable {
     let chatID: ChatID?
     let anchorVersion: Int
     let messageCount: Int
+}
+
+private struct ChatHydrationTaskKey: Hashable {
+    let chatID: ChatID?
+    let sessionID: UUID
 }
 
 // Shared metrics for the chat surface (mirrors the original

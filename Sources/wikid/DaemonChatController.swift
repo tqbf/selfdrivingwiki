@@ -22,6 +22,7 @@ actor DaemonChatController {
     private var snapshot: ChatRuntimeSnapshot
     private var replayBuffer: ChatUpdateReplayBuffer
     private var nextSequence = ChatUpdateSequence.initial
+    private var committedCursor: ChatTranscriptCursor
     private var runtimeHandle: ChatRuntimeHandle?
     private var eventTask: Task<Void, Never>?
     private var currentClaimID: ChatTurnClaimID?
@@ -58,6 +59,7 @@ actor DaemonChatController {
         self.generation = ChatSessionGenerationID(rawValue: ULID.generate())
         self.replayBuffer = ChatUpdateReplayBuffer(capacity: Self.replayCapacity)
         self.snapshot = try Self.bootstrapSnapshot(chatID: chatID, store: store, generation: generation)
+        self.committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
         if case .permissionRequired = snapshot.attention {
             self.activePermission = nil
         }
@@ -83,7 +85,6 @@ actor DaemonChatController {
                 createdAt: request.submission.submittedAt
             ))
         ])
-        pushEvent(.chatEvent(chatID: chatID, event: .userText(request.submission.userText)))
         record(.queued(ChatQueuedTurn(
             ordinal: persistedTurn.ordinal,
             submission: persistedTurn.submission,
@@ -153,28 +154,8 @@ actor DaemonChatController {
         )
     }
 
-    func chatSessionState() throws -> ChatSessionState {
-        let persistedEvents = try store.chatMessages(chatID: chatID).map(\.event)
-        let events = runtimeHandle == nil
-            ? persistedEvents
-            : AgentEvent.mergingStreamDeltas(persistedEvents + liveEvents)
-        return ChatSessionState(
-            chatID: chatID,
-            events: events,
-            isRunning: latestStateUpdate.isRunning,
-            isGenerating: latestStateUpdate.isGenerating,
-            isAwaitingGenerationSlot: latestStateUpdate.isAwaitingGenerationSlot,
-            preflightError: latestStateUpdate.preflightError,
-            thinkingOption: latestStateUpdate.thinkingOption,
-            usageData: latestStateUpdate.usageData,
-            logFileURL: latestStateUpdate.logFileURL,
-            debugFolderURL: latestStateUpdate.debugFolderURL,
-            runKindRaw: latestStateUpdate.runKindRaw,
-            runStartedAt: latestStateUpdate.runStartedAt,
-            stderr: latestStateUpdate.stderr,
-            lastActivityAt: latestStateUpdate.lastActivityAt,
-            currentProcessID: latestStateUpdate.currentProcessID
-        )
+    func chatSyncSnapshot() throws -> ChatSyncSnapshot {
+        ChatSyncSnapshot(projection: syncProjection())
     }
 
     func typedSnapshot() -> ChatRuntimeSnapshot { snapshot }
@@ -202,7 +183,12 @@ actor DaemonChatController {
     }
 
     func didUpdateCompatibilityState(_ update: ChatStateUpdate) {
+        guard update != latestStateUpdate else { return }
+        let previousProjection = syncProjection()
         latestStateUpdate = update
+        let nextProjection = syncProjection()
+        guard compatibilityMeaningfullyChanged(from: previousProjection, to: nextProjection) else { return }
+        pushSyncUpdate(reason: .compatibilityRefreshed)
     }
 
     func didReceiveLiveEvents(_ events: [AgentEvent]) {
@@ -426,7 +412,10 @@ actor DaemonChatController {
 
     private func appendTranscriptItems(_ items: [ChatTranscriptItem]) throws {
         guard items.isEmpty == false else { return }
-        _ = try store.appendChatTranscriptItems(chatID: chatID, items: items)
+        let inserted = try store.appendChatTranscriptItems(chatID: chatID, items: items)
+        if let latestCursor = inserted.last?.cursor {
+            committedCursor = max(committedCursor, latestCursor)
+        }
     }
 
     @discardableResult
@@ -519,9 +508,90 @@ actor DaemonChatController {
             replayBuffer.append(update)
             nextSequence = next
             snapshot = applied
+            pushSyncUpdate(reason: .sessionEvent(payload))
         case .rejected(let rejection):
             DebugLog.agent("DaemonChatController rejected update \(payload): \(rejection)")
         }
+    }
+
+    private func pushSyncUpdate(reason: ChatSyncUpdateReason) {
+        let update = ChatSyncUpdate(
+            reason: reason,
+            projection: syncProjection()
+        )
+        pushEvent(.chatSyncUpdate(chatID: chatID, update: update))
+    }
+
+    private func syncProjection() -> ChatSyncProjection {
+        ChatSyncProjection.from(
+            snapshot: snapshot,
+            committedCursor: committedCursor,
+            pendingPermission: activePermission,
+            runMetadata: compatibilityRunMetadata(),
+            usage: compatibilityUsage() ?? snapshot.usage,
+            diagnostics: compatibilityDiagnostics()
+        )
+    }
+
+    private func compatibilityMeaningfullyChanged(
+        from previousProjection: ChatSyncProjection?,
+        to nextProjection: ChatSyncProjection?
+    ) -> Bool {
+        compatibilityProjectionIgnoringLastActivity(previousProjection)
+            != compatibilityProjectionIgnoringLastActivity(nextProjection)
+    }
+
+    private func compatibilityProjectionIgnoringLastActivity(
+        _ projection: ChatSyncProjection?
+    ) -> ChatSyncProjection? {
+        guard let projection else { return nil }
+        return ChatSyncProjection(
+            chatID: projection.chatID,
+            generation: projection.generation,
+            lifecycle: projection.lifecycle,
+            activeTurn: projection.activeTurn,
+            queuedTurns: projection.queuedTurns,
+            attention: projection.attention,
+            capabilities: projection.capabilities,
+            providerState: projection.providerState,
+            usage: projection.usage,
+            diagnostics: ChatDiagnosticsState(
+                stderr: projection.diagnostics.stderr,
+                lastActivityAt: nil,
+                currentProcessID: projection.diagnostics.currentProcessID
+            ),
+            transcriptOverlay: projection.transcriptOverlay,
+            committedCursor: projection.committedCursor,
+            lastIncludedSequence: projection.lastIncludedSequence,
+            pendingPermission: projection.pendingPermission,
+            runMetadata: projection.runMetadata
+        )
+    }
+
+    private func compatibilityUsage() -> SessionUsage? {
+        guard let usageData = latestStateUpdate.usageData else { return nil }
+        return DebugLog.trying("DaemonChatController.decodeUsage", operation: {
+            try JSONDecoder().decode(SessionUsage.self, from: usageData)
+        })
+    }
+
+    private func compatibilityDiagnostics() -> ChatDiagnosticsState {
+        ChatDiagnosticsState(
+            stderr: latestStateUpdate.stderr ?? "",
+            lastActivityAt: latestStateUpdate.lastActivityAt,
+            currentProcessID: latestStateUpdate.currentProcessID.flatMap(Int32.init(exactly:))
+        )
+    }
+
+    private func compatibilityRunMetadata() -> ChatRunMetadata {
+        ChatRunMetadata(
+            preflightError: latestStateUpdate.preflightError,
+            thinkingOption: latestStateUpdate.thinkingOption,
+            logFileURL: latestStateUpdate.logFileURL,
+            debugFolderURL: latestStateUpdate.debugFolderURL,
+            runKindRaw: latestStateUpdate.runKindRaw,
+            runStartedAt: latestStateUpdate.runStartedAt
+        )
     }
 
     private func adoptClaimedTurnIfNeeded(_ queuedTurn: ChatQueuedTurn) {
@@ -585,7 +655,7 @@ actor DaemonChatController {
         )
     }
 
-    private static func bootstrapSnapshot(
+    static func bootstrapSnapshot(
         chatID: ChatID,
         store: GRDBWikiStore,
         generation: ChatSessionGenerationID

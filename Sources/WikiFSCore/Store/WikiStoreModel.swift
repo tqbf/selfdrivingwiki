@@ -4190,6 +4190,26 @@ public final class WikiStoreModel {
         DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chatID) }) ?? []
     }
 
+    public func readChatTranscriptPage(
+        chatID: ChatID,
+        after cursor: ChatTranscriptCursor?,
+        limit: Int
+    ) -> ChatTranscriptPage {
+        DebugLog.trying("readChatTranscriptPage", operation: {
+            try store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: limit)
+        }) ?? ChatTranscriptPage(
+            items: [],
+            checkpoint: cursor ?? .zero,
+            nextCursor: nil
+        )
+    }
+
+    public func chatTranscriptCheckpoint(chatID: ChatID) -> ChatTranscriptCursor {
+        DebugLog.trying("chatTranscriptCheckpoint", operation: {
+            try store.chatTranscriptCheckpoint(chatID: chatID)
+        }) ?? .zero
+    }
+
     public func renameChat(id: ChatID, to title: String) {
         do {
             try store.renameChat(id: id, to: title)

@@ -705,14 +705,18 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
-    /// Get the chat session state. Returns JSON `ChatSessionState`.
+    /// Get the authoritative chat sync snapshot. Returns JSON
+    /// `ChatSyncSnapshotEnvelope` data.
     func chatSessionStateData(chatID: ChatID) async -> Data {
         #if canImport(WikiFSEngine)
         do {
             let host = try await ensureChatHost()
             let state = try await host.chatSessionState(chatID: chatID)
-            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(state) })) ?? Data()
+            return (DebugLog.trying("encode chat sync snapshot envelope", operation: {
+                try ChatSyncSnapshotEnvelope(snapshot: state).encodedData()
+            })) ?? Data()
         } catch {
+            DebugLog.agent("WikiDaemon.chatSessionStateData failed for \(chatID.rawValue): \(error)")
             return Data()
         }
         #else

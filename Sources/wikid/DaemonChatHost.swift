@@ -172,12 +172,12 @@ final class DaemonChatHost: @unchecked Sendable {
 
     // MARK: - Chat session state (rehydration)
 
-    /// Return the live state of a chat for client rehydration. If the daemon
-    /// still has the launcher, reads from it; otherwise throws (the client
-    /// falls back to reading from its local store).
-    func chatSessionState(chatID: ChatID) async throws -> ChatSessionState {
+    /// Return the authoritative sync snapshot for a chat. If the daemon still
+    /// has a live controller, reads from it; otherwise synthesizes the same
+    /// typed projection from persisted state.
+    func chatSessionState(chatID: ChatID) async throws -> ChatSyncSnapshot {
         if let controller = queue.sync(execute: { controllers[chatID] }) {
-            return try await controller.chatSessionState()
+            return try await controller.chatSyncSnapshot()
         }
         let wikiID = try resolveWikiID(for: chatID)
         guard let store = storeResolver(wikiID) else {
@@ -210,7 +210,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Whether the host currently holds a live session for `chatID`.
     func hasLiveSession(_ chatID: ChatID) -> Bool {
-        queue.sync { sessions[chatID] != nil }
+        queue.sync { controllers[chatID] != nil }
     }
 
     /// The shared generation gate (for cross-chat serialization tests, RC3).
@@ -248,7 +248,6 @@ final class DaemonChatHost: @unchecked Sendable {
                 }
                 do {
                     try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
-                    self.pushEvent(.chatAcpSessionId(chatID: chatID, sessionId: sessionID))
                 } catch {
                     DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
                 }
@@ -308,23 +307,23 @@ final class DaemonChatHost: @unchecked Sendable {
 
     private func sharedGenerationGate() -> GenerationGate { sharedGate }
 
-    private static func persistedOnlySessionState(chatID: ChatID, store: GRDBWikiStore) throws -> ChatSessionState {
-        ChatSessionState(
+    private static func persistedOnlySessionState(chatID: ChatID, store: GRDBWikiStore) throws -> ChatSyncSnapshot {
+        let generation = ChatSessionGenerationID(rawValue: "persisted-\(chatID.rawValue)")
+        let runtimeSnapshot = try DaemonChatController.bootstrapSnapshot(
             chatID: chatID,
-            events: try store.chatMessages(chatID: chatID).map(\.event),
-            isRunning: false,
-            isGenerating: false,
-            isAwaitingGenerationSlot: false,
-            preflightError: nil,
-            thinkingOption: nil,
-            usageData: nil,
-            logFileURL: nil,
-            debugFolderURL: nil,
-            runKindRaw: nil,
-            runStartedAt: nil,
-            stderr: nil,
-            lastActivityAt: nil,
-            currentProcessID: nil
+            store: store,
+            generation: generation
+        )
+        let committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
+        return ChatSyncSnapshot(
+            projection: ChatSyncProjection.from(
+                snapshot: runtimeSnapshot,
+                committedCursor: committedCursor,
+                pendingPermission: nil,
+                runMetadata: .empty,
+                usage: nil,
+                diagnostics: ChatDiagnosticsState()
+            )
         )
     }
 

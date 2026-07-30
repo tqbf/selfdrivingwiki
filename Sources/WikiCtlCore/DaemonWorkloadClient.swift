@@ -10,6 +10,7 @@ public enum DaemonXPCError: Error, LocalizedError {
     case timeout
     case failure(String)
     case unexpectedReply
+    case chatWire(ChatSyncWireError)
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ public enum DaemonXPCError: Error, LocalizedError {
             return msg
         case .unexpectedReply:
             return "Unexpected reply from daemon"
+        case .chatWire(let error):
+            return error.localizedDescription
         }
     }
 }
@@ -353,7 +356,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     }
 
     /// Rehydrate a chat's live state after (re)connect.
-    public func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState {
+    public func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
                 self.proxy.chatSessionState(chatID: chatID.rawValue) { data in
@@ -361,7 +364,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                 }
             }
             do {
-                return try JSONDecoder().decode(ChatSessionState.self, from: replyData)
+                return try ChatSyncSnapshotEnvelope.decodeData(replyData)
+            } catch let error as ChatSyncWireError {
+                throw DaemonXPCError.chatWire(error)
             } catch {
                 throw DaemonXPCError.unexpectedReply
             }

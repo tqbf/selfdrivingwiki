@@ -124,7 +124,8 @@ import Foundation
     /// Cancel/stop the active turn (or end the session).
     func stopChat(chatID: String, reply: @escaping () -> Void)
 
-    /// Rehydrate a chat's live state after (re)connect. Reply is JSON `ChatSessionState`.
+    /// Rehydrate a chat's authoritative sync state after (re)connect. Reply is
+    /// JSON-encoded `ChatSyncSnapshotEnvelope` data.
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void)
 
     /// Resolve a pending permission request for a chat (approve/reject).

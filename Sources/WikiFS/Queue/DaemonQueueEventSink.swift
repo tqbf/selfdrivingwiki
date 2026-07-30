@@ -17,8 +17,8 @@ import WikiFSEngine
 final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Sendable {
     private let broadcaster = QueueEventBroadcaster()
 
-    private let chatContinuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation
-    private let chatStream: AsyncStream<(ChatID, QueueEventEnvelope)>
+    private let chatContinuation: AsyncStream<(ChatID, ChatSyncUpdate)>.Continuation
+    private let chatStream: AsyncStream<(ChatID, ChatSyncUpdate)>
 
     override init() {
         let chatComponents = Self.makeChatStream()
@@ -27,11 +27,11 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     }
 
     private static func makeChatStream() -> (
-        stream: AsyncStream<(ChatID, QueueEventEnvelope)>,
-        continuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation
+        stream: AsyncStream<(ChatID, ChatSyncUpdate)>,
+        continuation: AsyncStream<(ChatID, ChatSyncUpdate)>.Continuation
     ) {
-        var continuation: AsyncStream<(ChatID, QueueEventEnvelope)>.Continuation?
-        let stream = AsyncStream<(ChatID, QueueEventEnvelope)> { continuation = $0 }
+        var continuation: AsyncStream<(ChatID, ChatSyncUpdate)>.Continuation?
+        let stream = AsyncStream<(ChatID, ChatSyncUpdate)> { continuation = $0 }
         guard let continuation else {
             preconditionFailure("AsyncStream must synchronously provide its continuation.")
         }
@@ -48,14 +48,29 @@ final class DaemonQueueEventSink: NSObject, WikiDaemonEventSink, @unchecked Send
     /// Chat envelopes from the daemon, demuxed by chatID. The app's chat
     /// session registry subscribes and routes each envelope to the matching
     /// `RemoteChatSession.ingest(_:)`.
-    var chatEnvelopes: AsyncStream<(ChatID, QueueEventEnvelope)> { chatStream }
+    var chatEnvelopes: AsyncStream<(ChatID, ChatSyncUpdate)> { chatStream }
 
     func deliverEvent(_ payload: Data) {
         guard let envelope = DebugLog.trying("decode queue event envelope", operation: { try JSONDecoder().decode(QueueEventEnvelope.self, from: payload) }) else { return }
 
         // Route chat envelopes to the chat stream.
-        if envelope.isChatEnvelope, let chatID = envelope.chatID {
-            chatContinuation.yield((chatID, envelope))
+        if envelope.isChatEnvelope {
+            guard let chatID = envelope.chatID else {
+                DebugLog.agent("DaemonQueueEventSink rejected chat envelope without chatID kind=\(envelope.kind.rawValue)")
+                return
+            }
+            guard envelope.kind == .chatSyncUpdate else {
+                DebugLog.agent("DaemonQueueEventSink rejected legacy chat envelope kind=\(envelope.kind.rawValue) chat=\(chatID.rawValue)")
+                return
+            }
+            let update: ChatSyncUpdate
+            do {
+                update = try envelope.decodedChatSyncUpdate()
+            } catch {
+                DebugLog.agent("DaemonQueueEventSink rejected malformed chat sync update chat=\(chatID.rawValue): \(error)")
+                return
+            }
+            chatContinuation.yield((chatID, update))
             return
         }
 
