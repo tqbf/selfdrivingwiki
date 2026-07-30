@@ -88,8 +88,34 @@ All commands below used `TZ=America/Los_Angeles`, `LANG=en_US.UTF-8`, and
    `QuotaFallbackCoordinator.loadQuotaState()` at `Data(contentsOf:)` for its
    real persisted quota-state path. The test process was terminated. This is
    unrelated to this slice; it is not recorded as a pass.
-8. `git diff --check` passed before the corrective code commit and again before
-   the documentation commit.
+8. Verification recovery diagnosed the blocked gate as a pre-existing test
+   harness isolation defect, not a Phase 1 regression: the integration fixture
+   created a unique temporary directory but `AgentLauncher` constructed its
+   quota coordinator with the real App Group `quota-state.json`. Read-only
+   metadata access to that exact App Group path also stalled locally. No stale
+   SwiftPM test helper was present before reproduction; the focused stalled
+   helper launched during diagnosis was terminated by its exact validated PID.
+9. The recovery adds an injectable per-run quota-coordinator factory to
+   `AgentLauncher`. Production retains the existing durable App Group default;
+   `QuotaFallbackIntegrationTests` injects `tempDir/quota-state.json`, which is
+   owned by its existing UUID fixture and cleanup. The initial focused test
+   compile failed as expected before the seam existed; after the implementation,
+   `swift test --filter QuotaFallbackIntegrationTests/testSingleProviderQuotaFailsItem`
+   passed in 0.103 seconds and `swift test --filter QuotaFallback` passed 24
+   tests in 3 suites (with its two existing ACP-smoke tests skipped).
+10. After the recovery, `make build` passed. The required focused commands
+    passed: `WIKIFS_APP_TESTS=1 swift test --filter DaemonChatControllerTests`
+    (25 tests), `WIKIFS_APP_TESTS=1 swift test --filter
+    LauncherChatAgentRuntimeTests` (8 tests), `swift test --filter
+    ChatTranscriptReducerTests` (8 tests), and `swift test --filter
+    WikiEventBusTests` (8 tests).
+11. `make test` was rerun twice with the stated locale. The explicit
+    confirmation exit status was 0; its captured summary reports 2,702 tests
+    in 218 suites passed after 20.605 seconds. Logs are ignored scratch files:
+    `tmp/test-logs/phase1-verification-make-test.log` and
+    `tmp/test-logs/phase1-verification-make-test-confirmation.log`.
+12. `git diff --check` passed before the corrective code commit and again after
+    this documentation update.
 
 No hosted AppKit view is exercised or changed in this slice, so the SwiftUI
 runtime-issue log capture is not applicable. Mutation testing was not run.

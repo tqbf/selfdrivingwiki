@@ -291,6 +291,13 @@ public final class AgentLauncher {
             ?? FileManager.default.temporaryDirectory
     }
 
+    /// Constructs the per-run quota fallback coordinator. Production retains
+    /// durable App Group quota state; tests inject a fixture-local state file
+    /// so an integration run never reads or writes developer state.
+    @ObservationIgnored var makeQuotaFallbackCoordinator: () -> QuotaFallbackCoordinator = {
+        QuotaFallbackCoordinator()
+    }
+
     /// Resolve the bundled `pdf2md` script path to deny in the agent seatbelt,
     /// or nil if no script is resolvable. Injected because `PdfExtractionService`
     /// (which probes `Bundle.main`) lives in the app target. The app passes a
@@ -1595,7 +1602,7 @@ public final class AgentLauncher {
         // provider first, then the other enabled providers in display order.
         let config = providersConfig()
         let plannerChain = config.providerChain(forStage: ACPIngestStage.planner.rawValue)
-        let quotaFallback = QuotaFallbackCoordinator()
+        let quotaFallback = makeQuotaFallbackCoordinator()
         guard let firstProvider = quotaFallback.firstLive(in: plannerChain) else {
             preflightError = "All configured providers are exhausted. Try again later."
             finish(status: -1)
