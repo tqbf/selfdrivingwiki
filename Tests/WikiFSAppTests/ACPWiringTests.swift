@@ -122,6 +122,52 @@ import ACPModel
         #expect(spawn?.environment.isEmpty == true)
     }
 
+    /// Queue-derived ingest provenance is first serialized as a raw child
+    /// environment value, then converted to the `env.` provider-hint convention.
+    /// Drive the produced hints through the real ACP spawn resolver: a raw hint
+    /// key would be omitted from the child environment.
+    @Test func ingestRequestHintsResolveQueueSourceEnvironment() throws {
+        let first = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "first.md", name: "first",
+            sourceID: SourceID(rawValue: "a"))
+        let second = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "second.md", name: "second",
+            sourceID: SourceID(rawValue: "b"))
+        let request = OperationRequest.ingest(sources: [first, second], stateMarkdown: "")
+
+        let hints = AgentLauncher.ingestProvenanceProviderHints(
+            for: request,
+            addingTo: [HintKey.acpAgentPath.rawValue: "/bin/agent"])
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: BackendProfile(providerHints: hints)))
+
+        #expect(spawn.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
+    }
+
+    /// Large-source executor profiles are built independently from the
+    /// single-session profile and, on the serial path, again for each fallback
+    /// provider. Pin the executor-style hints through `resolveSpawnConfig` so
+    /// that every `wikictl` child receives the same queue evidence.
+    @Test func largeSourceExecutorHintsResolveQueueSourceEnvironment() throws {
+        let first = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "first.md", name: "first",
+            sourceID: SourceID(rawValue: "a"))
+        let second = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "second.md", name: "second",
+            sourceID: SourceID(rawValue: "b"))
+        let request = OperationRequest.ingest(sources: [first, second], stateMarkdown: "")
+
+        let executorHints = AgentLauncher.ingestProvenanceProviderHints(
+            for: request,
+            addingTo: [
+                HintKey.acpAgentPath.rawValue: "/bin/agent",
+                HintKey.acpSelectedModelId.rawValue: "executor-model",
+            ])
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: BackendProfile(providerHints: executorHints)))
+
+        #expect(executorHints[HintKey.acpSelectedModelId.rawValue] == "executor-model")
+        #expect(spawn.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
+    }
+
     // MARK: - buildAgentEnv (issue #441: WIKI_ROOT no longer exported)
 
     /// `buildAgentEnv` exports `WIKI_DB` and `WIKICTL` but NOT `WIKI_ROOT` —

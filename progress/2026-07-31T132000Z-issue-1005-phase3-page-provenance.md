@@ -60,22 +60,38 @@ supporting, and an explicit role for `b` adds evidence without replacing either
 automatic edge. A launcher-level test constructs an ordered `.ingest` request
 and proves that it serializes the same ordered value for the CLI boundary.
 
+## Exact-head provider-hint and large-source corrective pass
+
+Corrected the launch boundary so ordered ingest provenance is inserted as
+`HintKey.env("WIKI_INGEST_SOURCE_IDS")`. `ACPBackend.resolveSpawnConfig` now
+exports it into the child environment instead of silently ignoring a raw
+provider-hint key.
+
+The large-source planner, serial and parallel executors, finalizer, and
+per-provider fallback profiles receive the same queue-derived environment.
+`ACPWiringTests` drives a real `.ingest` request through the launcher hint
+builder and the production spawn-config resolver. The large-source integration
+test runs a two-source planner/executor/finalizer flow with the existing fake
+backend, captures both real executor profiles, and verifies that each resolves
+`WIKI_INGEST_SOURCE_IDS` to `a,b` in declared queue order.
+
 ## Verification
 
-- Corrective pass: `make build` passed, including the signed development app
-  bundle.
-- `swift build` passed after the Make prerequisites synchronized generated
-  resources.
-- AC-30 targeted suites passed: 94 tests across
-  `PageVersionSourceStoreTests`, `PageSourceNamespaceAuditTests`,
-  `PageVersionSourceWriterTests`, `ProvenanceDeletionRestrictionTests`,
-  `MetadataEventEmissionTests`, `StoreEmissionExhaustivenessTests`,
-  `AgentLauncherStageKeyDispatchTests`, `AgentCASTests`, and `WorkspaceTests`.
-- AC-30 `make test` passed: 2,885 tests in 233 suites.
-- AC-30 bare `swift test` passed: 2,885 tests in 233 suites.
-- `git diff --check` passed.
-- Typed-ID audit found no raw PageID/SourceID comparison in the scoped
-  provenance production code. The helper-seam audit found two legacy migration
-  `page_versions` writes and one helper-owned version plus edge writer. The
-  event and scope audits passed; no Phase 4 extraction or Phase 5 inspector
-  files changed.
+- Final corrective pass: `make build` exited 0 and produced the signed
+  development app bundle.
+- Final corrective pass: `make test` exited 0 with 2,885 tests in 233 suites.
+- Final corrective pass: `swift build` exited 0 after Make prerequisites had
+  synchronized generated resources.
+- Final corrective pass: bare `swift test` exited 0 with 2,885 tests in 233
+  suites.
+- `WIKIFS_APP_TESTS=1 swift test --filter '(ACPWiringTests|ACPIngestCollapsedRoutingTests|AgentLauncherStageKeyDispatchTests|PageVersionSourceWriterTests|AgentCASTests|WorkspaceTests|StoreEmissionExhaustivenessTests|PageVersionSourceStoreTests|PageVersionSourceReadTests|ProvenanceDeletionRestrictionTests|PageSourceNamespaceAuditTests|MetadataEventEmissionTests)'`
+  exited 0: 126 tests in 12 suites passed. One pre-existing ACP smoke test
+  remained intentionally skipped because `ACP_SMOKE` was not set.
+- `git diff --check` exited 0. The no-new-`try?` scan was empty.
+- The typed-ID audit passed through the named namespace suite and found no
+  newly added raw PageID/SourceID comparison. The helper-seam audit found two
+  documented legacy migration `page_versions` writes and one helper-owned
+  version plus edge writer. The event audit found the required emit-once and
+  emit-nothing tests plus public-mutator classification. The scope audit found
+  only agent-launcher, test, plan, and progress files: no Phase 4 extraction or
+  Phase 5 inspector work.

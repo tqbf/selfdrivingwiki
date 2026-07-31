@@ -63,6 +63,9 @@ actor FakeAgentBackend: AgentBackend {
     private(set) var allYieldedEvents: [AgentEvent] = []
     /// Model hints seen in start profiles (the `acpSelectedModelId` provider hint).
     private(set) var startModelHints: [String?] = []
+    /// Complete profiles seen in start order. Integration tests use these to
+    /// verify launcher-produced provider hints at the real backend boundary.
+    private(set) var startedProfiles: [BackendProfile] = []
     /// #830: Session IDs passed to `resume()` in call order.
     private(set) var resumedSessionIDs: [String] = []
     /// #830: Whether `start()` was called (for asserting resume-success skips fresh start).
@@ -92,6 +95,7 @@ actor FakeAgentBackend: AgentBackend {
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws -> SessionHandle {
         startCount += 1
+        startedProfiles.append(profile)
 
         let behavior = behaviorIndex < behaviors.count
             ? behaviors[behaviorIndex]
