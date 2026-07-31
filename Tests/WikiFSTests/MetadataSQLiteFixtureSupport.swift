@@ -33,6 +33,39 @@ enum MetadataSQLiteFixtureSupport {
         }
     }
 
+    /// Executes a deliberately-invalid fixture statement and returns SQLite's
+    /// primary result code. Constraint tests use this instead of disabling
+    /// enforcement or inferring behavior from `sqlite_master` text.
+    static func executeResult(_ sql: String, at url: URL) throws -> Int32 {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path, &database) == SQLITE_OK else {
+            throw WikiStoreError.open("could not open SQLite metadata fixture")
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, 5_000)
+        return sqlite3_exec(database, sql, nil, nil, nil)
+    }
+
+    static func scalar(_ sql: String, at url: URL) throws -> String {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path, &database) == SQLITE_OK else {
+            throw WikiStoreError.open("could not open SQLite metadata fixture")
+        }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw WikiStoreError.sqlite(code: -1, message: "could not prepare SQLite metadata scalar")
+        }
+        defer {
+            sqlite3_reset(statement)
+            sqlite3_finalize(statement)
+        }
+        guard sqlite3_step(statement) == SQLITE_ROW, let value = sqlite3_column_text(statement, 0) else {
+            throw WikiStoreError.sqlite(code: -1, message: "missing SQLite metadata scalar")
+        }
+        return String(cString: value)
+    }
+
     static func prepareV47(
         at url: URL,
         classificationFixture: ChatTurnsSchemaClassificationFixture = .exactV47

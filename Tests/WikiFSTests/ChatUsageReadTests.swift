@@ -49,10 +49,25 @@ struct ChatUsageReadTests {
                 cost: Decimal(string: "1.25"), currency: "USD"
             )
         )
+        _ = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: claimed.submission.turnID,
+            claimID: try #require(claimed.claimID),
+            state: .completed,
+            terminalMessage: "complete",
+            finishedAt: Date(timeIntervalSince1970: 12),
+            usage: .init(
+                inputTokens: 10, outputTokens: 20, thoughtTokens: 3,
+                cacheReadTokens: 4, cacheWriteTokens: 5,
+                cost: Decimal(string: "1.25"), currency: "USD"
+            )
+        )
         let usage = try #require(try store.chatTurnUsage(chatID: chat.id, turnID: claimed.submission.turnID))
         #expect(usage.providerID == ProviderID(rawValue: "provider-1"))
         #expect(usage.modelID == ModelID(rawValue: "model-1"))
         #expect(usage.startedAt == Date(timeIntervalSince1970: 11))
+        #expect(usage.finishedAt == Date(timeIntervalSince1970: 12))
+        #expect(usage.state == .completed)
         #expect(usage.inputTokens == 10)
         #expect(usage.outputTokens == 20)
         #expect(usage.thoughtTokens == 3)
@@ -169,6 +184,43 @@ struct ChatUsageReadTests {
             Issue.record("cost without currency must be rejected")
         } catch let error as MetadataStoreError {
             #expect(error == .invalidUsageValue(field: "cost_decimal"))
+        }
+    }
+
+    @Test func chatUsageSummaryRejectsCounterOverflow() throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "chat-usage-overflow")
+        let writable = try GRDBWikiStore(databaseURL: url)
+        let chat = try writable.createChat(kind: .edit, title: "Overflow")
+        writable.close()
+        try MetadataSQLiteFixtureSupport.execute("""
+        INSERT INTO chat_turns
+          (chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at, input_tokens)
+        VALUES ('\(chat.id.rawValue)', 'one', 'command-one', 0, 'claimed', 'one', '[]', 1, 9223372036854775807),
+               ('\(chat.id.rawValue)', 'two', 'command-two', 1, 'claimed', 'two', '[]', 2, 1);
+        """, at: url)
+        do {
+            _ = try GRDBWikiStore(databaseURL: url).chatUsageSummary(chatID: chat.id)
+            Issue.record("expected checked chat usage counter overflow")
+        } catch let error as MetadataStoreError {
+            #expect(error == .counterOverflow)
+        }
+    }
+
+    @Test func chatUsageSummaryRejectsMalformedDecimal() throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "chat-usage-decimal")
+        let writable = try GRDBWikiStore(databaseURL: url)
+        let chat = try writable.createChat(kind: .edit, title: "Decimal")
+        writable.close()
+        try MetadataSQLiteFixtureSupport.execute("""
+        INSERT INTO chat_turns
+          (chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at, cost_decimal, currency)
+        VALUES ('\(chat.id.rawValue)', 'turn', 'command', 0, 'claimed', 'text', '[]', 1, 'not-a-decimal', 'USD');
+        """, at: url)
+        do {
+            _ = try GRDBWikiStore(databaseURL: url).chatUsageSummary(chatID: chat.id)
+            Issue.record("expected malformed metadata decimal")
+        } catch let error as MetadataStoreError {
+            #expect(error == .malformedDecimal("not-a-decimal"))
         }
     }
 

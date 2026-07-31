@@ -88,7 +88,7 @@ struct SchemaV48MigrationTests {
         let upgradedURL = try v47URL("upgrade-v48")
         let upgraded = try migrationStore(at: upgradedURL)
         upgraded.close()
-        let names = "('chat_turns', 'page_version_sources', 'workspace_ref_sources', 'page_version_sources_source', 'workspace_ref_sources_source')"
+        let names = "('chat_turns', 'page_version_sources', 'workspace_ref_sources', 'chat_turns_command_id', 'chat_turns_ordinal', 'chat_turns_claim_id', 'page_version_sources_source', 'workspace_ref_sources_source')"
         for type in ["table", "index"] {
             let freshSQL = try metadataSQL(type: type, names: names, at: freshURL)
             let upgradedSQL = try metadataSQL(type: type, names: names, at: upgradedURL)
@@ -154,6 +154,44 @@ struct SchemaV48MigrationTests {
         #expect(recorder.events == ["cleanup", "copy:0:0"])
     }
 
+    @Test func afterShadowCleanupCheckpointObservesCleanShadowAndUncreatedFinalTables() throws {
+        let recorder = HookRecorder()
+        let hooks = SchemaV48MigrationHooks(
+            afterShadowCleanup: { recorder.append("cleanup") },
+            afterChatCopy: { source, copied in
+                recorder.append("copy")
+                return copied
+            }
+        )
+        let url = try v47URL()
+        try MetadataSQLiteFixtureSupport.execute("CREATE TABLE chat_turns_v48 (stale TEXT)", at: url)
+        _ = try migrationStore(at: url, hooks: hooks)
+        #expect(recorder.events == ["cleanup", "copy"])
+        #expect(try masterCount("chat_turns_v48", at: url) == 0)
+        #expect(try masterCount("page_version_sources", at: url) == 1)
+        #expect(try masterCount("workspace_ref_sources", at: url) == 1)
+    }
+
+    @Test func afterChatCopyCheckpointReceivesExactSourceAndCopiedCounts() throws {
+        let url = try v47URL()
+        try MetadataSQLiteFixtureSupport.execute("""
+        INSERT INTO chats (id, kind, title, created_at, updated_at) VALUES ('chat', 'edit', 'Chat', 1, 1);
+        INSERT INTO chat_turns (chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at)
+        VALUES ('chat', 'one', 'command-one', 0, 'queued', 'one', '[]', 1),
+               ('chat', 'two', 'command-two', 1, 'queued', 'two', '[]', 2);
+        """, at: url)
+        let recorder = HookRecorder()
+        let hooks = SchemaV48MigrationHooks(
+            afterShadowCleanup: { recorder.append("cleanup") },
+            afterChatCopy: { source, copied in
+                recorder.append("copy:\(source):\(copied)")
+                return copied
+            }
+        )
+        _ = try migrationStore(at: url, hooks: hooks)
+        #expect(recorder.events == ["cleanup", "copy:2:2"])
+    }
+
     @Test func afterShadowCleanupInjectedFailureRollsBackAndRetainsVersion47() throws {
         let hooks = SchemaV48MigrationHooks(
             afterShadowCleanup: { throw Sentinel() }, afterChatCopy: { _, copied in copied }
@@ -173,6 +211,25 @@ struct SchemaV48MigrationTests {
         do { _ = try migrationStore(at: url, hooks: hooks); Issue.record("expected copy mismatch") }
         catch let error as SchemaV48MigrationError { #expect(error.description.contains("copy count mismatch")) }
         #expect(try userVersion(at: url) == 47)
+    }
+
+    @Test func constraintInvalidCopiedRowRollsBackMigrationAndRetainsVersion47() throws {
+        let url = try v47URL()
+        // This is a legacy-corruption fixture only. The upgraded connection has
+        // enforcement enabled, so copying the invalid child into the v48 shadow
+        // table fails inside the production immediate transaction.
+        try MetadataSQLiteFixtureSupport.execute("""
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO chat_turns (chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at)
+        VALUES ('missing-chat', 'turn', 'command', 0, 'queued', 'text', '[]', 1);
+        """, at: url)
+        do {
+            _ = try migrationStore(at: url)
+            Issue.record("expected invalid copied child to fail")
+        } catch let error as SchemaV48MigrationError {
+            #expect(error.description.contains("constraint"))
+        }
+        try assertV48ObjectsAbsent(at: url)
     }
 
     @Test func productionForeignKeyCheckerRunsRealCleanPragmaWithEnforcementEnabled() throws {
@@ -203,8 +260,25 @@ struct SchemaV48MigrationTests {
             verifyEnforcement: { _ in },
             check: { _ in [.init(table: "child", rowID: 1, parentTable: "parent", foreignKeyIndex: 0)] }
         )
-        do { _ = try migrationStore(at: v47URL(), checker: checker); Issue.record("expected FK result") }
+        let url = try v47URL()
+        do { _ = try migrationStore(at: url, checker: checker); Issue.record("expected FK result") }
         catch let error as SchemaV48MigrationError { #expect(error.description.contains("foreign-key check returned 1")) }
+        try assertV48ObjectsAbsent(at: url)
+    }
+
+    @Test func injectedForeignKeyViolationRollbackRemovesAllV48ObjectsAndRetainsVersion47() throws {
+        let checker = SchemaForeignKeyChecker(
+            verifyEnforcement: { _ in },
+            check: { _ in [.init(table: "child", rowID: 1, parentTable: "parent", foreignKeyIndex: 0)] }
+        )
+        let url = try v47URL()
+        do {
+            _ = try migrationStore(at: url, checker: checker)
+            Issue.record("expected injected foreign-key violation")
+        } catch let error as SchemaV48MigrationError {
+            #expect(error.description.contains("foreign-key check returned 1"))
+        }
+        try assertV48ObjectsAbsent(at: url)
     }
 
     @Test func injectedForeignKeyCheckerThrowRollsBackAllV48ObjectsAndRetainsVersion47() throws {
@@ -212,8 +286,73 @@ struct SchemaV48MigrationTests {
         let url = try v47URL()
         do { _ = try migrationStore(at: url, checker: checker); Issue.record("expected checker failure") }
         catch let error as SchemaV48MigrationError { #expect(error.description.contains("checker failed")) }
-        #expect(try userVersion(at: url) == 47)
-        #expect(try masterCount("page_version_sources", at: url) == 0)
+        try assertV48ObjectsAbsent(at: url)
+    }
+
+    @Test func afterChatCopyInjectedFailureRollsBackAndRetainsVersion47() throws {
+        let hooks = SchemaV48MigrationHooks(
+            afterShadowCleanup: {}, afterChatCopy: { _, _ in throw Sentinel() }
+        )
+        let url = try v47URL()
+        do {
+            _ = try migrationStore(at: url, hooks: hooks)
+            Issue.record("expected after-copy hook failure")
+        } catch let error as SchemaV48MigrationError {
+            #expect(error.description.contains("migration failed"))
+        }
+        try assertV48ObjectsAbsent(at: url)
+    }
+
+    @Test func retryAfterInjectedForeignKeyViolationSucceeds() throws {
+        let checker = SchemaForeignKeyChecker(
+            verifyEnforcement: { _ in },
+            check: { _ in [.init(table: "child", rowID: 1, parentTable: "parent", foreignKeyIndex: 0)] }
+        )
+        let url = try v47URL()
+        do { _ = try migrationStore(at: url, checker: checker) } catch { }
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+    }
+
+    @Test func retryAfterReplacingThrowingCheckerWithProductionCheckerSucceeds() throws {
+        let throwing = SchemaForeignKeyChecker(verifyEnforcement: { _ in }, check: { _ in throw Sentinel() })
+        let url = try v47URL()
+        do { _ = try migrationStore(at: url, checker: throwing) } catch { }
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+    }
+
+    @Test func failedUpgradeRollsBackAndRetries() throws {
+        let hooks = SchemaV48MigrationHooks(
+            afterShadowCleanup: { throw Sentinel() }, afterChatCopy: { _, copied in copied }
+        )
+        let url = try v47URL()
+        do { _ = try migrationStore(at: url, hooks: hooks) } catch { }
+        try assertV48ObjectsAbsent(at: url)
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+    }
+
+    @Test func injectedForeignKeyCheckerRunsAtExactFinalSchemaCheckpoint() throws {
+        let recorder = HookRecorder()
+        let checker = SchemaForeignKeyChecker(
+            verifyEnforcement: { _ in recorder.append("verify") },
+            check: { db in
+                // These reads run through the very connection and immediate
+                // transaction that owns the upgrade. They prove the checker is
+                // after final chat and provenance objects exist, before the
+                // outer migration stamps user_version.
+                try db.execute(sql: "SELECT input_tokens, finished_at FROM chat_turns LIMIT 0;")
+                try db.execute(sql: "SELECT role FROM page_version_sources LIMIT 0;")
+                try db.execute(sql: "SELECT role FROM workspace_ref_sources LIMIT 0;")
+                recorder.append("check")
+                return []
+            }
+        )
+        let hooks = SchemaV48MigrationHooks(
+            afterShadowCleanup: { recorder.append("cleanup") },
+            afterChatCopy: { source, copied in recorder.append("copy"); return copied }
+        )
+        let store = try migrationStore(at: v47URL(), hooks: hooks, checker: checker)
+        #expect(recorder.events == ["verify", "cleanup", "copy", "check"])
+        #expect(store.pragmaValue("user_version") == "48")
     }
 
     @Test func readOnlyV47ReturnsCompatibilityEmptyValues() throws {
@@ -223,6 +362,65 @@ struct SchemaV48MigrationTests {
         #expect(try store.chatUsageSummary(chatID: ChatID(rawValue: "missing")) == .empty)
         #expect(try store.pageVersionSources(versionID: PageVersionID(rawValue: "missing")).isEmpty)
         #expect(try userVersion(at: url) == 47)
+    }
+
+    @Test func readOnlyOpenNeverMigrates() throws {
+        let url = try v47URL()
+        let store = try GRDBWikiStore(readOnlyURL: url)
+        #expect(store.pragmaValue("user_version") == "47")
+        store.close()
+        #expect(try userVersion(at: url) == 47)
+        #expect(try masterCount("page_version_sources", at: url) == 0)
+    }
+
+    @Test func readOnlyV48ReadsMetadata() throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "readonly-v48")
+        let writable = try GRDBWikiStore(databaseURL: url)
+        let chat = try writable.createChat(kind: .edit, title: "Read-only")
+        let source = try writable.addSource(filename: "source.txt", data: Data("source".utf8))
+        let page = try writable.createPage(title: "Page")
+        let version = try #require(try writable.pageHeadVersionID(pageID: page.id))
+        writable.close()
+        try MetadataSQLiteFixtureSupport.execute("""
+        INSERT INTO chat_turns
+          (chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json, submitted_at,
+           claimed_at, provider_id, model_id, input_tokens)
+        VALUES ('\(chat.id.rawValue)', 'turn', 'command', 0, 'claimed', 'text', '[]', 1,
+                2, 'provider', 'model', 3);
+        INSERT INTO page_version_sources VALUES ('\(version.rawValue)', '\(source.id.rawValue)', 'primary');
+        """, at: url)
+        let readOnly = try GRDBWikiStore(readOnlyURL: url)
+        #expect(try readOnly.chatTurnUsage(chatID: chat.id, turnID: ChatTurnID(rawValue: "turn"))?.inputTokens == 3)
+        #expect(try readOnly.pageVersionSources(versionID: version) == [
+            .init(pageVersionID: version, sourceID: source.id, role: .primary),
+        ])
+    }
+
+    @Test func migrationHooksAreInternalAndProductionDefaultsAreNoOp() throws {
+        let store = try migrationStore(at: v47URL(), hooks: .productionDefault, checker: .productionDefault())
+        #expect(store.pragmaValue("user_version") == "48")
+    }
+
+    @Test func productionForeignKeyCheckerIsRestoredPerStoreInstance() throws {
+        let url = try v47URL()
+        let rejecting = SchemaForeignKeyChecker(verifyEnforcement: { _ in throw Sentinel() }, check: { _ in [] })
+        do { _ = try migrationStore(at: url, checker: rejecting) } catch { }
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+    }
+
+    @Test func injectedForeignKeyCheckerStateDoesNotLeakAfterRollbackAndReopen() throws {
+        let url = try v47URL()
+        let rejecting = SchemaForeignKeyChecker(
+            verifyEnforcement: { _ in },
+            check: { _ in [.init(table: "child", rowID: 1, parentTable: "parent", foreignKeyIndex: 0)] }
+        )
+        do { _ = try migrationStore(at: url, checker: rejecting) } catch { }
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+    }
+
+    @Test func fixtureFactoryUsesFreshProductionCheckerByDefault() throws {
+        let url = try v47URL()
+        #expect(try GRDBWikiStore(databaseURL: url).pragmaValue("user_version") == "48")
     }
 
     @Test func foreignKeysAreEnabled() throws {
@@ -243,6 +441,12 @@ struct SchemaV48MigrationTests {
 
     private func userVersion(at url: URL) throws -> Int { Int(try scalar("PRAGMA user_version", at: url)) ?? -1 }
     private func masterCount(_ name: String, at url: URL) throws -> Int { Int(try scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = '\(name)'", at: url)) ?? -1 }
+    private func assertV48ObjectsAbsent(at url: URL) throws {
+        #expect(try userVersion(at: url) == 47)
+        for name in ["chat_turns_v48", "page_version_sources", "workspace_ref_sources", "page_version_sources_source", "workspace_ref_sources_source"] {
+            #expect(try masterCount(name, at: url) == 0)
+        }
+    }
     private func scalar(_ query: String, at url: URL) throws -> String {
         var database: OpaquePointer?
         guard sqlite3_open(url.path, &database) == SQLITE_OK else { throw WikiStoreError.open("fixture open") }

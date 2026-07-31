@@ -782,6 +782,39 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    @Test func rejectedStoreTransitionWritesNothingAndEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                userText: "queued", contextReferences: [], submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id, claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+        try await drain(rec, expected: 3)
+
+        do {
+            _ = try store.updatePersistedChatTurnUsage(
+                chatID: chat.id, turnID: ChatTurnID(rawValue: "turn-1"),
+                claimID: ChatTurnClaimID(rawValue: "stale-claim"), usage: .init(inputTokens: 1)
+            )
+            Issue.record("expected stale chat-turn claim")
+        } catch let error as MetadataStoreError {
+            #expect(error == .staleChatTurnClaim)
+        }
+
+        await assertNoEventsDelivered(rec)
+        let turn = try #require(try store.listPersistedChatTurns(chatID: chat.id).first)
+        #expect(turn.state == .claimed)
+        #expect(turn.usage.inputTokens == nil)
+    }
+
     @Test func appendChatTranscriptItemsEmitsChatUpdated() async throws {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")

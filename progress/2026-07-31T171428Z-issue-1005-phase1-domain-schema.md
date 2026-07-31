@@ -20,12 +20,19 @@ Page-source and workspace-source relations are constrained in v48, but writer
 threading remains deferred to Phase 3. Chat controller lifecycle wiring,
 canonical extraction writers, and inspector UI remain out of this phase.
 
+Post-audit corrective coverage is complete: direct real-SQLite tests now cover
+every v48 CHECK/FK, migration hook/checker failure and retry branch, schema
+parity including chat indexes, read-only compatibility, typed extraction
+projections, metadata read-pool visibility, counter/decimal corruption, and
+rejected-transition event silence. Legacy or local-tool provenance no longer
+claims provider/model identity from a joined agent row.
+
 ## Verification
 
 - `make build` passed.
-- `make test` passed: 2,780 tests in 224 suites.
+- `make test` passed: 2,824 tests in 227 suites.
 - `swift build` passed.
-- `swift test` passed: 2,780 tests in 224 suites.
-- Focused migration, usage, transition, and page-source reader suites passed.
+- `swift test` passed: 2,824 tests in 227 suites.
+- Focused Phase 1 suites passed: 153 tests in 9 suites.
 - Fresh-v48 and upgraded-v47 `sqlite_master` parity passed.
 - `git diff --check` passed.

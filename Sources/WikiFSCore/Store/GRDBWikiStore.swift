@@ -10027,7 +10027,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             sourceID: SourceID(rawValue: row["file_id"]),
             origin: origin,
             producer: producer,
-            providerID: providerRaw.map(ProviderID.init(rawValue:)),
+            // Agent provider/model metadata describes a backend invocation.
+            // A local tool or an unknown legacy technique may still have an
+            // historical activity join, but presenting those values as a
+            // provider/model would make unsupported provenance claims.
+            providerID: isBackend ? providerRaw.map(ProviderID.init(rawValue:)) : nil,
             modelID: isBackend ? agentVersion.map(ModelID.init(rawValue:)) : nil,
             toolVersion: isTool ? agentVersion : nil,
             createdAt: Date(timeIntervalSince1970: createdAt),

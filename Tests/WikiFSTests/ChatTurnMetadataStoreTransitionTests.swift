@@ -62,13 +62,28 @@ struct ChatTurnMetadataStoreTransitionTests {
     @Test func finishProviderSubmittedTurnPersistsTerminalOutcomeAndFinalUsageAtomically() throws { try assertFinish(submitted: true) }
 
     @Test func laterDifferentTerminalOutcomePreservesWinnerState() throws {
-        let (store, chatID, turn) = try claimedStore()
-        let winner = try finish(store, chatID: chatID, turn: turn, state: .completed, finishedAt: 12)
-        let later = try finish(store, chatID: chatID, turn: turn, state: .failed, finishedAt: 13)
+        let (winner, later) = try terminalRace()
         #expect(later.state == winner.state)
+    }
+
+    @Test func laterDifferentTerminalOutcomePreservesWinnerFinishedAt() throws {
+        let (winner, later) = try terminalRace()
         #expect(later.finishedAt == winner.finishedAt)
+    }
+
+    @Test func laterDifferentTerminalOutcomePreservesWinnerMessageAndError() throws {
+        let (winner, later) = try terminalRace()
         #expect(later.terminalMessage == winner.terminalMessage)
+    }
+
+    @Test func laterDifferentTerminalOutcomePreservesWinnerProviderAndModel() throws {
+        let (winner, later) = try terminalRace()
         #expect(later.providerID == winner.providerID)
+        #expect(later.modelID == winner.modelID)
+    }
+
+    @Test func laterDifferentTerminalOutcomePreservesWinnerEveryUsageField() throws {
+        let (winner, later) = try terminalRace()
         #expect(later.usage == winner.usage)
     }
 
@@ -92,6 +107,13 @@ struct ChatTurnMetadataStoreTransitionTests {
         #expect(finished.state == .completed)
         #expect(finished.finishedAt == Date(timeIntervalSince1970: 12))
         #expect(finished.usage.inputTokens == 4)
+    }
+
+    private func terminalRace() throws -> (PersistedChatTurn, PersistedChatTurn) {
+        let (store, chatID, turn) = try claimedStore()
+        let winner = try finish(store, chatID: chatID, turn: turn, state: .completed, finishedAt: 12)
+        let later = try finish(store, chatID: chatID, turn: turn, state: .failed, finishedAt: 13)
+        return (winner, later)
     }
 
     private func finish(
