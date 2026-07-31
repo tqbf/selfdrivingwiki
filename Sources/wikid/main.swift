@@ -578,9 +578,14 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     // Linux default — a conventional XDG-style data directory.
     let home = FileManager.default.homeDirectoryForCurrentUser
     let defaultDir = home.appendingPathComponent(".local/share/selfdrivingwiki", isDirectory: true)
-    // Directory creation is idempotent — failure is acceptable (directory may already exist).
-    // swiftlint:disable:next silent_try_optional
-    try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+    // createDirectory(withIntermediateDirectories:) succeeds when the dir
+    // already exists, so a real failure here means permissions/disk — log it
+    // rather than swallow silently (house rule: never bare try?).
+    do {
+        try FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+    } catch {
+        DebugLog.store("wikid: failed to create default data directory \(defaultDir.path): \(error)")
+    }
     containerDirectory = defaultDir
 }
 
