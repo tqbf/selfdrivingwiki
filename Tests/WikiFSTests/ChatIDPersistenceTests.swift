@@ -256,7 +256,7 @@ struct ChatIDPersistenceTests {
         #expect(try pragmaValue("user_version", at: databaseURL) == preChatIDRefactorSchemaVersion)
 
         let reopened = try GRDBWikiStore(databaseURL: databaseURL)
-        #expect(reopened.pragmaValue("user_version") == "47")
+        #expect(reopened.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(try reopened.listChats().isEmpty)
         #expect(try reopened.chatMessages(chatID: ChatID(rawValue: legacyChatID)).isEmpty)
     }
@@ -301,7 +301,7 @@ struct ChatIDPersistenceTests {
         let chat = try store.createChat(kind: .edit, title: "Fresh Chat")
         _ = try store.appendChatMessages(chatID: chat.id, events: [.assistantText("follow up")])
 
-        #expect(store.pragmaValue("user_version") == "47")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(try normalizedRows(
             "SELECT id FROM chats WHERE id = '\(chat.id.rawValue)';",
             at: databaseURL
@@ -320,7 +320,7 @@ struct ChatIDPersistenceTests {
         try assertPreChatIDRefactorSchemaLayout(at: databaseURL)
 
         let store = try GRDBWikiStore(databaseURL: databaseURL)
-        #expect(store.pragmaValue("user_version") == "47")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(try normalizedRows("PRAGMA table_info('chat_turns');", at: databaseURL) == [
             "0|chat_id|TEXT|1|NULL|1",
             "1|turn_id|TEXT|1|NULL|2",
@@ -336,6 +336,16 @@ struct ChatIDPersistenceTests {
             "11|provider_submitted_at|REAL|0|NULL|0",
             "12|provider_session_id|TEXT|0|NULL|0",
             "13|terminal_message|TEXT|0|NULL|0",
+            "14|provider_id|TEXT|0|NULL|0",
+            "15|model_id|TEXT|0|NULL|0",
+            "16|finished_at|REAL|0|NULL|0",
+            "17|input_tokens|INTEGER|0|NULL|0",
+            "18|output_tokens|INTEGER|0|NULL|0",
+            "19|thought_tokens|INTEGER|0|NULL|0",
+            "20|cache_read_tokens|INTEGER|0|NULL|0",
+            "21|cache_write_tokens|INTEGER|0|NULL|0",
+            "22|cost_decimal|TEXT|0|NULL|0",
+            "23|currency|TEXT|0|NULL|0",
         ])
         #expect(try normalizedRows("PRAGMA table_info('chat_transcript_items');", at: databaseURL) == [
             "0|chat_id|TEXT|1|NULL|1",

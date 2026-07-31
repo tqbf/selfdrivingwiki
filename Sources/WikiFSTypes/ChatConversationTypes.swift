@@ -331,6 +331,131 @@ public enum ChatTurnPersistenceState: String, Hashable, Sendable, Codable, CaseI
     case failed
 }
 
+/// Usage fields observed for one durable chat turn. Provider and model are
+/// snapshots from claim time; all counters and cost fields remain optional so
+/// rows written before schema v48 retain their original meaning.
+public struct ChatTurnUsage: Hashable, Sendable, Codable {
+    public let turnID: ChatTurnID
+    public let providerID: ProviderID?
+    public let modelID: ModelID?
+    public let startedAt: Date?
+    public let finishedAt: Date?
+    public let state: ChatTurnPersistenceState
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let thoughtTokens: Int?
+    public let cacheReadTokens: Int?
+    public let cacheWriteTokens: Int?
+    public let cost: Decimal?
+    public let currency: String?
+
+    public init(
+        turnID: ChatTurnID,
+        providerID: ProviderID?,
+        modelID: ModelID?,
+        startedAt: Date?,
+        finishedAt: Date?,
+        state: ChatTurnPersistenceState,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        thoughtTokens: Int?,
+        cacheReadTokens: Int?,
+        cacheWriteTokens: Int?,
+        cost: Decimal?,
+        currency: String?
+    ) {
+        self.turnID = turnID
+        self.providerID = providerID
+        self.modelID = modelID
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.state = state
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.thoughtTokens = thoughtTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cost = cost
+        self.currency = currency
+    }
+}
+
+/// The mutable subset of a turn's usage record. Lifecycle identity and claim
+/// snapshots are intentionally absent: only the controller's claim/finish
+/// paths establish those fields.
+public struct ChatTurnUsageValues: Hashable, Sendable, Codable {
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let thoughtTokens: Int?
+    public let cacheReadTokens: Int?
+    public let cacheWriteTokens: Int?
+    public let cost: Decimal?
+    public let currency: String?
+
+    public init(
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        thoughtTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
+        cost: Decimal? = nil,
+        currency: String? = nil
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.thoughtTokens = thoughtTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cost = cost
+        self.currency = currency
+    }
+}
+
+/// Aggregate durable usage for one chat. Counter totals are zero for an empty
+/// chat or legacy rows with no usage, while money remains unavailable until all
+/// contributing cost rows share one non-nil currency.
+public struct ChatUsageSummary: Hashable, Sendable {
+    public let latestTurn: ChatTurnUsage?
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public let thoughtTokens: Int
+    public let cacheReadTokens: Int
+    public let cacheWriteTokens: Int
+    public let cost: Decimal?
+    public let currency: String?
+
+    public init(
+        latestTurn: ChatTurnUsage?,
+        inputTokens: Int,
+        outputTokens: Int,
+        thoughtTokens: Int,
+        cacheReadTokens: Int,
+        cacheWriteTokens: Int,
+        cost: Decimal?,
+        currency: String?
+    ) {
+        self.latestTurn = latestTurn
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.thoughtTokens = thoughtTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cost = cost
+        self.currency = currency
+    }
+
+    public static let empty = ChatUsageSummary(
+        latestTurn: nil,
+        inputTokens: 0,
+        outputTokens: 0,
+        thoughtTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cost: nil,
+        currency: nil
+    )
+}
+
 /// One durable turn row persisted for later controller recovery/replay.
 public struct PersistedChatTurn: Hashable, Sendable, Codable {
     public let chatID: ChatID
@@ -343,6 +468,10 @@ public struct PersistedChatTurn: Hashable, Sendable, Codable {
     public let providerSubmittedAt: Date?
     public let providerSessionID: AcpSessionID?
     public let terminalMessage: String?
+    public let providerID: ProviderID?
+    public let modelID: ModelID?
+    public let finishedAt: Date?
+    public let usage: ChatTurnUsageValues
 
     public init(
         chatID: ChatID,
@@ -354,7 +483,11 @@ public struct PersistedChatTurn: Hashable, Sendable, Codable {
         claimedAt: Date?,
         providerSubmittedAt: Date?,
         providerSessionID: AcpSessionID?,
-        terminalMessage: String?
+        terminalMessage: String?,
+        providerID: ProviderID? = nil,
+        modelID: ModelID? = nil,
+        finishedAt: Date? = nil,
+        usage: ChatTurnUsageValues = .init()
     ) {
         self.chatID = chatID
         self.ordinal = ordinal
@@ -366,6 +499,10 @@ public struct PersistedChatTurn: Hashable, Sendable, Codable {
         self.providerSubmittedAt = providerSubmittedAt
         self.providerSessionID = providerSessionID
         self.terminalMessage = terminalMessage
+        self.providerID = providerID
+        self.modelID = modelID
+        self.finishedAt = finishedAt
+        self.usage = usage
     }
 }
 

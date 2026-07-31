@@ -424,6 +424,17 @@ public protocol WikiStore: Sendable {
         lastEditedBy: String?
     ) throws -> PageVersionID
 
+    /// Immutable source evidence for one page version. Compatibility readers
+    /// return an empty collection against v47 instead of attempting a schema
+    /// migration.
+    func pageVersionSources(versionID: PageVersionID) throws -> [PageVersionSource]
+    func pageHeadSources(pageID: PageID) throws -> [PageVersionSource]
+    func sourceReferencingPageVersions(sourceID: SourceID) throws -> [PageVersionID]
+
+    /// Typed read projections over existing source-markdown activity data.
+    func extractionProvenance(markdownVersionID: SourceMarkdownVersionID) throws -> ExtractionProvenance?
+    func activeExtractionProvenance(sourceID: SourceID) throws -> ExtractionProvenance?
+
     /// Resolve the active page-content version id (ref → version_id, or
     /// MAX(id) if no ref row exists — the default-active rule). Returns nil if
     /// the page has no versions (shouldn't happen post-migration).
@@ -776,6 +787,15 @@ public protocol WikiStore: Sendable {
         claimedAt: Date
     ) throws -> PersistedChatTurn?
 
+    @discardableResult
+    func claimNextPersistedChatTurn(
+        chatID: ChatID,
+        claimID: ChatTurnClaimID,
+        claimedAt: Date,
+        providerID: ProviderID?,
+        modelID: ModelID?
+    ) throws -> PersistedChatTurn?
+
     /// Record the at-most-once boundary where a claimed turn is handed to the
     /// provider/runtime.
     @discardableResult
@@ -795,6 +815,29 @@ public protocol WikiStore: Sendable {
         claimID: ChatTurnClaimID,
         state: ChatTurnPersistenceState,
         terminalMessage: String?
+    ) throws -> PersistedChatTurn
+
+    @discardableResult
+    func finishPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        state: ChatTurnPersistenceState,
+        terminalMessage: String?,
+        finishedAt: Date,
+        usage: ChatTurnUsageValues?
+    ) throws -> PersistedChatTurn
+
+    func chatTurnUsage(chatID: ChatID, turnID: ChatTurnID) throws -> ChatTurnUsage?
+    func latestChatTurnUsage(chatID: ChatID) throws -> ChatTurnUsage?
+    func chatUsageSummary(chatID: ChatID) throws -> ChatUsageSummary
+
+    @discardableResult
+    func updatePersistedChatTurnUsage(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        usage: ChatTurnUsageValues
     ) throws -> PersistedChatTurn
 
     /// Persist typed transcript rows while also maintaining the current

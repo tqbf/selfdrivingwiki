@@ -301,15 +301,15 @@ struct ChatPhase2PersistenceTests {
             terminalMessage: "done"
         )
 
-        #expect(throws: WikiStoreError.self) {
-            _ = try store.finishPersistedChatTurn(
-                chatID: chat.id,
-                turnID: ChatTurnID(rawValue: "turn-1"),
-                claimID: ChatTurnClaimID(rawValue: "claim-1"),
-                state: .failed,
-                terminalMessage: "different terminal"
-            )
-        }
+        let winner = try store.finishPersistedChatTurn(
+            chatID: chat.id,
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            claimID: ChatTurnClaimID(rawValue: "claim-1"),
+            state: .failed,
+            terminalMessage: "different terminal"
+        )
+        #expect(winner.state == .completed)
+        #expect(winner.terminalMessage == "done")
     }
 
     @Test func transcriptItemsRoundTripAndProjectToCompatibilityMessages() throws {
@@ -483,7 +483,7 @@ struct ChatPhase2PersistenceTests {
         }
         #expect(migratedNotice.noticeID.rawValue == "chat-transcript-v47:systemNotice:\(chat.id.rawValue):1")
         #expect(migratedFailure.failureID.rawValue == "chat-transcript-v47:turnFailure:\(chat.id.rawValue):2")
-        #expect(migrated.pragmaValue("user_version") == "47")
+        #expect(migrated.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func legacyStoreMigrationIsIdempotent() throws {
@@ -503,7 +503,7 @@ struct ChatPhase2PersistenceTests {
         let first = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 1)
         let second = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 1)
         #expect(first == second)
-        #expect(store.pragmaValue("user_version") == "47")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     private func legacyJSON(from item: ChatTranscriptItem, removing key: String) throws -> String {
@@ -595,7 +595,7 @@ struct ChatPhase2PersistenceTests {
         )
 
         let store = try GRDBWikiStore(databaseURL: url)
-        #expect(store.pragmaValue("user_version") == "47")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         let page = try store.getPage(id: PageID(rawValue: "page-1"))
         #expect(page.title == "Preserved")
         #expect(try store.listChats().isEmpty)

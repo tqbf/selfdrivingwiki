@@ -12,6 +12,82 @@ internal import GRDB
 
 // pattern: Imperative Shell
 
+/// A row returned by SQLite's real `PRAGMA foreign_key_check`.
+struct ForeignKeyCheckViolation: Equatable, Sendable {
+    let table: String
+    let rowID: Int64?
+    let parentTable: String
+    let foreignKeyIndex: Int
+}
+
+/// Typed v48 migration failures. These are intentionally separate so callers
+/// can distinguish disabled enforcement, a checker result, a checker failure,
+/// and a schema that must not be guessed at.
+enum SchemaV48MigrationError: Error, CustomStringConvertible {
+    case partialChatTurnsShape
+    case unknownChatTurnsDefinition
+    case copyCountMismatch(sourceCount: Int, copiedCount: Int)
+    case foreignKeyEnforcementDisabled
+    case foreignKeyViolation([ForeignKeyCheckViolation])
+    case foreignKeyCheckerFailed(underlying: any Error)
+    case constraintViolation(String)
+    case migrationFailure(String)
+
+    var description: String {
+        switch self {
+        case .partialChatTurnsShape: return "partial chat_turns v48 shape"
+        case .unknownChatTurnsDefinition: return "unknown chat_turns definition"
+        case .copyCountMismatch(let source, let copied): return "chat_turns copy count mismatch: \(source) source, \(copied) copied"
+        case .foreignKeyEnforcementDisabled: return "foreign-key enforcement is disabled"
+        case .foreignKeyViolation(let rows): return "foreign-key check returned \(rows.count) violation(s)"
+        case .foreignKeyCheckerFailed(let error): return "foreign-key checker failed: \(error)"
+        case .constraintViolation(let message): return "v48 constraint violation: \(message)"
+        case .migrationFailure(let message): return "v48 migration failed: \(message)"
+        }
+    }
+}
+
+/// Immutable, instance-scoped foreign-key verification seam. Production uses
+/// SQLite PRAGMAs on the migration connection; tests may inject deterministic
+/// returned violations or failures without toggling FK state mid-transaction.
+struct SchemaForeignKeyChecker: Sendable {
+    let verifyEnforcement: @Sendable (Database) throws -> Void
+    let check: @Sendable (Database) throws -> [ForeignKeyCheckViolation]
+
+    static func productionDefault() -> Self {
+        Self(
+            verifyEnforcement: { db in
+                guard (try Int.fetchOne(db, sql: "PRAGMA foreign_keys")) == 1 else {
+                    throw SchemaV48MigrationError.foreignKeyEnforcementDisabled
+                }
+            },
+            check: { db in
+                try Row.fetchAll(db, sql: "PRAGMA foreign_key_check").map { row in
+                    ForeignKeyCheckViolation(
+                        table: row["table"],
+                        rowID: row["rowid"],
+                        parentTable: row["parent"],
+                        foreignKeyIndex: row["fkid"]
+                    )
+                }
+            }
+        )
+    }
+}
+
+/// Executable v48 migration checkpoints. They are deliberately internal and
+/// immutable; production defaults are no-ops and no public store API exposes
+/// either hook.
+struct SchemaV48MigrationHooks: Sendable {
+    let afterShadowCleanup: @Sendable () throws -> Void
+    let afterChatCopy: @Sendable (_ sourceCount: Int, _ copiedCount: Int) throws -> Int
+
+    static let productionDefault = Self(
+        afterShadowCleanup: {},
+        afterChatCopy: { _, copiedCount in copiedCount }
+    )
+}
+
 /// A GRDB-backed implementation of the ``WikiStore`` protocol.
 ///
 /// This is a **parallel implementation** — it does NOT replace
@@ -60,7 +136,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 47
+    private static let currentSchemaVersion = 48
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -104,6 +180,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// path must skip when false, since an in-memory database has no WAL frames
     /// and `PRAGMA wal_checkpoint(TRUNCATE)` errors out on it. See issue #651.
     private let isFileBacked: Bool
+    /// Test-only immutable migration seams. Every public initializer gets a
+    /// fresh production checker so injected behavior cannot leak between stores.
+    private let schemaV48MigrationHooks: SchemaV48MigrationHooks
+    private let schemaForeignKeyChecker: SchemaForeignKeyChecker
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -124,9 +204,26 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// Open (creating if needed) the database at `databaseURL`, run migrations,
     /// and bootstrap search indexes. Mirrors `SQLiteWikiStore.init(databaseURL:)`.
-    public init(databaseURL: URL) throws {
+    public convenience init(databaseURL: URL) throws {
+        try self.init(
+            databaseURL: databaseURL,
+            schemaV48MigrationHooks: .productionDefault,
+            schemaForeignKeyChecker: .productionDefault()
+        )
+    }
+
+    /// Internal test-only migration initializer. Production callers use the
+    /// public initializer above, which creates fresh immutable defaults.
+    init(
+        databaseURL: URL,
+        schemaV48MigrationHooks: SchemaV48MigrationHooks,
+        schemaForeignKeyChecker: SchemaForeignKeyChecker,
+        foreignKeysEnabled: Bool = true
+    ) throws {
+        self.schemaV48MigrationHooks = schemaV48MigrationHooks
+        self.schemaForeignKeyChecker = schemaForeignKeyChecker
         var config = Configuration()
-        config.foreignKeysEnabled = true
+        config.foreignKeysEnabled = foreignKeysEnabled
         config.busyMode = .timeout(5)
 
         // Performance PRAGMAs matching SQLiteWikiStore (#523).
@@ -182,6 +279,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // gone: FTS5 is dropped at v37→v38 and Tantivy is now the sole BM25
             // leg. NOT run by the read-only File Provider open.
             ensureSearchIndexesPopulated()
+        } catch let error as SchemaV48MigrationError {
+            throw error
         } catch {
             throw WikiStoreError.open("\(error)")
         }
@@ -193,6 +292,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// pure read-only connection to a WAL DB can fail to create `-shm` when no
     /// writer has set it up).
     public init(readOnlyURL: URL) throws {
+        schemaV48MigrationHooks = .productionDefault
+        schemaForeignKeyChecker = .productionDefault()
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -243,6 +344,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// unchanged.
     #if DEBUG
     public init() throws {
+        schemaV48MigrationHooks = .productionDefault
+        schemaForeignKeyChecker = .productionDefault()
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -1316,6 +1419,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 47
         }
 
+        // v47→v48: typed durable chat usage and immutable page-version source
+        // provenance. FK enforcement is checked BEFORE opening the immediate
+        // transaction: SQLite cannot enable it safely mid-transaction.
+        if version < 48 {
+            try schemaForeignKeyChecker.verifyEnforcement(db)
+            try db.inTransaction(.immediate) {
+                try migrateV47ToV48(in: db)
+                try db.execute(sql: "PRAGMA user_version = 48;")
+                return .commit
+            }
+            version = 48
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1381,6 +1497,121 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// scalar text value (e.g. `SELECT sql FROM sqlite_master …`).
     private static func queryScalarText(_ sql: String, in db: Database) throws -> String {
         try String.fetchOne(db, sql: sql) ?? ""
+    }
+
+    /// Classification deliberately combines exact column namespaces with the
+    /// normalized SQL contract. A partially-added v48 column is never guessed
+    /// into a valid table because a rebuild could otherwise discard data.
+    enum ChatTurnsSchemaClassification: Equatable {
+        case v47
+        case v48
+        case partialChatTurnsShape
+        case unknownChatTurnsDefinition
+    }
+
+    static func classifyChatTurnsSchema(
+        columns: Set<String>, normalizedSQL: String
+    ) -> ChatTurnsSchemaClassification {
+        if columns == chatTurnsV47Columns,
+           normalizedSQL == normalizedSchemaSQL(chatTurnsV47CreateSQL) {
+            return .v47
+        }
+        if columns == chatTurnsV48Columns,
+           normalizedSQL == normalizedSchemaSQL(
+               chatTurnsV48CreateSQL.replacingOccurrences(of: "chat_turns_v48", with: "chat_turns")
+           ) {
+            return .v48
+        }
+        if !columns.intersection(chatTurnsV48Columns).isEmpty,
+           columns.isSubset(of: chatTurnsV48Columns) {
+            return .partialChatTurnsShape
+        }
+        return .unknownChatTurnsDefinition
+    }
+
+    static func normalizedSchemaSQL(_ sql: String) -> String {
+        sql.lowercased()
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "if not exists", with: "")
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+    }
+
+    /// The transactional v48 body. The caller owns the immediate transaction
+    /// and stamps `user_version` only after this returns successfully.
+    func migrateV47ToV48(in db: Database) throws {
+        do {
+            let columns = try Self.tableColumnInfo("chat_turns", in: db)
+            let tableSQL = try Self.queryScalarText(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_turns';", in: db)
+            let classification = Self.classifyChatTurnsSchema(
+                columns: columns,
+                normalizedSQL: Self.normalizedSchemaSQL(tableSQL)
+            )
+
+            // A previously interrupted external migration may have left this
+            // shadow table. Ordinary SQLite rollback never does, but its
+            // cleanup must happen before either final table creation or hooks.
+            try db.execute(sql: "DROP TABLE IF EXISTS chat_turns_v48;")
+
+            switch classification {
+            case .v47:
+                try schemaV48MigrationHooks.afterShadowCleanup()
+                try db.execute(sql: Self.chatTurnsV48CreateSQL)
+                let sourceCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chat_turns;") ?? 0
+                try db.execute(sql: """
+                INSERT INTO chat_turns_v48 (
+                    chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                    submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                    provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                    input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                    cache_write_tokens, cost_decimal, currency
+                )
+                SELECT
+                    chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                    submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                    provider_session_id, terminal_message, NULL, NULL, NULL, NULL, NULL, NULL,
+                    NULL, NULL, NULL, NULL
+                FROM chat_turns;
+                """)
+                let copiedCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chat_turns_v48;") ?? 0
+                let observedCopiedCount = try schemaV48MigrationHooks.afterChatCopy(sourceCount, copiedCount)
+                guard sourceCount == observedCopiedCount else {
+                    throw SchemaV48MigrationError.copyCountMismatch(
+                        sourceCount: sourceCount, copiedCount: observedCopiedCount)
+                }
+                try db.execute(sql: "DROP TABLE chat_turns;")
+                try db.execute(sql: "ALTER TABLE chat_turns_v48 RENAME TO chat_turns;")
+                try Self.createChatTurnsIndexes(in: db)
+
+            case .v48:
+                // An already-final table with a rewound user_version is safe:
+                // metadata tables/indexes below are idempotent and no rows move.
+                break
+            case .partialChatTurnsShape:
+                throw SchemaV48MigrationError.partialChatTurnsShape
+            case .unknownChatTurnsDefinition:
+                throw SchemaV48MigrationError.unknownChatTurnsDefinition
+            }
+
+            try Self.createMetadataProvenanceTablesV48(in: db)
+            let violations: [ForeignKeyCheckViolation]
+            do {
+                violations = try schemaForeignKeyChecker.check(db)
+            } catch {
+                throw SchemaV48MigrationError.foreignKeyCheckerFailed(underlying: error)
+            }
+            guard violations.isEmpty else {
+                throw SchemaV48MigrationError.foreignKeyViolation(violations)
+            }
+        } catch let error as SchemaV48MigrationError {
+            throw error
+        } catch let error as DatabaseError {
+            throw SchemaV48MigrationError.constraintViolation(String(describing: error))
+        } catch {
+            throw SchemaV48MigrationError.migrationFailure(String(describing: error))
+        }
     }
 
     // MARK: - Shared table builders (fresh-path + migration step parity)
@@ -1589,25 +1820,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     /// Create Phase 2 durable turn + typed transcript tables.
     private static func createChatPhase2TablesV46(in db: Database) throws {
-        try db.execute(sql: """
-        CREATE TABLE IF NOT EXISTS chat_turns (
-            chat_id                TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            turn_id                TEXT NOT NULL,
-            command_id             TEXT NOT NULL,
-            ordinal                INTEGER NOT NULL,
-            state                  TEXT NOT NULL,
-            user_text              TEXT NOT NULL,
-            context_refs_json      TEXT NOT NULL,
-            submitted_at           REAL NOT NULL,
-            edited_at              REAL,
-            claim_id               TEXT,
-            claimed_at             REAL,
-            provider_submitted_at  REAL,
-            provider_session_id    TEXT,
-            terminal_message       TEXT,
-            PRIMARY KEY (chat_id, turn_id)
-        );
-        """)
+        try db.execute(sql: chatTurnsV47CreateSQL.replacingOccurrences(
+            of: "CREATE TABLE chat_turns", with: "CREATE TABLE IF NOT EXISTS chat_turns"
+        ))
         try db.execute(sql: """
         CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_command_id
             ON chat_turns(chat_id, command_id);
@@ -1632,6 +1847,133 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             created_at            REAL NOT NULL,
             PRIMARY KEY (chat_id, cursor)
         ) WITHOUT ROWID;
+        """)
+    }
+
+    static let chatTurnsV47Columns: Set<String> = [
+        "chat_id", "turn_id", "command_id", "ordinal", "state", "user_text",
+        "context_refs_json", "submitted_at", "edited_at", "claim_id", "claimed_at",
+        "provider_submitted_at", "provider_session_id", "terminal_message",
+    ]
+
+    static let chatTurnsV48Columns: Set<String> = chatTurnsV47Columns.union([
+        "provider_id", "model_id", "finished_at", "input_tokens", "output_tokens",
+        "thought_tokens", "cache_read_tokens", "cache_write_tokens", "cost_decimal", "currency",
+    ])
+
+    static let chatTurnsV47CreateSQL = """
+    CREATE TABLE chat_turns (
+        chat_id                TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        turn_id                TEXT NOT NULL,
+        command_id             TEXT NOT NULL,
+        ordinal                INTEGER NOT NULL,
+        state                  TEXT NOT NULL,
+        user_text              TEXT NOT NULL,
+        context_refs_json      TEXT NOT NULL,
+        submitted_at           REAL NOT NULL,
+        edited_at              REAL,
+        claim_id               TEXT,
+        claimed_at             REAL,
+        provider_submitted_at  REAL,
+        provider_session_id    TEXT,
+        terminal_message       TEXT,
+        PRIMARY KEY (chat_id, turn_id)
+    );
+    """
+
+    static let chatTurnsV48CreateSQL = """
+    CREATE TABLE chat_turns_v48 (
+        chat_id                TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        turn_id                TEXT NOT NULL,
+        command_id             TEXT NOT NULL,
+        ordinal                INTEGER NOT NULL,
+        state                  TEXT NOT NULL,
+        user_text              TEXT NOT NULL,
+        context_refs_json      TEXT NOT NULL,
+        submitted_at           REAL NOT NULL,
+        edited_at              REAL,
+        claim_id               TEXT,
+        claimed_at             REAL,
+        provider_submitted_at  REAL,
+        provider_session_id    TEXT,
+        terminal_message       TEXT,
+        provider_id            TEXT,
+        model_id               TEXT,
+        finished_at            REAL,
+        input_tokens           INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+        output_tokens          INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+        thought_tokens         INTEGER CHECK (thought_tokens IS NULL OR thought_tokens >= 0),
+        cache_read_tokens      INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+        cache_write_tokens     INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+        cost_decimal           TEXT,
+        currency               TEXT,
+        CHECK (finished_at IS NULL OR claimed_at IS NULL OR finished_at >= claimed_at),
+        CHECK ((cost_decimal IS NULL AND currency IS NULL) OR (cost_decimal IS NOT NULL AND currency IS NOT NULL)),
+        PRIMARY KEY (chat_id, turn_id)
+    );
+    """
+
+    private static func createChatTurnsV48(in db: Database, tableName: String = "chat_turns") throws {
+        // SQLite's ALTER TABLE RENAME records the final name with quotes. Use
+        // the same spelling on the fresh path so sqlite_master normalization is
+        // byte-identical after a v47 upgrade.
+        let finalTableName = tableName == "chat_turns" ? "\"chat_turns\"" : tableName
+        let sql = chatTurnsV48CreateSQL.replacingOccurrences(of: "chat_turns_v48", with: finalTableName)
+        try db.execute(sql: sql)
+        try createChatTurnsIndexes(in: db)
+    }
+
+    private static func createChatTurnsIndexes(in db: Database) throws {
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_command_id ON chat_turns(chat_id, command_id);")
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_ordinal ON chat_turns(chat_id, ordinal);")
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_claim_id ON chat_turns(claim_id) WHERE claim_id IS NOT NULL;")
+    }
+
+    private static func createChatTranscriptItemsV46(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_transcript_items (
+            chat_id               TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            cursor                INTEGER NOT NULL,
+            item_kind             TEXT NOT NULL,
+            item_json             TEXT NOT NULL,
+            projected_event_json  TEXT,
+            projected_text        TEXT NOT NULL DEFAULT '',
+            created_at            REAL NOT NULL,
+            PRIMARY KEY (chat_id, cursor)
+        ) WITHOUT ROWID;
+        """)
+    }
+
+    /// Final v48 provenance relations. Writer threading is intentionally
+    /// deferred to Phase 3; the schema and typed readers land in Phase 1.
+    private static func createMetadataProvenanceTablesV48(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS page_version_sources (
+            page_version_id TEXT NOT NULL REFERENCES page_versions(id) ON DELETE CASCADE,
+            source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
+            role TEXT NOT NULL CHECK (role IN ('primary', 'supporting', 'quoted')),
+            PRIMARY KEY (page_version_id, source_id, role)
+        ) WITHOUT ROWID;
+        """)
+        try db.execute(sql: """
+        CREATE INDEX IF NOT EXISTS page_version_sources_source
+            ON page_version_sources(source_id, page_version_id);
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS workspace_ref_sources (
+            workspace_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind = 'page-content'),
+            owner_id TEXT NOT NULL,
+            source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
+            role TEXT NOT NULL CHECK (role IN ('primary', 'supporting', 'quoted')),
+            PRIMARY KEY (workspace_id, kind, owner_id, source_id, role),
+            FOREIGN KEY (workspace_id, kind, owner_id)
+                REFERENCES workspace_refs(workspace_id, kind, owner_id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+        """)
+        try db.execute(sql: """
+        CREATE INDEX IF NOT EXISTS workspace_ref_sources_source
+            ON workspace_ref_sources(source_id, workspace_id, owner_id);
         """)
     }
 
@@ -2684,7 +3026,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             body    TEXT NOT NULL
         );
         """)
-        try createChatPhase2TablesV46(in: db)
+        try createChatTurnsV48(in: db)
+        try createChatTranscriptItemsV46(in: db)
 
         // v30: page versions (W0).
         try db.execute(sql: """
@@ -2748,6 +3091,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             value TEXT NOT NULL
         );
         """)
+        try createMetadataProvenanceTablesV48(in: db)
     }
 
     // MARK: - Internal helpers (mirrors of SQLiteWikiStore privates)
@@ -4650,6 +4994,93 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func pageVersionSources(versionID: PageVersionID) throws -> [PageVersionSource] {
+        try dbWriter.read { db in
+            guard try Self.tableExists("page_version_sources", in: db) else { return [] }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT pvs.page_version_id, pvs.source_id, pvs.role
+                FROM page_version_sources pvs
+                JOIN sources s ON s.id = pvs.source_id
+                WHERE pvs.page_version_id = ?
+                ORDER BY CASE pvs.role
+                    WHEN 'primary' THEN 0
+                    WHEN 'supporting' THEN 1
+                    WHEN 'quoted' THEN 2
+                    ELSE 3
+                END,
+                lower(COALESCE(NULLIF(s.display_name, ''), s.filename)),
+                pvs.source_id;
+                """,
+                arguments: [versionID.rawValue]
+            )
+            return try rows.map { row in
+                let rawRole: String = row["role"]
+                guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                    DebugLog.store("page_version_sources has unknown role: \(rawRole)")
+                    throw MetadataStoreError.unknownPageVersionSourceRole(rawRole)
+                }
+                return PageVersionSource(
+                    pageVersionID: PageVersionID(rawValue: row["page_version_id"]),
+                    sourceID: SourceID(rawValue: row["source_id"]),
+                    role: role
+                )
+            }
+        }
+    }
+
+    public func pageHeadSources(pageID: PageID) throws -> [PageVersionSource] {
+        try dbWriter.read { db in
+            guard try Self.tableExists("page_version_sources", in: db) else { return [] }
+            guard let versionID = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db) else { return [] }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT pvs.page_version_id, pvs.source_id, pvs.role
+                FROM page_version_sources pvs
+                JOIN sources s ON s.id = pvs.source_id
+                WHERE pvs.page_version_id = ?
+                ORDER BY CASE pvs.role
+                    WHEN 'primary' THEN 0
+                    WHEN 'supporting' THEN 1
+                    WHEN 'quoted' THEN 2
+                    ELSE 3
+                END,
+                lower(COALESCE(NULLIF(s.display_name, ''), s.filename)),
+                pvs.source_id;
+                """,
+                arguments: [versionID.rawValue]
+            )
+            return try rows.map { row in
+                let rawRole: String = row["role"]
+                guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                    DebugLog.store("page_version_sources has unknown role: \(rawRole)")
+                    throw MetadataStoreError.unknownPageVersionSourceRole(rawRole)
+                }
+                return PageVersionSource(
+                    pageVersionID: PageVersionID(rawValue: row["page_version_id"]),
+                    sourceID: SourceID(rawValue: row["source_id"]),
+                    role: role
+                )
+            }
+        }
+    }
+
+    public func sourceReferencingPageVersions(sourceID: SourceID) throws -> [PageVersionID] {
+        try dbWriter.read { db in
+            guard try Self.tableExists("page_version_sources", in: db) else { return [] }
+            return try String.fetchAll(
+                db,
+                sql: """
+                SELECT page_version_id FROM page_version_sources
+                WHERE source_id = ? ORDER BY page_version_id ASC;
+                """,
+                arguments: [sourceID.rawValue]
+            ).map(PageVersionID.init(rawValue:))
+        }
+    }
+
     public func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
@@ -6539,7 +6970,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns
                 WHERE chat_id = ? AND command_id = ?;
                 """,
@@ -6593,7 +7026,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns
                 WHERE chat_id = ?
                 ORDER BY ordinal ASC;
@@ -6632,7 +7067,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                 """,
                 arguments: [chatID.rawValue, turnID.rawValue]
@@ -6663,6 +7100,23 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         claimID: ChatTurnClaimID,
         claimedAt: Date
     ) throws -> PersistedChatTurn? {
+        try claimNextPersistedChatTurn(
+            chatID: chatID,
+            claimID: claimID,
+            claimedAt: claimedAt,
+            providerID: nil,
+            modelID: nil
+        )
+    }
+
+    @discardableResult
+    public func claimNextPersistedChatTurn(
+        chatID: ChatID,
+        claimID: ChatTurnClaimID,
+        claimedAt: Date,
+        providerID: ProviderID?,
+        modelID: ModelID?
+    ) throws -> PersistedChatTurn? {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
@@ -6682,12 +7136,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let turnID: String = row["turn_id"]
             try db.execute(sql: """
             UPDATE chat_turns
-            SET state = ?, claim_id = ?, claimed_at = ?
+            SET state = ?, claim_id = ?, claimed_at = ?, provider_id = ?, model_id = ?
             WHERE chat_id = ? AND turn_id = ? AND state = ?;
             """, arguments: [
                 ChatTurnPersistenceState.claimed.rawValue,
                 claimID.rawValue,
                 claimedAt.timeIntervalSince1970,
+                providerID?.rawValue,
+                modelID?.rawValue,
                 chatID.rawValue,
                 turnID,
                 ChatTurnPersistenceState.queued.rawValue,
@@ -6700,7 +7156,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                 """,
                 arguments: [chatID.rawValue, turnID]
@@ -6735,7 +7193,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     sql: """
                     SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                            submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                           provider_session_id, terminal_message
+                           provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                           input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                           cache_write_tokens, cost_decimal, currency
                     FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                     """,
                     arguments: [chatID.rawValue, turnID.rawValue]
@@ -6765,7 +7225,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                 """,
                 arguments: [chatID.rawValue, turnID.rawValue]
@@ -6785,38 +7247,76 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         state: ChatTurnPersistenceState,
         terminalMessage: String?
     ) throws -> PersistedChatTurn {
+        try finishPersistedChatTurn(
+            chatID: chatID,
+            turnID: turnID,
+            claimID: claimID,
+            state: state,
+            terminalMessage: terminalMessage,
+            finishedAt: Date(),
+            usage: nil
+        )
+    }
+
+    @discardableResult
+    public func finishPersistedChatTurn(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        state: ChatTurnPersistenceState,
+        terminalMessage: String?,
+        finishedAt: Date,
+        usage: ChatTurnUsageValues?
+    ) throws -> PersistedChatTurn {
         guard [.completed, .cancelled, .failed].contains(state) else {
             throw WikiStoreError.unexpected("invalid terminal persisted turn state")
         }
-        return try mutate(event: { _ in
-            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        let result: (turn: PersistedChatTurn, didMutate: Bool) = try mutate(event: { result in
+            result.didMutate ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil
         }) { db in
-            let existingState = try String.fetchOne(
-                db,
-                sql: "SELECT state FROM chat_turns WHERE chat_id = ? AND turn_id = ?;",
-                arguments: [chatID.rawValue, turnID.rawValue]
-            )
-            guard let existingState else { throw WikiStoreError.unexpected("persisted turn missing") }
-            if existingState == state.rawValue,
-               let row = try Row.fetchOne(
+            guard let existing = try Row.fetchOne(
                 db,
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                 """,
                 arguments: [chatID.rawValue, turnID.rawValue]
-               ) {
-                return try Self.readPersistedChatTurn(from: row)
+            ) else {
+                throw WikiStoreError.unexpected("persisted turn missing")
             }
+            let existingTurn = try Self.readPersistedChatTurn(from: existing)
+            if [.completed, .cancelled, .failed].contains(existingTurn.state) {
+                return (existingTurn, false)
+            }
+            guard existingTurn.claimID == claimID else {
+                throw MetadataStoreError.staleChatTurnClaim
+            }
+            guard [.claimed, .providerSubmitted].contains(existingTurn.state) else {
+                throw MetadataStoreError.nonActiveChatTurnState(existingTurn.state)
+            }
+            let persistedUsage = usage ?? existingTurn.usage
+            try Self.validateUsage(persistedUsage)
             try db.execute(sql: """
             UPDATE chat_turns
-            SET state = ?, terminal_message = ?
+            SET state = ?, terminal_message = ?, finished_at = ?,
+                input_tokens = ?, output_tokens = ?, thought_tokens = ?,
+                cache_read_tokens = ?, cache_write_tokens = ?, cost_decimal = ?, currency = ?
             WHERE chat_id = ? AND turn_id = ? AND claim_id = ? AND state IN (?, ?);
             """, arguments: [
                 state.rawValue,
                 terminalMessage,
+                finishedAt.timeIntervalSince1970,
+                persistedUsage.inputTokens,
+                persistedUsage.outputTokens,
+                persistedUsage.thoughtTokens,
+                persistedUsage.cacheReadTokens,
+                persistedUsage.cacheWriteTokens,
+                persistedUsage.cost.map(Self.encodeMetadataDecimal),
+                persistedUsage.currency,
                 chatID.rawValue,
                 turnID.rawValue,
                 claimID.rawValue,
@@ -6831,7 +7331,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 sql: """
                 SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
                        submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
-                       provider_session_id, terminal_message
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
                 FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
                 """,
                 arguments: [chatID.rawValue, turnID.rawValue]
@@ -6839,7 +7341,124 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             guard let row else {
                 throw WikiStoreError.unexpected("failed to reload finished persisted turn")
             }
-            return try Self.readPersistedChatTurn(from: row)
+            return (try Self.readPersistedChatTurn(from: row), true)
+        }
+        return result.turn
+    }
+
+    @discardableResult
+    public func updatePersistedChatTurnUsage(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        claimID: ChatTurnClaimID,
+        usage: ChatTurnUsageValues
+    ) throws -> PersistedChatTurn {
+        try Self.validateUsage(usage)
+        let result: (turn: PersistedChatTurn, didMutate: Bool) = try mutate(event: { result in
+            result.didMutate ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil
+        }) { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            ) else {
+                throw WikiStoreError.unexpected("persisted turn missing")
+            }
+            let existing = try Self.readPersistedChatTurn(from: row)
+            guard existing.claimID == claimID else { throw MetadataStoreError.staleChatTurnClaim }
+            guard [.claimed, .providerSubmitted].contains(existing.state) else {
+                throw MetadataStoreError.nonActiveChatTurnState(existing.state)
+            }
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET input_tokens = ?, output_tokens = ?, thought_tokens = ?,
+                cache_read_tokens = ?, cache_write_tokens = ?, cost_decimal = ?, currency = ?
+            WHERE chat_id = ? AND turn_id = ? AND claim_id = ? AND state IN (?, ?);
+            """, arguments: [
+                usage.inputTokens, usage.outputTokens, usage.thoughtTokens,
+                usage.cacheReadTokens, usage.cacheWriteTokens,
+                usage.cost.map(Self.encodeMetadataDecimal), usage.currency,
+                chatID.rawValue, turnID.rawValue, claimID.rawValue,
+                ChatTurnPersistenceState.claimed.rawValue,
+                ChatTurnPersistenceState.providerSubmitted.rawValue,
+            ])
+            guard db.changesCount == 1 else { throw MetadataStoreError.staleChatTurnClaim }
+            guard let updated = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            ) else {
+                throw WikiStoreError.unexpected("failed to reload usage-updated persisted turn")
+            }
+            return (try Self.readPersistedChatTurn(from: updated), true)
+        }
+        return result.turn
+    }
+
+    public func chatTurnUsage(chatID: ChatID, turnID: ChatTurnID) throws -> ChatTurnUsage? {
+        try dbWriter.read { db in
+            guard try Self.hasChatTurnUsageColumns(in: db) else { return nil }
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT turn_id, provider_id, model_id, claimed_at, finished_at, state,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            ) else { return nil }
+            return try Self.readChatTurnUsage(from: row)
+        }
+    }
+
+    public func latestChatTurnUsage(chatID: ChatID) throws -> ChatTurnUsage? {
+        try dbWriter.read { db in
+            guard try Self.hasChatTurnUsageColumns(in: db) else { return nil }
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT turn_id, provider_id, model_id, claimed_at, finished_at, state,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? ORDER BY ordinal DESC LIMIT 1;
+                """,
+                arguments: [chatID.rawValue]
+            ) else { return nil }
+            return try Self.readChatTurnUsage(from: row)
+        }
+    }
+
+    public func chatUsageSummary(chatID: ChatID) throws -> ChatUsageSummary {
+        try dbWriter.read { db in
+            guard try Self.hasChatTurnUsageColumns(in: db) else { return .empty }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT turn_id, provider_id, model_id, claimed_at, finished_at, state,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? ORDER BY ordinal ASC;
+                """,
+                arguments: [chatID.rawValue]
+            )
+            guard !rows.isEmpty else { return .empty }
+            let usages = try rows.map(Self.readChatTurnUsage)
+            return try Self.summarizeChatUsage(usages)
         }
     }
 
@@ -7592,6 +8211,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let providerSubmittedAt: Double? = row["provider_submitted_at"]
         let providerSessionID: String? = row["provider_session_id"]
         let terminalMessage: String? = row["terminal_message"]
+        let providerID: String? = row["provider_id"]
+        let modelID: String? = row["model_id"]
+        let finishedAt: Double? = row["finished_at"]
+        let inputTokens: Int? = row["input_tokens"]
+        let outputTokens: Int? = row["output_tokens"]
+        let thoughtTokens: Int? = row["thought_tokens"]
+        let cacheReadTokens: Int? = row["cache_read_tokens"]
+        let cacheWriteTokens: Int? = row["cache_write_tokens"]
+        let costRaw: String? = row["cost_decimal"]
+        let currency: String? = row["currency"]
+        let cost = try costRaw.map(Self.decodeMetadataDecimal)
         return PersistedChatTurn(
             chatID: chatID,
             ordinal: ordinal,
@@ -7608,8 +8238,133 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             claimedAt: claimedAt.map(Date.init(timeIntervalSince1970:)),
             providerSubmittedAt: providerSubmittedAt.map(Date.init(timeIntervalSince1970:)),
             providerSessionID: providerSessionID.map(AcpSessionID.init(rawValue:)),
-            terminalMessage: terminalMessage
+            terminalMessage: terminalMessage,
+            providerID: providerID.map(ProviderID.init(rawValue:)),
+            modelID: modelID.map(ModelID.init(rawValue:)),
+            finishedAt: finishedAt.map(Date.init(timeIntervalSince1970:)),
+            usage: ChatTurnUsageValues(
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                thoughtTokens: thoughtTokens,
+                cacheReadTokens: cacheReadTokens,
+                cacheWriteTokens: cacheWriteTokens,
+                cost: cost,
+                currency: currency
+            )
         )
+    }
+
+    private static func decodeMetadataDecimal(_ rawValue: String) throws -> Decimal {
+        guard let decimal = Decimal(string: rawValue, locale: Locale(identifier: "en_US_POSIX")) else {
+            throw MetadataStoreError.malformedDecimal(rawValue)
+        }
+        return decimal
+    }
+
+    private static func encodeMetadataDecimal(_ value: Decimal) -> String {
+        NSDecimalNumber(decimal: value).stringValue
+    }
+
+    private static func validateUsage(_ usage: ChatTurnUsageValues) throws {
+        let values: [(String, Int?)] = [
+            ("input_tokens", usage.inputTokens),
+            ("output_tokens", usage.outputTokens),
+            ("thought_tokens", usage.thoughtTokens),
+            ("cache_read_tokens", usage.cacheReadTokens),
+            ("cache_write_tokens", usage.cacheWriteTokens),
+        ]
+        for (field, value) in values where (value ?? 0) < 0 {
+            throw MetadataStoreError.invalidUsageValue(field: field)
+        }
+        if usage.cost == nil, usage.currency != nil {
+            throw MetadataStoreError.invalidUsageValue(field: "currency")
+        }
+        if usage.cost != nil, usage.currency == nil {
+            throw MetadataStoreError.invalidUsageValue(field: "cost_decimal")
+        }
+    }
+
+    private static func hasChatTurnUsageColumns(in db: Database) throws -> Bool {
+        let required: Set<String> = [
+            "provider_id", "model_id", "finished_at", "input_tokens", "output_tokens",
+            "thought_tokens", "cache_read_tokens", "cache_write_tokens", "cost_decimal", "currency",
+        ]
+        return required.isSubset(of: try tableColumnInfo("chat_turns", in: db))
+    }
+
+    private static func readChatTurnUsage(from row: Row) throws -> ChatTurnUsage {
+        let stateRaw: String = row["state"]
+        guard let state = ChatTurnPersistenceState(rawValue: stateRaw) else {
+            throw WikiStoreError.unexpected("unknown persisted chat turn state: \(stateRaw)")
+        }
+        let providerID: String? = row["provider_id"]
+        let modelID: String? = row["model_id"]
+        let startedAt: Double? = row["claimed_at"]
+        let finishedAt: Double? = row["finished_at"]
+        let costRaw: String? = row["cost_decimal"]
+        return ChatTurnUsage(
+            turnID: ChatTurnID(rawValue: row["turn_id"]),
+            providerID: providerID.map(ProviderID.init(rawValue:)),
+            modelID: modelID.map(ModelID.init(rawValue:)),
+            startedAt: startedAt.map(Date.init(timeIntervalSince1970:)),
+            finishedAt: finishedAt.map(Date.init(timeIntervalSince1970:)),
+            state: state,
+            inputTokens: row["input_tokens"],
+            outputTokens: row["output_tokens"],
+            thoughtTokens: row["thought_tokens"],
+            cacheReadTokens: row["cache_read_tokens"],
+            cacheWriteTokens: row["cache_write_tokens"],
+            cost: try costRaw.map(decodeMetadataDecimal),
+            currency: row["currency"]
+        )
+    }
+
+    private static func summarizeChatUsage(_ usages: [ChatTurnUsage]) throws -> ChatUsageSummary {
+        var inputTokens = 0
+        var outputTokens = 0
+        var thoughtTokens = 0
+        var cacheReadTokens = 0
+        var cacheWriteTokens = 0
+        var totalCost = Decimal.zero
+        var costCurrency: String?
+        var costAvailable = true
+
+        for usage in usages {
+            inputTokens = try checkedMetadataAddition(inputTokens, usage.inputTokens)
+            outputTokens = try checkedMetadataAddition(outputTokens, usage.outputTokens)
+            thoughtTokens = try checkedMetadataAddition(thoughtTokens, usage.thoughtTokens)
+            cacheReadTokens = try checkedMetadataAddition(cacheReadTokens, usage.cacheReadTokens)
+            cacheWriteTokens = try checkedMetadataAddition(cacheWriteTokens, usage.cacheWriteTokens)
+
+            guard let cost = usage.cost else { continue }
+            guard let currency = usage.currency else {
+                costAvailable = false
+                continue
+            }
+            if let costCurrency, costCurrency != currency {
+                costAvailable = false
+                continue
+            }
+            costCurrency = currency
+            totalCost += cost
+        }
+        return ChatUsageSummary(
+            latestTurn: usages.last,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            thoughtTokens: thoughtTokens,
+            cacheReadTokens: cacheReadTokens,
+            cacheWriteTokens: cacheWriteTokens,
+            cost: costAvailable && costCurrency != nil ? totalCost : nil,
+            currency: costAvailable && costCurrency != nil ? costCurrency : nil
+        )
+    }
+
+    private static func checkedMetadataAddition(_ total: Int, _ value: Int?) throws -> Int {
+        guard let value else { return total }
+        let (result, overflow) = total.addingReportingOverflow(value)
+        guard !overflow else { throw MetadataStoreError.counterOverflow }
+        return result
     }
 
     private static func readPersistedChatTranscriptItem(from row: Row) throws -> PersistedChatTranscriptItem {
@@ -9215,6 +9970,73 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let version: String? = row["version"]
             return SourceMarkdownProducer(name: name, version: version)
         }
+    }
+
+    public func extractionProvenance(markdownVersionID: SourceMarkdownVersionID) throws -> ExtractionProvenance? {
+        try dbWriter.read { db in
+            try Self.readExtractionProvenance(markdownVersionID: markdownVersionID, in: db)
+        }
+    }
+
+    public func activeExtractionProvenance(sourceID: SourceID) throws -> ExtractionProvenance? {
+        try dbWriter.read { db in
+            guard let head = try self.processedMarkdownHead(sourceID: sourceID, on: db) else { return nil }
+            return try Self.readExtractionProvenance(markdownVersionID: head.id, in: db)
+        }
+    }
+
+    private static func readExtractionProvenance(
+        markdownVersionID: SourceMarkdownVersionID, in db: Database
+    ) throws -> ExtractionProvenance? {
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+            SELECT smv.id, smv.file_id, smv.origin, smv.technique, smv.created_at,
+                   smv.source_version_id, a.external_ref AS provider_id,
+                   a.version AS agent_version
+            FROM source_markdown_versions smv
+            LEFT JOIN activities act ON act.id = smv.activity_id
+            LEFT JOIN agents a ON a.id = act.agent_id
+            WHERE smv.id = ?;
+            """,
+            arguments: [markdownVersionID.rawValue]
+        ) else { return nil }
+        let originRaw: String = row["origin"]
+        guard let origin = SourceMarkdownOrigin(rawValue: originRaw) else {
+            throw WikiStoreError.unexpected("unknown source markdown origin: \(originRaw)")
+        }
+        let technique: String? = row["technique"]
+        let producer: ExtractionProducer
+        if let raw = technique, let backend = ExtractionBackend(rawValue: raw) {
+            producer = .backend(backend)
+        } else if let raw = technique, let tool = ExtractionTool(rawValue: raw) {
+            producer = .tool(tool)
+        } else {
+            producer = .legacy(rawTechnique: technique)
+        }
+        let providerRaw: String? = row["provider_id"]
+        let agentVersion: String? = row["agent_version"]
+        let isBackend: Bool
+        if case .backend = producer { isBackend = true } else { isBackend = false }
+        let isTool: Bool
+        if case .tool = producer { isTool = true } else { isTool = false }
+        let createdAt: Double = row["created_at"]
+        let sourceVersion: String? = row["source_version_id"]
+        return ExtractionProvenance(
+            markdownVersionID: SourceMarkdownVersionID(rawValue: row["id"]),
+            sourceID: SourceID(rawValue: row["file_id"]),
+            origin: origin,
+            producer: producer,
+            // Agent provider/model metadata describes a backend invocation.
+            // A local tool or an unknown legacy technique may still have an
+            // historical activity join, but presenting those values as a
+            // provider/model would make unsupported provenance claims.
+            providerID: isBackend ? providerRaw.map(ProviderID.init(rawValue:)) : nil,
+            modelID: isBackend ? agentVersion.map(ModelID.init(rawValue:)) : nil,
+            toolVersion: isTool ? agentVersion : nil,
+            createdAt: Date(timeIntervalSince1970: createdAt),
+            sourceVersionID: sourceVersion.map(SourceVersionID.init(rawValue:))
+        )
     }
 
     // MARK: - Test hooks (#if DEBUG)
