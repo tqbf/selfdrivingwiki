@@ -10,7 +10,10 @@ import WikiFSEngine
 /// claim, so no runtime or provider can author durable lifecycle state.
 struct ChatTurnUsageAccumulator: Sendable {
     private let baseline: SessionUsage
-    private var latestSessionSnapshot: SessionUsage?
+    /// Once provider snapshots disagree about currency, a single turn has no
+    /// meaningful cost unit. Keep that fact latched so a later snapshot cannot
+    /// make an ambiguous cost appear valid again.
+    private var isCostUnavailableAfterCurrencyConflict = false
     private(set) var values = ChatTurnUsageValues()
 
     init(baseline: SessionUsage) {
@@ -22,8 +25,7 @@ struct ChatTurnUsageAccumulator: Sendable {
     /// prior value; a changed currency makes the cost unavailable.
     @discardableResult
     mutating func record(_ snapshot: SessionUsage) -> ChatTurnUsageValues {
-        let priorSession = latestSessionSnapshot
-        latestSessionSnapshot = monotonicSessionSnapshot(previous: priorSession, next: snapshot)
+        let cost = mergedCost(snapshot: snapshot)
 
         values = ChatTurnUsageValues(
             inputTokens: greatestValid(previous: values.inputTokens, baseline: baseline.inputTokens, snapshot: snapshot.inputTokens),
@@ -31,8 +33,8 @@ struct ChatTurnUsageAccumulator: Sendable {
             thoughtTokens: greatestValid(previous: values.thoughtTokens, baseline: baseline.thoughtTokens, snapshot: snapshot.thoughtTokens),
             cacheReadTokens: greatestValid(previous: values.cacheReadTokens, baseline: baseline.cachedReadTokens, snapshot: snapshot.cachedReadTokens),
             cacheWriteTokens: greatestValid(previous: values.cacheWriteTokens, baseline: baseline.cachedWriteTokens, snapshot: snapshot.cachedWriteTokens),
-            cost: mergedCost(snapshot: snapshot),
-            currency: mergedCurrency(snapshot: snapshot)
+            cost: cost.cost,
+            currency: cost.currency
         )
         return values
     }
@@ -49,54 +51,22 @@ struct ChatTurnUsageAccumulator: Sendable {
         return max(previous ?? 0, candidate)
     }
 
-    private func mergedCost(snapshot: SessionUsage) -> Decimal? {
-        guard let cost = snapshot.cost, cost >= 0 else { return values.cost }
-        guard let currency = snapshot.currency else { return values.cost }
-        if let persistedCurrency = values.currency, persistedCurrency != currency {
-            DebugLog.agent("DaemonChatController rejected usage cost after currency changed from \(persistedCurrency) to \(currency).")
-            return nil
+    private mutating func mergedCost(snapshot: SessionUsage) -> (cost: Decimal?, currency: String?) {
+        guard isCostUnavailableAfterCurrencyConflict == false else { return (nil, nil) }
+        guard let currency = snapshot.currency else { return (values.cost, values.currency) }
+
+        let expectedCurrency = values.currency ?? baseline.currency
+        if let expectedCurrency, expectedCurrency != currency {
+            isCostUnavailableAfterCurrencyConflict = true
+            DebugLog.agent("DaemonChatController rejected usage cost after currency changed from \(expectedCurrency) to \(currency).")
+            return (nil, nil)
         }
-        if let baselineCurrency = baseline.currency, baselineCurrency != currency {
-            DebugLog.agent("DaemonChatController rejected usage cost after baseline currency changed from \(baselineCurrency) to \(currency).")
-            return nil
+
+        guard let cost = snapshot.cost, cost >= 0 else {
+            return (values.cost, values.cost == nil ? nil : expectedCurrency ?? currency)
         }
         let delta = max(0, cost - (baseline.cost ?? 0))
-        return Decimal(string: String(delta))
-    }
-
-    private func mergedCurrency(snapshot: SessionUsage) -> String? {
-        guard let currency = snapshot.currency else { return values.currency }
-        if let persistedCurrency = values.currency, persistedCurrency != currency { return nil }
-        if let baselineCurrency = baseline.currency, baselineCurrency != currency { return nil }
-        return currency
-    }
-
-    private func monotonicSessionSnapshot(previous: SessionUsage?, next: SessionUsage) -> SessionUsage {
-        guard let previous else { return next }
-        return SessionUsage(
-            inputTokens: max(previous.inputTokens, next.inputTokens),
-            outputTokens: max(previous.outputTokens, next.outputTokens),
-            totalTokens: max(previous.totalTokens, next.totalTokens),
-            cachedReadTokens: maximum(previous.cachedReadTokens, next.cachedReadTokens),
-            cachedWriteTokens: maximum(previous.cachedWriteTokens, next.cachedWriteTokens),
-            thoughtTokens: maximum(previous.thoughtTokens, next.thoughtTokens),
-            cost: next.cost,
-            currency: next.currency,
-            contextUsed: next.contextUsed,
-            contextSize: next.contextSize,
-            providerLabel: next.providerLabel ?? previous.providerLabel,
-            modelId: next.modelId ?? previous.modelId,
-            modelName: next.modelName ?? previous.modelName,
-            thinkingLevel: next.thinkingLevel ?? previous.thinkingLevel
-        )
-    }
-
-    private func maximum(_ lhs: Int?, _ rhs: Int?) -> Int? {
-        switch (lhs, rhs) {
-        case let (.some(lhs), .some(rhs)): max(lhs, rhs)
-        case let (.some(value), .none), let (.none, .some(value)): value
-        case (.none, .none): nil
-        }
+        return (Decimal(string: String(delta)), currency)
     }
 }
 #endif

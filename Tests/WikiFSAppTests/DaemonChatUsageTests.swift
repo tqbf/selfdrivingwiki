@@ -78,6 +78,19 @@ struct DaemonChatUsageTests {
         #expect(persisted.currency == nil)
     }
 
+    @Test func currencyConflictStaysUnavailableAfterLaterMatchingCurrency() {
+        var accumulator = ChatTurnUsageAccumulator(baseline: usage(input: 0, output: 0))
+        _ = accumulator.record(usage(input: 3, output: 2, cost: 1.5, currency: "USD"))
+        _ = accumulator.record(usage(input: 4, output: 3, cost: 2.0, currency: "EUR"))
+
+        let persisted = accumulator.record(usage(input: 5, output: 4, cost: 2.5, currency: "USD"))
+
+        #expect(persisted.inputTokens == 5)
+        #expect(persisted.outputTokens == 4)
+        #expect(persisted.cost == nil)
+        #expect(persisted.currency == nil)
+    }
+
     @Test func cacheReadAndWritePersist() {
         var accumulator = ChatTurnUsageAccumulator(baseline: usage(input: 0, output: 0))
 

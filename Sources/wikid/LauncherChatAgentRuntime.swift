@@ -229,7 +229,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 onLiveUsage: { [weak self] usage in
                     guard let self else { return }
                     Task {
-                        await self.emit(.usage(usage))
+                        await self.emitLiveUsage(usage)
                     }
                 },
                 onPendingPermission: { [weak self] permission in
@@ -474,8 +474,15 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 try JSONDecoder().decode(SessionUsage.self, from: data)
             }
         }) {
-            await emit(.usage(usage))
+            if let turnID = state.activeTurnID {
+                await emit(.usage(turnID: turnID, usage: usage))
+            }
         }
+    }
+
+    private func emitLiveUsage(_ usage: SessionUsage) async {
+        guard let turnID = runtimeState?.activeTurnID else { return }
+        await emit(.usage(turnID: turnID, usage: usage))
     }
 
     private func updateLatestProviderSessionID(_ sessionID: AcpSessionID?) {

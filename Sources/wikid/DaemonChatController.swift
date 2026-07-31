@@ -450,9 +450,9 @@ actor DaemonChatController {
             activePermission = nil
             record(.permissionResolved(resolution.requestID))
 
-        case .usage(let usage):
+        case .usage(let turnID, let usage):
             recordUsageIfCurrent(
-                turnID: currentClaimTurnID,
+                turnID: turnID,
                 generation: envelope.generation,
                 usage: usage
             )
@@ -555,16 +555,17 @@ actor DaemonChatController {
             return false
         }
 
-        if let finalUsage = await finalRuntimeUsage() {
-            guard eventGeneration == generation,
-                  currentClaimTurnID == turnID,
-                  currentClaimID == claimID,
-                  snapshot.activeTurn?.turnID == turnID,
-                  snapshot.activeTurn?.state.isTerminal == false
-            else {
-                DebugLog.agent("DaemonChatController rejected terminal signal after final usage snapshot changed ownership.")
-                return false
-            }
+        let finalUsage = await finalRuntimeUsage()
+        guard eventGeneration == generation,
+              currentClaimTurnID == turnID,
+              currentClaimID == claimID,
+              snapshot.activeTurn?.turnID == turnID,
+              snapshot.activeTurn?.state.isTerminal == false
+        else {
+            DebugLog.agent("DaemonChatController rejected terminal signal after final usage snapshot changed ownership.")
+            return false
+        }
+        if let finalUsage {
             if var accumulator = turnUsageAccumulator {
                 _ = accumulator.record(finalUsage)
                 turnUsageAccumulator = accumulator
