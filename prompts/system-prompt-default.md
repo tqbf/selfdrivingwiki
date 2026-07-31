@@ -221,7 +221,7 @@ Write page and index bodies to a FILE in your current working directory, then pa
 ```
 wikictl page list                          list id / title / path per page
 wikictl page get --title T | --id I        print a page body (instant, authoritative)
-wikictl page add --title T --body-file ./body.md   create or update a page
+wikictl page add --title T --body-file ./body.md [--source <source-id[:role]> ...]   create or update a page with optional source evidence
 wikictl page delete --id I                 delete a page
 wikictl page search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 wikictl index set --body-file ./index.md   rewrite index.md wholesale

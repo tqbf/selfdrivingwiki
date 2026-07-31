@@ -1348,6 +1348,7 @@ public final class AgentLauncher {
         if case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
             await runACPIngestPlannerExecutors(
                 scratch: scratch,
+                request: request,
                 operation: operation,
                 wikiRoot: wikiRoot,
                 wikiID: wikiID,
@@ -1383,6 +1384,12 @@ public final class AgentLauncher {
         // The launcher resolves it from the operation kind (one-shot runs) or the
         // chatID (interactive runs). An explicit `--author` on wikictl still wins.
         providerHints[HintKey.env("WIKI_AUTHOR")] = Self.authorForRun(kind: operation.kind, chatID: nil)
+        // Page provenance is built from the ordered queue payload, not merely
+        // from an executor remembering to spell `--source`. The CLI decodes
+        // this external-format boundary into typed PageVersionSourceInput values.
+        providerHints = Self.ingestProvenanceProviderHints(
+            for: request,
+            addingTo: providerHints)
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,
@@ -1537,6 +1544,7 @@ public final class AgentLauncher {
     /// are unchanged.
     private func runACPIngestPlannerExecutors(
         scratch: URL,
+        request: OperationRequest,
         operation: WikiOperation,
         wikiRoot: String,
         wikiID: WikiID,
@@ -1671,7 +1679,7 @@ public final class AgentLauncher {
             if let m, !m.isEmpty {
                 h[HintKey.acpSelectedModelId.rawValue] = m
             }
-            return h
+            return Self.ingestProvenanceProviderHints(for: request, addingTo: h)
         }
         // `self.backend` was assigned by `run()` at :954 before delegating
         // here — there is always an instance. Read it into a local so the
@@ -1714,6 +1722,7 @@ public final class AgentLauncher {
                             retryAdvisory: self.retryCeilingKillContext?.retryAdvisory)
             },
             scratch: scratch,
+            ingestRequest: request,
             makeCLIProfile: makeCLIProfile,
             operation: operation,
             wikiRoot: wikiRoot,
@@ -1839,6 +1848,7 @@ public final class AgentLauncher {
                             retryAdvisory: self.retryCeilingKillContext?.retryAdvisory)
                     },
                     scratch: scratch,
+                    ingestRequest: request,
                     makeCLIProfile: makeCLIProfile,
                     operation: operation,
                     wikiRoot: wikiRoot,
@@ -1901,6 +1911,7 @@ public final class AgentLauncher {
                     sourceIDs: sourceIDs)
             },
             scratch: scratch,
+            ingestRequest: request,
             makeCLIProfile: makeCLIProfile,
             operation: operation,
             wikiRoot: wikiRoot,
@@ -2198,6 +2209,7 @@ public final class AgentLauncher {
         forkFrom: SessionHandle?,
         buildPrompt: (AgentProvider) -> String,
         scratch: URL,
+        ingestRequest: OperationRequest,
         makeCLIProfile: (WikiOperation) -> CLIProfile,
         operation: WikiOperation,
         wikiRoot: String,
@@ -2224,6 +2236,7 @@ public final class AgentLauncher {
             if let stageModelId, !stageModelId.isEmpty {
                 hints[HintKey.acpSelectedModelId.rawValue] = stageModelId
             }
+            hints = Self.ingestProvenanceProviderHints(for: ingestRequest, addingTo: hints)
 
             // Decide which backend to use: reuse self.backend for the FIRST
             // attempt (the planner's provider — warm subprocess), build a
@@ -2861,6 +2874,31 @@ public final class AgentLauncher {
         case .lint, .lintPage: return "lint"
         case .query:           return "chat"
         }
+    }
+
+    /// Serializes the ordered ingest queue payload for the `wikictl` process.
+    /// This is the sole raw-ID environment boundary; the CLI immediately
+    /// converts it into typed primary/supporting provenance inputs.
+    nonisolated static func ingestProvenanceEnvironment(
+        for request: OperationRequest
+    ) -> [String: String] {
+        guard case .ingest(let sources, _) = request else { return [:] }
+        return ["WIKI_INGEST_SOURCE_IDS": sources.map(\.sourceID.rawValue).joined(separator: ",")]
+    }
+
+    /// Converts the queue-derived provenance environment into the `env.`-prefixed
+    /// provider-hint convention that `ACPBackend.resolveSpawnConfig` exports to
+    /// the child process. Used by the one-shot profile and every large-ingest
+    /// phase, including profiles rebuilt for quota fallback providers.
+    nonisolated static func ingestProvenanceProviderHints(
+        for request: OperationRequest,
+        addingTo providerHints: [String: String]
+    ) -> [String: String] {
+        var providerHints = providerHints
+        for (key, value) in ingestProvenanceEnvironment(for: request) {
+            providerHints[HintKey.env(key)] = value
+        }
+        return providerHints
     }
 
     /// Extract the `(sourceFiles, sourceIDs)` pair from a staged `WikiOperation`

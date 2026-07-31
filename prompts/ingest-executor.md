@@ -31,7 +31,7 @@ For EACH assigned page:
    - Cross-link related pages with [[Page Title]] wiki-links. Use the page titles listed above.
    - Cite sources by their `sources/…` path.
 
-3. Create or update the page: `wikictl page add --title 'PAGE TITLE' --body-file ./body.md --expect-head '<head_version_id>'` (get `head_version_id` per the CAS discipline below)
+3. Create or update the page: `wikictl page add --title 'PAGE TITLE' --body-file ./body.md --expect-head '<head_version_id>' --source '<assigned-source-id>:primary'` (get `head_version_id` per the CAS discipline below). Add each consulted source with `--source '<id>:supporting'`.
 
 4. Verify: `wikictl page get --title 'PAGE TITLE'`
 

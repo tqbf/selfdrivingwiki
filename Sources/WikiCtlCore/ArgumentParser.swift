@@ -94,7 +94,7 @@ public enum ArgumentParser {
       page get  (--title X | --id Y) [--json] [--workspace W]
                                               print a page body; --json adds head_version_id;
                                               --workspace W reads the staged version
-      page add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>]
+      page add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>] [--source <source-id[:role]> ...]
                                               create-or-update a page;
                                               --expect-head enables CAS (exit 3 on conflict);
                                               --workspace W writes into workspace W;
@@ -254,7 +254,8 @@ public enum ArgumentParser {
             let expectHead = options.value("--expect-head").map(PageVersionID.init(rawValue:))
             let workspace = options.value("--workspace")
             let author = options.value("--author")
-            return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, workspace: workspace, author: author))
+            let provenance = try decodePageVersionSources(options.values("--source"))
+            return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, workspace: workspace, author: author, provenance: provenance))
 
         case "delete":
             guard let id = options.value("--id") else {
@@ -645,7 +646,7 @@ public enum ArgumentParser {
     /// A tiny `--key value` / `--flag` option bag. Tolerates options in any order;
     /// rejects an unbalanced trailing `--key` with no value.
     private struct Options {
-        private var values: [String: String] = [:]
+        private var valuesByKey: [String: [String]] = [:]
         private var flags: Set<String> = []
 
         init(_ tokens: [String], booleanFlags: Set<String> = ["--json"]) throws {
@@ -665,17 +666,18 @@ public enum ArgumentParser {
                 guard index + 1 < tokens.count else {
                     throw Failure.usage("\(token) requires a value")
                 }
-                values[token] = tokens[index + 1]
+                valuesByKey[token, default: []].append(tokens[index + 1])
                 index += 2
             }
         }
 
-        func value(_ key: String) -> String? { values[key] }
+        func value(_ key: String) -> String? { valuesByKey[key]?.last }
+        func values(_ key: String) -> [String] { valuesByKey[key] ?? [] }
         func flag(_ key: String) -> Bool { flags.contains(key) }
 
         /// A `--title X` or `--id Y` page selector (exactly one required).
         func requireSelector() throws -> PageCommand.Selector {
-            switch (values["--id"], values["--title"]) {
+            switch (value("--id"), value("--title")) {
             case (let id?, nil):
                 return .id(PageID(rawValue: id))
             case (nil, let title?):
@@ -689,7 +691,7 @@ public enum ArgumentParser {
 
         /// A `--id Y` or `--title T` chat selector (exactly one required).
         func requireChatSelector() throws -> ChatCommand.Selector {
-            switch (values["--id"], values["--title"]) {
+            switch (value("--id"), value("--title")) {
             case (let id?, nil):
                 return .id(ChatID(rawValue: id))
             case (nil, let title?):
@@ -703,7 +705,7 @@ public enum ArgumentParser {
 
         /// A `--id Y` or `--name N` source selector (exactly one required).
         func requireSourceSelector() throws -> SourceCommand.Selector {
-            switch (values["--id"], values["--name"]) {
+            switch (value("--id"), value("--name")) {
             case (let id?, nil):
                 return .id(SourceID(rawValue: id))
             case (nil, let name?):
@@ -771,21 +773,37 @@ public enum ArgumentParser {
         case .page(.get(let selector, let json, let workspace))
             where workspace == nil && workspaceID?.isEmpty == false:
             return .page(.get(selector, json: json, workspace: workspaceID))
-        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor, let provenance))
             where workspace == nil && workspaceID?.isEmpty == false:
             return .page(.add(id: id, title: title, body: bodySource,
                              expectHead: expectHead, workspace: workspaceID,
-                             author: existingAuthor ?? author))
-        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor))
+                             author: existingAuthor ?? author, provenance: provenance))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor, let provenance))
             where existingAuthor == nil && author?.isEmpty == false:
             return .page(.add(id: id, title: title, body: bodySource,
                              expectHead: expectHead, workspace: workspace,
-                             author: author))
+                             author: author, provenance: provenance))
         case .indexSet(let bodyFile, let workspace)
             where workspace == nil && workspaceID?.isEmpty == false:
             return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
         default:
             return command
+        }
+    }
+
+    /// Decodes the repeatable external CLI representation at its boundary.
+    /// `sourceID` defaults to primary. Empty and unknown roles are rejected.
+    private static func decodePageVersionSources(
+        _ rawValues: [String]
+    ) throws -> [PageVersionSourceInput] {
+        try rawValues.map { rawValue in
+            let parts = rawValue.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            let sourceID = SourceID(rawValue: String(parts[0]))
+            let rawRole = parts.count == 2 ? String(parts[1]) : PageVersionSourceRole.primary.rawValue
+            guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                throw PageVersionProvenanceWriteError.invalidRole(rawValue: rawRole)
+            }
+            return PageVersionSourceInput(sourceID: sourceID, role: role)
         }
     }
 }

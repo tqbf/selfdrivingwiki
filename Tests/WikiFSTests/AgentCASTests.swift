@@ -122,7 +122,7 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-", "--expect-head", "01ABC123"],
             env: { _ in nil })
-        guard case .page(.add(_, let title, _, let expectHead, _, _)) = invocation.command else {
+        guard case .page(.add(_, let title, _, let expectHead, _, _, _)) = invocation.command else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -157,10 +157,35 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-"],
             env: { _ in nil })
-        guard case .page(.add(_, _, _, let expectHead, _, _)) = invocation.command else {
+        guard case .page(.add(_, _, _, let expectHead, _, _, _)) = invocation.command else {
             Issue.record("expected .page(.add)")
             return
         }
         #expect(expectHead == nil)
+    }
+
+    @Test func wikictlAddDecodesSourceRoles() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "test", "page", "add", "--title", "Test", "--body-file", "-",
+             "--source", "source-a", "--source", "source-b:quoted"],
+            env: { _ in nil })
+
+        guard case .page(.add(_, _, _, _, _, _, let provenance)) = invocation.command else {
+            Issue.record("expected .page(.add)")
+            return
+        }
+        #expect(provenance == [
+            .init(sourceID: SourceID(rawValue: "source-a"), role: .primary),
+            .init(sourceID: SourceID(rawValue: "source-b"), role: .quoted),
+        ])
+    }
+
+    @Test func wikictlRejectsEmptySourceRole() {
+        #expect(throws: PageVersionProvenanceWriteError.invalidRole(rawValue: "")) {
+            _ = try ArgumentParser.parse(
+                ["--wiki", "test", "page", "add", "--title", "Test", "--body-file", "-",
+                 "--source", "source-a:"],
+                env: { _ in nil })
+        }
     }
 }

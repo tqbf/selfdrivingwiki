@@ -467,6 +467,9 @@ struct ACPIngestCollapsedRoutingTests {
         }
         launcher.resolveProvidersContainerDirectory = { tempDir }
         launcher.containerDirectory = tempDir
+        launcher.makeQuotaFallbackCoordinator = {
+            QuotaFallbackCoordinator(quotaStateURL: tempDir.appendingPathComponent("quota-state.json"))
+        }
         return launcher
     }
 
@@ -474,14 +477,20 @@ struct ACPIngestCollapsedRoutingTests {
     /// `plan.isLargeSource == true` and `run()` delegates to the multi-phase
     /// path at `AgentLauncher.swift:1022`.
     private func largeSource() -> OperationRequest.StagedSource {
+        largeSource(
+            name: "Large Source",
+            sourceID: SourceID(rawValue: "01FAKE01KQ8HDDR3ZXK72XHG6R"))
+    }
+
+    private func largeSource(
+        name: String,
+        sourceID: SourceID
+    ) -> OperationRequest.StagedSource {
         let pad = String(repeating: "# page\n", count: 600)  // ~4800 bytes
         return OperationRequest.StagedSource(
             bytes: Data(pad.utf8),
-            ext: "md",
-            displayPath: "sources/by-id/large.md",
-            name: "Large Source",
-            sourceID: SourceID(rawValue: "01FAKE01KQ8HDDR3ZXK72XHG6R")
-        )
+            ext: "md", displayPath: "sources/by-id/\(sourceID.rawValue).md",
+            name: name, sourceID: sourceID)
     }
 
     @Test(
@@ -548,6 +557,62 @@ struct ACPIngestCollapsedRoutingTests {
 
         // Run completed (finish() was called).
         #expect(launcher.isRunning == false)
+    }
+
+    /// A two-source large ingest reaches the actual planner → serial executor
+    /// → finalizer orchestration. The fake backend records the profiles handed
+    /// to both executor sessions, then the production ACP resolver proves each
+    /// profile exports the queue order as the child `wikictl` environment.
+    @Test func largeSourceExecutorProfilesResolveQueueSourceEnvironment() async throws {
+        let first = largeSource(name: "First", sourceID: SourceID(rawValue: "a"))
+        let second = largeSource(name: "Second", sourceID: SourceID(rawValue: "b"))
+        let planData = try JSONEncoder().encode(ACPIngestPlan(
+            pages: [
+                ACPIngestPageAssignment(
+                    title: "First page", sourceFile: "First--a.md",
+                    sourceRanges: "1-600", outline: "first"),
+                ACPIngestPageAssignment(
+                    title: "Second page", sourceFile: "Second--b.md",
+                    sourceRanges: "1-600", outline: "second"),
+            ],
+            sourceIDs: ["a", "b"]))
+        let fake = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [.messageStop], planJSON: planData),
+            FakeSessionBehavior(events: [.messageStop]),
+            FakeSessionBehavior(events: [.messageStop]),
+            FakeSessionBehavior(events: [.messageStop]),
+        ])
+        let counter = ResolveBackendCallCounter()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-provenance-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tempDir)
+            } catch {
+                Issue.record("Failed to remove ACP provenance fixture: \(error)")
+            }
+        }
+        let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [first, second], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        let profiles = await fake.startedProfiles
+        #expect(profiles.count == 4)
+        let firstExecutor = try #require(ACPBackend.resolveSpawnConfig(from: profiles[1]))
+        let secondExecutor = try #require(ACPBackend.resolveSpawnConfig(from: profiles[2]))
+        #expect(firstExecutor.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
+        #expect(secondExecutor.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
     }
 }
 #endif
