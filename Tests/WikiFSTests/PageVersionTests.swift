@@ -645,11 +645,11 @@ struct PageVersionTests {
     /// v47 adds durable non-message transcript identities.
     /// issue #982 Phase 2.
     @Test func v44SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 47,
+        #expect(GRDBWikiStore.schemaVersion == 48,
                 "schemaVersion must report 46 after the Phase 2 chat rebuild")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "47", "fresh DB stamps user_version = 47 (got \(v))")
+        #expect(v == "48", "fresh DB stamps user_version = 48 (got \(v))")
     }
 
     // MARK: - #817: pageVersionBody (read arbitrary version body)
