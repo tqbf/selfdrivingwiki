@@ -11,6 +11,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case sourceNotFound(SourceID)
     case sourceVersionNotFound(SourceVersionID)
     case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
+    case deletionRestricted(ResourceDeletionRestriction)
     case invalidBookmarkRow(id: String, reason: String)
     case unexpected(String)
     /// Thrown by `addSource` when the incoming bytes are byte-identical to an
@@ -28,6 +29,8 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
         case .sourceVersionNotFound(let id): return "Source version not found: \(id.rawValue)"
         case .sourceMarkdownVersionNotFound(let id): return "Source markdown version not found: \(id.rawValue)"
+        case .deletionRestricted(.provenance(let blockers)):
+            return "Source deletion restricted by \(blockers.values.count) page version provenance reference(s)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
@@ -163,8 +166,12 @@ public protocol WikiStore: Sendable {
     /// `createPage(title: createdBy: nil)`.
     @discardableResult
     func createPage(title: String) throws -> WikiPage
-    func createPage(title: String, createdBy: String?) throws -> WikiPage
-    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?) throws
+    func createPage(
+        title: String, body: String, createdBy: String?,
+        provenance: [PageVersionSourceInput]
+    ) throws -> WikiPage
+    func createPage(title: String, createdBy: String?, provenance: [PageVersionSourceInput]) throws -> WikiPage
+    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?, provenance: [PageVersionSourceInput]) throws
     func deletePage(id: PageID) throws
 
     /// Resolve a page *title* to its id, or nil if no page has that title.
@@ -421,7 +428,7 @@ public protocol WikiStore: Sendable {
     func appendPageVersion(
         pageID: PageID, title: String, body: String,
         expectedHeadVersionID: PageVersionID?,
-        lastEditedBy: String?
+        lastEditedBy: String?, provenance: [PageVersionSourceInput]
     ) throws -> PageVersionID
 
     /// Immutable source evidence for one page version. Compatibility readers
@@ -510,7 +517,7 @@ public protocol WikiStore: Sendable {
     /// version's activity — nil degrades to the shared `legacy-import` agent.
     func workspaceWritePage(
         workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
-        author: String?
+        author: String?, provenance: [PageVersionSourceInput]
     ) throws -> PageVersionID?
 
     /// Resolve the workspace's current version id for a page (overlay read).
@@ -940,6 +947,37 @@ public protocol WikiStore: Sendable {
 // kind-specific equivalent) and resolve a Tantivy leg first.
 
 extension WikiStore {
+    func workspaceWritePage(
+        workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
+        author: String? = nil
+    ) throws -> PageVersionID? {
+        try workspaceWritePage(
+            workspaceID: workspaceID, pageID: pageID, title: title, body: body,
+            author: author, provenance: [])
+    }
+    func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
+        try createPage(title: title, createdBy: createdBy, provenance: [])
+    }
+
+    func createPage(
+        title: String, createdBy: String?, provenance: [PageVersionSourceInput]
+    ) throws -> WikiPage {
+        try createPage(title: title, body: "", createdBy: createdBy, provenance: provenance)
+    }
+
+    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
+        try updatePage(id: id, title: title, body: body, lastEditedBy: lastEditedBy, provenance: [])
+    }
+
+    func appendPageVersion(
+        pageID: PageID, title: String, body: String,
+        expectedHeadVersionID: PageVersionID?, lastEditedBy: String? = nil
+    ) throws -> PageVersionID {
+        try appendPageVersion(
+            pageID: pageID, title: title, body: body,
+            expectedHeadVersionID: expectedHeadVersionID,
+            lastEditedBy: lastEditedBy, provenance: [])
+    }
     /// Legacy 2-arg entry point — `nil` bm25Leg means NO BM25 leg post-#634.
     /// See `searchSimilar(query:limit:bm25Leg:)`.
     ///

@@ -3414,7 +3414,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    public func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
+    public func createPage(
+        title: String, body: String, createdBy: String? = nil,
+        provenance: [PageVersionSourceInput] = []
+    ) throws -> WikiPage {
         try mutate(event: { page in
             self.localEvent(.page, id: page.id.rawValue, change: .created)
         }) { db in
@@ -3423,65 +3426,51 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let slug = try self.uniqueSlug(from: title, id: id, on: db)
             let now = Date()
             let nowTS = now.timeIntervalSince1970
+            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
 
             try db.execute(sql: """
             INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by)
-            VALUES (?, ?, ?, '', ?, ?, 1, ?, ?);
-            """, arguments: [id.rawValue, title, slug, nowTS, nowTS,
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?);
+            """, arguments: [id.rawValue, title, slug, body, nowTS, nowTS,
                             createdBy, createdBy])
 
-            // Phase 3 (head-ref invariant): seed a root version + page-content
-            // ref atomically so the page has a ref from birth. The empty body
-            // is the initial blob.
-            let bodyData = Data("".utf8)
+            let bodyData = Data(body.utf8)
             let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
-
-            try db.execute(sql: """
-            INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-            """, arguments: [hash, Int64(0), bodyData])
-
-            // Page provenance (#page-provenance): route the root activity's
-            // agent through `ensureAgent(name:kind:)` so a chat / agent / user
-            // author identity lands as a REAL named agent row (not the shared
-            // `legacy-import`). Degrades to the shared legacy agent when
-            // `createdBy` is nil/empty (pre-v39 behaviour, no data loss).
-            let agentID = try self.ensurePageAuthorAgent(createdBy, on: db)
-            let activityID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?, 'import', ?, ?, ?);
-            """, arguments: [activityID, agentID, nowTS, nowTS])
-
-            let versionID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
-            VALUES (?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, id.rawValue, hash, title, activityID, nowTS])
-
-            try db.execute(sql: """
-            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-            VALUES ('page-content', ?, ?, 1, ?);
-            """, arguments: [id.rawValue, versionID, nowTS])
+            _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: id, head: nil, title: title, slug: slug, body: body,
+                bodyData: bodyData, hash: hash, lastEditedBy: createdBy,
+                activityKind: "import", now: now, nowTS: nowTS,
+                provenance: normalizedProvenance, mirrorMutation: .seed))
 
             return WikiPage(
-                id: id, title: title, slug: slug, bodyMarkdown: "",
+                id: id, title: title, slug: slug, bodyMarkdown: body,
                 createdAt: now, updatedAt: now, version: 1,
                 createdBy: createdBy, lastEditedBy: createdBy
             )
         }
     }
 
+    public func createPage(
+        title: String, createdBy: String? = nil,
+        provenance: [PageVersionSourceInput] = []
+    ) throws -> WikiPage {
+        try createPage(title: title, body: "", createdBy: createdBy, provenance: provenance)
+    }
+
     /// 1-arg convenience requirement: forward to the full-signature impl with
     /// `createdBy: nil`. Mirrors `SQLiteWikiStore`'s defaulted-parameter convenience.
     @discardableResult
     public func createPage(title: String) throws -> WikiPage {
-        try createPage(title: title, createdBy: nil)
+        try createPage(title: title, createdBy: nil, provenance: [])
     }
 
-    public func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
-        try mutate(event: { _ in
-            self.localEvent(.page, id: id.rawValue, change: .updated)
+    public func updatePage(
+        id: PageID, title: String, body: String, lastEditedBy: String? = nil,
+        provenance: [PageVersionSourceInput] = []
+    ) throws {
+        _ = try mutate(event: { result in
+            result.didWrite ? self.localEvent(.page, id: id.rawValue, change: .updated) : nil
         }) { db in
             // Existence check — match the pre-refactor contract that threw
             // `.notFound` when the id is gone (the legacy `guard
@@ -3506,6 +3495,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
+            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
 
             // Page provenance (#page-provenance): the CAS-off path (no
             // `expectedHeadVersionID`, the `wikictl` default — see
@@ -3531,15 +3521,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if let amendVersionID = try self.tryAmendPageVersion(
                 db: db, pageID: id, head: head, title: title, slug: slug,
                 body: body, bodyData: bodyData, hash: hash,
-                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+                lastEditedBy: lastEditedBy, provenance: normalizedProvenance, now: now, nowTS: nowTS)
             {
                 _ = amendVersionID   // amend already touched the mirror.
-                return
+                return PageVersionProvenanceResult(versionID: amendVersionID, didWrite: true)
             }
-            _ = try self.appendPageVersionLocked(
-                db: db, pageID: id, head: head, title: title, slug: slug,
-                body: body, bodyData: bodyData, hash: hash,
-                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+            return try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: id, head: head, title: title, slug: slug, body: body,
+                bodyData: bodyData, hash: hash, lastEditedBy: lastEditedBy,
+                activityKind: "edit", now: now, nowTS: nowTS,
+                provenance: normalizedProvenance, mirrorMutation: .append))
         }
     }
 
@@ -3974,11 +3965,43 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .deleted)
         }) { db in
+            if let blockers = try self.provenanceDeletionBlockers(sourceID: id, on: db) {
+                throw WikiStoreError.deletionRestricted(.provenance(blockers))
+            }
             // source_versions cascade on DELETE, but blobs and activities do
             // not — they're left for lazy GC (vacuumBlobs/vacuumActivities).
             try db.execute(sql: "DELETE FROM sources WHERE id = ?;",
                            arguments: [id.rawValue])
         }
+    }
+
+    /// Finds the complete, deterministic provenance impact before source
+    /// deletion. Raw ordering remains at this SQLite boundary.
+    private func provenanceDeletionBlockers(
+        sourceID: SourceID, on db: Database
+    ) throws -> NonEmptyProvenanceDeletionBlockers? {
+        guard try Self.tableExists("page_version_sources", in: db) else { return nil }
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT DISTINCT pvs.source_id, pvs.page_version_id, pv.page_id
+            FROM page_version_sources pvs
+            JOIN page_versions pv ON pv.id = pvs.page_version_id
+            WHERE pvs.source_id = ?
+            ORDER BY pv.page_id COLLATE BINARY,
+                     pvs.page_version_id COLLATE BINARY,
+                     pvs.source_id COLLATE BINARY;
+            """,
+            arguments: [sourceID.rawValue]
+        )
+        let blockers = rows.map { row in
+            ProvenanceDeletionBlocker(
+                sourceID: SourceID(rawValue: row["source_id"]),
+                pageVersionID: PageVersionID(rawValue: row["page_version_id"]),
+                pageID: PageID(rawValue: row["page_id"])
+            )
+        }
+        return NonEmptyProvenanceDeletionBlockers(blockers)
     }
 
     public func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin? {
@@ -4817,10 +4840,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func appendPageVersion(
         pageID: PageID, title: String, body: String,
         expectedHeadVersionID: PageVersionID?,
-        lastEditedBy: String? = nil
+        lastEditedBy: String? = nil,
+        provenance: [PageVersionSourceInput] = []
     ) throws -> PageVersionID {
-        try mutate(event: { _ in
-            self.localEvent(.page, id: pageID.rawValue, change: .updated)
+        let result = try mutate(event: { result in
+            result.didWrite ? self.localEvent(.page, id: pageID.rawValue, change: .updated) : nil
         }) { db in
             let title = WikiNameRules.sanitized(title)
             let slug = try self.uniqueSlug(from: title, id: pageID, on: db)
@@ -4829,6 +4853,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
+            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
 
             // 1. CAS check: resolve current head (ref → version_id, or MAX(id)).
             let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
@@ -4842,9 +4867,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if let amendVersionID = try self.tryAmendPageVersion(
                 db: db, pageID: pageID, head: head, title: title, slug: slug,
                 body: body, bodyData: bodyData, hash: hash,
-                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+                lastEditedBy: lastEditedBy, provenance: normalizedProvenance, now: now, nowTS: nowTS)
             {
-                return amendVersionID
+                return PageVersionProvenanceResult(versionID: amendVersionID, didWrite: true)
             }
 
             // 2–6. Append the new version row (blob + activity + version +
@@ -4855,11 +4880,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             //      mutators that compose must pass the `Database` to internal
             //      helpers, not re-call `mutate`). This helper does NOT emit;
             //      this method's `mutate` wrapper is the single emit site.
-            return try self.appendPageVersionLocked(
-                db: db, pageID: pageID, head: head, title: title, slug: slug,
-                body: body, bodyData: bodyData, hash: hash,
-                lastEditedBy: lastEditedBy, now: now, nowTS: nowTS)
+            return try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: pageID, head: head, title: title, slug: slug, body: body,
+                bodyData: bodyData, hash: hash, lastEditedBy: lastEditedBy,
+                activityKind: "edit", now: now, nowTS: nowTS,
+                provenance: normalizedProvenance, mirrorMutation: .append))
         }
+        return result.versionID
     }
 
     /// Shared version-append logic for `appendPageVersion` (CAS path) and
@@ -4885,12 +4912,51 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// is NOT reentrant; a public mutator that re-calls `mutate` deadlocks).
     /// `updatePage` MUST NOT call public `appendPageVersion` (would double-emit
     /// AND re-enter); both call THIS instead.
-    private func appendPageVersionLocked(
-        db: Database, pageID: PageID, head: PageVersionID?,
-        title: String, slug: String,
-        body: String, bodyData: Data, hash: String,
-        lastEditedBy: String?, now: Date, nowTS: Double
-    ) throws -> PageVersionID {
+    private enum PageVersionMirrorMutation {
+        /// The page row was inserted with its initial mirror generation. Creating
+        /// the root immutable version must not make that initial state look like
+        /// an additional edit.
+        case seed
+        /// A pre-existing page receives a new immutable version.
+        case append
+    }
+
+    private struct PageVersionProvenanceRequest {
+        let pageID: PageID
+        let head: PageVersionID?
+        let title: String
+        let slug: String
+        let body: String
+        let bodyData: Data
+        let hash: String
+        let lastEditedBy: String?
+        let activityKind: String
+        let now: Date
+        let nowTS: Double
+        let provenance: [PageVersionSourceInput]
+        let mirrorMutation: PageVersionMirrorMutation
+    }
+
+    private struct PageVersionProvenanceResult {
+        let versionID: PageVersionID
+        let didWrite: Bool
+    }
+
+    /// Writes one complete page version inside the caller's transaction.
+    /// It never opens a transaction or emits an event.
+    private func createPageVersionWithProvenance(
+        on db: Database, request: PageVersionProvenanceRequest
+    ) throws -> PageVersionProvenanceResult {
+        let pageID = request.pageID
+        let head = request.head
+        let title = request.title
+        let slug = request.slug
+        let body = request.body
+        let bodyData = request.bodyData
+        let hash = request.hash
+        let lastEditedBy = request.lastEditedBy
+        let nowTS = request.nowTS
+        let provenance = try self.normalizedPageVersionProvenance(request.provenance, on: db)
         // No-op guard: identical body AND title = no real change. Skip the
         // version-append and the `pages` UPDATE (the ref's generation is
         // unchanged too). The mirror already reflects the head. `wikictl`'s
@@ -4910,17 +4976,20 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let headTitle: String? = headRow["title"]
             let existingActor: String? = headRow["last_edited_by"]
             if headHash == hash && headTitle == title {
-                // #763: If the author changed (e.g. a pre-v39 page with
-                // `legacy-import` being re-ingested by `agent:ingest`), DON'T
-                // short-circuit — fall through to create a new version +
-                // activity so the provenance reflects the new author. Same
-                // author → the no-op path is genuinely a no-op (bump
-                // `updated_at` only, no version chain pollution).
-                if existingActor == lastEditedBy || (existingActor == nil && lastEditedBy == nil) {
-                    try db.execute(sql: """
-                    UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
-                    """, arguments: [nowTS, lastEditedBy, pageID.rawValue])
-                    return head
+                let existingProvenance = try self.pageVersionSourceInputs(versionID: head, on: db)
+                if existingProvenance == provenance {
+                    // #763: If the author changed (e.g. a pre-v39 page with
+                    // `legacy-import` being re-ingested by `agent:ingest`), DON'T
+                    // short-circuit — fall through to create a new version +
+                    // activity so the provenance reflects the new author. Same
+                    // author → the no-op path is genuinely a no-op (bump
+                    // `updated_at` only, no version chain pollution).
+                    if existingActor == lastEditedBy || (existingActor == nil && lastEditedBy == nil) {
+                        try db.execute(sql: """
+                        UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
+                        """, arguments: [nowTS, lastEditedBy, pageID.rawValue])
+                        return PageVersionProvenanceResult(versionID: head, didWrite: false)
+                    }
                 }
                 // Author changed — fall through to append a new version with
                 // the new author's activity. This is the fix for #763: a re-
@@ -4941,8 +5010,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let activityID = ULID.generate()
         try db.execute(sql: """
         INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-        VALUES (?, 'edit', ?, ?, ?);
-        """, arguments: [activityID, agentID, nowTS, nowTS])
+        VALUES (?, ?, ?, ?, ?);
+        """, arguments: [activityID, request.activityKind, agentID, nowTS, nowTS])
 
         // 4. New version (parent = current head, or NULL for a brand-new page
         //    with no prior versions — `head == nil` should not happen after v34
@@ -4953,13 +5022,32 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
         """, arguments: [versionID, pageID.rawValue, head?.rawValue, hash, title, activityID, nowTS])
 
-        // 5. Update the denormalized pages mirror.
-        try db.execute(sql: """
-        UPDATE pages
-        SET title = ?, slug = ?, body_markdown = ?,
-            updated_at = ?, version = version + 1, last_edited_by = ?
-        WHERE id = ?;
-        """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+        for input in provenance {
+            try db.execute(sql: """
+            INSERT INTO page_version_sources (page_version_id, source_id, role)
+            VALUES (?, ?, ?);
+            """, arguments: [versionID, input.sourceID.rawValue, input.role.rawValue])
+        }
+
+        // 5. Update the denormalized pages mirror. The root version is seeded
+        // alongside a freshly inserted page already at generation one; later
+        // versions advance that mirror generation.
+        switch request.mirrorMutation {
+        case .seed:
+            try db.execute(sql: """
+            UPDATE pages
+            SET title = ?, slug = ?, body_markdown = ?,
+                updated_at = ?, last_edited_by = ?
+            WHERE id = ?;
+            """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+        case .append:
+            try db.execute(sql: """
+            UPDATE pages
+            SET title = ?, slug = ?, body_markdown = ?,
+                updated_at = ?, version = version + 1, last_edited_by = ?
+            WHERE id = ?;
+            """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+        }
         guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
 
         // 6. Write the page-content ref.
@@ -4972,7 +5060,117 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             updated_at = excluded.updated_at;
         """, arguments: [pageID.rawValue, versionID, nowTS])
 
-        return PageVersionID(rawValue: versionID)
+        return PageVersionProvenanceResult(
+            versionID: PageVersionID(rawValue: versionID), didWrite: true)
+    }
+
+    /// The persistence boundary validates source existence and canonicalizes
+    /// write order before any blob, activity, version, mirror, or ref mutation.
+    private func normalizedPageVersionProvenance(
+        _ inputs: [PageVersionSourceInput], on db: Database
+    ) throws -> [PageVersionSourceInput] {
+        var seen = Set<PageVersionSourceInput>()
+        for input in inputs {
+            guard seen.insert(input).inserted else {
+                throw PageVersionProvenanceWriteError.duplicateInput(
+                    sourceID: input.sourceID, role: input.role)
+            }
+        }
+
+        let ordered = inputs.sorted {
+            if $0.role.rawValue != $1.role.rawValue {
+                return $0.role.rawValue < $1.role.rawValue
+            }
+            return $0.sourceID.rawValue < $1.sourceID.rawValue
+        }
+        for input in ordered {
+            let exists = try Int.fetchOne(
+                db, sql: "SELECT 1 FROM sources WHERE id = ?;",
+                arguments: [input.sourceID.rawValue]) ?? 0
+            guard exists == 1 else {
+                throw PageVersionProvenanceWriteError.missingSource(input.sourceID)
+            }
+        }
+        return ordered
+    }
+
+    private func pageVersionSourceInputs(
+        versionID: PageVersionID, on db: Database
+    ) throws -> [PageVersionSourceInput] {
+        guard try Self.tableExists("page_version_sources", in: db) else { return [] }
+        return try Row.fetchAll(
+            db,
+            sql: "SELECT source_id, role FROM page_version_sources WHERE page_version_id = ? ORDER BY role, source_id;",
+            arguments: [versionID.rawValue]
+        ).map { row in
+            let rawRole: String = row["role"]
+            guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                throw MetadataStoreError.unknownPageVersionSourceRole(rawRole)
+            }
+            return PageVersionSourceInput(sourceID: SourceID(rawValue: row["source_id"]), role: role)
+        }
+    }
+
+    private func replaceWorkspaceRefSources(
+        workspaceID: WorkspaceID, pageID: PageID,
+        provenance: [PageVersionSourceInput], on db: Database
+    ) throws {
+        try db.execute(
+            sql: "DELETE FROM workspace_ref_sources WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;",
+            arguments: [workspaceID.rawValue, pageID.rawValue]
+        )
+        for input in provenance {
+            try db.execute(sql: """
+            INSERT INTO workspace_ref_sources (workspace_id, kind, owner_id, source_id, role)
+            VALUES (?, 'page-content', ?, ?, ?);
+            """, arguments: [workspaceID.rawValue, pageID.rawValue, input.sourceID.rawValue, input.role.rawValue])
+        }
+    }
+
+    private func workspaceRefSourceInputs(
+        workspaceID: WorkspaceID, pageID: PageID, on db: Database
+    ) throws -> [PageVersionSourceInput] {
+        guard try Self.tableExists("workspace_ref_sources", in: db) else { return [] }
+        return try Row.fetchAll(
+            db,
+            sql: """
+            SELECT source_id, role FROM workspace_ref_sources
+            WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?
+            ORDER BY role, source_id;
+            """,
+            arguments: [workspaceID.rawValue, pageID.rawValue]
+        ).map { row in
+            let rawRole: String = row["role"]
+            guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                throw MetadataStoreError.unknownPageVersionSourceRole(rawRole)
+            }
+            return PageVersionSourceInput(sourceID: SourceID(rawValue: row["source_id"]), role: role)
+        }
+    }
+
+    private func unionPageVersionSourceInputs(
+        _ versionIDs: [PageVersionID], on db: Database
+    ) throws -> [PageVersionSourceInput] {
+        var inputs = Set<PageVersionSourceInput>()
+        for versionID in versionIDs {
+            inputs.formUnion(try pageVersionSourceInputs(versionID: versionID, on: db))
+        }
+        return inputs.sorted {
+            $0.role.rawValue == $1.role.rawValue
+                ? $0.sourceID.rawValue < $1.sourceID.rawValue
+                : $0.role.rawValue < $1.role.rawValue
+        }
+    }
+
+    private func attachPageVersionSources(
+        _ provenance: [PageVersionSourceInput], to versionID: PageVersionID, on db: Database
+    ) throws {
+        for input in provenance {
+            try db.execute(sql: """
+            INSERT INTO page_version_sources (page_version_id, source_id, role)
+            VALUES (?, ?, ?);
+            """, arguments: [versionID.rawValue, input.sourceID.rawValue, input.role.rawValue])
+        }
     }
 
 
@@ -5346,52 +5544,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // 2. Current HEAD is the parent of the new restore node.
             let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
 
-            // 3. Create a 'restore' PROV activity (distinct from 'edit'/'import'
-            //    so the history badges it as a restore). Author = the user
-            //    (a manual restore is an explicit user action).
-            let agentID = try self.ensurePageAuthorAgent(PageAuthor.user.rawValue, on: db)
-            let activityID = ULID.generate()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?, 'restore', ?, ?, ?);
-            """, arguments: [activityID, agentID, nowTS, nowTS])
-
-            // 4. Append the new version node (parent = current head; reuses the
-            //    target's blob_hash — no blob INSERT needed, it already exists).
-            let newVersionID = ULID.generate()
             let sanitizedTitle = WikiNameRules.sanitized(targetTitle)
             let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
-            try db.execute(sql: """
-            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [newVersionID, pageID.rawValue, head?.rawValue, targetBlobHash,
-                            sanitizedTitle, activityID, nowTS])
-
-            // 5. Update the denormalized pages mirror (fires the FTS5 trigger —
-            //    pages use external-content FTS over `pages`, so no manual
-            //    search refresh is needed).
-            try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, version = version + 1, last_edited_by = ?
-            WHERE id = ?;
-            """, arguments: [sanitizedTitle, slug, body, nowTS,
-                            PageAuthor.user.rawValue, pageID.rawValue])
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
-
-            // 6. Repoint HEAD to the NEW restore node.
-            try db.execute(sql: """
-            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-            VALUES ('page-content', ?, ?, 1, ?)
-            ON CONFLICT(kind, owner_id) DO UPDATE SET
-                version_id = excluded.version_id,
-                generation = generation + 1,
-                updated_at = excluded.updated_at;
-            """, arguments: [pageID.rawValue, newVersionID, nowTS])
-
-            return PageVersionID(rawValue: newVersionID)
+            let sources = try self.pageVersionSourceInputs(versionID: versionID, on: db)
+            return try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: pageID, head: head, title: sanitizedTitle, slug: slug,
+                body: body, bodyData: bodyData, hash: targetBlobHash,
+                lastEditedBy: PageAuthor.user.rawValue, activityKind: "restore",
+                now: now, nowTS: nowTS, provenance: sources,
+                mirrorMutation: .append)).versionID
         }
     }
 
@@ -5493,15 +5656,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     public func workspaceWritePage(
         workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
-        author: String? = nil
+        author: String? = nil, provenance: [PageVersionSourceInput] = []
     ) throws -> PageVersionID? {
-        try mutate(event: { _ in nil }) { db in
+        try mutate(event: { _ in nil }) { db -> PageVersionID? in
             let title = WikiNameRules.sanitized(title)
             let bodyData = Data(body.utf8)
             let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             let now = Date()
             let nowTS = now.timeIntervalSince1970
+            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
 
             // Guard: workspace must be 'open'.
             guard let statusRaw = try String.fetchOne(
@@ -5538,6 +5702,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 UPDATE workspaces SET updated_at = ? WHERE id = ?;
                 """, arguments: [nowTS, workspaceID.rawValue])
 
+                try self.replaceWorkspaceRefSources(
+                    workspaceID: workspaceID, pageID: pageID,
+                    provenance: normalizedProvenance, on: db)
+
                 // Created pages have no page-version row until merge.
                 return nil
             }
@@ -5568,6 +5736,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
             """, arguments: [versionID, pageID.rawValue, parent?.rawValue, hash, title, activityID, nowTS])
 
+            // Workspace versions are immutable history just like main versions.
+            // Keep their edge set on the version itself; workspace_ref_sources
+            // additionally records provenance for staged, not-yet-minted pages.
+            try self.attachPageVersionSources(
+                normalizedProvenance, to: PageVersionID(rawValue: versionID), on: db)
+
             // UPSERT workspace_refs. On first touch, record base_version_id = main head.
             // On subsequent touches, keep the original base (NULL = no-op in ON CONFLICT).
             let hasWsRef = wsHead != nil
@@ -5582,6 +5756,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 title = NULL,
                 updated_at = excluded.updated_at;
             """, arguments: [workspaceID.rawValue, pageID.rawValue, baseToRecord?.rawValue, versionID, nowTS])
+
+            try self.replaceWorkspaceRefSources(
+                workspaceID: workspaceID, pageID: pageID,
+                provenance: normalizedProvenance, on: db)
 
             try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;", arguments: [nowTS, workspaceID.rawValue])
 
@@ -5690,7 +5868,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                             }
                             continue
                         }
-                        try self.mintCreatedPage(db: db, pageID: pageID, blobHash: stagedHash, title: title ?? "")
+                        try self.mintCreatedPage(db: db, workspaceID: workspaceID, pageID: pageID, blobHash: stagedHash, title: title ?? "")
                         mergedPageIDs.append(pageIDStr)
                     } else if base == nil {
                         // Old-style created page (pre-v35: version_id set, base nil).
@@ -5912,6 +6090,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                     """, arguments: [newVersionID, pageID.rawValue, mainHead?.rawValue, wsVersion.rawValue,
                                      hash, title, activityID, nowTS])
+                    if let mainHead {
+                        try self.attachPageVersionSources(
+                            try self.unionPageVersionSourceInputs([mainHead, wsVersion], on: db),
+                            to: PageVersionID(rawValue: newVersionID), on: db)
+                    } else {
+                        try self.attachPageVersionSources(
+                            try self.pageVersionSourceInputs(versionID: wsVersion, on: db),
+                            to: PageVersionID(rawValue: newVersionID), on: db)
+                    }
 
                     // Update the workspace_ref: new version + new base.
                     try db.execute(sql: """
@@ -6038,14 +6225,24 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 """, arguments: [pageID.rawValue, title, slug, nowTS, nowTS])
             }
 
+            let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
             let versionID = ULID.generate()
             try db.execute(sql: """
             INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
             VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
             """, arguments: [versionID, pageID.rawValue, wsHead?.rawValue, hash, title, activityID, nowTS])
+            let resolvedSources: [PageVersionSourceInput]
+            if let wsHead, let mainHead {
+                resolvedSources = try self.unionPageVersionSourceInputs([mainHead, wsHead], on: db)
+            } else if let wsHead {
+                resolvedSources = try self.pageVersionSourceInputs(versionID: wsHead, on: db)
+            } else {
+                resolvedSources = try self.workspaceRefSourceInputs(workspaceID: workspaceID, pageID: pageID, on: db)
+            }
+            try self.attachPageVersionSources(
+                resolvedSources, to: PageVersionID(rawValue: versionID), on: db)
 
             // 4. Update workspace_ref to point at the resolved version.
-            let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
             try db.execute(sql: """
             UPDATE workspace_refs
             SET version_id = ?, base_version_id = ?, blob_hash = NULL, title = NULL, updated_at = ?
@@ -9097,10 +9294,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private func tryAmendPageVersion(
         db: Database, pageID: PageID, head: PageVersionID?, title: String, slug: String,
         body: String, bodyData: Data, hash: String,
-        lastEditedBy: String?, now: Date, nowTS: Double
+        lastEditedBy: String?, provenance: [PageVersionSourceInput], now: Date, nowTS: Double
     ) throws -> PageVersionID? {
         // Need a head to amend.
         guard let head else { return nil }
+
+        // Provenance is immutable evidence. Amending is valid only when the
+        // caller supplied exactly the already-attached edge set.
+        let existingProvenance = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT source_id, role FROM page_version_sources
+            WHERE page_version_id = ? ORDER BY role, source_id;
+            """,
+            arguments: [head.rawValue]
+        ).map { row -> PageVersionSourceInput in
+            let rawRole: String = row["role"]
+            guard let role = PageVersionSourceRole(rawValue: rawRole) else {
+                throw MetadataStoreError.unknownPageVersionSourceRole(rawRole)
+            }
+            return PageVersionSourceInput(sourceID: SourceID(rawValue: row["source_id"]), role: role)
+        }
+        guard existingProvenance == provenance else { return nil }
 
         // 1. Same-actor check.
         guard let lastEditedBy else { return nil }
@@ -9254,7 +9469,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// pages row, a root page_versions row from the staged blob, and a
     /// page-content ref pointing at it.
     private func mintCreatedPage(
-        db: Database, pageID: PageID, blobHash: String, title: String
+        db: Database, workspaceID: WorkspaceID, pageID: PageID, blobHash: String, title: String
     ) throws {
         // Fetch the staged body from the blob.
         guard let blobRow = try Row.fetchOne(
@@ -9290,6 +9505,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
         VALUES (?, ?, NULL, ?, ?, ?, ?);
         """, arguments: [versionID, pageID.rawValue, blobHash, title, activityID, now])
+
+        try db.execute(sql: """
+        INSERT INTO page_version_sources (page_version_id, source_id, role)
+        SELECT ?, source_id, role
+        FROM workspace_ref_sources
+        WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
+        """, arguments: [versionID, workspaceID.rawValue, pageID.rawValue])
 
         // 4. Page-content ref.
         try db.execute(sql: """
@@ -9366,6 +9588,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """, arguments: [versionID, pageID.rawValue, mainVersionID.rawValue, wsVersionID.rawValue,
                          hash, title, activityID, nowTS])
+        try self.attachPageVersionSources(
+            try self.unionPageVersionSourceInputs([mainVersionID, wsVersionID], on: db),
+            to: PageVersionID(rawValue: versionID), on: db)
 
         // Update the pages mirror.
         let sanitizedTitle = WikiNameRules.sanitized(title)

@@ -51,7 +51,8 @@ public enum PageUpsert {
         title: String,
         body: String,
         expectedHeadVersionID: PageVersionID? = nil,
-        author: String? = nil
+        author: String? = nil,
+        provenance: [PageVersionSourceInput] = []
     ) throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
         // create/update (which sanitizes again as a backstop): resolving the
@@ -71,7 +72,8 @@ public enum PageUpsert {
                 try store.resolveChatByTitle(title)
             })) ?? body
         let outcome = try writePage(in: store, id: id, title: title, body: canonicalBody,
-                                     expectedHeadVersionID: expectedHeadVersionID, author: author)
+                                     expectedHeadVersionID: expectedHeadVersionID, author: author,
+                                     provenance: provenance)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.
         try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
         // Compute + store chunk embeddings for the page body. Non-fatal: a
@@ -94,7 +96,8 @@ public enum PageUpsert {
         title: String,
         body: String,
         expectedHeadVersionID: PageVersionID?,
-        author: String? = nil
+        author: String? = nil,
+        provenance: [PageVersionSourceInput]
     ) throws -> Outcome {
         if let id {
             // When CAS is active, route through appendPageVersion (versioned
@@ -103,9 +106,9 @@ public enum PageUpsert {
             if let expected = expectedHeadVersionID {
                 _ = try store.appendPageVersion(
                     pageID: id, title: title, body: body,
-                    expectedHeadVersionID: expected, lastEditedBy: author)
+                    expectedHeadVersionID: expected, lastEditedBy: author, provenance: provenance)
             } else {
-                try store.updatePage(id: id, title: title, body: body, lastEditedBy: author)
+                try store.updatePage(id: id, title: title, body: body, lastEditedBy: author, provenance: provenance)
             }
             return Outcome(id: id, didCreate: false)
         }
@@ -113,14 +116,17 @@ public enum PageUpsert {
             if let expected = expectedHeadVersionID {
                 _ = try store.appendPageVersion(
                     pageID: existing, title: title, body: body,
-                    expectedHeadVersionID: expected, lastEditedBy: author)
+                    expectedHeadVersionID: expected, lastEditedBy: author, provenance: provenance)
             } else {
-                try store.updatePage(id: existing, title: title, body: body, lastEditedBy: author)
+                try store.updatePage(id: existing, title: title, body: body, lastEditedBy: author, provenance: provenance)
             }
             return Outcome(id: existing, didCreate: false)
         }
-        let page = try store.createPage(title: title, createdBy: author)
-        try store.updatePage(id: page.id, title: title, body: body, lastEditedBy: author)
+        // A new upsert creates its first immutable version atomically. Its
+        // source inputs belong on that content-bearing root, not on a second
+        // follow-up version after an empty placeholder root.
+        let page = try store.createPage(
+            title: title, body: body, createdBy: author, provenance: provenance)
         return Outcome(id: page.id, didCreate: true)
     }
 }

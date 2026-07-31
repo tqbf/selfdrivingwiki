@@ -39,7 +39,7 @@ public enum PageCommand {
         /// caller read before editing); when non-nil, the upsert routes through
         /// `appendPageVersion` and a mismatch throws `PageConflictError`
         /// (Phase 1: agent CAS writes).
-        case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, workspace: String? = nil, author: String? = nil)
+        case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, workspace: String? = nil, author: String? = nil, provenance: [PageVersionSourceInput] = [])
         case delete(id: PageID)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// Swift-side `VectorCosine`), falling back to LIKE title match.
@@ -93,9 +93,9 @@ public enum PageCommand {
             return try list(in: store, json: json)
         case .get(let selector, let json, let workspace):
             return try get(selector, in: store, json: json, workspace: workspace)
-        case .add(let id, let title, let bodySource, let expectHead, let workspace, let author):
+        case .add(let id, let title, let bodySource, let expectHead, let workspace, let author, let provenance):
             let body = try resolveBodySource(bodySource)
-            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author, in: store, validator: validator, linter: linter)
+            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author, provenance: provenance, in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -249,6 +249,7 @@ public enum PageCommand {
         expectHead: PageVersionID? = nil,
         workspace: String? = nil,
         author: String? = nil,
+        provenance: [PageVersionSourceInput] = [],
         in store: WikiStore,
         validator: MermaidValidator?,
         linter: MarkdownLinter?
@@ -291,7 +292,7 @@ public enum PageCommand {
             }
             let resultID = try store.workspaceWritePage(
                 workspaceID: WorkspaceID(rawValue: workspace), pageID: pageID, title: title, body: fixed,
-                author: author)
+                author: author, provenance: provenance)
             return Result(output: resultID?.rawValue ?? "", didCommit: true)
         }
 
@@ -299,7 +300,8 @@ public enum PageCommand {
         //    the in-app editor, so the link graph stays consistent across both
         //    writers.
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
-                                             expectedHeadVersionID: expectHead, author: author)
+                                             expectedHeadVersionID: expectHead, author: author,
+                                             provenance: provenance)
         return Result(output: outcome.id.rawValue, didCommit: true)
     }
 
