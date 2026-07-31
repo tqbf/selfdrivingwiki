@@ -37,6 +37,6 @@ external-format boundary.
 - Targeted Phase 3 suites passed: 37 tests across
   `PageVersionSourceReadTests`, `PageVersionSourceWriterTests`,
   `ProvenanceDeletionRestrictionTests`, and `AgentCASTests`.
-- `make test` passed: 2,841 tests in 229 suites.
-- Bare `swift test` passed: 2,841 tests in 229 suites.
+- `make test` passed: 2,842 tests in 229 suites.
+- Bare `swift test` passed: 2,842 tests in 229 suites.
 - `git diff --check` passed.
