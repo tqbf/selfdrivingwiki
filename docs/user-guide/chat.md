@@ -23,7 +23,7 @@ preserved in the database.
 
 ## The chat interface
 
-![Chat window: title, tab strip, agent transcript with a collapsed thinking block and timestamped response, and the composer with model and permission-mode chips at the bottom.](images/chat-window.png)
+![Chat window: title, tab strip, agent transcript with a collapsed reasoning block and response state, and the composer with model and permission-mode chips at the bottom.](images/chat-window.png)
 
 ### Message layout
 
@@ -120,37 +120,53 @@ Agent messages render as full Markdown:
 - **Embedded media** — `![[source:...]]` renders inline.
 - **Copy button** — hover over any agent response to reveal a copy icon (top-right).
   Click to copy the raw Markdown. The icon flashes green for 1.5s to confirm.
+- **Separate response blocks** — a response can appear in more than one block.
+  Each block keeps its own copy button and completion state.
 
 ### Tool calls
 
-When the agent uses tools (reading pages, writing files), you see compact
-progress rows:
-- Shown as muted, one-line indicators: `wikictl page get` + a brief summary.
-- Click the **disclosure triangle** to expand full details.
-- Errors appear in red.
+When the agent uses tools, you see compact progress rows between response
+blocks:
+- Each row updates in place as the tool runs.
+- Click the **disclosure triangle** to show details.
+- Errors have an icon and a text label, not color alone.
 - Toggle **Hide tool calls** (in the Activity menu) to filter these out.
 
-### Thinking blocks
+### Reasoning blocks
 
-Some models show reasoning steps:
-- Rendered as dimmed, italic, collapsible boxes labeled "Thinking."
-- The preview shows the first line; click to expand the full reasoning.
+Some models show a collapsed reasoning block:
+- The preview shows the first line.
+- Click the block to read it.
 
-### Duration and timestamps
+### Response state and time
 
-After each agent response completes:
-- A **"Worked for Xs"** footer appears below the response.
-- **Hover** the footer to swap it to the completion timestamp (e.g., "2:34 PM").
+Each response block shows whether it is **Streaming** or **Completed**. Completed
+blocks also show the time when the app recorded the response.
 
 ### While generating
 
 - A **"Thinking… [elapsed]"** indicator pulses below the transcript.
-- The **Activity menu** (⋯ icon) appears with options:
-  - **Show internals** — reveals the raw event feed (tool calls, diagnostics).
+- The **Activity menu** (⋯ icon) is available while a query chat is queued or
+  answering. It has options:
+  - **Show Full Activity** — replaces the chat transcript with the full run
+    activity feed.
   - **Hide tool calls** — filters tool-call rows.
   - **Exit status** — shows "Ended" or "Exited N" when the process finishes.
-  - **Reveal Debug Folder** — opens the run's debug trace folder in Finder
-    (ACP messages, permissions, usage, stderr.log).
+  - **Reveal Debug Folder** — opens the run's debug trace folder in Finder,
+    when the run created one.
+
+### Export diagnostic information
+
+If a query chat is queued or answering, open the Activity menu and use these
+debug actions:
+
+- **Copy Diagnostics** copies a redacted report to the clipboard.
+- **Write Redacted Diagnostics JSONL** is available only after the run has a
+  debug folder. It saves the report there.
+
+The report includes timing, status, and row information. It does not include
+chat message text. Use the debug folder only when a developer asks for the
+full run files.
 
 ---
 

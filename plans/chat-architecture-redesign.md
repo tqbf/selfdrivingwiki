@@ -6,10 +6,10 @@ Last updated: July 29, 2026 (America/Los_Angeles)
 
 Issue: #982
 
-State: In progress
+State: Renderer migration complete
 
 Scope of this branch: Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5,
-and Phase 6
+Phase 6, and the Phase 7 renderer-compatibility cleanup
 
 This document is the design record for the chat redesign. The goal is to move
 chat to a daemon-owned, typed conversation domain with explicit turn
@@ -19,7 +19,9 @@ persistence, and client synchronization.
 This branch implements the Phase 0/1 foundation, the Phase 2 persistence
 rebuild, the Phase 3 per-chat daemon-controller move, the Phase 4 XPC
 wire / client-sync redesign, the Phase 5 chat UI decomposition, and the
-Phase 6 compatibility cleanup.
+Phase 6 compatibility cleanup. Phase 7 completed the renderer-compatibility
+cleanup. Its execution record is
+[`progress/2026-07-31T101712Z-chat-presentation-diagnostics-phase7.md`](../progress/2026-07-31T101712Z-chat-presentation-diagnostics-phase7.md).
 
 Remediation note for PR #990 on Wednesday, July 29, 2026:
 
@@ -390,7 +392,10 @@ Tool-call items carry:
 - typed detail
 - optional permission link
 
-`WikiFSCore` keeps the projection to `AgentEvent` for the current renderer.
+The renderer migration is complete. `WikiFSCore` keeps a Core-only projection
+only to write legacy persistence columns. See
+[`plans/chat-presentation-and-diagnostics.md`](chat-presentation-and-diagnostics.md)
+for the compatibility boundary and its retirement condition.
 
 ### Session state
 
@@ -671,8 +676,8 @@ Before and during implementation:
 
 ## Risks
 
-1. Typed transcript work can expand into a renderer rewrite. This plan keeps
-   the current renderer through an `AgentEvent` projection.
+1. The typed transcript renderer is complete. The legacy `AgentEvent`
+   projection remains only for the separately versioned persistence contract.
 2. Schema v46 is destructive. Tests must prove that non-chat data survives.
 3. App and daemon ship together, but stale processes can still exist during
    development. Wire versioning must fail clearly.
@@ -691,7 +696,8 @@ Before and during implementation:
 - Durable history is authoritative. Live updates are an overlay.
 - Session lifecycle, turn lifecycle, and attention are separate typed states.
 - Schema v46 may reset chat-owned data.
-- The current transcript renderer stays in scope through a projection.
+- The typed transcript renderer is complete. The legacy projection remains
+  only for persistence compatibility.
 
 ## Branch scope for this PR
 

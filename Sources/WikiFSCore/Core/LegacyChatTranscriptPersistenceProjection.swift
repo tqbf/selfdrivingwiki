@@ -1,12 +1,16 @@
+// pattern: Functional Core
+
 import Foundation
 import WikiFSTypes
 
-/// Current-renderer compatibility projection for Phase 2 typed transcript rows.
-/// This keeps the durable vocabulary (`ChatTranscriptItem`) separate from the
-/// existing `AgentEvent` renderer contract while later phases migrate the live
-/// path.
-public enum ChatTranscriptProjection {
-    public static func project(_ item: ChatTranscriptItem) -> AgentEvent {
+/// Core-only persistence compatibility adapter for typed transcript rows.
+///
+/// `GRDBWikiStore` uses this adapter only while it maintains the legacy
+/// `projected_event_json` and `projected_text` columns. The app transcript
+/// renderer must use `ChatDisplayRow` directly. Keep this adapter until a
+/// separately versioned persistence contract replaces those columns.
+enum LegacyChatTranscriptPersistenceProjection {
+    static func project(_ item: ChatTranscriptItem) -> AgentEvent {
         switch item {
         case .message(let message):
             switch message.role {
@@ -25,9 +29,9 @@ public enum ChatTranscriptProjection {
                     inputSummary: toolCall.detail ?? ""
                 )
             case .completed:
-                return .toolResult(isError: false, summary: toolCall.detail ?? toolCall.toolName)
+                return .toolResult(isError: false, summary: toolCall.output ?? toolCall.detail ?? toolCall.toolName)
             case .failed, .cancelled:
-                return .toolResult(isError: true, summary: toolCall.detail ?? toolCall.toolName)
+                return .toolResult(isError: true, summary: toolCall.output ?? toolCall.detail ?? toolCall.toolName)
             }
         case .systemNotice(let notice):
             return .assistantText("\(notice.title)\n\n\(notice.message)")

@@ -80,6 +80,12 @@ let package = Package(
         // reference these foundational types without a circular dependency.
         .target(
             name: "WikiFSTypes",
+            dependencies: [
+                // macOS uses CryptoKit; Linux resolves the matching API from
+                // swift-crypto's Crypto module.
+                .product(name: "Crypto", package: "swift-crypto",
+                         condition: .when(platforms: [.linux])),
+            ],
             path: "Sources/WikiFSTypes",
             swiftSettings: strictSwiftSettings
         ),

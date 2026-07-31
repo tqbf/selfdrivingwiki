@@ -31,6 +31,7 @@ struct ChatDetailView: View {
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     @State private var queuedMessages: [PendingQueuedMessage] = []
+    @State private var diagnosticExportError: String?
     @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     private var isLiveChat: Bool {
@@ -104,7 +105,9 @@ struct ChatDetailView: View {
                     showsInternals: $showsInternals,
                     hideToolCalls: $hideToolCalls,
                     exitStatus: remoteSession.exitStatus,
-                    debugFolderURL: remoteSession.debugFolderURL
+                    debugFolderURL: remoteSession.debugFolderURL,
+                    copyDiagnostics: copyDiagnostics,
+                    writeDiagnosticsJSONL: writeDiagnosticsJSONL
                 )
                 .padding(.top, ChatMetrics.debugTopInset)
                 .padding(.trailing, ChatMetrics.contentInset)
@@ -164,7 +167,22 @@ struct ChatDetailView: View {
             updateRightSidebarRegistration()
         }
         .onChange(of: liveDebugKey, initial: true) { _, key in
-            DebugLog.chatLive("7.detail \(key)")
+            ChatDiagnostics.observe(
+                stage: .displayProjection,
+                correlation: .init(
+                    chat: chatID.map { .init(rawValue: $0.rawValue) },
+                    eventKind: .init(rawValue: "chat-detail")
+                ),
+                detail: "presentation-change"
+            )
+        }
+        .alert("Diagnostics Export Failed", isPresented: Binding(
+            get: { diagnosticExportError != nil },
+            set: { if !$0 { diagnosticExportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { diagnosticExportError = nil }
+        } message: {
+            Text(diagnosticExportError ?? "Unknown diagnostic export failure.")
         }
         .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {
@@ -189,6 +207,37 @@ struct ChatDetailView: View {
         }
     }
 
+    private func copyDiagnostics() {
+        Task { @MainActor in
+            do {
+                try await coordinator.copyDiagnostics(for: chatID) { data in
+                    guard let text = String(data: data, encoding: .utf8) else {
+                        throw ChatDiagnosticExportError.invalidUTF8
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    guard pasteboard.setString(text, forType: .string) else {
+                        throw ChatDiagnosticExportError.pasteboardWriteFailed
+                    }
+                }
+            } catch {
+                DebugLog.store("chat diagnostic copy failed: \(error)")
+                diagnosticExportError = error.localizedDescription
+            }
+        }
+    }
+
+    private func writeDiagnosticsJSONL(to url: URL) {
+        Task { @MainActor in
+            do {
+                try await coordinator.writeDiagnosticsJSONL(for: chatID, to: url)
+            } catch {
+                DebugLog.store("chat diagnostic JSONL export failed: \(error)")
+                diagnosticExportError = error.localizedDescription
+            }
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch presentation.contentState {
@@ -206,7 +255,6 @@ struct ChatDetailView: View {
     private var internalsContent: some View {
         AgentQueueView(
             remoteSession: remoteSession,
-            showsResultEvents: false,
             showsInternals: true,
             onWikiLink: WikiReaderView.onWikiLinkHandler(for: store)
         )

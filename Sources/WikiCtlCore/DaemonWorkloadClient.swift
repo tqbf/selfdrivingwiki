@@ -11,6 +11,8 @@ public enum DaemonXPCError: Error, LocalizedError {
     case failure(String)
     case unexpectedReply
     case chatWire(ChatSyncWireError)
+    case diagnosticDecode
+    case diagnosticVersion(ChatDiagnosticVersionError)
 
     public var errorDescription: String? {
         switch self {
@@ -22,6 +24,10 @@ public enum DaemonXPCError: Error, LocalizedError {
             return "Unexpected reply from daemon"
         case .chatWire(let error):
             return error.localizedDescription
+        case .diagnosticDecode:
+            return "Daemon diagnostic snapshot could not be decoded"
+        case .diagnosticVersion(let error):
+            return "Daemon diagnostic snapshot version failure: \(error)"
         }
     }
 }
@@ -370,6 +376,48 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             } catch {
                 throw DaemonXPCError.unexpectedReply
             }
+        }
+    }
+
+    /// Request a redacted daemon trace. The request is bounded by the same XPC
+    /// timeout as every app-side workload request and validates both envelope
+    /// versions after decoding.
+    public func chatDiagnosticSnapshot(
+        _ request: ChatDiagnosticSnapshotRequest
+    ) async throws -> ChatDiagnosticSnapshotEnvelope {
+        let requestData = try JSONEncoder().encode(request)
+        return try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.chatDiagnosticSnapshot(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            let snapshot: ChatDiagnosticSnapshotEnvelope
+            do {
+                snapshot = try JSONDecoder().decode(ChatDiagnosticSnapshotEnvelope.self, from: replyData)
+            } catch {
+                throw DaemonXPCError.diagnosticDecode
+            }
+            do {
+                try snapshot.validatingVersion()
+            } catch let error as ChatDiagnosticVersionError {
+                throw DaemonXPCError.diagnosticVersion(error)
+            }
+            return snapshot
+        }
+    }
+
+    /// Acknowledge a successfully persisted/copy-delivered export. The daemon
+    /// validates the same versioned request boundary before rotating its ring.
+    public func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
+        let requestData = try JSONEncoder().encode(request)
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.resetChatDiagnostics(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            guard replyData.isEmpty == false else { throw DaemonXPCError.unexpectedReply }
         }
     }
 

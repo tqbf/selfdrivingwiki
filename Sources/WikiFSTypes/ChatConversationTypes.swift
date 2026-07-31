@@ -144,7 +144,13 @@ public struct ChatTranscriptToolCallItem: Hashable, Sendable, Codable {
     public let turnID: ChatTurnID
     public let toolName: String
     public let status: ChatToolCallStatus
+    /// Stable human-readable descriptor of the tool input (for example, a
+    /// command, path, URL, or query). It remains stable when an output arrives.
     public let detail: String?
+    /// The provider's raw-for-display tool output. This is deliberately
+    /// separate from `detail` so presentation can expand output without using
+    /// a transport wrapper as the tool descriptor.
+    public let output: String?
     public let permissionRequestID: PermissionRequestID?
     public let updatedAt: Date
 
@@ -154,6 +160,7 @@ public struct ChatTranscriptToolCallItem: Hashable, Sendable, Codable {
         toolName: String,
         status: ChatToolCallStatus,
         detail: String?,
+        output: String? = nil,
         permissionRequestID: PermissionRequestID?,
         updatedAt: Date
     ) {
@@ -162,6 +169,7 @@ public struct ChatTranscriptToolCallItem: Hashable, Sendable, Codable {
         self.toolName = toolName
         self.status = status
         self.detail = detail
+        self.output = output
         self.permissionRequestID = permissionRequestID
         self.updatedAt = updatedAt
     }

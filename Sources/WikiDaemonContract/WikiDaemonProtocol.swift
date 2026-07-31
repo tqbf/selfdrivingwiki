@@ -128,6 +128,14 @@ import Foundation
     /// JSON-encoded `ChatSyncSnapshotEnvelope` data.
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void)
 
+    /// Returns a versioned, redacted diagnostic snapshot. Both request and
+    /// reply are JSON `Data`; protocol versions are validated by the daemon.
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Acknowledges a successfully delivered diagnostic export so `wikid` can
+    /// rotate its identity, fingerprint key, and bounded ring.
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void)
+
     /// Resolve a pending permission request for a chat (approve/reject).
     /// `request` is JSON `ChatPermissionResolveRequest`.
     func resolveChatPermission(request: Data, reply: @escaping () -> Void)

@@ -8,7 +8,7 @@ Sources/WikiFSTypes/ChatConfigurationOptionID.swift	public struct ChatConfigurat
 Sources/WikiFSTypes/ChatConfigurationValueID.swift	public struct ChatConfigurationValueID: Hashable, Codable, RawRepresentable, Sendable
 Sources/WikiFSTypes/ChatConversationTypes.swift	public init( commandID: ChatCommandID, turnID: ChatTurnID, userText: String, contextReferences: [ChatContextReference], submittedAt: Date )
 Sources/WikiFSTypes/ChatConversationTypes.swift	public init( messageID: ChatMessageID, turnID: ChatTurnID, role: ChatTranscriptMessageRole, text: String, createdAt: Date )
-Sources/WikiFSTypes/ChatConversationTypes.swift	public init( toolCallID: ToolCallID, turnID: ChatTurnID, toolName: String, status: ChatToolCallStatus, detail: String?, permissionRequestID: PermissionRequestID?, updatedAt: Date )
+Sources/WikiFSTypes/ChatConversationTypes.swift	public init( toolCallID: ToolCallID, turnID: ChatTurnID, toolName: String, status: ChatToolCallStatus, detail: String?, output: String? = nil, permissionRequestID: PermissionRequestID?, updatedAt: Date )
 Sources/WikiFSEngine/ChatAgentRuntime.swift	public init(optionID: ChatConfigurationOptionID, valueID: ChatConfigurationValueID)
 Sources/WikiFSEngine/ChatAgentRuntime.swift	func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope>
 Sources/WikiFSEngine/ChatAgentRuntime.swift	func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws

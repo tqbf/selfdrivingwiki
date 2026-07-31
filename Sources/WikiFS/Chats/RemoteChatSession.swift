@@ -1,3 +1,5 @@
+// pattern: Imperative Shell
+
 #if os(macOS)
 import ACPModel
 import Foundation
@@ -22,9 +24,6 @@ public final class RemoteChatSession {
 
     public private(set) var syncState: ChatClientSyncState?
     private(set) var displayTranscript: ChatDisplayTranscript = .empty
-    /// Compatibility only for the separate queue/activity-feed surface. Chat
-    /// presentation must use `displayTranscript`.
-    public private(set) var activityFeedEvents: [AgentEvent] = []
     public private(set) var runState: ChatRunState = .idle
     public var syncStatus: ChatClientSyncStatus? { syncState?.syncStatus }
 
@@ -87,6 +86,15 @@ public final class RemoteChatSession {
 
     func ingest(_ update: ChatSyncUpdate) {
         guard update.projection.chatID == chatID.chatID else { return }
+        ChatDiagnostics.observe(
+            stage: .syncAcceptance,
+            correlation: .init(
+                chat: .init(rawValue: update.projection.chatID.rawValue),
+                generation: .init(rawValue: update.projection.generation.rawValue),
+                updateSequence: .init(UInt64(max(0, update.projection.lastIncludedSequence.rawValue)))
+            ),
+            detail: "live-update"
+        )
         apply(.applyUpdate(update))
     }
 
@@ -115,6 +123,12 @@ public final class RemoteChatSession {
     private func apply(_ action: ChatClientSyncAction) {
         guard let state = syncState else { return }
         let reduction = ChatClientSyncReducer.reduce(state, action)
+        ChatDiagnostics.observe(
+            stage: .syncReconciliation,
+            outcome: reduction.state.syncStatus == .synchronized ? .accepted : .recovered,
+            correlation: .init(chat: .init(rawValue: state.chatID.rawValue)),
+            detail: "client-sync"
+        )
         syncState = reduction.state
         if reduction.state.syncStatus == .synchronized {
             clearAuthoritativeSnapshotRetryBackoff()
@@ -126,7 +140,6 @@ public final class RemoteChatSession {
     private func projectDisplayState() {
         guard let syncState else {
             displayTranscript = .empty
-            activityFeedEvents = []
             runState = .idle
             exitStatus = nil
             runningKind = nil
@@ -151,7 +164,6 @@ public final class RemoteChatSession {
             items: items,
             activeContentBlock: activeContentBlock
         ).transcript
-        activityFeedEvents = items.map(ChatTranscriptProjection.project)
 
         guard let projection = syncState.projection else {
             runState = .idle
@@ -402,7 +414,6 @@ public final class RemoteChatSession {
     func reset() {
         syncState = chatID.chatID.map { ChatClientSyncState(chatID: $0) }
         displayTranscript = .empty
-        activityFeedEvents = []
         runState = .idle
         exitStatus = nil
         runningKind = nil
