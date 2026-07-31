@@ -6887,7 +6887,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             var inserted: [PersistedChatTranscriptItem] = []
 
             for item in items {
-                let projectedEvent = ChatTranscriptProjection.project(item)
+                let projectedEvent = LegacyChatTranscriptPersistenceProjection.project(item)
                 let itemJSON = String(data: try itemEncoder.encode(item), encoding: .utf8) ?? "{}"
                 let projectedData = try eventEncoder.encode(projectedEvent)
                 let projectedJSON = String(data: projectedData, encoding: .utf8)

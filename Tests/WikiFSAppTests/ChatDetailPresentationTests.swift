@@ -282,7 +282,7 @@ private func persisted(_ items: [ChatTranscriptItem]) -> [PersistedChatTranscrip
             cursor: ChatTranscriptCursor(rawValue: Int64(index + 1)),
             item: item,
             projectedEventJSON: nil,
-            projectedPlainText: ChatTranscriptProjection.project(item).plainText,
+            projectedPlainText: "",
             createdAt: .distantPast
         )
     }

@@ -120,21 +120,23 @@ Agent messages render as full Markdown:
 - **Embedded media** — `![[source:...]]` renders inline.
 - **Copy button** — hover over any agent response to reveal a copy icon (top-right).
   Click to copy the raw Markdown. The icon flashes green for 1.5s to confirm.
+- **Separate response blocks** — a response can appear in more than one block.
+  Each block keeps its own copy button and completion state.
 
 ### Tool calls
 
-When the agent uses tools (reading pages, writing files), you see compact
-progress rows:
-- Shown as muted, one-line indicators: `wikictl page get` + a brief summary.
-- Click the **disclosure triangle** to expand full details.
-- Errors appear in red.
+When the agent uses tools, you see compact progress rows between response
+blocks:
+- Each row updates in place as the tool runs.
+- Click the **disclosure triangle** to show details.
+- Errors have an icon and a text label, not color alone.
 - Toggle **Hide tool calls** (in the Activity menu) to filter these out.
 
-### Thinking blocks
+### Reasoning blocks
 
-Some models show reasoning steps:
-- Rendered as dimmed, italic, collapsible boxes labeled "Thinking."
-- The preview shows the first line; click to expand the full reasoning.
+Some models show a collapsed reasoning block:
+- The preview shows the first line.
+- Click the block to read it.
 
 ### Duration and timestamps
 
@@ -146,11 +148,23 @@ After each agent response completes:
 
 - A **"Thinking… [elapsed]"** indicator pulses below the transcript.
 - The **Activity menu** (⋯ icon) appears with options:
-  - **Show internals** — reveals the raw event feed (tool calls, diagnostics).
+  - **Show internals** — shows extra activity details.
   - **Hide tool calls** — filters tool-call rows.
   - **Exit status** — shows "Ended" or "Exited N" when the process finishes.
   - **Reveal Debug Folder** — opens the run's debug trace folder in Finder
     (ACP messages, permissions, usage, stderr.log).
+
+### Export diagnostic information
+
+If a chat does not behave as expected, open the Activity menu and use one of
+these debug actions:
+
+- **Copy Diagnostics** copies a redacted report to the clipboard.
+- **Write Redacted Diagnostics JSONL** saves the same report in the debug folder.
+
+The report includes timing, status, and row information. It does not include
+chat message text. Use the debug folder only when a developer asks for the
+full run files.
 
 ---
 

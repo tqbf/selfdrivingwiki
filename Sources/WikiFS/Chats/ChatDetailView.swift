@@ -255,7 +255,6 @@ struct ChatDetailView: View {
     private var internalsContent: some View {
         AgentQueueView(
             remoteSession: remoteSession,
-            showsResultEvents: false,
             showsInternals: true,
             onWikiLink: WikiReaderView.onWikiLinkHandler(for: store)
         )

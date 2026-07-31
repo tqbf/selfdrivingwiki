@@ -1,26 +1,23 @@
+// pattern: Imperative Shell
+
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
 /// The live activity feed for an ACP-driven agent run — the "Agent Queue."
-/// Shows a real-time transcript of agent tool calls, diagnostics, and results
-/// as the agent executes, with an optional internals toggle for verbose output.
+/// Shows a real-time typed transcript of agent work and results as it executes.
 struct AgentQueueView: View {
-    /// The daemon-mirrored chat session (replaces the in-process chat
-    /// `AgentLauncher` after Phase C4). Run-state reads (`events`,
-    /// `preflightError`, `stderr`, `runState`, `runningKind`) come from the
-    /// daemon's live launcher via chat envelopes.
+    /// The daemon-mirrored chat session replaces the in-process launcher.
+    /// Run-state reads come from typed chat synchronization envelopes.
     var remoteSession: RemoteChatSession
-    let showsResultEvents: Bool
     let showsInternals: Bool
     /// Forwards wiki-link clicks in the transcript to the detail column. Built
     /// where the store lives and threaded down; `nil` when navigation is
     /// impossible (links still render, just don't navigate).
     var onWikiLink: ((URL, Bool) -> Void)? = nil
 
-    init(remoteSession: RemoteChatSession, showsResultEvents: Bool = true, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
+    init(remoteSession: RemoteChatSession, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
         self.remoteSession = remoteSession
-        self.showsResultEvents = showsResultEvents
         self.showsInternals = showsInternals
         self.onWikiLink = onWikiLink
     }
@@ -43,8 +40,8 @@ struct AgentQueueView: View {
                 stderrBanner
             }
         }
-        // Selection + copy across the whole feed now happens inside
-        // `ChatWebView`'s single document; this only covers the
+        // Selection + copy across the whole feed happens inside
+        // `ChatTranscriptView`'s single document. This only covers the
         // placeholder/banner `Text` views outside it.
         .textSelection(.enabled)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
@@ -57,24 +54,27 @@ struct AgentQueueView: View {
                 .padding(ActivityMetrics.padding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            ChatWebView(events: renderedEvents, style: .activityFeed, showsInternals: showsInternals, onWikiLink: onWikiLink)
+            ChatTranscriptView(
+                rendering: .init(transcript: remoteSession.displayTranscript),
+                transcriptID: remoteSession.chatID.chatID.map(TranscriptID.chat),
+                emptyStateMessage: "No activity yet.",
+                isStreaming: remoteSession.runState.isAnswering,
+                onIntent: handleTranscriptIntent
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     private var showsPlaceholder: Bool {
-        renderedEvents.isEmpty && remoteSession.preflightError == nil
+        remoteSession.displayTranscript.rows.isEmpty && remoteSession.preflightError == nil
     }
 
-    private var renderedEvents: [AgentEvent] {
-        remoteSession.activityFeedEvents.filter { event in
-            if !showsInternals && event.isInternalTranscriptEvent {
-                return false
-            }
-            if case .result = event {
-                return showsResultEvents
-            }
-            return true
+    private func handleTranscriptIntent(_ intent: ChatTranscriptIntent) {
+        switch intent {
+        case .openWikiLink(let url, let inNewTab):
+            onWikiLink?(url, inNewTab)
+        case .resolvePermission:
+            break
         }
     }
 
