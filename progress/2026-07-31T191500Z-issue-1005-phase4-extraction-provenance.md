@@ -27,9 +27,15 @@ markdown records. It does not add inspector, hydration, or SwiftUI code.
 
 ## Verification
 
-The targeted Phase 4 suites passed on the implementation workspace before the
-final full verification run. The passing groups included codec, projection,
-derived-write, hook, event-emission, manifest, CLI, and source-version suites.
+Implementation commit: `59381b25fed367c8cb054725a5fa1bc280f96451`.
 
-The final exact commit SHA and full command results are added after commit and
-push.
+- `make build` passed.
+- `make test` passed: 2,920 tests in 236 suites, with two explicitly skipped
+  opt-in ACP integration tests.
+- `swift build` passed.
+- `swift test` passed.
+- Focused codec, projection, derived-write, hook, event-emission, manifest,
+  CLI, source-version, and legacy extraction regression suites passed.
+- `git diff --check` passed. The source audit found no new bare `try?`, no new
+  raw page/source ID comparisons, and only the intended user/source callers at
+  the `appendProcessedMarkdown` compatibility boundary.
