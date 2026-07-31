@@ -95,7 +95,8 @@ public enum PageCommand {
             return try get(selector, in: store, json: json, workspace: workspace)
         case .add(let id, let title, let bodySource, let expectHead, let workspace, let author, let provenance):
             let body = try resolveBodySource(bodySource)
-            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author, provenance: provenance, in: store, validator: validator, linter: linter)
+            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author,
+                              provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
         case .delete(let id):
             return try delete(id: id, in: store)
         case .search(let query, let limit):
@@ -107,6 +108,22 @@ public enum PageCommand {
         case .info(let selector):
             return try info(selector, in: store)
         }
+    }
+
+    /// Decodes the launcher-provided queue payload at the CLI boundary. Explicit
+    /// command-line roles remain supported as compatibility input, but cannot
+    /// remove the primary/supporting evidence assigned by the ingest queue.
+    private static func mergedAgentIngestProvenance(
+        _ explicit: [PageVersionSourceInput],
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [PageVersionSourceInput] {
+        guard let raw = environment["WIKI_INGEST_SOURCE_IDS"], !raw.isEmpty else { return explicit }
+        let assigned = raw.split(separator: ",").map { SourceID(rawValue: String($0)) }
+        var merged = PageVersionSourceInput.agentIngest(sourceIDs: assigned)
+        for input in explicit where !merged.contains(input) {
+            merged.append(input)
+        }
+        return merged
     }
 
     // MARK: - list

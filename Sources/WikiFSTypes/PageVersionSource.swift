@@ -31,6 +31,18 @@ public struct PageVersionSourceInput: Equatable, Hashable, Sendable {
         self.sourceID = sourceID
         self.role = role
     }
+
+    /// Deterministic provenance for one agent ingest assignment. The assigned
+    /// source is primary; later, distinct queue-payload sources are supporting.
+    /// The queue payload is an external ordering contract, so conversion to
+    /// typed inputs happens once at that boundary instead of in prompt text.
+    public static func agentIngest(sourceIDs: [SourceID]) -> [Self] {
+        var seen = Set<SourceID>()
+        let distinct = sourceIDs.filter { seen.insert($0).inserted }
+        guard let assigned = distinct.first else { return [] }
+        return [Self(sourceID: assigned, role: .primary)]
+            + distinct.dropFirst().map { Self(sourceID: $0, role: .supporting) }
+    }
 }
 
 /// A source that prevents removal because an immutable page version cites it.
@@ -65,6 +77,17 @@ public struct NonEmptyProvenanceDeletionBlockers: Equatable, Sendable {
 /// The typed categories that can prevent destructive resource removal.
 public enum ResourceDeletionRestriction: Error, Equatable, Sendable {
     case provenance(NonEmptyProvenanceDeletionBlockers)
+}
+
+/// Data-only input supplied to Issue #219's combined deletion-impact analysis.
+/// Presentation and navigation remain owned by that later feature.
+public enum Issue219DeletionAnalysisInput: Equatable, Sendable {
+    case provenance(NonEmptyProvenanceDeletionBlockers)
+}
+
+public extension NonEmptyProvenanceDeletionBlockers {
+    /// Preserves the persistence ordering and complete typed identities.
+    var issue219DeletionAnalysisInput: Issue219DeletionAnalysisInput { .provenance(self) }
 }
 
 /// Rejections specific to the page-version provenance write boundary.

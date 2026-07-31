@@ -1383,6 +1383,14 @@ public final class AgentLauncher {
         // The launcher resolves it from the operation kind (one-shot runs) or the
         // chatID (interactive runs). An explicit `--author` on wikictl still wins.
         providerHints[HintKey.env("WIKI_AUTHOR")] = Self.authorForRun(kind: operation.kind, chatID: nil)
+        // Page provenance is built from the ordered queue payload, not merely
+        // from an executor remembering to spell `--source`. The CLI decodes
+        // this external-format boundary into typed PageVersionSourceInput values.
+        if case .ingest(let sources, _) = request {
+            providerHints[HintKey.env("WIKI_INGEST_SOURCE_IDS")] = sources
+                .map(\.sourceID.rawValue)
+                .joined(separator: ",")
+        }
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,

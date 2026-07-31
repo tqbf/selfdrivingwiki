@@ -3438,10 +3438,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let hash = portableSHA256( bodyData)
                 .map { String(format: "%02x", $0) }.joined()
             _ = try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: id, head: nil, title: title, slug: slug, body: body,
-                bodyData: bodyData, hash: hash, lastEditedBy: createdBy,
+                pageID: id, head: nil, mergeParentID: nil, title: title, body: body,
+                bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(createdBy),
                 activityKind: "import", now: now, nowTS: nowTS,
-                provenance: normalizedProvenance, mirrorMutation: .seed))
+                provenance: normalizedProvenance,
+                publication: .main(slug: slug, mirrorMutation: .seed)))
 
             return WikiPage(
                 id: id, title: title, slug: slug, bodyMarkdown: body,
@@ -3527,10 +3528,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return PageVersionProvenanceResult(versionID: amendVersionID, didWrite: true)
             }
             return try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: id, head: head, title: title, slug: slug, body: body,
-                bodyData: bodyData, hash: hash, lastEditedBy: lastEditedBy,
+                pageID: id, head: head, mergeParentID: nil, title: title, body: body,
+                bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(lastEditedBy),
                 activityKind: "edit", now: now, nowTS: nowTS,
-                provenance: normalizedProvenance, mirrorMutation: .append))
+                provenance: normalizedProvenance,
+                publication: .main(slug: slug, mirrorMutation: .append)))
         }
     }
 
@@ -4881,10 +4883,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             //      helpers, not re-call `mutate`). This helper does NOT emit;
             //      this method's `mutate` wrapper is the single emit site.
             return try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: pageID, head: head, title: title, slug: slug, body: body,
-                bodyData: bodyData, hash: hash, lastEditedBy: lastEditedBy,
+                pageID: pageID, head: head, mergeParentID: nil, title: title, body: body,
+                bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(lastEditedBy),
                 activityKind: "edit", now: now, nowTS: nowTS,
-                provenance: normalizedProvenance, mirrorMutation: .append))
+                provenance: normalizedProvenance,
+                publication: .main(slug: slug, mirrorMutation: .append)))
         }
         return result.versionID
     }
@@ -4921,20 +4924,37 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         case append
     }
 
+    /// Selects the ref/mirror publication owned by a page-version write.
+    /// Workspace history is deliberately separate from the main page mirror.
+    private enum PageVersionPublication {
+        case main(slug: String, mirrorMutation: PageVersionMirrorMutation)
+        case workspaceWrite(workspaceID: WorkspaceID, initialBaseVersionID: PageVersionID?)
+        case workspaceRefresh(workspaceID: WorkspaceID, mainHead: PageVersionID?)
+        case workspaceResolve(workspaceID: WorkspaceID, mainHead: PageVersionID?)
+    }
+
+    private enum PageVersionActivityAgent {
+        case pageAuthor(String?)
+        /// The activity already has a durable agent identity. Main-mirror
+        /// publication also receives the existing page author to preserve the
+        /// visible author field without reinterpreting an agent ID as one.
+        case existingAgentID(String, mirrorAuthor: String? = nil)
+    }
+
     private struct PageVersionProvenanceRequest {
         let pageID: PageID
         let head: PageVersionID?
+        let mergeParentID: PageVersionID?
         let title: String
-        let slug: String
         let body: String
         let bodyData: Data
         let hash: String
-        let lastEditedBy: String?
+        let activityAgent: PageVersionActivityAgent
         let activityKind: String
         let now: Date
         let nowTS: Double
         let provenance: [PageVersionSourceInput]
-        let mirrorMutation: PageVersionMirrorMutation
+        let publication: PageVersionPublication
     }
 
     private struct PageVersionProvenanceResult {
@@ -4950,11 +4970,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let pageID = request.pageID
         let head = request.head
         let title = request.title
-        let slug = request.slug
         let body = request.body
         let bodyData = request.bodyData
         let hash = request.hash
-        let lastEditedBy = request.lastEditedBy
         let nowTS = request.nowTS
         let provenance = try self.normalizedPageVersionProvenance(request.provenance, on: db)
         // No-op guard: identical body AND title = no real change. Skip the
@@ -4964,7 +4982,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // `pages` UPDATE per no-op save. Returns the existing head's id so the
         // public caller's return value stays consistent with "the active
         // version after this save".
-        if let head,
+        if case .main = request.publication,
+           let head,
            let headRow = try Row.fetchOne(db, sql: """
                 SELECT pv.blob_hash, pv.title, p.last_edited_by
                 FROM page_versions pv
@@ -4984,6 +5003,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     // activity so the provenance reflects the new author. Same
                     // author → the no-op path is genuinely a no-op (bump
                     // `updated_at` only, no version chain pollution).
+                    let lastEditedBy: String?
+                    switch request.activityAgent {
+                    case .pageAuthor(let author): lastEditedBy = author
+                    case .existingAgentID(_, let mirrorAuthor): lastEditedBy = mirrorAuthor ?? existingActor
+                    }
                     if existingActor == lastEditedBy || (existingActor == nil && lastEditedBy == nil) {
                         try db.execute(sql: """
                         UPDATE pages SET updated_at = ?, last_edited_by = ? WHERE id = ?;
@@ -5006,7 +5030,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
         // 3. Real named agent (page provenance #page-provenance) + an
         //    'edit' activity. Degrades to legacy-import for nil/empty authors.
-        let agentID = try self.ensurePageAuthorAgent(lastEditedBy, on: db)
+        let agentID: String
+        let lastEditedBy: String?
+        switch request.activityAgent {
+        case .pageAuthor(let author):
+            agentID = try self.ensurePageAuthorAgent(author, on: db)
+            lastEditedBy = author
+        case .existingAgentID(let existingAgentID, let mirrorAuthor):
+            agentID = existingAgentID
+            lastEditedBy = mirrorAuthor
+        }
         let activityID = ULID.generate()
         try db.execute(sql: """
         INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
@@ -5019,8 +5052,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let versionID = ULID.generate()
         try db.execute(sql: """
         INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-        VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-        """, arguments: [versionID, pageID.rawValue, head?.rawValue, hash, title, activityID, nowTS])
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """, arguments: [versionID, pageID.rawValue, head?.rawValue,
+                            request.mergeParentID?.rawValue, hash, title, activityID, nowTS])
 
         for input in provenance {
             try db.execute(sql: """
@@ -5029,36 +5063,62 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [versionID, input.sourceID.rawValue, input.role.rawValue])
         }
 
-        // 5. Update the denormalized pages mirror. The root version is seeded
-        // alongside a freshly inserted page already at generation one; later
-        // versions advance that mirror generation.
-        switch request.mirrorMutation {
-        case .seed:
+        // 5. Publish the new immutable node to its owning ref/mirror.
+        switch request.publication {
+        case .main(let slug, let mirrorMutation):
+            switch mirrorMutation {
+            case .seed:
+                try db.execute(sql: """
+                UPDATE pages
+                SET title = ?, slug = ?, body_markdown = ?,
+                    updated_at = ?, last_edited_by = ?
+                WHERE id = ?;
+                """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+            case .append:
+                try db.execute(sql: """
+                UPDATE pages
+                SET title = ?, slug = ?, body_markdown = ?,
+                    updated_at = ?, version = version + 1, last_edited_by = ?
+                WHERE id = ?;
+                """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+            }
+            guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
             try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, last_edited_by = ?
-            WHERE id = ?;
-            """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
-        case .append:
+            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+            VALUES ('page-content', ?, ?, 1, ?)
+            ON CONFLICT(kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                generation = generation + 1,
+                updated_at = excluded.updated_at;
+            """, arguments: [pageID.rawValue, versionID, nowTS])
+        case .workspaceWrite(let workspaceID, let initialBaseVersionID):
             try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, version = version + 1, last_edited_by = ?
-            WHERE id = ?;
-            """, arguments: [title, slug, body, nowTS, lastEditedBy, pageID.rawValue])
+            INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
+            VALUES (?, 'page-content', ?, ?, ?, NULL, NULL, ?)
+            ON CONFLICT(workspace_id, kind, owner_id) DO UPDATE SET
+                version_id = excluded.version_id,
+                blob_hash = NULL,
+                title = NULL,
+                updated_at = excluded.updated_at;
+            """, arguments: [workspaceID.rawValue, pageID.rawValue,
+                                initialBaseVersionID?.rawValue, versionID, nowTS])
+            try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;",
+                           arguments: [nowTS, workspaceID.rawValue])
+        case .workspaceRefresh(let workspaceID, let mainHead):
+            try db.execute(sql: """
+            UPDATE workspace_refs
+            SET base_version_id = ?, version_id = ?, updated_at = ?
+            WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
+            """, arguments: [mainHead?.rawValue, versionID, nowTS,
+                                workspaceID.rawValue, pageID.rawValue])
+        case .workspaceResolve(let workspaceID, let mainHead):
+            try db.execute(sql: """
+            UPDATE workspace_refs
+            SET version_id = ?, base_version_id = ?, blob_hash = NULL, title = NULL, updated_at = ?
+            WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
+            """, arguments: [versionID, mainHead?.rawValue, nowTS,
+                                workspaceID.rawValue, pageID.rawValue])
         }
-        guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
-
-        // 6. Write the page-content ref.
-        try db.execute(sql: """
-        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-        VALUES ('page-content', ?, ?, 1, ?)
-        ON CONFLICT(kind, owner_id) DO UPDATE SET
-            version_id = excluded.version_id,
-            generation = generation + 1,
-            updated_at = excluded.updated_at;
-        """, arguments: [pageID.rawValue, versionID, nowTS])
 
         return PageVersionProvenanceResult(
             versionID: PageVersionID(rawValue: versionID), didWrite: true)
@@ -5161,18 +5221,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 : $0.role.rawValue < $1.role.rawValue
         }
     }
-
-    private func attachPageVersionSources(
-        _ provenance: [PageVersionSourceInput], to versionID: PageVersionID, on db: Database
-    ) throws {
-        for input in provenance {
-            try db.execute(sql: """
-            INSERT INTO page_version_sources (page_version_id, source_id, role)
-            VALUES (?, ?, ?);
-            """, arguments: [versionID.rawValue, input.sourceID.rawValue, input.role.rawValue])
-        }
-    }
-
 
     public func pageHeadVersionID(pageID: PageID) throws -> PageVersionID? {
         try dbWriter.read { db in
@@ -5550,11 +5598,11 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
             let sources = try self.pageVersionSourceInputs(versionID: versionID, on: db)
             return try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: pageID, head: head, title: sanitizedTitle, slug: slug,
+                pageID: pageID, head: head, mergeParentID: nil, title: sanitizedTitle,
                 body: body, bodyData: bodyData, hash: targetBlobHash,
-                lastEditedBy: PageAuthor.user.rawValue, activityKind: "restore",
+                activityAgent: .pageAuthor(PageAuthor.user.rawValue), activityKind: "restore",
                 now: now, nowTS: nowTS, provenance: sources,
-                mirrorMutation: .append)).versionID
+                publication: .main(slug: slug, mirrorMutation: .append))).versionID
         }
     }
 
@@ -5710,60 +5758,29 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return nil
             }
 
-            // Existing page: append page_versions row + UPSERT workspace_refs.
-            try db.execute(sql: """
-            INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-            """, arguments: [hash, Int64(bodyData.count), bodyData])
-
-            // #763: thread the author identity through ensurePageAuthorAgent
-            // so workspace version activities carry the real agent (e.g.
-            // `agent:ingest`), not the shared `legacy-import`.
-            let agentID = try self.ensurePageAuthorAgent(author, on: db)
-            let activityID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?, 'edit', ?, ?, ?);
-            """, arguments: [activityID, agentID, nowTS, nowTS])
-
+            // Existing page: publish an immutable workspace version. The helper
+            // owns blob/activity/version/edge/ref writes, but never touches the
+            // main page mirror for a workspace destination.
             let wsHead = try Self.workspacePageVersionLocked(
                 workspaceID: workspaceID, pageID: pageID, on: db)
             let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
-
-            let versionID = ULID.generate()
             let parent = wsHead ?? mainHead
-            try db.execute(sql: """
-            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, pageID.rawValue, parent?.rawValue, hash, title, activityID, nowTS])
-
-            // Workspace versions are immutable history just like main versions.
-            // Keep their edge set on the version itself; workspace_ref_sources
-            // additionally records provenance for staged, not-yet-minted pages.
-            try self.attachPageVersionSources(
-                normalizedProvenance, to: PageVersionID(rawValue: versionID), on: db)
-
-            // UPSERT workspace_refs. On first touch, record base_version_id = main head.
-            // On subsequent touches, keep the original base (NULL = no-op in ON CONFLICT).
             let hasWsRef = wsHead != nil
             let baseToRecord: PageVersionID? = hasWsRef ? nil : mainHead
-
-            try db.execute(sql: """
-            INSERT INTO workspace_refs (workspace_id, kind, owner_id, base_version_id, version_id, blob_hash, title, updated_at)
-            VALUES (?, 'page-content', ?, ?, ?, NULL, NULL, ?)
-            ON CONFLICT(workspace_id, kind, owner_id) DO UPDATE SET
-                version_id = excluded.version_id,
-                blob_hash = NULL,
-                title = NULL,
-                updated_at = excluded.updated_at;
-            """, arguments: [workspaceID.rawValue, pageID.rawValue, baseToRecord?.rawValue, versionID, nowTS])
+            let versionID = try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: pageID, head: parent, mergeParentID: nil, title: title,
+                body: body, bodyData: bodyData, hash: hash,
+                activityAgent: .pageAuthor(author), activityKind: "edit",
+                now: now, nowTS: nowTS, provenance: normalizedProvenance,
+                publication: .workspaceWrite(
+                    workspaceID: workspaceID, initialBaseVersionID: baseToRecord)
+            )).versionID
 
             try self.replaceWorkspaceRefSources(
                 workspaceID: workspaceID, pageID: pageID,
                 provenance: normalizedProvenance, on: db)
 
-            try db.execute(sql: "UPDATE workspaces SET updated_at = ? WHERE id = ?;", arguments: [nowTS, workspaceID.rawValue])
-
-            return PageVersionID(rawValue: versionID)
+            return versionID
 
         }
     }
@@ -6061,19 +6078,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     let mergedData = Data(mergedText.utf8)
                     let hash = portableSHA256( mergedData)
                         .map { String(format: "%02x", $0) }.joined()
-                    let nowTS = Date().timeIntervalSince1970
-
-                    try db.execute(sql: """
-                    INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-                    """, arguments: [hash, Int64(mergedData.count), mergedData])
-
-                    // #763: use the workspace version's agent.
-                    let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
-                    let activityID = ULID.generate()
-                    try db.execute(sql: """
-                    INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-                    VALUES (?, 'refresh', ?, ?, ?);
-                    """, arguments: [activityID, agentID, nowTS, nowTS])
+                    let now = Date()
+                    let nowTS = now.timeIntervalSince1970
 
                     // Fetch the title from the workspace version.
                     guard let wsVersion else {
@@ -6084,28 +6090,20 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                         arguments: [wsVersion.rawValue]
                     ) else { continue }
 
-                    let newVersionID = ULID.generate()
-                    try db.execute(sql: """
-                    INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                    """, arguments: [newVersionID, pageID.rawValue, mainHead?.rawValue, wsVersion.rawValue,
-                                     hash, title, activityID, nowTS])
+                    let sources: [PageVersionSourceInput]
                     if let mainHead {
-                        try self.attachPageVersionSources(
-                            try self.unionPageVersionSourceInputs([mainHead, wsVersion], on: db),
-                            to: PageVersionID(rawValue: newVersionID), on: db)
+                        sources = try self.unionPageVersionSourceInputs([mainHead, wsVersion], on: db)
                     } else {
-                        try self.attachPageVersionSources(
-                            try self.pageVersionSourceInputs(versionID: wsVersion, on: db),
-                            to: PageVersionID(rawValue: newVersionID), on: db)
+                        sources = try self.pageVersionSourceInputs(versionID: wsVersion, on: db)
                     }
-
-                    // Update the workspace_ref: new version + new base.
-                    try db.execute(sql: """
-                    UPDATE workspace_refs
-                    SET base_version_id = ?, version_id = ?, updated_at = ?
-                    WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-                    """, arguments: [mainHead?.rawValue, newVersionID, nowTS, workspaceID.rawValue, pageIDStr])
+                    let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
+                    _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+                        pageID: pageID, head: mainHead, mergeParentID: wsVersion, title: title,
+                        body: mergedText, bodyData: mergedData, hash: hash,
+                        activityAgent: .existingAgentID(agentID), activityKind: "refresh",
+                        now: now, nowTS: nowTS, provenance: sources,
+                        publication: .workspaceRefresh(workspaceID: workspaceID, mainHead: mainHead)
+                    ))
                 }
 
                 if !conflicts.isEmpty {
@@ -6182,21 +6180,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let now = Date()
             let nowTS = now.timeIntervalSince1970
 
-            // 1. Blob.
-            try db.execute(sql: """
-            INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-            """, arguments: [hash, Int64(bodyData.count), bodyData])
-
-            // 2. Activity.
-            // #763: use the workspace version's agent.
-            let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
-            let activityID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-            VALUES (?, 'resolve', ?, ?, ?);
-            """, arguments: [activityID, agentID, nowTS, nowTS])
-
-            // 3. New workspace version (parent = workspace's current head).
+            // New workspace version (parent = workspace's current head).
             let wsHead = try Self.workspacePageVersionLocked(
                 workspaceID: workspaceID, pageID: pageID, on: db)
             let title: String
@@ -6226,11 +6210,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
 
             let mainHead = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
-            let versionID = ULID.generate()
-            try db.execute(sql: """
-            INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
-            """, arguments: [versionID, pageID.rawValue, wsHead?.rawValue, hash, title, activityID, nowTS])
             let resolvedSources: [PageVersionSourceInput]
             if let wsHead, let mainHead {
                 resolvedSources = try self.unionPageVersionSourceInputs([mainHead, wsHead], on: db)
@@ -6239,15 +6218,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             } else {
                 resolvedSources = try self.workspaceRefSourceInputs(workspaceID: workspaceID, pageID: pageID, on: db)
             }
-            try self.attachPageVersionSources(
-                resolvedSources, to: PageVersionID(rawValue: versionID), on: db)
-
-            // 4. Update workspace_ref to point at the resolved version.
-            try db.execute(sql: """
-            UPDATE workspace_refs
-            SET version_id = ?, base_version_id = ?, blob_hash = NULL, title = NULL, updated_at = ?
-            WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-            """, arguments: [versionID, mainHead?.rawValue, nowTS, workspaceID.rawValue, pageID.rawValue])
+            let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
+            _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+                pageID: pageID, head: wsHead, mergeParentID: nil, title: title,
+                body: body, bodyData: bodyData, hash: hash,
+                activityAgent: .existingAgentID(agentID), activityKind: "resolve",
+                now: now, nowTS: nowTS, provenance: resolvedSources,
+                publication: .workspaceResolve(workspaceID: workspaceID, mainHead: mainHead)
+            ))
 
             // 5. Delete the conflict row for this page.
             try db.execute(sql: """
@@ -9481,7 +9459,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let bodyData: Data = blobRow["content"]
         let body = String(data: bodyData, encoding: .utf8) ?? ""
 
-        let now = Date().timeIntervalSince1970
+        let date = Date()
+        let now = date.timeIntervalSince1970
         let slug = try self.uniqueSlug(from: title, id: pageID, on: db)
 
         // 1. Create the pages row.
@@ -9490,34 +9469,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         VALUES (?, ?, ?, ?, ?, ?, 1);
         """, arguments: [pageID.rawValue, title, slug, body, now, now])
 
-        // 2. Activity + agent.
-        // #763: resolve the author from the workspace version's activity.
+        // The helper owns the root activity, immutable version, provenance
+        // edges, mirror, and page-content ref in this same transaction.
         let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
-        let activityID = ULID.generate()
-        try db.execute(sql: """
-        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-        VALUES (?, 'edit', ?, ?, ?);
-        """, arguments: [activityID, agentID, now, now])
-
-        // 3. Root version (parent NULL).
-        let versionID = ULID.generate()
-        try db.execute(sql: """
-        INSERT INTO page_versions (id, page_id, parent_id, blob_hash, title, activity_id, saved_at)
-        VALUES (?, ?, NULL, ?, ?, ?, ?);
-        """, arguments: [versionID, pageID.rawValue, blobHash, title, activityID, now])
-
-        try db.execute(sql: """
-        INSERT INTO page_version_sources (page_version_id, source_id, role)
-        SELECT ?, source_id, role
-        FROM workspace_ref_sources
-        WHERE workspace_id = ? AND kind = 'page-content' AND owner_id = ?;
-        """, arguments: [versionID, workspaceID.rawValue, pageID.rawValue])
-
-        // 4. Page-content ref.
-        try db.execute(sql: """
-        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-        VALUES ('page-content', ?, ?, 1, ?);
-        """, arguments: [pageID.rawValue, versionID, now])
+        let sources = try self.workspaceRefSourceInputs(
+            workspaceID: workspaceID, pageID: pageID, on: db)
+        _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+            pageID: pageID, head: nil, mergeParentID: nil, title: title,
+            body: body, bodyData: bodyData, hash: blobHash,
+            activityAgent: .existingAgentID(agentID), activityKind: "edit",
+            now: date, nowTS: now, provenance: sources,
+            publication: .main(slug: slug, mirrorMutation: .seed)
+        ))
     }
 
     /// The result of a diff3 merge attempt for a single page.
@@ -9561,56 +9524,26 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let now = Date()
         let nowTS = now.timeIntervalSince1970
 
-        // Blob.
-        try db.execute(sql: """
-        INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
-        """, arguments: [hash, Int64(mergedData.count), mergedData])
-
-        // Merge PROV activity.
-        // #763: use the workspace version's agent.
-        let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
-        let activityID = ULID.generate()
-        try db.execute(sql: """
-        INSERT INTO activities (id, kind, agent_id, started_at, ended_at)
-        VALUES (?, 'merge', ?, ?, ?);
-        """, arguments: [activityID, agentID, nowTS, nowTS])
-
         // Fetch the title from theirs (workspace version).
         let title = try String.fetchOne(
             db, sql: "SELECT title FROM page_versions WHERE id = ?;",
             arguments: [wsVersionID.rawValue]
         ) ?? ""
 
-        // Merge version (two parents).
-        let versionID = ULID.generate()
-        try db.execute(sql: """
-        INSERT INTO page_versions (id, page_id, parent_id, merge_parent_id, blob_hash, title, activity_id, saved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, arguments: [versionID, pageID.rawValue, mainVersionID.rawValue, wsVersionID.rawValue,
-                         hash, title, activityID, nowTS])
-        try self.attachPageVersionSources(
-            try self.unionPageVersionSourceInputs([mainVersionID, wsVersionID], on: db),
-            to: PageVersionID(rawValue: versionID), on: db)
-
-        // Update the pages mirror.
         let sanitizedTitle = WikiNameRules.sanitized(title)
         let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
-        try db.execute(sql: """
-        UPDATE pages
-        SET title = ?, slug = ?, body_markdown = ?,
-            updated_at = ?, version = version + 1
-        WHERE id = ?;
-        """, arguments: [sanitizedTitle, slug, mergedText, nowTS, pageID.rawValue])
-
-        // Repoint the main page-content ref.
-        try db.execute(sql: """
-        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-        VALUES ('page-content', ?, ?, 1, ?)
-        ON CONFLICT(kind, owner_id) DO UPDATE SET
-            version_id = excluded.version_id,
-            generation = generation + 1,
-            updated_at = excluded.updated_at;
-        """, arguments: [pageID.rawValue, versionID, nowTS])
+        let agentID = try self.workspaceVersionAgentID(db: db, pageID: pageID)
+        let existingAuthor = try String.fetchOne(
+            db, sql: "SELECT last_edited_by FROM pages WHERE id = ?;",
+            arguments: [pageID.rawValue])
+        _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+            pageID: pageID, head: mainVersionID, mergeParentID: wsVersionID,
+            title: sanitizedTitle, body: mergedText, bodyData: mergedData, hash: hash,
+            activityAgent: .existingAgentID(agentID, mirrorAuthor: existingAuthor),
+            activityKind: "merge", now: now, nowTS: nowTS,
+            provenance: try self.unionPageVersionSourceInputs([mainVersionID, wsVersionID], on: db),
+            publication: .main(slug: slug, mirrorMutation: .append)
+        ))
 
         // Derived-data regeneration: re-parse wiki links (non-fatal).
         // NOTE: Cannot call self.replaceLinks here — it re-enters mutate/dbWriter.write
