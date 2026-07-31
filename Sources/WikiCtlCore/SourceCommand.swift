@@ -371,18 +371,29 @@ public enum SourceCommand {
         let service = SourceRefreshService(fetcher: fetcher)
         #endif
         let material = try await service.materialize(origin: origin)
-        switch material {
-        case .contentVersion(let data, let prov):
-            _ = try store.appendContentVersion(
-                sourceID: id, data: data, mimeType: nil, provenance: prov)
-        case .derivedMarkdown(let content):
-            try store.appendDerivedMarkdown(
-                sourceID: id, content: content, origin: .transcript,
-                producer: .tool(.transcript), providerID: nil, modelID: nil,
-                toolVersion: nil, sourceVersionID: nil, note: nil)
-        }
+        try persistRefreshMaterial(material, sourceID: id, in: store)
         return Result(
             payload: .text("Refreshed \(origin.displayLabel) source."),
             didCommit: true)
+    }
+
+    /// Persist the result of a completed source refresh. This stays separate
+    /// from materialization so command tests can verify the typed write seam
+    /// without starting a network fetch.
+    static func persistRefreshMaterial(
+        _ material: SourceRefreshService.RefreshMaterial,
+        sourceID: SourceID,
+        in store: WikiStore
+    ) throws {
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: sourceID, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: content, origin: .transcript,
+                producer: .tool(.transcript), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
+        }
     }
 }

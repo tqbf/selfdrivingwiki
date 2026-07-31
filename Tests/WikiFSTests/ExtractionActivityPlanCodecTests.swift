@@ -61,4 +61,11 @@ struct ExtractionActivityPlanCodecTests {
         #expect(decoded.sourceVersionID == nil)
         #expect(decoded.note == nil)
     }
+
+    @Test func bytelessOEmbedSyntheticToolRoundTrips() throws {
+        let value = ExtractionActivityPlan(
+            producer: .tool(.bytelessOEmbedSynthetic), origin: .transcript)
+        let decoded = try ExtractionActivityPlanCodec.decode(ExtractionActivityPlanCodec.encode(value))
+        #expect(decoded.producer == .tool(.bytelessOEmbedSynthetic))
+    }
 }

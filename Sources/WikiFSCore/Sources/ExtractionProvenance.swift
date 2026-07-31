@@ -9,6 +9,7 @@ public enum ExtractionTool: String, Codable, CaseIterable, Sendable {
     case appleTTML = "apple-ttml"
     case youtubeCaptions = "youtube-captions"
     case rssPodcastTranscript = "rss-podcast-transcript"
+    case vimeoTranscript = "vimeo-transcript"
     case materializerSidecar = "materializer-sidecar"
     case bytelessOEmbedSynthetic = "byteless-oembed-synthetic"
     case transcript

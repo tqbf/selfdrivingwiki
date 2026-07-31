@@ -156,6 +156,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         case ExtractionTool.youtubeCaptions.rawValue: return .youtubeCaptions
         case ExtractionTool.rssPodcastTranscript.rawValue: return .rssPodcastTranscript
         case ExtractionTool.appleTTML.rawValue: return .appleTTML
+        case ExtractionTool.vimeoTranscript.rawValue: return .vimeoTranscript
         default: return .transcript
         }
     }

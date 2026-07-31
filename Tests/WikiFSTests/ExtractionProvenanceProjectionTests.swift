@@ -198,6 +198,18 @@ struct ExtractionProvenanceProjectionTests {
         #expect(value.producer == .tool(.youtubeCaptions))
     }
 
+    @Test func projectsBytelessOEmbedSyntheticTool() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "synthetic-markdown")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(
+            fixture, id: markdownID, origin: "transcript",
+            technique: ExtractionTool.bytelessOEmbedSynthetic.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .tool(.bytelessOEmbedSynthetic))
+    }
+
     @Test func projectsSourceVersionIdentity() throws {
         let fixture = try makeFixture()
         let markdownID = SourceMarkdownVersionID(rawValue: "source-version-markdown")

@@ -424,6 +424,7 @@ public final class WikiStoreModel {
         case youtubeCaptionsTechnique: return .youtubeCaptions
         case rssPodcastTranscriptTechnique: return .rssPodcastTranscript
         case podcastTtmlTechnique: return .appleTTML
+        case ExtractionTool.vimeoTranscript.rawValue: return .vimeoTranscript
         default: return .transcript
         }
     }
@@ -1980,7 +1981,7 @@ public final class WikiStoreModel {
     /// source blob; the markdown is the derived artifact. Best-effort: a write
     /// failure is logged, never thrown (the source itself already landed).
     @discardableResult
-    private func storeMaterialized(
+    func storeMaterialized(
         _ m: MaterializedSource,
         resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
