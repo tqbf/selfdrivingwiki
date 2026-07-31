@@ -293,6 +293,7 @@ struct SourceVersionIDPersistenceTests {
             at: databaseURL
         ) == [
             "source-content|\(versionV2.id.rawValue)",
+            "source-derived|\(markdown.id.rawValue)",
         ])
         #expect(try normalizedRows(
             """

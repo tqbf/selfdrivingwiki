@@ -3,7 +3,7 @@ import Foundation
 /// The origin of a `SourceMarkdownVersion` — what created it. Persisted as the
 /// `source_markdown_versions.origin` column. Typed (not a raw string) so a typo
 /// like `"User"` is a compile error rather than a silent mis-guard (issue #501).
-public enum SourceMarkdownOrigin: String, Sendable, CaseIterable {
+public enum SourceMarkdownOrigin: String, Codable, Sendable, CaseIterable {
     /// Backend extraction (pdf2md, anthropic, gemini, docling, …).
     case extraction
     /// Manual user edit.

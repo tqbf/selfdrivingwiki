@@ -134,10 +134,11 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             return
         }
         if let technique {
-            _ = DebugLog.trying("appendProcessedMarkdown", operation: {
-                try store.appendProcessedMarkdown(
-                    sourceID: sourceID, content: markdown,
-                    origin: .transcript, note: nil, technique: technique)
+            _ = DebugLog.trying("appendDerivedMarkdown", operation: {
+                try store.appendDerivedMarkdown(
+                    sourceID: sourceID, content: markdown, origin: .transcript,
+                    producer: .tool(Self.transcriptTool(for: technique)), providerID: nil,
+                    modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
             })
         } else {
             _ = DebugLog.trying("recordMarkdownExtraction", operation: {
@@ -148,6 +149,15 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             })
         }
         DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+    }
+
+    private static func transcriptTool(for technique: String) -> ExtractionTool {
+        switch technique {
+        case ExtractionTool.youtubeCaptions.rawValue: return .youtubeCaptions
+        case ExtractionTool.rssPodcastTranscript.rawValue: return .rssPodcastTranscript
+        case ExtractionTool.appleTTML.rawValue: return .appleTTML
+        default: return .transcript
+        }
     }
 }
 

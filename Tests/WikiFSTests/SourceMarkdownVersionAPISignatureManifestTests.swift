@@ -72,11 +72,13 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "wiki-store.processed-markdown-history",
         "wiki-store.processed-markdown-alternatives",
         "wiki-store.append-processed-markdown",
+        "wiki-store.append-derived-markdown",
         "wiki-store.record-markdown-extraction",
         "grdb.public-processed-markdown-head",
         "grdb.public-processed-markdown-history",
         "grdb.public-processed-markdown-alternatives",
         "grdb.public-append-processed-markdown",
+        "grdb.public-append-derived-markdown",
         "grdb.public-record-markdown-extraction",
         "grdb.public-replace-links",
         "grdb.private-processed-markdown-head",
@@ -122,6 +124,7 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
         "wiki-store.processed-markdown-history",
         "wiki-store.processed-markdown-alternatives",
         "wiki-store.append-processed-markdown",
+        "wiki-store.append-derived-markdown",
         "wiki-store.record-markdown-extraction",
         "grdb.public-processed-markdown-head",
         "grdb.private-processed-markdown-head",
@@ -236,8 +239,8 @@ struct SourceMarkdownVersionAPISignatureManifestTests {
 
         let anchors = [
             "public func appendProcessedMarkdown(",
+            "public func appendDerivedMarkdown(",
             "public func revertProcessedMarkdown(",
-            "public func recordMarkdownExtraction(",
             "private func appendProcessedMarkdownInline(",
         ]
 

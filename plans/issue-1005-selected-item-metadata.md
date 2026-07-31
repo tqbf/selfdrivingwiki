@@ -563,6 +563,14 @@ Issue #219 owns deletion-impact analysis and all deletion UI. Its analysis combi
 
 Add typed extraction activity plans and projections. Add internal production-no-op `AppendDerivedMarkdownHooks.afterInitialWrites` with rollback and retry coverage. Move all known extraction and transcript writers to canonical typed seams. Keep compatibility decoding for legacy data.
 
+Phase 4 implementation uses `ExtractionActivityPlan`,
+`ExtractionActivityPlanCodec`, `AppendDerivedMarkdownError`, and
+`GRDBWikiStore.appendDerivedMarkdown`. The current activity plan stores version,
+producer, origin, provider, model, tool version, source version, and note.
+Malformed or unsupported plan JSON falls back to normalized markdown, activity,
+and agent columns. The Phase 4 source-markdown API manifest lists the canonical
+append method with its compatibility writers.
+
 #### Phase 5 / PR 5: Shared metadata inspector
 
 Add ordered tabs, injectable empty-tab assertion reporting plus pure fallback, shared metadata models, exhaustive conditional projections, every renderer case, action-router no-op/error/eligibility paths, detail-owned hydration, live/persisted chat merge, event refresh, hosted layout tests, and accessibility.

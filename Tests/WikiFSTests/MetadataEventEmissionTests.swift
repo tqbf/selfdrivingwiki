@@ -49,4 +49,18 @@ struct MetadataEventEmissionTests {
         #expect(recorder.snapshot.isEmpty)
         #expect(try store.pageHeadSources(pageID: page.id).isEmpty)
     }
+
+    @Test func extractionWriteEmitsAfterCommit() async throws {
+        let store = try TestStoreFactory.inMemory()
+        let source = try store.addSource(filename: "evidence.pdf", data: Data("pdf".utf8))
+        let recorder = makeRecorder(for: store)
+        _ = try store.appendDerivedMarkdown(
+            sourceID: source.id, content: "# extracted", origin: .extraction,
+            producer: .tool(.pdf2md), providerID: nil, modelID: nil, toolVersion: nil,
+            sourceVersionID: nil, note: nil)
+        try await recorder.awaitNonEmpty()
+        #expect(recorder.snapshot.count == 1)
+        #expect(recorder.snapshot.first?.kind == .source)
+        #expect(recorder.snapshot.first?.id == source.id.rawValue)
+    }
 }

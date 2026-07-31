@@ -376,8 +376,10 @@ public enum SourceCommand {
             _ = try store.appendContentVersion(
                 sourceID: id, data: data, mimeType: nil, provenance: prov)
         case .derivedMarkdown(let content):
-            try store.appendProcessedMarkdown(
-                sourceID: id, content: content, origin: .transcript, note: nil, technique: nil)
+            try store.appendDerivedMarkdown(
+                sourceID: id, content: content, origin: .transcript,
+                producer: .tool(.transcript), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
         }
         return Result(
             payload: .text("Refreshed \(origin.displayLabel) source."),
