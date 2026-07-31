@@ -113,7 +113,7 @@ public enum PageCommand {
     /// Decodes the launcher-provided queue payload at the CLI boundary. Explicit
     /// command-line roles remain supported as compatibility input, but cannot
     /// remove the primary/supporting evidence assigned by the ingest queue.
-    private static func mergedAgentIngestProvenance(
+    static func mergedAgentIngestProvenance(
         _ explicit: [PageVersionSourceInput],
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [PageVersionSourceInput] {

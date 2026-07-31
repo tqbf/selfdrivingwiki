@@ -317,6 +317,18 @@ struct PageVersionSourceWriterTests {
         #expect(edges.map(\.role) == [.primary, .supporting])
     }
 
+    @Test func agentIngestEnvironmentUsesAssignedPrimaryAndExplicitRolesAddOnly() {
+        let provenance = PageCommand.mergedAgentIngestProvenance(
+            [.init(sourceID: SourceID(rawValue: "b"), role: .quoted)],
+            environment: ["WIKI_INGEST_SOURCE_IDS": "a,b"])
+
+        #expect(provenance == [
+            .init(sourceID: SourceID(rawValue: "a"), role: .primary),
+            .init(sourceID: SourceID(rawValue: "b"), role: .supporting),
+            .init(sourceID: SourceID(rawValue: "b"), role: .quoted),
+        ])
+    }
+
     @Test func transactionHelperSuccessWritesVersionActivityRefsAllEdgesAndReturnsEventPayload() throws {
         let store = try TestStoreFactory.inMemory()
         let page = try store.createPage(title: "Transaction")

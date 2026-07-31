@@ -52,19 +52,27 @@ The Issue #219 handoff remains data-only. `Issue219DeletionAnalysisInput`
 preserves the complete typed, ordered provenance blocker collection. This pass
 adds no deletion UI, warning, recovery, or navigation.
 
+## AC-30 agent-ingest boundary follow-up
+
+Made the CLI environment merge helper internal for direct coverage. The test
+injects `WIKI_INGEST_SOURCE_IDS=a,b` and proves that `a` is primary, `b` is
+supporting, and an explicit role for `b` adds evidence without replacing either
+automatic edge. A launcher-level test constructs an ordered `.ingest` request
+and proves that it serializes the same ordered value for the CLI boundary.
+
 ## Verification
 
 - Corrective pass: `make build` passed, including the signed development app
   bundle.
 - `swift build` passed after the Make prerequisites synchronized generated
   resources.
-- Targeted corrective suites passed: 85 tests across
+- AC-30 targeted suites passed: 94 tests across
   `PageVersionSourceStoreTests`, `PageSourceNamespaceAuditTests`,
   `PageVersionSourceWriterTests`, `ProvenanceDeletionRestrictionTests`,
   `MetadataEventEmissionTests`, `StoreEmissionExhaustivenessTests`,
-  `AgentCASTests`, and `WorkspaceTests`.
-- Corrective `make test` passed: 2,883 tests in 233 suites.
-- Corrective bare `swift test` passed: 2,883 tests in 233 suites.
+  `AgentLauncherStageKeyDispatchTests`, `AgentCASTests`, and `WorkspaceTests`.
+- AC-30 `make test` passed: 2,885 tests in 233 suites.
+- AC-30 bare `swift test` passed: 2,885 tests in 233 suites.
 - `git diff --check` passed.
 - Typed-ID audit found no raw PageID/SourceID comparison in the scoped
   provenance production code. The helper-seam audit found two legacy migration

@@ -27,6 +27,20 @@ struct AgentLauncherStageKeyDispatchTests {
         #expect(key == "planner")
     }
 
+    @Test func ingestRequestSerializesSourceIDsInDeclaredQueueOrder() {
+        let first = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "first.md", name: "first",
+            sourceID: SourceID(rawValue: "a"))
+        let second = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "second.md", name: "second",
+            sourceID: SourceID(rawValue: "b"))
+
+        let environment = AgentLauncher.ingestProvenanceEnvironment(
+            for: .ingest(sources: [first, second], stateMarkdown: ""))
+
+        #expect(environment == ["WIKI_INGEST_SOURCE_IDS": "a,b"])
+    }
+
     @Test func lintMapsToLint() {
         #expect(AgentLauncher.stageKey(for: .lint(stateMarkdown: emptyState)) == "lint")
     }

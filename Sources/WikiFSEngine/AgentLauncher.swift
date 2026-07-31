@@ -1386,10 +1386,8 @@ public final class AgentLauncher {
         // Page provenance is built from the ordered queue payload, not merely
         // from an executor remembering to spell `--source`. The CLI decodes
         // this external-format boundary into typed PageVersionSourceInput values.
-        if case .ingest(let sources, _) = request {
-            providerHints[HintKey.env("WIKI_INGEST_SOURCE_IDS")] = sources
-                .map(\.sourceID.rawValue)
-                .joined(separator: ",")
+        for (key, value) in Self.ingestProvenanceEnvironment(for: request) {
+            providerHints[key] = value
         }
         let profile = BackendProfile(
             providerHints: providerHints,
@@ -2869,6 +2867,16 @@ public final class AgentLauncher {
         case .lint, .lintPage: return "lint"
         case .query:           return "chat"
         }
+    }
+
+    /// Serializes the ordered ingest queue payload for the `wikictl` process.
+    /// This is the sole raw-ID environment boundary; the CLI immediately
+    /// converts it into typed primary/supporting provenance inputs.
+    nonisolated static func ingestProvenanceEnvironment(
+        for request: OperationRequest
+    ) -> [String: String] {
+        guard case .ingest(let sources, _) = request else { return [:] }
+        return ["WIKI_INGEST_SOURCE_IDS": sources.map(\.sourceID.rawValue).joined(separator: ",")]
     }
 
     /// Extract the `(sourceFiles, sourceIDs)` pair from a staged `WikiOperation`
