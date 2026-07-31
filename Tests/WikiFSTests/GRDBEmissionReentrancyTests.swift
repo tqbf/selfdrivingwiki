@@ -4,23 +4,21 @@ import Foundation
 
 /// GRDBWikiStore-specific emission-reentrancy regression tests (issue #591).
 ///
-/// `GRDBWikiStore` uses GRDB's `DatabaseQueue` — a serial queue that does NOT
-/// allow reentrant reads. Calling `dbQueue.read` from within a `dbQueue.write`
-/// context traps with `Fatal error: Database methods are not reentrant`
-/// (`SerializedDatabase.swift`). The former `SQLiteWikiStore` side-stepped this
-/// with an `NSRecursiveLock`; GRDB's `DatabaseQueue` has no such escape hatch.
+/// `GRDBWikiStore` uses a `DatabasePool` for file-backed stores. GRDB writer
+/// contexts do not allow a public read to re-enter the same serialized
+/// database access; doing so traps with
+/// `Fatal error: Database methods are not reentrant`.
 ///
 /// The `mutate()` seam protects against reentrance via **deferred emission**:
 /// the event is *computed* inside the transaction (committed state) but
-/// *emitted* AFTER `dbQueue.write` returns — outside the serial queue. Combined
+/// *emitted* AFTER the writer operation returns. Combined
 /// with `WikiEventBus.emit`'s async dispatch (`Task { @MainActor in … }`),
 /// subscribers' reads always land after the write commits and never re-enter
 /// the writer queue.
 ///
-/// These tests verify that contract for `GRDBWikiStore` specifically. The
-/// existing `StoreEmissionReentrancyTests` only exercise `SQLiteWikiStore`
-/// (whose `NSRecursiveLock` masks the problem); this suite is the regression
-/// net for the backend that is actually vulnerable.
+/// These file-backed tests complement the in-memory
+/// `StoreEmissionReentrancyTests` by exercising the production `DatabasePool`
+/// configuration that originally exposed the crash.
 struct GRDBEmissionReentrancyTests {
 
     /// Thread-safe event recorder (subscribers fire on the main actor).
@@ -63,7 +61,7 @@ struct GRDBEmissionReentrancyTests {
     /// (`getPage`) during event emission must observe the COMMITTED row — no
     /// `Database methods are not reentrant` trap. This is the exact crash
     /// scenario from the issue: before the deferred-emission fix, the event was
-    /// emitted while the `DatabaseQueue` serial lock was still held.
+    /// emitted while the GRDB writer context was still active.
     @Test func reentrantReaderSeesCommittedState() async throws {
         let (store, _, _) = try makeHarness()
 
@@ -76,8 +74,8 @@ struct GRDBEmissionReentrancyTests {
         let slot = Slot()
         store.eventBus?.subscribe(nil) { event in
             guard event.kind == .page, event.change == .created else { return }
-            // Re-enter the store via its public READ API. On GRDB this does
-            // dbQueue.read; if the writer queue were still held this traps.
+            // Re-enter the store via its public READ API. If the writer context
+            // were still active this would trap.
             if let page = try? store.getPage(id: PageID(rawValue: event.id)) {
                 slot.set(page)
             }

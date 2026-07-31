@@ -3,17 +3,15 @@ import Foundation
 @testable import WikiFSCore
 
 /// Structural safety of emission via `mutate()` (AC.3). Emission happens
-/// strictly AFTER the recursive lock is released at the outermost `mutate()`
-/// exit and AFTER the transaction commits, so:
+/// strictly AFTER the GRDB write returns and the transaction commits, so:
 /// (a) a `withTransaction`-wrapped mutation emits once and never deadlocks;
 /// (b) a subscriber that re-enters the store to READ observes COMMITTED state;
 /// (c) a mutation that throws / rolls back emits NOTHING.
 ///
-/// No public EMIT method currently composes another public EMIT method (verified
-/// by grep), so `mutate`-within-`mutate` nesting does not arise today; the
-/// depth-0 design is future-proofing for graph-model ref-repoint methods. The
-/// per-method `StoreEmissionTests` already prove each top-level mutator emits
-/// exactly once (no double-emit).
+/// Public mutators that compose write operations use `Database`-taking helpers
+/// or GRDB savepoints instead of opening a nested writer operation. The
+/// per-method `StoreEmissionTests` prove each top-level mutator emits exactly
+/// once (no double-emit).
 @Suite
 struct StoreEmissionReentrancyTests {
 
@@ -44,8 +42,8 @@ struct StoreEmissionReentrancyTests {
     }
 
     /// (a) A `withTransaction`-wrapped mutation (deletePage) re-enters the
-    /// recursive lock; the event must flush once at the outermost exit, with no
-    /// deadlock (R1).
+    /// writer through a savepoint; the event must emit once after the outer
+    /// transaction commits, with no deadlock (R1).
     @Test func withTransactionMutationEmitsOnceNoDeadlock() async throws {
         let (store, _, rec) = try makeHarness()
         let page = try store.createPage(title: "Doomed")
@@ -89,7 +87,7 @@ struct StoreEmissionReentrancyTests {
     }
 
     /// (b) A subscriber that re-enters the store to READ observes the COMMITTED
-    /// value (the event fires post-commit, after the lock is released). This
+    /// value (the event fires post-commit, outside the writer context). This
     /// catches a misplaced/inner flush that would let a reader see uncommitted
     /// (or locked-out) state.
     @Test func reentrantReaderSeesCommittedState() async throws {
@@ -105,8 +103,8 @@ struct StoreEmissionReentrancyTests {
         let slot = Slot()
         store.eventBus?.subscribe(nil) { event in
             guard event.kind == .page, event.change == .created else { return }
-            // Re-enter the store via its public READ API. This acquires the lock
-            // again; it must succeed (lock is free post-flush) and read the row
+            // Re-enter the store via its public READ API. This opens a GRDB
+            // read; it must run outside the completed write and see the row
             // that was just committed.
             if let page = try? store.getPage(id: PageID(rawValue: event.id)) {
                 slot.set(page)

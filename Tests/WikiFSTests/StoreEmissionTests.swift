@@ -33,10 +33,12 @@ struct StoreEmissionTests {
         return recorder.snapshot
     }
 
-    /// Await `recorder`'s current pending event(s), then clear it — used after a
-    /// prerequisite mutation so only the mutation under test is observed.
-    private func drain(_ recorder: Recorder) async throws {
-        _ = try await awaitEvents(recorder, expected: max(recorder.count, 1))
+    /// Await every event emitted by the prerequisite batch, then clear the
+    /// recorder so only the mutation under test is observed. Callers pass the
+    /// batch's known number of public mutator calls instead of sampling the
+    /// partially delivered async recorder.
+    private func drain(_ recorder: Recorder, expected: Int = 1) async throws {
+        _ = try await awaitEvents(recorder, expected: expected)
         recorder.clear()
     }
 
@@ -153,7 +155,7 @@ struct StoreEmissionTests {
         _ = try store.appendPageVersion(
             pageID: page.id, title: "Restore Emit", body: "v2",
             expectedHeadVersionID: v1)
-        try await drain(rec)
+        try await drain(rec, expected: 3)
 
         try store.restorePage(pageID: page.id, to: v1)
         let events = try await awaitEvents(rec)
@@ -224,7 +226,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)
         let v2 = try store.appendContentVersion(sourceID: s.id, data: Data("b2".utf8), mimeType: nil, provenance: nil)
-        try await drain(rec)
+        try await drain(rec, expected: 2)
         try store.rollbackSourceContent(sourceID: s.id, to: v2.id)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
@@ -297,7 +299,7 @@ struct StoreEmissionTests {
         let s = try addSeedSource(store)
         let v1 = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v2", origin: .extraction, note: nil)
-        try await drain(rec)
+        try await drain(rec, expected: 3)
         _ = try store.revertProcessedMarkdown(sourceID: s.id, to: v1.id)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
@@ -309,7 +311,7 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)
         let v = try store.recordMarkdownExtraction(sourceID: s.id, content: "# md", backend: .anthropic, sourceVersionID: nil, note: nil, modelVersion: "x")
-        try await drain(rec)
+        try await drain(rec, expected: 2)
         try store.setActiveMarkdown(sourceID: s.id, to: v.id)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .source)
@@ -322,7 +324,7 @@ struct StoreEmissionTests {
         let source = try addSeedSource(store)
         let appended = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "v1", origin: .extraction, note: nil)
-        try await drain(rec)
+        try await drain(rec, expected: 2)
 
         try store.setActiveMarkdown(sourceID: source.id, to: appended.id)
         var events = try await awaitEvents(rec)
@@ -341,7 +343,7 @@ struct StoreEmissionTests {
         let source = try addSeedSource(store)
         let first = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "v1", origin: .extraction, note: nil)
-        try await drain(rec)
+        try await drain(rec, expected: 2)
         _ = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "v2", origin: .extraction, note: nil)
         try await drain(rec)
@@ -378,7 +380,7 @@ struct StoreEmissionTests {
         let first = try store.recordMarkdownExtraction(
             sourceID: source.id, content: "v1", backend: .anthropic,
             sourceVersionID: nil, note: nil, modelVersion: "x")
-        try await drain(rec)
+        try await drain(rec, expected: 2)
         _ = try store.recordMarkdownExtraction(
             sourceID: source.id, content: "v2", backend: .anthropic,
             sourceVersionID: nil, note: nil, modelVersion: "x")
