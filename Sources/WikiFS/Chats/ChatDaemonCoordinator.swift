@@ -143,8 +143,9 @@ public final class ChatDaemonCoordinator {
 
     /// Requests the app/daemon snapshot through the normal coordinator path,
     /// then writes the redacted artifact to the caller-provided destination.
-    /// Both app and daemon rings rotate only after every export step succeeds,
-    /// preserving retry evidence when a destination or daemon reset fails.
+    /// A written artifact immediately retires both fingerprint epochs. The
+    /// daemon reset still drains both rings on success; a failed reset retains
+    /// retry evidence without reusing an exported fingerprint key.
     func copyDiagnostics(
         for chatID: ChatID?,
         write: (Data) throws -> Void
@@ -153,7 +154,12 @@ public final class ChatDaemonCoordinator {
         let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
         try await exporter.copy(snapshot, write: write)
         if let chatID {
-            try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
         }
         exporter.resetAfterSuccessfulExport()
     }
@@ -169,7 +175,12 @@ public final class ChatDaemonCoordinator {
         let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
         try await exporter.writeJSONL(snapshot, to: url)
         if let chatID {
-            try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
         }
         exporter.resetAfterSuccessfulExport()
     }

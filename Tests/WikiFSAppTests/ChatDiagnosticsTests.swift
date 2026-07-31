@@ -26,21 +26,24 @@ struct ChatDiagnosticsTests {
         #expect(rotatedFingerprint != fingerprint)
     }
 
-    @Test func mergeUsesSequenceWithinSourceAndTimestampAcrossSources() {
+    @Test func mergeUsesDeclaredSourceInstanceSequenceOrder() {
+        let appProcess = ChatDiagnosticProcessIdentity(source: .app, instanceID: UUID())
+        let daemonProcess = ChatDiagnosticProcessIdentity(source: .daemon, instanceID: UUID())
         let app = ChatDiagnosticSnapshotEnvelope(
-            process: .init(source: .app, instanceID: UUID()),
+            process: appProcess,
             events: [
-                .init(process: .init(source: .app, instanceID: UUID()), sequence: .init(2), timestamp: Date(timeIntervalSince1970: 2), stage: .displayProjection, outcome: .accepted),
-                .init(process: .init(source: .app, instanceID: UUID()), sequence: .init(1), timestamp: Date(timeIntervalSince1970: 1), stage: .syncAcceptance, outcome: .accepted),
+                .init(process: appProcess, sequence: .init(2), timestamp: Date(timeIntervalSince1970: 1), stage: .displayProjection, outcome: .accepted),
+                .init(process: appProcess, sequence: .init(1), timestamp: Date(timeIntervalSince1970: 2), stage: .syncAcceptance, outcome: .accepted),
             ]
         )
         let daemon = ChatDiagnosticSnapshotEnvelope(
-            process: .init(source: .daemon, instanceID: UUID()),
-            events: [.init(process: .init(source: .daemon, instanceID: UUID()), sequence: .init(1), timestamp: Date(timeIntervalSince1970: 1.5), stage: .providerReceipt, outcome: .accepted)]
+            process: daemonProcess,
+            events: [.init(process: daemonProcess, sequence: .init(1), timestamp: Date(timeIntervalSince1970: 0), stage: .providerReceipt, outcome: .accepted)]
         )
         let merged = ChatDiagnosticSnapshotMerge.merge(app: app, daemon: daemon)
         #expect(merged.events.filter { $0.process.source == .app }.map(\.sequence.rawValue) == [1, 2])
-        #expect(merged.mergeOrder.contains("per-process-sequence"))
+        #expect(merged.events.map(\.process.source) == [.app, .app, .daemon])
+        #expect(merged.mergeOrder == "source-instance-sequence; timestamps-informational")
     }
 
     @Test func selectedChatWithoutDropsDoesNotReportAnotherChatsEvictions() async {

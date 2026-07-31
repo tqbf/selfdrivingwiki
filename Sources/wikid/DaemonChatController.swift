@@ -386,7 +386,14 @@ actor DaemonChatController {
 
     private func handleRuntimeEvent(_ envelope: ChatAgentRuntimeEventEnvelope) async {
         guard envelope.generation == generation else { return }
-        await observeDiagnostic(stage: .providerReceipt, detail: "runtime-event")
+        let diagnosticContext = Self.diagnosticContext(for: envelope.event)
+        await observeDiagnostic(
+            stage: .providerReceipt,
+            detail: "runtime-event",
+            turnID: diagnosticContext?.turnID,
+            durableItem: diagnosticContext?.durableItem,
+            content: diagnosticContext?.content
+        )
         // The runtime supplies this transition with the same envelope as the
         // transcript delta. Clearing it first prevents a closed block from
         // remaining live across a semantic boundary.
@@ -402,8 +409,20 @@ actor DaemonChatController {
             } catch {
                 DebugLog.store("DaemonChatController transcript persistence failed: \(error)")
             }
-            await observeDiagnostic(stage: .reduction, detail: "transcript-reduced")
-            await observeDiagnostic(stage: .persistence, detail: "transcript-persisted")
+            await observeDiagnostic(
+                stage: .reduction,
+                detail: "transcript-reduced",
+                turnID: diagnosticContext?.turnID,
+                durableItem: diagnosticContext?.durableItem,
+                content: diagnosticContext?.content
+            )
+            await observeDiagnostic(
+                stage: .persistence,
+                detail: "transcript-persisted",
+                turnID: diagnosticContext?.turnID,
+                durableItem: diagnosticContext?.durableItem,
+                content: diagnosticContext?.content
+            )
             record(.transcriptChanged(deltas))
 
         case .permissionRequested(let request):
@@ -585,6 +604,7 @@ actor DaemonChatController {
         stage: ChatDiagnosticStage,
         detail: String,
         turnID: ChatTurnID? = nil,
+        durableItem: ChatDiagnosticCorrelation.Value? = nil,
         content: String? = nil
     ) async {
         await diagnosticTrace.record(
@@ -594,7 +614,8 @@ actor DaemonChatController {
                 chat: .init(rawValue: chatID.rawValue),
                 generation: .init(rawValue: generation.rawValue),
                 updateSequence: .init(UInt64(max(0, nextSequence.rawValue))),
-                turn: turnID.map { .init(rawValue: $0.rawValue) }
+                turn: turnID.map { .init(rawValue: $0.rawValue) },
+                durableItem: durableItem
             ),
             detail: detail,
             content: content
@@ -863,6 +884,54 @@ actor DaemonChatController {
                     createdAt: createdAt
                 ))
             }
+        }
+    }
+
+    private struct DiagnosticTranscriptContext {
+        let durableItem: ChatDiagnosticCorrelation.Value
+        let turnID: ChatTurnID
+        let content: String?
+    }
+
+    /// Returns a stable identity only when the runtime envelope changes one
+    /// durable item. Mixed batches deliberately stay uncoalesced so unrelated
+    /// transcript changes cannot overwrite one another in the diagnostic ring.
+    private static func diagnosticContext(
+        for event: ChatAgentRuntimeEvent
+    ) -> DiagnosticTranscriptContext? {
+        guard case .transcript(let deltas) = event else { return nil }
+        let contexts = deltas.compactMap(diagnosticContext(for:))
+        guard let first = contexts.first,
+              contexts.count == deltas.count,
+              contexts.allSatisfy({ $0.durableItem == first.durableItem })
+        else { return nil }
+        return contexts.last
+    }
+
+    private static func diagnosticContext(
+        for delta: ChatTranscriptDelta
+    ) -> DiagnosticTranscriptContext? {
+        switch delta {
+        case .messageDelta(let messageID, let turnID, _, let text, _),
+             .messageReplacement(let messageID, let turnID, _, let text, _):
+            return .init(
+                durableItem: .init(rawValue: messageID.rawValue),
+                turnID: turnID,
+                content: text
+            )
+        case .toolCallUpsert(let toolCall):
+            return .init(
+                durableItem: .init(rawValue: toolCall.toolCallID.rawValue),
+                turnID: toolCall.turnID,
+                content: nil
+            )
+        case .append(let item):
+            guard case .message(let message) = item else { return nil }
+            return .init(
+                durableItem: .init(rawValue: message.messageID.rawValue),
+                turnID: message.turnID,
+                content: message.text
+            )
         }
     }
 }

@@ -182,7 +182,7 @@ struct ChatDaemonCoordinatorTests {
         #expect(snapshot.events.map(\.stage).contains(.renderPlanning))
         #expect(snapshot.events.map(\.stage).contains(.domAcknowledgement))
         #expect(snapshot.daemonSummary["runtime"] == "daemon")
-        #expect(snapshot.mergeOrder.contains("per-process-sequence"))
+        #expect(snapshot.mergeOrder == "source-instance-sequence; timestamps-informational")
         let daemonRetention = snapshot.retention.first { $0.source == .daemon }
         #expect(daemonRetention?.droppedRecordCount == 3)
         #expect(daemonRetention?.droppedByteCount == 144)
@@ -230,6 +230,40 @@ struct ChatDaemonCoordinatorTests {
         #expect(after.events == before.events)
         #expect(trace.fingerprint("same content") == fingerprint)
         #expect(stub.diagnosticResetRequests.isEmpty)
+    }
+
+    @Test func failedDaemonDiagnosticResetRetiresAppFingerprintEpochButKeepsRetryRing() async {
+        let chatID = ChatID(rawValue: "diagnostic-reset-failure")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let fingerprint = trace.fingerprint("same content")
+        let before = trace.snapshot(chat: correlation)
+        let stub = StubChatDaemonCommands()
+        stub.shouldThrowDiagnosticReset = true
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+
+        do {
+            try await coordinator.copyDiagnostics(for: chatID) { _ in }
+            Issue.record("Expected daemon diagnostic reset failure.")
+        } catch StubError.throwing {
+            // The artifact was written, so the key must not remain reusable.
+        } catch {
+            Issue.record("Unexpected reset failure: \(error)")
+        }
+
+        let after = trace.snapshot(chat: correlation)
+        #expect(after.events == before.events)
+        #expect(after.process.instanceID == before.process.instanceID)
+        #expect(trace.fingerprint("same content") != fingerprint)
     }
 
     @Test func jsonlDiagnosticsExportUsesCoordinatorSnapshotAndRotatesAfterWrite() async throws {
@@ -465,6 +499,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var sessionState: ChatSyncSnapshot?
     var diagnosticSnapshot: ChatDiagnosticSnapshotEnvelope?
     var shouldThrow = false
+    var shouldThrowDiagnosticReset = false
 
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
         submitTurnCalls.append(request)
@@ -514,6 +549,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
         diagnosticResetRequests.append(request)
         try request.validatingVersion()
+        if shouldThrowDiagnosticReset { throw StubError.throwing }
         if shouldThrow { throw StubError.throwing }
     }
 

@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#elseif canImport(Crypto)
+import Crypto
+#endif
 
 /// Foundation-only, versioned diagnostic data shared by the app and `wikid`.
 ///
@@ -80,7 +85,7 @@ public struct ChatDiagnosticCorrelation: Codable, Hashable, Sendable {
 }
 
 public struct ChatDiagnosticContentFingerprint: Codable, Hashable, Sendable {
-    public static let currentAlgorithm = "keyed-fnv1a64-v1"
+    public static let currentAlgorithm = "hmac-sha256-v1"
 
     public let algorithm: String
     public let digest: String
@@ -93,29 +98,35 @@ public struct ChatDiagnosticContentFingerprint: Codable, Hashable, Sendable {
     }
 }
 
-/// A local random key used only to produce non-reusable content fingerprints.
-/// It is intentionally not Codable, so it can never be exported with a trace.
+/// A local random HMAC key used only to produce non-reusable content
+/// fingerprints. It is intentionally not Codable, so it can never be exported
+/// with a trace.
+///
+/// HMAC-SHA-256 is a cryptographic message authentication code: unlike the
+/// former prefix-FNV construction, a known plaintext/digest pair does not
+/// reveal a reusable state for deriving fingerprints of other plaintexts.
 public struct ChatDiagnosticFingerprintKey: Hashable, Sendable {
-    private let bytes: [UInt8]
+    private let key: SymmetricKey
+    /// Preserves value identity for callers without exposing secret key bytes.
+    private let identity: UUID
 
     public init() {
-        let parts = [UUID().uuid, UUID().uuid]
-        self.bytes = parts.flatMap { tuple in
-            withUnsafeBytes(of: tuple) { Array($0) }
-        }
+        self.key = SymmetricKey(size: .bits256)
+        self.identity = UUID()
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.identity == rhs.identity
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(identity)
     }
 
     public func fingerprint(for text: String) -> ChatDiagnosticContentFingerprint {
-        // FNV-1a is a compact keyed *fingerprint*, not a password hash or a
-        // secrecy primitive. The random local key prevents correlating text
-        // across a trace or deriving a reusable plaintext token from exports.
-        var hash: UInt64 = 0xcbf29ce484222325
-        for byte in bytes + Array(text.utf8) {
-            hash ^= UInt64(byte)
-            hash &*= 0x100000001b3
-        }
+        let code = HMAC<SHA256>.authenticationCode(for: Data(text.utf8), using: key)
         return ChatDiagnosticContentFingerprint(
-            digest: String(hash, radix: 16, uppercase: false),
+            digest: Data(code).base64EncodedString(),
             length: text.utf8.count
         )
     }

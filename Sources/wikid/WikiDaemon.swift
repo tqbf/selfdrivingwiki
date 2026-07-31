@@ -735,6 +735,10 @@ final class WikiDaemon: @unchecked Sendable {
                 detail: "diagnostic-snapshot-request"
             )
             let snapshot = await daemonChatDiagnostics.snapshot(chat: chat)
+            // The caller may successfully copy this artifact but fail before
+            // the reset acknowledgement returns. Retire the key now while the
+            // ring remains available for that retry.
+            await daemonChatDiagnostics.rotateFingerprintKeyPreservingRecords()
             return try JSONEncoder().encode(snapshot)
         } catch {
             DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData rejected request: \(error)")

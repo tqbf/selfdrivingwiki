@@ -34,10 +34,16 @@ struct ChatDiagnosticTypesTests {
         let second = ChatDiagnosticFingerprintKey()
         let text = "sensitive message text"
         let a = first.fingerprint(for: text)
+        #expect(first == first)
+        #expect(first != second)
         #expect(a == first.fingerprint(for: text))
         #expect(a != second.fingerprint(for: text))
         #expect(a.length == text.utf8.count)
         #expect(a.digest != text)
+        #expect(a.algorithm == "hmac-sha256-v1")
+        #expect(a.algorithm != "keyed-fnv1a64-v1")
+        let digestBytes = Data(base64Encoded: a.digest)
+        #expect(digestBytes?.count == 32)
     }
 
     @Test func versionValidationRejectsUnsupportedRequestAndSnapshot() {

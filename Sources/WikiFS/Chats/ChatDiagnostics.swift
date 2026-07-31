@@ -32,28 +32,25 @@ struct ChatDiagnosticMergedRetention: Codable, Sendable, Hashable {
 }
 
 enum ChatDiagnosticSnapshotMerge {
-    /// Event sequence is authoritative only inside one process. Source and
-    /// sequence form the deterministic merge key; time merely breaks ties for
-    /// human readability.
+    /// Source, process identity, and per-process sequence are the deterministic
+    /// merge order. Timestamps remain exported capture metadata, but never
+    /// reorder one process's causal sequence.
     static func merge(
         app: ChatDiagnosticSnapshotEnvelope,
         daemon: ChatDiagnosticSnapshotEnvelope?
     ) -> ChatDiagnosticMergedSnapshot {
         let snapshots = [app] + (daemon.map { [$0] } ?? [])
         let events = snapshots.flatMap(\.events).sorted { lhs, rhs in
-            // This is deliberately a single lexicographic key. Mixing a
-            // per-source sequence comparison with a cross-source timestamp
-            // comparison is non-transitive and makes Swift's sort unspecified.
-            if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
             if lhs.process.source != rhs.process.source { return lhs.process.source.rawValue < rhs.process.source.rawValue }
             if lhs.process.instanceID != rhs.process.instanceID { return lhs.process.instanceID.uuidString < rhs.process.instanceID.uuidString }
-            return lhs.sequence < rhs.sequence
+            if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
+            return lhs.timestamp < rhs.timestamp
         }
         return ChatDiagnosticMergedSnapshot(
             version: ChatDiagnosticTypes.currentVersion,
             sources: snapshots.map(\.process.source),
             events: events,
-            mergeOrder: "per-process-sequence; timestamp-approximate-across-sources",
+            mergeOrder: "source-instance-sequence; timestamps-informational",
             appSummary: app.summary,
             daemonSummary: daemon?.summary ?? [:],
             retention: snapshots.map {
@@ -109,8 +106,12 @@ final class ChatDiagnosticTrace {
     ) -> ChatDiagnosticEventEnvelope {
         nextSequence &+= 1
         let bucket = payload.correlation.chat.map(Bucket.chat) ?? .process
-        let didCoalesce = shouldCoalesce(stage: stage, correlation: payload.correlation)
-            && recordsByBucket[bucket]?.last.map { coalescingKey(for: $0.event) == coalescingKey(stage: stage, correlation: payload.correlation) } == true
+        let key = coalescingKey(stage: stage, correlation: payload.correlation)
+        let didCoalesce = key.map { key in
+            recordsByBucket[bucket, default: []].contains {
+                coalescingKey(for: $0.event) == key
+            }
+        } ?? false
         let event = ChatDiagnosticEventEnvelope(
             process: identity,
             sequence: ChatDiagnosticSequence(nextSequence),
@@ -147,6 +148,13 @@ final class ChatDiagnosticTrace {
         droppedBytesByBucket.removeAll()
     }
 
+    /// Retires the content-fingerprint epoch while retaining the bounded ring.
+    /// This is used after an artifact reaches its destination but before a
+    /// daemon reset failure can be returned to the UI.
+    func rotateFingerprintKeyPreservingRecords() {
+        fingerprintKey = ChatDiagnosticFingerprintKey()
+    }
+
     private func append(_ event: ChatDiagnosticEventEnvelope, for bucket: Bucket) {
         let encoded: Data
         do {
@@ -157,8 +165,9 @@ final class ChatDiagnosticTrace {
         }
         let record = StoredRecord(event: event, byteCount: encoded.count)
         var records = recordsByBucket[bucket, default: []]
-        if shouldCoalesce(event), let last = records.last, coalescingKey(for: last.event) == coalescingKey(for: event) {
-            records.removeLast()
+        if let key = coalescingKey(for: event),
+           let index = records.lastIndex(where: { coalescingKey(for: $0.event) == key }) {
+            records.remove(at: index)
         }
         records.append(record)
         var bytes = records.reduce(0) { $0 + $1.byteCount }
@@ -285,6 +294,11 @@ struct ChatDiagnosticExporter {
     /// Commit a completed app/daemon diagnostic export.
     func resetAfterSuccessfulExport() {
         trace.resetAfterSuccessfulExport()
+    }
+
+    /// Retires the local fingerprint epoch without draining retry evidence.
+    func rotateFingerprintKeyPreservingRecords() {
+        trace.rotateFingerprintKeyPreservingRecords()
     }
 }
 

@@ -125,6 +125,52 @@ struct ChatTranscriptRenderExecutorTests {
         #expect(events.allSatisfy { $0.payload.correlation.chat == correlation })
     }
 
+    @Test func rendererTraceCoalescesReplacementPlanningAcrossDOMAcknowledgements() {
+        let recorder = RenderMutationRecorder()
+        let trace = ChatDiagnosticTrace(source: .app)
+        let executor = makeExecutor(recorder, diagnosticTrace: trace)
+        let original = row("a", text: "A")
+        let firstReplacement = row("a", text: "AB")
+        let latestReplacement = row("a", text: "ABC")
+
+        executor.submit(snapshot([original]))
+        recorder.succeedCurrent()
+        executor.submit(snapshot([firstReplacement]))
+        recorder.succeedCurrent()
+        executor.submit(snapshot([latestReplacement]))
+        recorder.succeedCurrent()
+
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: "chat-executor")
+        let row = ChatDiagnosticCorrelation.Value(rawValue: original.id.domValue)
+        let planning = trace.snapshot(chat: chat).events.filter {
+            $0.stage == .renderPlanning && $0.payload.correlation.displayRow == row
+        }
+        #expect(planning.count == 1)
+        #expect(planning[0].outcome == .coalesced)
+        #expect(planning[0].payload.correlation.rendererRevision == .init(3))
+    }
+
+    @Test func acknowledgementKeepsTheOriginatingChatAfterDesiredChatSwitches() {
+        let recorder = RenderMutationRecorder()
+        let trace = ChatDiagnosticTrace(source: .app)
+        let executor = makeExecutor(recorder, diagnosticTrace: trace)
+        let chatA = TranscriptID.chat(ChatID(rawValue: "chat-a"))
+        let chatB = TranscriptID.chat(ChatID(rawValue: "chat-b"))
+
+        executor.submit(.init(context: .init(transcriptID: chatA), rows: [row("a", text: "A")]))
+        executor.submit(.init(context: .init(transcriptID: chatB), rows: [row("b", text: "B")]))
+        recorder.succeedCurrent()
+
+        let acknowledgedA = trace.snapshot(chat: .init(rawValue: "chat-a")).events.filter {
+            $0.stage == .domAcknowledgement
+        }
+        let acknowledgedB = trace.snapshot(chat: .init(rawValue: "chat-b")).events.filter {
+            $0.stage == .domAcknowledgement
+        }
+        #expect(acknowledgedA.count == 1)
+        #expect(acknowledgedB.isEmpty)
+    }
+
     @Test func coalescesOnlyPendingReplacementForTheSameRow() {
         let recorder = RenderMutationRecorder()
         let executor = makeExecutor(recorder)

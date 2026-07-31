@@ -55,6 +55,7 @@ final class ChatTranscriptRenderExecutor {
     private var reloadSnapshot: ChatTranscriptRenderSnapshot?
     private var nextRevision = 0
     private var reloadRevision: ChatTranscriptRenderRevision?
+    private var inFlightDiagnosticCorrelation: ChatDiagnosticCorrelation?
     private var recoveryReloadAttempted = false
     private var requiresRecoveryReload = false
 
@@ -101,27 +102,32 @@ final class ChatTranscriptRenderExecutor {
             )), reloadRevision)
         }
         guard let expected else { return }
+        let correlation = inFlightDiagnosticCorrelation ?? diagnosticCorrelation(
+            snapshot: desiredSnapshot,
+            revision: acknowledgement.revision,
+            rowID: acknowledgement.rowID
+        )
         guard acknowledgement.revision == expected.revision else {
-            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
             reportAnomaly(.staleAcknowledgement(expected: expected.revision, received: acknowledgement.revision))
             return
         }
         guard acknowledgement.kind == expected.command.kind else {
-            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
             reportAnomaly(.invalidAcknowledgement(expected: expected.command.kind, received: acknowledgement.kind))
-            scheduleRecovery(after: expected.command)
+            scheduleRecovery(after: expected.command, correlation: correlation)
             return
         }
         guard acknowledgement.rowID == expected.command.rowID else {
-            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
             reportAnomaly(.rowMismatch(expected: expected.command.rowID, received: acknowledgement.rowID))
-            scheduleRecovery(after: expected.command)
+            scheduleRecovery(after: expected.command, correlation: correlation)
             return
         }
         guard acknowledgement.outcome == .success else {
-            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
             reportAnomaly(.failedAcknowledgement(acknowledgement.outcome))
-            scheduleRecovery(after: expected.command)
+            scheduleRecovery(after: expected.command, correlation: correlation)
             return
         }
 
@@ -133,7 +139,8 @@ final class ChatTranscriptRenderExecutor {
             acknowledgedSnapshot = applying(expected.command, to: acknowledgedSnapshot)
         }
         state = .idle
-        observe(stage: .domAcknowledgement, outcome: .accepted, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
+        observe(stage: .domAcknowledgement, outcome: .accepted, correlation: correlation)
+        inFlightDiagnosticCorrelation = nil
         reloadRevision = nil
         recoveryReloadAttempted = false
         drain()
@@ -154,7 +161,9 @@ final class ChatTranscriptRenderExecutor {
             command = first
         }
         let revision = makeRevision()
-        observe(stage: .renderPlanning, outcome: .accepted, revision: revision, rowID: command.rowID)
+        let correlation = diagnosticCorrelation(snapshot: desiredSnapshot, revision: revision, rowID: command.rowID)
+        observe(stage: .renderPlanning, outcome: .accepted, correlation: correlation)
+        inFlightDiagnosticCorrelation = correlation
         if case .reload = command {
             state = .awaitingReload
             reloadRevision = revision
@@ -166,13 +175,17 @@ final class ChatTranscriptRenderExecutor {
         }
     }
 
-    private func scheduleRecovery(after command: ChatTranscriptRenderCommand) {
+    private func scheduleRecovery(
+        after command: ChatTranscriptRenderCommand,
+        correlation: ChatDiagnosticCorrelation
+    ) {
         state = .idle
         reloadRevision = nil
         reloadSnapshot = nil
+        inFlightDiagnosticCorrelation = nil
         guard case .reload = command else {
             if !recoveryReloadAttempted {
-                observe(stage: .recoveryReload, outcome: .recovered, revision: nil, rowID: command.rowID)
+                observe(stage: .recoveryReload, outcome: .recovered, correlation: correlation)
                 requiresRecoveryReload = true
                 drain()
             }
@@ -190,26 +203,30 @@ final class ChatTranscriptRenderExecutor {
     private func observe(
         stage: ChatDiagnosticStage,
         outcome: ChatDiagnosticOutcome,
+        correlation: ChatDiagnosticCorrelation
+    ) {
+        _ = diagnosticTrace.record(
+            stage: stage,
+            outcome: outcome,
+            payload: .init(correlation: correlation, detail: "renderer")
+        )
+    }
+
+    private func diagnosticCorrelation(
+        snapshot: ChatTranscriptRenderSnapshot?,
         revision: ChatTranscriptRenderRevision?,
         rowID: ChatDisplayRowID?
-    ) {
+    ) -> ChatDiagnosticCorrelation {
         let chat: ChatDiagnosticCorrelation.Value?
-        if case .chat(let chatID)? = desiredSnapshot?.context.transcriptID {
+        if case .chat(let chatID)? = snapshot?.context.transcriptID {
             chat = .init(rawValue: chatID.rawValue)
         } else {
             chat = nil
         }
-        _ = diagnosticTrace.record(
-            stage: stage,
-            outcome: outcome,
-            payload: .init(
-                correlation: .init(
-                    chat: chat,
-                    displayRow: rowID.map { .init(rawValue: $0.domValue) },
-                    rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
-                ),
-                detail: "renderer"
-            )
+        return .init(
+            chat: chat,
+            displayRow: rowID.map { .init(rawValue: $0.domValue) },
+            rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
         )
     }
 

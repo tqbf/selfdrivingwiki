@@ -31,8 +31,12 @@ actor DaemonChatDiagnostics {
         sequence &+= 1
         let populated = correlationWithFingerprint(correlation, content: content)
         let bucket = populated.chat.map(Bucket.chat) ?? .process
-        let didCoalesce = shouldCoalesce(stage: stage, correlation: populated)
-            && recordsByBucket[bucket]?.last.map { coalescingKey(for: $0.event) == coalescingKey(stage: stage, correlation: populated) } == true
+        let key = coalescingKey(stage: stage, correlation: populated)
+        let didCoalesce = key.map { key in
+            recordsByBucket[bucket, default: []].contains {
+                coalescingKey(for: $0.event) == key
+            }
+        } ?? false
         let event = ChatDiagnosticEventEnvelope(
             process: identity,
             sequence: .init(sequence),
@@ -65,6 +69,12 @@ actor DaemonChatDiagnostics {
         recordsByBucket.removeAll()
         droppedRecordsByBucket.removeAll()
         droppedBytesByBucket.removeAll()
+    }
+
+    /// Retires content-fingerprint material after a snapshot is handed to the
+    /// export path while retaining the ring until a reset acknowledgement.
+    func rotateFingerprintKeyPreservingRecords() {
+        fingerprintKey = ChatDiagnosticFingerprintKey()
     }
 
     func versionFailureSnapshot() -> ChatDiagnosticSnapshotEnvelope {
@@ -103,8 +113,9 @@ actor DaemonChatDiagnostics {
             return
         }
         var records = recordsByBucket[bucket, default: []]
-        if shouldCoalesce(event), let last = records.last, coalescingKey(for: last.event) == coalescingKey(for: event) {
-            records.removeLast()
+        if let key = coalescingKey(for: event),
+           let index = records.lastIndex(where: { coalescingKey(for: $0.event) == key }) {
+            records.remove(at: index)
         }
         records.append(.init(event: event, byteCount: encoded.count))
         var bytes = records.reduce(0) { $0 + $1.byteCount }
@@ -123,7 +134,10 @@ actor DaemonChatDiagnostics {
 
     private func shouldCoalesce(stage: ChatDiagnosticStage, correlation: ChatDiagnosticCorrelation) -> Bool {
         switch stage {
-        case .providerReceipt, .providerTranslation, .reduction:
+        // These stages are emitted once for each runtime transcript update.
+        // The durable item is the stable stream identity that lets interleaved
+        // receipt, reduction, and persistence observations coalesce safely.
+        case .providerReceipt, .providerTranslation, .reduction, .persistence:
             return correlation.updateSequence != nil || correlation.durableItem != nil
         default:
             return false
