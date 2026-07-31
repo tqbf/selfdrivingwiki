@@ -21,6 +21,7 @@ actor DaemonChatController {
     private let wikiID: WikiID
     private let store: GRDBWikiStore
     private let runtime: ChatAgentRuntime
+    private let clock: @Sendable () -> Date
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
     private let diagnosticTrace: DaemonChatDiagnostics
 
@@ -31,9 +32,12 @@ actor DaemonChatController {
     private var nextSequence = ChatUpdateSequence.initial
     private var committedCursor: ChatTranscriptCursor
     private var runtimeHandle: ChatRuntimeHandle?
+    private var runtimeStartRequest: ChatRuntimeStartRequest?
     private var eventTask: Task<Void, Never>?
     private var currentClaimID: ChatTurnClaimID?
     private var currentClaimTurnID: ChatTurnID?
+    private var turnUsageAccumulator: ChatTurnUsageAccumulator?
+    private var latestSessionUsage: SessionUsage?
     private var pendingCancellationTurnID: ChatTurnID?
     private var activePermission: ChatPendingPermissionRequest?
     private var isProcessingQueue = false
@@ -63,17 +67,24 @@ actor DaemonChatController {
         store: GRDBWikiStore,
         runtime: ChatAgentRuntime,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
-        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics()
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) throws {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
         self.runtime = runtime
+        self.clock = clock
         self.pushEvent = pushEvent
         self.diagnosticTrace = diagnosticTrace
         self.generation = ChatSessionGenerationID(rawValue: ULID.generate())
         self.replayBuffer = ChatUpdateReplayBuffer(capacity: Self.replayCapacity)
-        self.snapshot = try Self.bootstrapSnapshot(chatID: chatID, store: store, generation: generation)
+        self.snapshot = try Self.bootstrapSnapshot(
+            chatID: chatID,
+            store: store,
+            generation: generation,
+            bootstrapAt: clock()
+        )
         self.committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
         if case .permissionRequired = snapshot.attention {
             self.activePermission = nil
@@ -139,6 +150,12 @@ actor DaemonChatController {
                 DebugLog.agent("DaemonChatController.cancel runtime cancel failed: \(error)")
             }
         }
+        _ = await finishTurnIfCurrent(
+            turnID: resolvedTurnID,
+            generation: generation,
+            outcome: .cancelled,
+            at: clock()
+        )
     }
 
     func stopSession() async {
@@ -281,11 +298,15 @@ actor DaemonChatController {
             break
         }
 
+        let startRequest = try currentRuntimeStartRequest()
         let claimID = ChatTurnClaimID(rawValue: ULID.generate())
+        let startedAt = clock()
         guard let claimed = try store.claimNextPersistedChatTurn(
             chatID: chatID,
             claimID: claimID,
-            claimedAt: Date()
+            claimedAt: startedAt,
+            providerID: startRequest.providerID,
+            modelID: startRequest.modelID
         ) else {
             return
         }
@@ -304,6 +325,9 @@ actor DaemonChatController {
 
         currentClaimID = claimID
         currentClaimTurnID = claimed.submission.turnID
+        turnUsageAccumulator = ChatTurnUsageAccumulator(
+            baseline: runtimeHandle == nil ? Self.zeroUsage : (latestSessionUsage ?? Self.zeroUsage)
+        )
         record(.submitted(turnID: claimed.submission.turnID))
 
         let handle: ChatRuntimeHandle
@@ -311,18 +335,9 @@ actor DaemonChatController {
             if let existingHandle = runtimeHandle {
                 handle = existingHandle
             } else {
-                let chat = try store.getChat(id: chatID)
-                handle = try await runtime.start(
-                    ChatRuntimeStartRequest(
-                        chatID: chatID,
-                        generation: generation,
-                        systemPrompt: try store.getSystemPrompt().body,
-                        providerID: chat.modelProviderId,
-                        modelID: chat.modelId,
-                        existingProviderSessionID: chat.acpSessionId
-                    )
-                )
+                handle = try await runtime.start(startRequest)
                 runtimeHandle = handle
+                runtimeStartRequest = startRequest
                 startEventLoop(handle)
             }
             record(.started(turnID: claimed.submission.turnID))
@@ -333,7 +348,7 @@ actor DaemonChatController {
                 turnID: claimed.submission.turnID,
                 claimID: claimID,
                 providerSessionID: snapshot.providerState.providerSessionID,
-                submittedAt: Date()
+                submittedAt: clock()
             )
             if marked.providerSessionID != snapshot.providerState.providerSessionID {
                 snapshot = ChatRuntimeSnapshot(
@@ -358,9 +373,11 @@ actor DaemonChatController {
             await observeDiagnostic(stage: .persistence, detail: "provider-submitted", turnID: claimed.submission.turnID)
         } catch {
             DebugLog.agent("DaemonChatController.processQueueIfPossible submit failed: \(error)")
-            _ = finishPersistedTurn(
+            _ = await finishTurnIfCurrent(
                 turnID: claimed.submission.turnID,
-                outcome: .failed(category: .runtimeError, message: error.localizedDescription)
+                generation: generation,
+                outcome: .failed(category: .runtimeError, message: error.localizedDescription),
+                at: clock()
             )
             if let runtimeError = error as? LauncherChatAgentRuntime.RuntimeError,
                case .preflight(let message) = runtimeError {
@@ -433,11 +450,18 @@ actor DaemonChatController {
             activePermission = nil
             record(.permissionResolved(resolution.requestID))
 
+        case .usage(let usage):
+            recordUsageIfCurrent(
+                turnID: currentClaimTurnID,
+                generation: envelope.generation,
+                usage: usage
+            )
+
         case .turnCompleted(let turnID):
             if consumePendingCancellation(turnID: turnID) {
-                _ = finishPersistedTurn(turnID: turnID, outcome: .cancelled)
+                _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .cancelled, at: clock())
             } else {
-                _ = finishPersistedTurn(turnID: turnID, outcome: .completed)
+                _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .completed, at: clock())
             }
             do {
                 try await processQueueIfPossible()
@@ -447,9 +471,9 @@ actor DaemonChatController {
 
         case .turnFailed(let turnID, let category, let message):
             if consumePendingCancellation(turnID: turnID) {
-                _ = finishPersistedTurn(turnID: turnID, outcome: .cancelled)
+                _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .cancelled, at: clock())
             } else {
-                _ = finishPersistedTurn(turnID: turnID, outcome: .failed(category: category, message: message))
+                _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .failed(category: category, message: message), at: clock())
             }
             do {
                 try await processQueueIfPossible()
@@ -458,7 +482,7 @@ actor DaemonChatController {
             }
 
         case .turnCancelled(let turnID):
-            _ = finishPersistedTurn(turnID: turnID, outcome: .cancelled)
+            _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .cancelled, at: clock())
             do {
                 try await processQueueIfPossible()
             } catch {
@@ -468,11 +492,13 @@ actor DaemonChatController {
         case .transportClosed:
             if let turnID = currentClaimTurnID {
                 if consumePendingCancellation(turnID: turnID) {
-                    _ = finishPersistedTurn(turnID: turnID, outcome: .cancelled)
+                    _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .cancelled, at: clock())
                 } else {
-                    _ = finishPersistedTurn(
+                    _ = await finishTurnIfCurrent(
                         turnID: turnID,
-                        outcome: .interrupted(message: "The daemon transport exited before the turn completed.")
+                        generation: envelope.generation,
+                        outcome: .interrupted(message: "The daemon transport exited before the turn completed."),
+                        at: clock()
                     )
                 }
             }
@@ -503,16 +529,47 @@ actor DaemonChatController {
     }
 
     @discardableResult
-    private func finishPersistedTurn(
+    private func finishTurnIfCurrent(
         turnID: ChatTurnID,
-        outcome: ChatTurnTerminalOutcome
-    ) -> Bool {
-        guard let claimID = currentClaimID,
-              currentClaimTurnID == turnID,
+        generation eventGeneration: ChatSessionGenerationID,
+        outcome: ChatTurnTerminalOutcome,
+        at finishedAt: Date
+    ) async -> Bool {
+        guard eventGeneration == generation else {
+            DebugLog.agent("DaemonChatController rejected terminal signal for stale generation \(eventGeneration.rawValue).")
+            return false
+        }
+        guard currentClaimTurnID == turnID else {
+            DebugLog.agent("DaemonChatController rejected terminal signal for non-current turn \(turnID.rawValue).")
+            return false
+        }
+        guard let claimID = currentClaimID else {
+            DebugLog.agent("DaemonChatController rejected terminal signal without a current claim.")
+            return false
+        }
+        guard
               let activeTurn = snapshot.activeTurn,
               activeTurn.turnID == turnID,
               activeTurn.state.isTerminal == false else {
+            DebugLog.agent("DaemonChatController rejected terminal signal after terminal snapshot.")
             return false
+        }
+
+        if let finalUsage = await finalRuntimeUsage() {
+            guard eventGeneration == generation,
+                  currentClaimTurnID == turnID,
+                  currentClaimID == claimID,
+                  snapshot.activeTurn?.turnID == turnID,
+                  snapshot.activeTurn?.state.isTerminal == false
+            else {
+                DebugLog.agent("DaemonChatController rejected terminal signal after final usage snapshot changed ownership.")
+                return false
+            }
+            if var accumulator = turnUsageAccumulator {
+                _ = accumulator.record(finalUsage)
+                turnUsageAccumulator = accumulator
+                latestSessionUsage = finalUsage
+            }
         }
 
         let persistenceState: ChatTurnPersistenceState
@@ -535,7 +592,7 @@ actor DaemonChatController {
                 failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
                 category: category,
                 message: terminalMessage,
-                createdAt: Date()
+                createdAt: finishedAt
             )
         case .interrupted(let terminalMessage):
             persistenceState = .failed
@@ -545,7 +602,7 @@ actor DaemonChatController {
                 failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
                 category: .interrupted,
                 message: terminalMessage,
-                createdAt: Date()
+                createdAt: finishedAt
             )
         }
 
@@ -555,18 +612,75 @@ actor DaemonChatController {
                 turnID: turnID,
                 claimID: claimID,
                 state: persistenceState,
-                terminalMessage: message
+                terminalMessage: message,
+                finishedAt: finishedAt,
+                usage: turnUsageAccumulator?.values
             )
         } catch {
-            DebugLog.store("DaemonChatController.finishPersistedTurn failed: \(error)")
+            DebugLog.store("DaemonChatController.finishTurnIfCurrent failed: \(error)")
+            return false
         }
 
         currentClaimID = nil
         currentClaimTurnID = nil
+        turnUsageAccumulator = nil
         activePermission = nil
         record(payload)
         liveEvents.removeAll(keepingCapacity: true)
         return true
+    }
+
+    private func finalRuntimeUsage() async -> SessionUsage? {
+        guard let runtimeHandle else { return nil }
+        do {
+            return (try await runtime.snapshot(for: runtimeHandle)).usage
+        } catch {
+            DebugLog.agent("DaemonChatController.finalRuntimeUsage failed: \(error)")
+            return nil
+        }
+    }
+
+    private func recordUsageIfCurrent(
+        turnID: ChatTurnID?,
+        generation eventGeneration: ChatSessionGenerationID,
+        usage: SessionUsage
+    ) {
+        guard eventGeneration == generation else {
+            DebugLog.agent("DaemonChatController rejected usage for stale generation \(eventGeneration.rawValue).")
+            return
+        }
+        guard let turnID, currentClaimTurnID == turnID else {
+            DebugLog.agent("DaemonChatController rejected usage for non-current turn.")
+            return
+        }
+        guard let claimID = currentClaimID else {
+            DebugLog.agent("DaemonChatController rejected usage without a current claim.")
+            return
+        }
+        guard let activeTurn = snapshot.activeTurn,
+              activeTurn.turnID == turnID,
+              activeTurn.state.isTerminal == false else {
+            DebugLog.agent("DaemonChatController rejected usage after terminal snapshot.")
+            return
+        }
+        guard var accumulator = turnUsageAccumulator else {
+            DebugLog.agent("DaemonChatController rejected usage without an accumulator.")
+            return
+        }
+
+        let values = accumulator.record(usage)
+        do {
+            _ = try store.updatePersistedChatTurnUsage(
+                chatID: chatID,
+                turnID: turnID,
+                claimID: claimID,
+                usage: values
+            )
+            turnUsageAccumulator = accumulator
+            latestSessionUsage = usage
+        } catch {
+            DebugLog.store("DaemonChatController.recordUsageIfCurrent rejected usage: \(error)")
+        }
     }
 
     private func consumePendingCancellation(turnID: ChatTurnID) -> Bool {
@@ -737,6 +851,35 @@ actor DaemonChatController {
         )
     }
 
+    /// The configuration used to claim a turn is the exact configuration used
+    /// to start its runtime. Warm turns retain their existing session's
+    /// configuration instead of reading settings that can change mid-session.
+    private func currentRuntimeStartRequest() throws -> ChatRuntimeStartRequest {
+        if let runtimeStartRequest { return runtimeStartRequest }
+        let chat = try store.getChat(id: chatID)
+        return ChatRuntimeStartRequest(
+            chatID: chatID,
+            generation: generation,
+            systemPrompt: try store.getSystemPrompt().body,
+            providerID: chat.modelProviderId,
+            modelID: chat.modelId,
+            existingProviderSessionID: chat.acpSessionId
+        )
+    }
+
+    private static let zeroUsage = SessionUsage(
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cachedReadTokens: nil,
+        cachedWriteTokens: nil,
+        thoughtTokens: nil,
+        cost: nil,
+        currency: nil,
+        contextUsed: 0,
+        contextSize: 0
+    )
+
     /// Acquires the single close-owner role. A re-entrant lifecycle path can
     /// observe that close but cannot perform teardown or clear its guard.
     @discardableResult
@@ -748,12 +891,15 @@ actor DaemonChatController {
             await runtime.close(handle)
         }
         runtimeHandle = nil
+        runtimeStartRequest = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)
         pendingCancellationTurnID = nil
         currentClaimID = nil
         currentClaimTurnID = nil
+        turnUsageAccumulator = nil
+        latestSessionUsage = nil
         generation = ChatSessionGenerationID(rawValue: ULID.generate())
         snapshot = ChatRuntimeSnapshot(
             chatID: snapshot.chatID,
@@ -786,7 +932,8 @@ actor DaemonChatController {
     static func bootstrapSnapshot(
         chatID: ChatID,
         store: GRDBWikiStore,
-        generation: ChatSessionGenerationID
+        generation: ChatSessionGenerationID,
+        bootstrapAt: Date = Date()
     ) throws -> ChatRuntimeSnapshot {
         let chat = try store.getChat(id: chatID)
         let turns = try store.listPersistedChatTurns(chatID: chatID)
@@ -801,7 +948,9 @@ actor DaemonChatController {
                     turnID: turn.submission.turnID,
                     claimID: claimID,
                     state: .failed,
-                    terminalMessage: interruptedMessage
+                    terminalMessage: interruptedMessage,
+                    finishedAt: bootstrapAt,
+                    usage: turn.usage
                 )
             } catch {
                 DebugLog.store("DaemonChatController.bootstrapSnapshot interrupted finish failed: \(error)")

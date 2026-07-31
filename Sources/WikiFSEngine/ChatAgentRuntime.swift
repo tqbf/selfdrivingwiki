@@ -49,6 +49,9 @@ public enum ChatAgentRuntimeEvent: Hashable, Sendable, Codable {
     case transcript([ChatTranscriptDelta])
     case permissionRequested(ChatPendingPermissionRequest)
     case permissionResolved(ChatPermissionResolution)
+    /// A cumulative usage snapshot for the provider session. The controller,
+    /// rather than the runtime, attributes it to the active durable turn.
+    case usage(SessionUsage)
     case turnCompleted(ChatTurnID)
     case turnFailed(turnID: ChatTurnID, category: ChatTurnFailureCategory, message: String)
     case turnCancelled(ChatTurnID)
