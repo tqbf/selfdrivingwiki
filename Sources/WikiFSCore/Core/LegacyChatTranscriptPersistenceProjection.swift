@@ -29,9 +29,9 @@ enum LegacyChatTranscriptPersistenceProjection {
                     inputSummary: toolCall.detail ?? ""
                 )
             case .completed:
-                return .toolResult(isError: false, summary: toolCall.detail ?? toolCall.toolName)
+                return .toolResult(isError: false, summary: toolCall.output ?? toolCall.detail ?? toolCall.toolName)
             case .failed, .cancelled:
-                return .toolResult(isError: true, summary: toolCall.detail ?? toolCall.toolName)
+                return .toolResult(isError: true, summary: toolCall.output ?? toolCall.detail ?? toolCall.toolName)
             }
         case .systemNotice(let notice):
             return .assistantText("\(notice.title)\n\n\(notice.message)")

@@ -97,6 +97,7 @@ struct ChatWebViewLinkifyTests {
             toolName: "Read",
             status: .running,
             detail: "page.md",
+            output: nil,
             permissionRequestID: nil,
             updatedAt: .distantPast
         )

@@ -67,7 +67,28 @@ struct ChatIdentifierCodableCompatibilityTests {
         ))
 
         let encoded = try JSONEncoder().encode(item)
+        let json = try #require(String(data: encoded, encoding: .utf8))
         let decoded = try JSONDecoder().decode(ChatTranscriptItem.self, from: encoded)
+
+        // Existing transcript JSON predates raw tool output and must remain
+        // decodable without fabricating an output value.
+        #expect(json.contains("\"output\"") == false)
+        #expect(decoded == item)
+    }
+
+    @Test func transcriptToolCallPersistsRawOutputSeparatelyFromItsDescriptor() throws {
+        let item = ChatTranscriptItem.toolCall(ChatTranscriptToolCallItem(
+            toolCallID: ToolCallID(rawValue: "tool-output"),
+            turnID: ChatTurnID(rawValue: "turn-output"),
+            toolName: "Bash",
+            status: .completed,
+            detail: "wikictl page list",
+            output: "```console\n<output>\n```",
+            permissionRequestID: nil,
+            updatedAt: Date(timeIntervalSince1970: 200)
+        ))
+
+        let decoded = try JSONDecoder().decode(ChatTranscriptItem.self, from: JSONEncoder().encode(item))
 
         #expect(decoded == item)
     }

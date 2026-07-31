@@ -53,6 +53,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         struct RunningToolCallState: Sendable {
             let toolCallID: ToolCallID
             let toolName: String
+            let inputSummary: String
         }
 
         enum ContentBlockState: Sendable {
@@ -542,7 +543,11 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 closeContentBlock(in: &translationState)
                 let toolCallID = ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
                 translationState.nextToolCallOrdinal += 1
-                translationState.runningToolCalls.append(.init(toolCallID: toolCallID, toolName: name))
+                translationState.runningToolCalls.append(.init(
+                    toolCallID: toolCallID,
+                    toolName: name,
+                    inputSummary: inputSummary
+                ))
                 return .toolCallUpsert(ChatTranscriptToolCallItem(
                     toolCallID: toolCallID,
                     turnID: turnID,
@@ -559,7 +564,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 let toolCall = translationState.runningToolCalls.isEmpty
                     ? TranscriptTranslationState.RunningToolCallState(
                         toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)"),
-                        toolName: "Tool"
+                        toolName: "Tool",
+                        inputSummary: ""
                     )
                     : translationState.runningToolCalls.removeFirst()
                 return .toolCallUpsert(ChatTranscriptToolCallItem(
@@ -567,7 +573,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     turnID: turnID,
                     toolName: toolCall.toolName,
                     status: isError ? .failed : .completed,
-                    detail: summary,
+                    detail: toolCall.inputSummary,
+                    output: summary,
                     permissionRequestID: nil,
                     updatedAt: Date()
                 ))

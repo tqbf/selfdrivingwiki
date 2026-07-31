@@ -832,19 +832,20 @@ struct ChatWebView: NSViewRepresentable {
         /// `[[Foo]]` is not a link. `internal` so the linkify behavior is
         /// unit-testable.
         static func renderedMarkdown(_ text: String, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
+            let presentationMarkdown = normalizingInsightCallout(in: text)
             if let context {
                 // Two-tier: a non-final (still-streaming) row renders links only —
                 // pass nil embedInfo so a half-typed `![[source:…` can't render a
                 // broken iframe/player. The row re-renders with embeds on finalize.
                 let embedInfo = isFinal ? context.embedInfo : nil
-                let prepared = ReaderMarkdown.prepared(text,
+                let prepared = ReaderMarkdown.prepared(presentationMarkdown,
                     isResolved: context.isResolved,
                     embedInfo: embedInfo,
                     displayName: context.displayName,
                     pinnedExtractionID: context.pinnedExtractionID)
                 return MarkdownHTMLRenderer.render(prepared)
             }
-            return MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(text) { _, _ in true })
+            return MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(presentationMarkdown) { _, _ in true })
         }
 
         static func feedRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
@@ -926,15 +927,16 @@ struct ChatWebView: NSViewRepresentable {
                 <div class="row-thinking-body">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div></details>
                 """
 
-            case .toolCall(_, _, let toolName, let status, let detail, _, _):
+            case .toolCall(_, _, let toolName, let status, let detail, let output, _, _):
                 let statusText = toolStatusLabel(status)
                 let isError = status == .failed || status == .cancelled
-                let detailText = detail ?? ""
+                let summaryText = toolSummary(descriptor: detail, output: output, fallback: toolName)
+                let outputText = toolDetailPayload(output ?? detail ?? "")
                 let cue = isError ? "⚠" : (status == .running || status == .pending ? "◌" : "✓")
                 return """
                 <details class="row chat-row chat-tool\(isError ? " is-error" : "")\((status == .running || status == .pending) ? " is-running" : "")" role="group" aria-label="Tool \(escape(toolName)), \(statusText)"\(attributes)>
-                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(detailText.isEmpty ? "" : " — \(escape(detailText.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""))")</span></summary>
-                \(detailText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(detailText))</pre>")</details>
+                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(summaryText.isEmpty ? "" : " — \(escape(summaryText))")</span></summary>
+                \(outputText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(outputText))</pre>")</details>
                 """
 
             case .notice(_, _, _, let title, let message, _):
@@ -947,6 +949,101 @@ struct ChatWebView: NSViewRepresentable {
                 <aside class="row row-turn-failed" role="alert" aria-label="Chat action failed"\(attributes)><span class="row-turn-failed-icon" aria-hidden="true">⚠︎</span><div class="row-turn-failed-body"><strong>Chat action failed</strong> \(escape(message))</div></aside>
                 """
             }
+        }
+
+        /// Returns a collapsed descriptor without mutating durable output. New
+        /// rows retain an input descriptor; legacy rows may have only output,
+        /// whose Markdown fence is skipped for this compact presentation.
+        private static func toolSummary(descriptor: String?, output: String?, fallback: String) -> String {
+            previewText(in: descriptor) ?? previewText(in: output) ?? fallback
+        }
+
+        private static func previewText(in text: String?) -> String? {
+            guard let text else { return nil }
+            return text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first(where: { line in
+                    !line.isEmpty && !isMarkdownFence(line)
+                })
+        }
+
+        private static func isMarkdownFence(_ line: String) -> Bool {
+            line.hasPrefix("```") || line.hasPrefix("~~~")
+        }
+
+        /// Removes a provider-added Markdown fence around an entire tool payload.
+        /// The persisted payload remains untouched so copy and diagnostic exports
+        /// retain their original bytes.
+        private static func toolDetailPayload(_ text: String) -> String {
+            let lines = text.components(separatedBy: .newlines)
+            guard let openingIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }),
+                  let closingIndex = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }),
+                  openingIndex < closingIndex,
+                  let openingFence = markdownFence(in: lines[openingIndex], allowsInfoString: true),
+                  let closingFence = markdownFence(in: lines[closingIndex], allowsInfoString: false),
+                  openingFence.character == closingFence.character,
+                  closingFence.length >= openingFence.length
+            else {
+                return text
+            }
+
+            return lines[(openingIndex + 1)..<closingIndex].joined(separator: "\n")
+        }
+
+        private static func markdownFence(in line: String, allowsInfoString: Bool) -> (character: Character, length: Int)? {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let character = trimmed.first, character == "`" || character == "~" else { return nil }
+
+            let length = trimmed.prefix { $0 == character }.count
+            guard length >= 3 else { return nil }
+
+            let suffix = trimmed.dropFirst(length)
+            guard allowsInfoString || suffix.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return (character, length)
+        }
+
+        /// The agent guidance formats Insights as full-line single-backtick
+        /// markers. Swift Markdown treats them as a multiline inline code span,
+        /// so remove only that known presentation wrapper.
+        private static func normalizingInsightCallout(in text: String) -> String {
+            var lines = text.components(separatedBy: .newlines)
+            guard let openingIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }),
+                  let closingIndex = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }),
+                  openingIndex < closingIndex,
+                  isInsightOpeningMarker(lines[openingIndex]),
+                  isInsightClosingMarker(lines[closingIndex])
+            else {
+                return text
+            }
+
+            lines[openingIndex] = removingOuterBackticks(from: lines[openingIndex])
+            lines[closingIndex] = removingOuterBackticks(from: lines[closingIndex])
+            return lines.joined(separator: "\n")
+        }
+
+        private static func isInsightOpeningMarker(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("`★ Insight") && trimmed.hasSuffix("`")
+        }
+
+        private static func isInsightClosingMarker(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.first == "`", trimmed.last == "`" else { return false }
+            let divider = trimmed.dropFirst().dropLast()
+            return divider.count >= 3 && divider.allSatisfy { $0 == "─" }
+        }
+
+        private static func removingOuterBackticks(from line: String) -> String {
+            guard let opening = line.firstIndex(of: "`"),
+                  let closing = line.lastIndex(of: "`"),
+                  opening < closing
+            else {
+                return line
+            }
+            var result = line
+            result.remove(at: closing)
+            result.remove(at: opening)
+            return result
         }
 
         private static func toolStatusLabel(_ status: ChatToolCallStatus) -> String {
@@ -1239,8 +1336,7 @@ struct ChatWebView: NSViewRepresentable {
           }
           .turn-timestamp { opacity: 0.7; }
           .chat-tool {
-            justify-content: flex-start; align-items: baseline;
-            gap: 6px; font-size: 11.5px; color: var(--muted);
+            display: block; font-size: 11.5px; color: var(--muted);
             padding: 1px 2px;
           }
           .chat-tool-name {
@@ -1252,7 +1348,10 @@ struct ChatWebView: NSViewRepresentable {
           }
           .chat-tool.is-error { color: #ff453a; }
           .chat-tool.is-error .chat-tool-name { color: #ff453a; }
-          .chat-tool > summary { list-style: none; cursor: pointer; }
+          .chat-tool > summary {
+            display: flex; align-items: baseline; gap: 6px;
+            list-style: none; cursor: pointer;
+          }
           .chat-tool > summary::-webkit-details-marker { display: none; }
           .chat-tool[open] > summary .chat-tool-summary::before {
             content: "▾ "; opacity: 0.5;

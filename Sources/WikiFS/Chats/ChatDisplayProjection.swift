@@ -52,6 +52,7 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         toolName: String,
         status: ChatToolCallStatus,
         detail: String?,
+        output: String?,
         permissionRequestID: PermissionRequestID?,
         updatedAt: Date
     )
@@ -77,7 +78,7 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
              .assistantMessage(let id, _, _, _, _),
              .reasoning(let id, _, _, _, _):
             .message(id)
-        case .toolCall(let id, _, _, _, _, _, _):
+        case .toolCall(let id, _, _, _, _, _, _, _):
             .toolCall(id)
         case .notice(let id, _, _, _, _, _):
             .notice(id)
@@ -91,7 +92,7 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         case .userMessage(_, let turnID, _, _),
              .assistantMessage(_, let turnID, _, _, _),
              .reasoning(_, let turnID, _, _, _),
-             .toolCall(_, let turnID, _, _, _, _, _),
+             .toolCall(_, let turnID, _, _, _, _, _, _),
              .failure(_, let turnID, _, _, _):
             turnID
         case .notice(_, let turnID, _, _, _, _):
@@ -120,8 +121,8 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
              .reasoning(_, _, let text, _, _),
              .failure(_, _, _, let text, _):
             text
-        case .toolCall(_, _, let toolName, _, let detail, _, _):
-            [toolName, detail].compactMap { $0 }.joined(separator: "\n")
+        case .toolCall(_, _, let toolName, _, let detail, let output, _, _):
+            [toolName, detail, output].compactMap { $0 }.joined(separator: "\n")
         case .notice(_, _, _, let title, let message, _):
             [title, message].joined(separator: "\n")
         }
@@ -135,7 +136,7 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
              .notice(_, _, _, _, _, let createdAt),
              .failure(_, _, _, _, let createdAt):
             createdAt
-        case .toolCall(_, _, _, _, _, _, let updatedAt):
+        case .toolCall(_, _, _, _, _, _, _, let updatedAt):
             updatedAt
         }
     }
@@ -333,6 +334,7 @@ enum ChatDisplayProjection {
                 toolName: toolCall.toolName,
                 status: toolCall.status,
                 detail: toolCall.detail,
+                output: toolCall.output,
                 permissionRequestID: toolCall.permissionRequestID,
                 updatedAt: toolCall.updatedAt
             )

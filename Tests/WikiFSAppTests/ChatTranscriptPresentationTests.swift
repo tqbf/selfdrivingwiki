@@ -41,6 +41,7 @@ struct ChatTranscriptPresentationTests {
             toolName: "Read",
             status: .running,
             detail: "page.md",
+            output: nil,
             permissionRequestID: nil,
             updatedAt: .distantPast
         )
@@ -53,6 +54,67 @@ struct ChatTranscriptPresentationTests {
         #expect(toolHTML.contains("data-row-id=\"tool-tool-1\""))
         #expect(toolHTML.contains("Tool Read, Running"))
         #expect(toolHTML.contains("◌"))
+    }
+
+    @Test(arguments: [
+        ("```console\nfile changed\n```", "file changed"),
+        ("```json\n{\"ok\":true}\n```", "{\"ok\":true}"),
+        ("~~~text\nplain output\n~~~", "plain output"),
+    ])
+    func legacyToolOutputNeverUsesAMarkdownFenceAsItsCollapsedDescriptor(
+        _ output: String,
+        expectedSummary: String
+    ) {
+        let legacyRow = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-legacy"),
+            turnID: turnID,
+            toolName: "Bash",
+            status: .completed,
+            detail: output,
+            output: nil,
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(legacyRow)
+
+        #expect(html.contains("Completed — \(expectedSummary)"))
+        #expect(!html.contains("Completed — ```"))
+        #expect(!html.contains("Completed — ~~~"))
+        #expect(html.contains("<pre class=\"chat-tool-detail\">\(expectedSummary)</pre>"))
+        #expect(html.contains("<pre class=\"chat-tool-detail\">```") == false)
+        #expect(html.contains("~~~</pre>") == false)
+    }
+
+    @Test func insightCalloutMarkersRenderAsTextInsteadOfAnInlineCodeSpan() {
+        let markdown = """
+        `★ Insight ─────────────────────────────────────`
+        The parser should render this as prose, not code.
+        `─────────────────────────────────────────────────`
+        """
+
+        let html = ChatWebView.Coordinator.renderedMarkdown(markdown)
+
+        #expect(html.contains("★ Insight ─────────────────────────────────────"))
+        #expect(html.contains("<code>★ Insight") == false)
+        #expect(html.contains("<code>─────────────────────────────────────────────────</code>") == false)
+    }
+
+    @Test func incompleteToolFenceRemainsVisibleAsRawOutput() {
+        let row = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-incomplete-fence"),
+            turnID: turnID,
+            toolName: "Bash",
+            status: .completed,
+            detail: nil,
+            output: "```console\nfile changed",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(row)
+
+        #expect(html.contains("<pre class=\"chat-tool-detail\">```console\nfile changed</pre>"))
     }
 
     @Test func noticesAndFailuresAreNotAssistantRows() {
@@ -104,6 +166,8 @@ struct ChatTranscriptPresentationTests {
         #expect(shell.contains("data-focus-key"))
         #expect(shell.contains("selectionOffsets"))
         #expect(shell.contains("isNearBottom"))
+        #expect(shell.contains(".chat-tool {\n    display: block"))
+        #expect(shell.contains(".chat-tool > summary {\n    display: flex"))
     }
 }
 #endif

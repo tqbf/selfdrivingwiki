@@ -102,6 +102,13 @@ struct SystemPromptTests {
         #expect(body.contains("wikictl page add"))
     }
 
+    @Test func defaultBodyForbidsDecorativeInsightSections() {
+        let body = SystemPrompt.defaultBody
+
+        #expect(body.contains("Do not add decorative \"Insight\" sections"))
+        #expect(body.contains("Give the answer directly"))
+    }
+
     // MARK: - Update is a no-op (read-only)
 
     @Test func updateSystemPromptIsANoOp() throws {

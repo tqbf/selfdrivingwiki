@@ -152,6 +152,58 @@ struct ChatTranscriptHostedTests {
         #expect(acknowledgementField("outcome", in: missing) == "missingRow")
     }
 
+    @Test func hostedExpandedToolRowsStackAndDisplayTheUnfencedPayload() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let tool = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-hosted"),
+            turnID: ChatTurnID(rawValue: "turn-hosted-tool"),
+            toolName: "Bash",
+            status: .completed,
+            detail: "git status",
+            output: "```console\nhead_version_id: 01KX94Y\n```",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+        let toolHTML = ChatWebView.Coordinator.chatDisplayRowHTML(tool)
+        let data = try JSONSerialization.data(withJSONObject: toolHTML, options: [.fragmentsAllowed])
+        let json = try #require(String(data: data, encoding: .utf8))
+
+        let acknowledgement = await webView.chatTranscriptJavaScriptResult(
+            "appendChatRows(\(json), false, 71, \"tool-tool-hosted\")"
+        )
+        #expect(acknowledgementField("outcome", in: acknowledgement) == "success")
+
+        let state = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var details=document.querySelector("[data-row-id='tool-tool-hosted']");
+                var summary=details.querySelector('summary');
+                var detail=details.querySelector('.chat-tool-detail');
+                details.open=true;
+                return [
+                    detail.textContent,
+                    String(detail.getBoundingClientRect().top > summary.getBoundingClientRect().top),
+                    getComputedStyle(details).display
+                ].join('|');
+            })()
+            """)
+
+        #expect(state == "head_version_id: 01KX94Y|true|block")
+    }
+
     private func acknowledgementField<T>(
         _ field: String,
         in result: ChatTranscriptJavaScriptResult

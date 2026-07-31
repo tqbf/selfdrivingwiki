@@ -2,6 +2,7 @@
 import ACPModel
 import Foundation
 import Testing
+@testable import WikiFS
 @testable import WikiFSCore
 @testable import WikiFSEngine
 @testable import wikid
@@ -55,6 +56,59 @@ struct LauncherChatAgentRuntimeTests {
         #expect(useItem.toolName == resultItem.toolName)
         #expect(useItem.status == .running)
         #expect(resultItem.status == .completed)
+    }
+
+    @Test(arguments: [
+        ("```console\n<command-output>\n```", "```console\n&lt;command-output&gt;\n```"),
+        ("```json\n{\"ok\": true}\n```", "```json\n{\"ok\": true}\n```"),
+        ("build completed", "build completed"),
+    ])
+    @MainActor
+    func acpToolOutputKeepsTheDescriptorAndRendersRawOutputSafely(
+        _ output: String,
+        escapedOutput: String
+    ) {
+        let command = "wikictl page add --title Fence"
+        let translator = ACPEventTranslator()
+        let events = translator.translate(.toolCall(ToolCallUpdate(
+            toolCallId: "tool-fence",
+            status: .pending,
+            kind: .execute,
+            rawInput: AnyCodable(["command": command])
+        ))) + translator.translate(.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tool-fence",
+            status: .completed,
+            content: [.content(.text(TextContent(text: output)))]
+        )))
+
+        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
+            from: events,
+            turnID: ChatTurnID(rawValue: "turn-fence")
+        )
+        let items = ChatTranscriptReducer.reducing(items: [], with: deltas)
+        let toolCall = items.compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }.last
+
+        guard let toolCall else {
+            Issue.record("expected an ACP tool-call transcript row")
+            return
+        }
+        #expect(toolCall.status == .completed)
+        #expect(toolCall.detail == command)
+        #expect(toolCall.output == output)
+
+        let row = ChatDisplayProjection.project(items: items, activeContentBlock: nil).transcript.rows.last
+        guard let row else {
+            Issue.record("expected a display row")
+            return
+        }
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(row)
+        #expect(html.contains("Completed — \(command)"))
+        #expect(!html.contains("Completed — ```"))
+        #expect(html.contains("<pre class=\"chat-tool-detail\">\(escapedOutput)</pre>"))
+        #expect(!html.contains("<command-output>"))
     }
 
     @Test func transcriptTranslationCoalescesAssistantAndReasoningDeltasIntoStableMessageReplacements() {
