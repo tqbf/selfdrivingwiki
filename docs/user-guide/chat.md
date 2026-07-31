@@ -23,7 +23,7 @@ preserved in the database.
 
 ## The chat interface
 
-![Chat window: title, tab strip, agent transcript with a collapsed thinking block and timestamped response, and the composer with model and permission-mode chips at the bottom.](images/chat-window.png)
+![Chat window: title, tab strip, agent transcript with a collapsed reasoning block and response state, and the composer with model and permission-mode chips at the bottom.](images/chat-window.png)
 
 ### Message layout
 
@@ -138,29 +138,31 @@ Some models show a collapsed reasoning block:
 - The preview shows the first line.
 - Click the block to read it.
 
-### Duration and timestamps
+### Response state and time
 
-After each agent response completes:
-- A **"Worked for Xs"** footer appears below the response.
-- **Hover** the footer to swap it to the completion timestamp (e.g., "2:34 PM").
+Each response block shows whether it is **Streaming** or **Completed**. Completed
+blocks also show the time when the app recorded the response.
 
 ### While generating
 
 - A **"Thinking… [elapsed]"** indicator pulses below the transcript.
-- The **Activity menu** (⋯ icon) appears with options:
-  - **Show internals** — shows extra activity details.
+- The **Activity menu** (⋯ icon) is available while a query chat is queued or
+  answering. It has options:
+  - **Show Full Activity** — replaces the chat transcript with the full run
+    activity feed.
   - **Hide tool calls** — filters tool-call rows.
   - **Exit status** — shows "Ended" or "Exited N" when the process finishes.
-  - **Reveal Debug Folder** — opens the run's debug trace folder in Finder
-    (ACP messages, permissions, usage, stderr.log).
+  - **Reveal Debug Folder** — opens the run's debug trace folder in Finder,
+    when the run created one.
 
 ### Export diagnostic information
 
-If a chat does not behave as expected, open the Activity menu and use one of
-these debug actions:
+If a query chat is queued or answering, open the Activity menu and use these
+debug actions:
 
 - **Copy Diagnostics** copies a redacted report to the clipboard.
-- **Write Redacted Diagnostics JSONL** saves the same report in the debug folder.
+- **Write Redacted Diagnostics JSONL** is available only after the run has a
+  debug folder. It saves the report there.
 
 The report includes timing, status, and row information. It does not include
 chat message text. Use the debug folder only when a developer asks for the
