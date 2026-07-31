@@ -22,6 +22,7 @@ actor DaemonChatController {
     private let store: GRDBWikiStore
     private let runtime: ChatAgentRuntime
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
+    private let diagnosticTrace: DaemonChatDiagnostics
 
     private var generation: ChatSessionGenerationID
     private var snapshot: ChatRuntimeSnapshot
@@ -61,13 +62,15 @@ actor DaemonChatController {
         wikiID: WikiID,
         store: GRDBWikiStore,
         runtime: ChatAgentRuntime,
-        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void
+        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics()
     ) throws {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
         self.runtime = runtime
         self.pushEvent = pushEvent
+        self.diagnosticTrace = diagnosticTrace
         self.generation = ChatSessionGenerationID(rawValue: ULID.generate())
         self.replayBuffer = ChatUpdateReplayBuffer(capacity: Self.replayCapacity)
         self.snapshot = try Self.bootstrapSnapshot(chatID: chatID, store: store, generation: generation)
@@ -90,6 +93,13 @@ actor DaemonChatController {
             return chatID
         }
 
+        await observeDiagnostic(
+            stage: .providerReceipt,
+            detail: "turn-received",
+            turnID: request.submission.turnID,
+            content: request.submission.userText
+        )
+
         let persistedTurn = try store.enqueuePersistedChatTurn(chatID: chatID, submission: request.submission)
         try appendTranscriptItems([
             .message(ChatTranscriptMessageItem(
@@ -100,6 +110,7 @@ actor DaemonChatController {
                 createdAt: request.submission.submittedAt
             ))
         ])
+        await observeDiagnostic(stage: .persistence, detail: "turn-enqueued", turnID: request.submission.turnID)
         record(.queued(ChatQueuedTurn(
             ordinal: persistedTurn.ordinal,
             submission: persistedTurn.submission,
@@ -315,6 +326,7 @@ actor DaemonChatController {
                 startEventLoop(handle)
             }
             record(.started(turnID: claimed.submission.turnID))
+            await observeDiagnostic(stage: .providerTranslation, detail: "provider-submit", turnID: claimed.submission.turnID)
             try await runtime.submitTurn(claimed.submission, in: handle)
             let marked = try store.markPersistedChatTurnProviderSubmitted(
                 chatID: chatID,
@@ -343,6 +355,7 @@ actor DaemonChatController {
                     lastIncludedSequence: snapshot.lastIncludedSequence
                 )
             }
+            await observeDiagnostic(stage: .persistence, detail: "provider-submitted", turnID: claimed.submission.turnID)
         } catch {
             DebugLog.agent("DaemonChatController.processQueueIfPossible submit failed: \(error)")
             _ = finishPersistedTurn(
@@ -373,6 +386,7 @@ actor DaemonChatController {
 
     private func handleRuntimeEvent(_ envelope: ChatAgentRuntimeEventEnvelope) async {
         guard envelope.generation == generation else { return }
+        await observeDiagnostic(stage: .providerReceipt, detail: "runtime-event")
         // The runtime supplies this transition with the same envelope as the
         // transcript delta. Clearing it first prevents a closed block from
         // remaining live across a semantic boundary.
@@ -388,6 +402,8 @@ actor DaemonChatController {
             } catch {
                 DebugLog.store("DaemonChatController transcript persistence failed: \(error)")
             }
+            await observeDiagnostic(stage: .reduction, detail: "transcript-reduced")
+            await observeDiagnostic(stage: .persistence, detail: "transcript-persisted")
             record(.transcriptChanged(deltas))
 
         case .permissionRequested(let request):
@@ -563,6 +579,26 @@ actor DaemonChatController {
         case .rejected(let rejection):
             DebugLog.agent("DaemonChatController rejected update \(payload): \(rejection)")
         }
+    }
+
+    private func observeDiagnostic(
+        stage: ChatDiagnosticStage,
+        detail: String,
+        turnID: ChatTurnID? = nil,
+        content: String? = nil
+    ) async {
+        await diagnosticTrace.record(
+            stage: stage,
+            outcome: .accepted,
+            correlation: .init(
+                chat: .init(rawValue: chatID.rawValue),
+                generation: .init(rawValue: generation.rawValue),
+                updateSequence: .init(UInt64(max(0, nextSequence.rawValue))),
+                turn: turnID.map { .init(rawValue: $0.rawValue) }
+            ),
+            detail: detail,
+            content: content
+        )
     }
 
     private func pushSyncUpdate(reason: ChatSyncUpdateReason) {

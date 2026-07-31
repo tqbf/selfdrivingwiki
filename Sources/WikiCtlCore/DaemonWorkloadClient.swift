@@ -407,6 +407,20 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    /// Acknowledge a successfully persisted/copy-delivered export. The daemon
+    /// validates the same versioned request boundary before rotating its ring.
+    public func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
+        let requestData = try JSONEncoder().encode(request)
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.resetChatDiagnostics(request: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            guard replyData.isEmpty == false else { throw DaemonXPCError.unexpectedReply }
+        }
+    }
+
     /// Resolve a pending permission request for a chat.
     public func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
         let requestData = try JSONEncoder().encode(request)

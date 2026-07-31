@@ -49,6 +49,7 @@ final class ChatTranscriptRenderExecutor {
 
     private let mutate: Mutation
     private let reportAnomaly: @MainActor (ChatTranscriptRendererAnomaly) -> Void
+    private let diagnosticTrace: ChatDiagnosticTrace
     private var acknowledgedSnapshot: ChatTranscriptRenderSnapshot?
     private var desiredSnapshot: ChatTranscriptRenderSnapshot?
     private var reloadSnapshot: ChatTranscriptRenderSnapshot?
@@ -61,10 +62,12 @@ final class ChatTranscriptRenderExecutor {
 
     init(
         mutate: @escaping Mutation,
-        reportAnomaly: @escaping @MainActor (ChatTranscriptRendererAnomaly) -> Void
+        reportAnomaly: @escaping @MainActor (ChatTranscriptRendererAnomaly) -> Void,
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
     ) {
         self.mutate = mutate
         self.reportAnomaly = reportAnomaly
+        self.diagnosticTrace = diagnosticTrace
     }
 
     func submit(_ snapshot: ChatTranscriptRenderSnapshot) {
@@ -190,14 +193,23 @@ final class ChatTranscriptRenderExecutor {
         revision: ChatTranscriptRenderRevision?,
         rowID: ChatDisplayRowID?
     ) {
-        ChatDiagnostics.observe(
+        let chat: ChatDiagnosticCorrelation.Value?
+        if case .chat(let chatID)? = desiredSnapshot?.context.transcriptID {
+            chat = .init(rawValue: chatID.rawValue)
+        } else {
+            chat = nil
+        }
+        _ = diagnosticTrace.record(
             stage: stage,
             outcome: outcome,
-            correlation: .init(
-                displayRow: rowID.map { .init(rawValue: $0.domValue) },
-                rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
-            ),
-            detail: "renderer"
+            payload: .init(
+                correlation: .init(
+                    chat: chat,
+                    displayRow: rowID.map { .init(rawValue: $0.domValue) },
+                    rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
+                ),
+                detail: "renderer"
+            )
         )
     }
 

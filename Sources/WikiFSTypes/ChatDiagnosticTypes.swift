@@ -255,3 +255,22 @@ public struct ChatDiagnosticSnapshotRequest: Codable, Hashable, Sendable {
         }
     }
 }
+
+/// Acknowledges that a redacted export reached its destination. It is a
+/// separate XPC operation so a failed pasteboard/file write never drains the
+/// daemon ring that a retry needs.
+public struct ChatDiagnosticResetRequest: Codable, Hashable, Sendable {
+    public let version: Int
+    public let chat: ChatDiagnosticCorrelation.Value?
+
+    public init(version: Int = ChatDiagnosticTypes.currentVersion, chat: ChatDiagnosticCorrelation.Value? = nil) {
+        self.version = version
+        self.chat = chat
+    }
+
+    public func validatingVersion() throws {
+        guard version == ChatDiagnosticTypes.currentVersion else {
+            throw ChatDiagnosticVersionError.unsupported(version)
+        }
+    }
+}

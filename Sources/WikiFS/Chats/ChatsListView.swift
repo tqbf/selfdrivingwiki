@@ -35,11 +35,6 @@ struct ChatsListView: NSViewControllerRepresentable {
         let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
         let needs = vc.needsReload(visible)
         DebugLog.tabs("ChatsListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
-        ChatDiagnostics.observe(
-            stage: .displayProjection,
-            correlation: .init(eventKind: .init(rawValue: "sidebar")),
-            detail: "\(needs ? "reload" : "reconfigure"); rows=\(visible.count)"
-        )
         if needs {
             vc.reloadData(from: visible)
         } else {
@@ -178,12 +173,15 @@ final class ChatsListViewController: NSViewController {
     private func logLiveState(_ reason: String, reconfigured: Int, candidates: Int) {
         let live = Set(items.map(\.id).filter { chatDaemon?.isChatGenerating($0) ?? false })
         guard live != loggedLiveIDs else { return }
+        let previousLive = loggedLiveIDs
         loggedLiveIDs = live
-        ChatDiagnostics.observe(
-            stage: .displayProjection,
-            correlation: .init(eventKind: .init(rawValue: "sidebar-\(reason)")),
-            detail: "live-count=\(live.count); reconfigured=\(reconfigured)/\(candidates)"
-        )
+        for chatID in live.symmetricDifference(previousLive) {
+            ChatDiagnostics.observe(
+                stage: .displayProjection,
+                correlation: .init(chat: .init(rawValue: chatID.rawValue), eventKind: .init(rawValue: "sidebar-\(reason)")),
+                detail: "live-transition; reconfigured=\(reconfigured)/\(candidates)"
+            )
+        }
     }
 
     private func signature(_ rows: [ChatSummary]) -> String {

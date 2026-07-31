@@ -110,6 +110,21 @@ struct ChatTranscriptRenderExecutorTests {
         #expect(executor.state == .idle)
     }
 
+    @Test func rendererTraceCarriesTypedChatThroughPlanningAndDOMAcknowledgement() {
+        let recorder = RenderMutationRecorder()
+        let trace = ChatDiagnosticTrace(source: .app)
+        let executor = makeExecutor(recorder, diagnosticTrace: trace)
+
+        executor.submit(snapshot([row("a", text: "A")]))
+        recorder.succeedCurrent()
+
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: "chat-executor")
+        let events = trace.snapshot(chat: correlation).events
+        #expect(events.map(\.stage).contains(.renderPlanning))
+        #expect(events.map(\.stage).contains(.domAcknowledgement))
+        #expect(events.allSatisfy { $0.payload.correlation.chat == correlation })
+    }
+
     @Test func coalescesOnlyPendingReplacementForTheSameRow() {
         let recorder = RenderMutationRecorder()
         let executor = makeExecutor(recorder)
@@ -191,11 +206,13 @@ struct ChatTranscriptRenderExecutorTests {
 
     private func makeExecutor(
         _ recorder: RenderMutationRecorder,
-        anomalies: RenderAnomalyRecorder = .init()
+        anomalies: RenderAnomalyRecorder = .init(),
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
     ) -> ChatTranscriptRenderExecutor {
         ChatTranscriptRenderExecutor(
             mutate: recorder.record,
-            reportAnomaly: anomalies.record
+            reportAnomaly: anomalies.record,
+            diagnosticTrace: diagnosticTrace
         )
     }
 

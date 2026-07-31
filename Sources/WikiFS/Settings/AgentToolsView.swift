@@ -28,13 +28,6 @@ struct AgentToolsView: View {
         // because `isChatGenerating(_:)` is called from the NSTableView data
         // source, which SwiftUI can't observe.
         let _ = chatDaemon?.runningStateToken
-        // Debug-only observation of the sidebar's tracked generation token.
-        // It contains no chat content and is retained only in the redacted trace.
-        let _ = ChatDiagnostics.observe(
-            stage: .displayProjection,
-            correlation: .init(updateSequence: .init(UInt64(chatDaemon?.runningStateToken ?? 0))),
-            detail: "sidebar-body"
-        )
         VStack(spacing: 0) {
             chatsHeader
             chatSearchBar

@@ -18,6 +18,17 @@ struct ChatDiagnosticMergedSnapshot: Codable, Sendable {
     let mergeOrder: String
     let appSummary: [String: String]
     let daemonSummary: [String: String]
+    let retention: [ChatDiagnosticMergedRetention]
+}
+
+/// Exported retention accounting. Keeping it adjacent to the merged event list
+/// prevents a bounded ring from being mistaken for a complete history.
+struct ChatDiagnosticMergedRetention: Codable, Sendable, Hashable {
+    let source: ChatDiagnosticSource
+    let instanceID: UUID
+    let droppedRecordCount: Int
+    let droppedByteCount: Int
+    let summary: [String: String]
 }
 
 enum ChatDiagnosticSnapshotMerge {
@@ -30,11 +41,13 @@ enum ChatDiagnosticSnapshotMerge {
     ) -> ChatDiagnosticMergedSnapshot {
         let snapshots = [app] + (daemon.map { [$0] } ?? [])
         let events = snapshots.flatMap(\.events).sorted { lhs, rhs in
-            if lhs.process.source == rhs.process.source {
-                return lhs.sequence < rhs.sequence
-            }
+            // This is deliberately a single lexicographic key. Mixing a
+            // per-source sequence comparison with a cross-source timestamp
+            // comparison is non-transitive and makes Swift's sort unspecified.
             if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
-            return lhs.process.source.rawValue < rhs.process.source.rawValue
+            if lhs.process.source != rhs.process.source { return lhs.process.source.rawValue < rhs.process.source.rawValue }
+            if lhs.process.instanceID != rhs.process.instanceID { return lhs.process.instanceID.uuidString < rhs.process.instanceID.uuidString }
+            return lhs.sequence < rhs.sequence
         }
         return ChatDiagnosticMergedSnapshot(
             version: ChatDiagnosticTypes.currentVersion,
@@ -42,7 +55,16 @@ enum ChatDiagnosticSnapshotMerge {
             events: events,
             mergeOrder: "per-process-sequence; timestamp-approximate-across-sources",
             appSummary: app.summary,
-            daemonSummary: daemon?.summary ?? [:]
+            daemonSummary: daemon?.summary ?? [:],
+            retention: snapshots.map {
+                ChatDiagnosticMergedRetention(
+                    source: $0.process.source,
+                    instanceID: $0.process.instanceID,
+                    droppedRecordCount: $0.droppedRecordCount,
+                    droppedByteCount: $0.droppedByteCount,
+                    summary: $0.summary
+                )
+            }
         )
     }
 }
@@ -50,7 +72,8 @@ enum ChatDiagnosticSnapshotMerge {
 /// App-owned serialized, redacted trace store. It intentionally has no app
 /// display-type dependency; UI correlation is supplied as opaque diagnostic
 /// values at the call site.
-actor ChatDiagnosticTrace {
+@MainActor
+final class ChatDiagnosticTrace {
     private struct StoredRecord: Sendable {
         let event: ChatDiagnosticEventEnvelope
         let byteCount: Int
@@ -60,9 +83,14 @@ actor ChatDiagnosticTrace {
     private var identity: ChatDiagnosticProcessIdentity
     private var fingerprintKey = ChatDiagnosticFingerprintKey()
     private var nextSequence: UInt64 = 0
-    private var recordsByChat: [ChatDiagnosticCorrelation.Value: [StoredRecord]] = [:]
-    private var droppedRecordsByChat: [ChatDiagnosticCorrelation.Value: Int] = [:]
-    private var droppedBytesByChat: [ChatDiagnosticCorrelation.Value: Int] = [:]
+    private enum Bucket: Hashable {
+        case chat(ChatDiagnosticCorrelation.Value)
+        case process
+    }
+
+    private var recordsByBucket: [Bucket: [StoredRecord]] = [:]
+    private var droppedRecordsByBucket: [Bucket: Int] = [:]
+    private var droppedBytesByBucket: [Bucket: Int] = [:]
 
     init(source: ChatDiagnosticSource) {
         self.source = source
@@ -80,23 +108,25 @@ actor ChatDiagnosticTrace {
         payload: ChatDiagnosticPayload = .init()
     ) -> ChatDiagnosticEventEnvelope {
         nextSequence &+= 1
+        let bucket = payload.correlation.chat.map(Bucket.chat) ?? .process
+        let didCoalesce = shouldCoalesce(stage: stage, correlation: payload.correlation)
+            && recordsByBucket[bucket]?.last.map { coalescingKey(for: $0.event) == coalescingKey(stage: stage, correlation: payload.correlation) } == true
         let event = ChatDiagnosticEventEnvelope(
             process: identity,
             sequence: ChatDiagnosticSequence(nextSequence),
             stage: stage,
             payload: payload,
-            outcome: outcome
+            outcome: didCoalesce ? .coalesced : outcome
         )
-        let chat = payload.correlation.chat ?? .init(rawValue: "process")
-        append(event, for: chat)
+        append(event, for: bucket)
         emit(event)
         return event
     }
 
     func snapshot(chat: ChatDiagnosticCorrelation.Value? = nil, summary: [String: String] = [:]) -> ChatDiagnosticSnapshotEnvelope {
-        let selected = chat.map { recordsByChat[$0] ?? [] } ?? recordsByChat.values.flatMap { $0 }
-        let droppedRecords = chat.map { droppedRecordsByChat[$0] ?? 0 } ?? droppedRecordsByChat.values.reduce(0, +)
-        let droppedBytes = chat.map { droppedBytesByChat[$0] ?? 0 } ?? droppedBytesByChat.values.reduce(0, +)
+        let selected = chat.map { recordsByBucket[.chat($0)] ?? [] } ?? recordsByBucket.values.flatMap { $0 }
+        let droppedRecords = chat.map { droppedRecordsByBucket[.chat($0)] ?? 0 } ?? droppedRecordsByBucket.values.reduce(0, +)
+        let droppedBytes = chat.map { droppedBytesByBucket[.chat($0)] ?? 0 } ?? droppedBytesByBucket.values.reduce(0, +)
         return ChatDiagnosticSnapshotEnvelope(
             process: identity,
             events: selected.map(\.event),
@@ -112,12 +142,12 @@ actor ChatDiagnosticTrace {
         identity = ChatDiagnosticProcessIdentity(source: source)
         fingerprintKey = ChatDiagnosticFingerprintKey()
         nextSequence = 0
-        recordsByChat.removeAll()
-        droppedRecordsByChat.removeAll()
-        droppedBytesByChat.removeAll()
+        recordsByBucket.removeAll()
+        droppedRecordsByBucket.removeAll()
+        droppedBytesByBucket.removeAll()
     }
 
-    private func append(_ event: ChatDiagnosticEventEnvelope, for chat: ChatDiagnosticCorrelation.Value) {
+    private func append(_ event: ChatDiagnosticEventEnvelope, for bucket: Bucket) {
         let encoded: Data
         do {
             encoded = try JSONEncoder().encode(event)
@@ -126,16 +156,54 @@ actor ChatDiagnosticTrace {
             return
         }
         let record = StoredRecord(event: event, byteCount: encoded.count)
-        var records = recordsByChat[chat, default: []]
+        var records = recordsByBucket[bucket, default: []]
+        if shouldCoalesce(event), let last = records.last, coalescingKey(for: last.event) == coalescingKey(for: event) {
+            records.removeLast()
+        }
         records.append(record)
         var bytes = records.reduce(0) { $0 + $1.byteCount }
         while records.count > ChatDiagnosticPolicy.maximumRecordsPerChat || bytes > ChatDiagnosticPolicy.maximumBytesPerChat {
             let removed = records.removeFirst()
             bytes -= removed.byteCount
-            droppedRecordsByChat[chat, default: 0] += 1
-            droppedBytesByChat[chat, default: 0] += removed.byteCount
+            droppedRecordsByBucket[bucket, default: 0] += 1
+            droppedBytesByBucket[bucket, default: 0] += removed.byteCount
         }
-        recordsByChat[chat] = records
+        recordsByBucket[bucket] = records
+    }
+
+    private func shouldCoalesce(_ event: ChatDiagnosticEventEnvelope) -> Bool {
+        shouldCoalesce(stage: event.stage, correlation: event.payload.correlation)
+    }
+
+    private func shouldCoalesce(stage: ChatDiagnosticStage, correlation: ChatDiagnosticCorrelation) -> Bool {
+        switch stage {
+        case .syncReconciliation, .renderPlanning, .displayProjection:
+            return correlation.updateSequence != nil || correlation.rendererRevision != nil || correlation.displayRow != nil
+        default:
+            return false
+        }
+    }
+
+    private func coalescingKey(for event: ChatDiagnosticEventEnvelope) -> String? {
+        coalescingKey(stage: event.stage, correlation: event.payload.correlation)
+    }
+
+    private func coalescingKey(stage: ChatDiagnosticStage, correlation: ChatDiagnosticCorrelation) -> String? {
+        guard shouldCoalesce(stage: stage, correlation: correlation) else { return nil }
+        let subject = correlation.durableItem?.rawValue ?? correlation.displayRow?.rawValue
+        // A display row or durable item identifies the streamed message. Keep
+        // its newest revision rather than only collapsing duplicate callbacks
+        // for one revision. When no item is known, a revision is the narrowest
+        // safe coalescing boundary.
+        let revision = subject == nil
+            ? correlation.rendererRevision.map { String($0.rawValue) } ?? correlation.updateSequence.map { String($0.rawValue) } ?? ""
+            : "message"
+        return [
+            stage.rawValue,
+            correlation.chat?.rawValue ?? "",
+            subject ?? "",
+            revision
+        ].joined(separator: "|")
     }
 
     private func emit(_ event: ChatDiagnosticEventEnvelope) {
@@ -149,28 +217,32 @@ actor ChatDiagnosticTrace {
     }
 }
 
-/// The process-wide app trace. AppKit-facing callers are on the main actor,
-/// while the actor keeps ring writes serial even when callbacks arrive from XPC.
+/// The process-wide app trace. AppKit-facing callers serialize observation on
+/// the main actor, preserving the order in which UI and XPC callbacks arrive.
+@MainActor
 enum ChatDiagnostics {
     static let appTrace = ChatDiagnosticTrace(source: .app)
 
-    /// The UI bridges are synchronous callbacks. The record itself is isolated
-    /// in the trace actor, so this short task only crosses that boundary and
-    /// never mutates SwiftUI state during an update pass.
+    static func fingerprint(_ text: String) -> ChatDiagnosticContentFingerprint {
+        appTrace.fingerprint(text)
+    }
+
+    /// AppKit and SwiftUI callbacks run on the main actor. Recording directly
+    /// here preserves producer order instead of scheduling independent tasks
+    /// that can arrive at the trace actor out of order.
     static func observe(
         stage: ChatDiagnosticStage,
         outcome: ChatDiagnosticOutcome = .accepted,
         correlation: ChatDiagnosticCorrelation = .init(),
         detail: String? = nil
     ) {
-        Task {
-            _ = await appTrace.record(
-                stage: stage,
-                outcome: outcome,
-                payload: .init(correlation: correlation, detail: detail)
-            )
-        }
+        _ = appTrace.record(
+            stage: stage,
+            outcome: outcome,
+            payload: .init(correlation: correlation, detail: detail)
+        )
     }
+
 }
 
 /// App-side export boundary for the redacted diagnostic artifact. The caller
@@ -189,15 +261,16 @@ struct ChatDiagnosticExporter {
         self.jsonlWriter = jsonlWriter
     }
 
-    /// Copies one complete redacted merged snapshot. Trace material rotates
-    /// strictly after the destination confirms the write succeeded.
+    /// Copies one complete redacted merged snapshot.
+    ///
+    /// The coordinator commits ring rotation after both the destination and
+    /// the daemon reset acknowledge success.
     func copy(
         _ snapshot: ChatDiagnosticMergedSnapshot,
         write: (Data) throws -> Void
     ) async throws {
         let data = try JSONEncoder().encode(snapshot)
         try write(data)
-        await trace.resetAfterSuccessfulExport()
     }
 
     /// Appends the merged trace records to a redacted JSONL artifact. This is
@@ -206,10 +279,12 @@ struct ChatDiagnosticExporter {
         _ snapshot: ChatDiagnosticMergedSnapshot,
         to url: URL
     ) async throws {
-        for event in snapshot.events {
-            _ = try await jsonlWriter.append(event, to: url)
-        }
-        await trace.resetAfterSuccessfulExport()
+        try await jsonlWriter.appendSnapshotAtomically(snapshot, to: url)
+    }
+
+    /// Commit a completed app/daemon diagnostic export.
+    func resetAfterSuccessfulExport() {
+        trace.resetAfterSuccessfulExport()
     }
 }
 
@@ -237,6 +312,39 @@ actor ChatDiagnosticJSONLWriter {
         try handle.write(contentsOf: encoded)
         try handle.write(contentsOf: newline)
         return target
+    }
+
+    /// A whole exported snapshot is one JSONL record. The file is replaced
+    /// atomically only after the complete next contents are durable, so retrying
+    /// a failed export cannot duplicate a partial prefix.
+    func appendSnapshotAtomically(_ snapshot: ChatDiagnosticMergedSnapshot, to url: URL) throws {
+        let encoded = try JSONEncoder().encode(snapshot)
+        let newline = Data("\n".utf8)
+        let target = try rotatedURLIfNeeded(forAdditionalBytes: encoded.count + newline.count, url: url)
+        let existing: Data
+        if fileManager.fileExists(atPath: target.path) {
+            existing = try Data(contentsOf: target)
+        } else {
+            existing = Data()
+        }
+        var next = existing
+        next.append(encoded)
+        next.append(newline)
+        let temporary = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+        do {
+            try next.write(to: temporary, options: .atomic)
+            if fileManager.fileExists(atPath: target.path) {
+                _ = try fileManager.replaceItemAt(target, withItemAt: temporary)
+            } else {
+                try fileManager.moveItem(at: temporary, to: target)
+            }
+        } catch {
+            if fileManager.fileExists(atPath: temporary.path) {
+                do { try fileManager.removeItem(at: temporary) }
+                catch { DebugLog.store("chat diagnostics JSONL rollback cleanup failed: \(error)") }
+            }
+            throw error
+        }
     }
 
     private func rotatedURLIfNeeded(forAdditionalBytes additional: Int, url: URL) throws -> URL {

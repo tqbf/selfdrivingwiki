@@ -3,25 +3,26 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSCore
 
+@MainActor
 struct ChatDiagnosticsTests {
     @Test func traceEvictsOldestRecordsAndRotatesFingerprintKey() async {
         let trace = ChatDiagnosticTrace(source: .app)
-        let fingerprint = await trace.fingerprint("same content")
+        let fingerprint = trace.fingerprint("same content")
         for index in 0...(ChatDiagnosticPolicy.maximumRecordsPerChat) {
-            _ = await trace.record(
+            _ = trace.record(
                 stage: .syncAcceptance,
                 outcome: .accepted,
                 payload: .init(correlation: .init(chat: .init(rawValue: "chat")), detail: "event-\(index)")
             )
         }
-        let before = await trace.snapshot(chat: .init(rawValue: "chat"))
+        let before = trace.snapshot(chat: .init(rawValue: "chat"))
         #expect(before.events.count == ChatDiagnosticPolicy.maximumRecordsPerChat)
         #expect(before.droppedRecordCount == 1)
-        await trace.resetAfterSuccessfulExport()
-        let after = await trace.snapshot(chat: .init(rawValue: "chat"))
+        trace.resetAfterSuccessfulExport()
+        let after = trace.snapshot(chat: .init(rawValue: "chat"))
         #expect(after.events.isEmpty)
         #expect(after.process.instanceID != before.process.instanceID)
-        let rotatedFingerprint = await trace.fingerprint("same content")
+        let rotatedFingerprint = trace.fingerprint("same content")
         #expect(rotatedFingerprint != fingerprint)
     }
 
@@ -48,22 +49,42 @@ struct ChatDiagnosticsTests {
         let retainedChat = ChatDiagnosticCorrelation.Value(rawValue: "retained-chat")
 
         for index in 0...ChatDiagnosticPolicy.maximumRecordsPerChat {
-            _ = await trace.record(
+            _ = trace.record(
                 stage: .syncAcceptance,
                 outcome: .accepted,
                 payload: .init(correlation: .init(chat: evictedChat), detail: "event-\(index)")
             )
         }
-        _ = await trace.record(
+        _ = trace.record(
             stage: .displayProjection,
             outcome: .accepted,
             payload: .init(correlation: .init(chat: retainedChat), detail: "retained")
         )
 
-        let snapshot = await trace.snapshot(chat: retainedChat)
+        let snapshot = trace.snapshot(chat: retainedChat)
         #expect(snapshot.events.count == 1)
         #expect(snapshot.droppedRecordCount == 0)
         #expect(snapshot.droppedByteCount == 0)
+    }
+
+    @Test func traceCoalescesRepeatedRevisionWithoutChangingChatScope() {
+        let trace = ChatDiagnosticTrace(source: .app)
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: "coalesced-chat")
+        for revision in 4...6 {
+            _ = trace.record(
+                stage: .renderPlanning,
+                outcome: .accepted,
+                payload: .init(correlation: .init(
+                    chat: chat,
+                    displayRow: .init(rawValue: "row-1"),
+                    rendererRevision: .init(UInt64(revision))
+                ), detail: "renderer")
+            )
+        }
+        let snapshot = trace.snapshot(chat: chat)
+        #expect(snapshot.events.count == 1)
+        #expect(snapshot.events[0].outcome == .coalesced)
+        #expect(snapshot.events[0].payload.correlation.rendererRevision == .init(6))
     }
 
     @Test func jsonlWriterRotatesBoundedRedactedRecords() async throws {

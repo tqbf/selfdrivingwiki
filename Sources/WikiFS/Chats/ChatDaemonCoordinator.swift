@@ -14,6 +14,7 @@ public protocol ChatDaemonCommands: AnyObject, Sendable {
     func stopChat(_ chatID: ChatID) async throws
     func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
     func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope
+    func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -107,7 +108,7 @@ public final class ChatDaemonCoordinator {
     /// explain whether the daemon half was unavailable, malformed, or old.
     func diagnosticSnapshot(for chatID: ChatID?) async -> ChatDiagnosticMergedSnapshot {
         let correlation = chatID.map { ChatDiagnosticCorrelation.Value(rawValue: $0.rawValue) }
-        let app = await diagnosticTrace.snapshot(
+        let app = diagnosticTrace.snapshot(
             chat: correlation,
             summary: ["sync": "app-coordinator", "chat": correlation?.rawValue ?? "draft"]
         )
@@ -123,34 +124,38 @@ public final class ChatDaemonCoordinator {
             case .diagnosticVersion: outcome = .versionFailure
             default: outcome = .failed
             }
-            _ = await diagnosticTrace.record(
+            _ = diagnosticTrace.record(
                 stage: .syncAcceptance,
                 outcome: outcome,
                 payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
             )
-            let updated = await diagnosticTrace.snapshot(chat: correlation)
+            let updated = diagnosticTrace.snapshot(chat: correlation)
             return ChatDiagnosticSnapshotMerge.merge(app: updated, daemon: nil)
         } catch {
-            _ = await diagnosticTrace.record(
+            _ = diagnosticTrace.record(
                 stage: .syncAcceptance,
                 outcome: .failed,
                 payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
             )
-            return ChatDiagnosticSnapshotMerge.merge(app: await diagnosticTrace.snapshot(chat: correlation), daemon: nil)
+            return ChatDiagnosticSnapshotMerge.merge(app: diagnosticTrace.snapshot(chat: correlation), daemon: nil)
         }
     }
 
     /// Requests the app/daemon snapshot through the normal coordinator path,
     /// then writes the redacted artifact to the caller-provided destination.
-    /// The exporter rotates app-local trace material only after that write
-    /// succeeds, preserving retry evidence when a pasteboard write fails.
+    /// Both app and daemon rings rotate only after every export step succeeds,
+    /// preserving retry evidence when a destination or daemon reset fails.
     func copyDiagnostics(
         for chatID: ChatID?,
-        exporter: ChatDiagnosticExporter = .init(),
         write: (Data) throws -> Void
     ) async throws {
         let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
         try await exporter.copy(snapshot, write: write)
+        if let chatID {
+            try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+        }
+        exporter.resetAfterSuccessfulExport()
     }
 
     /// Writes the same redacted coordinator snapshot as JSONL for explicit
@@ -158,11 +163,15 @@ public final class ChatDaemonCoordinator {
     /// debug-folder workflow owned by the chat runtime.
     func writeDiagnosticsJSONL(
         for chatID: ChatID?,
-        to url: URL,
-        exporter: ChatDiagnosticExporter = .init()
+        to url: URL
     ) async throws {
         let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
         try await exporter.writeJSONL(snapshot, to: url)
+        if let chatID {
+            try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+        }
+        exporter.resetAfterSuccessfulExport()
     }
 
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a

@@ -118,13 +118,35 @@ struct ChatDaemonCoordinatorTests {
         let chatID = ChatID(rawValue: "diagnostic-chat")
         let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
         let trace = ChatDiagnosticTrace(source: .app)
-        let fingerprint = await trace.fingerprint("same content")
-        _ = await trace.record(
+        let fingerprint = trace.fingerprint("same content")
+        _ = trace.record(
             stage: .displayProjection,
             outcome: .accepted,
             payload: .init(correlation: .init(chat: correlation), detail: "app-display")
         )
-        let before = await trace.snapshot(chat: correlation)
+        let renderer = ChatTranscriptRenderExecutor(
+            mutate: { command, revision, acknowledgement in
+                acknowledgement(.init(
+                    kind: command.kind,
+                    revision: revision,
+                    rowID: command.rowID,
+                    outcome: .success
+                ))
+            },
+            reportAnomaly: { _ in Issue.record("Unexpected renderer anomaly.") },
+            diagnosticTrace: trace
+        )
+        renderer.submit(.init(
+            context: .init(transcriptID: .chat(chatID)),
+            rows: [.assistantMessage(
+                id: ChatMessageID(rawValue: "diagnostic-message"),
+                turnID: ChatTurnID(rawValue: "diagnostic-turn"),
+                text: "redacted from the diagnostic payload",
+                createdAt: .distantPast,
+                contentState: .final
+            )]
+        ))
+        let before = trace.snapshot(chat: correlation)
         let stub = StubChatDaemonCommands()
         stub.diagnosticSnapshot = ChatDiagnosticSnapshotEnvelope(
             process: .init(source: .daemon),
@@ -137,6 +159,8 @@ struct ChatDaemonCoordinatorTests {
                     outcome: .accepted
                 )
             ],
+            droppedRecordCount: 3,
+            droppedByteCount: 144,
             summary: ["runtime": "daemon"]
         )
         let coordinator = ChatDaemonCoordinator(
@@ -144,39 +168,46 @@ struct ChatDaemonCoordinatorTests {
             eventSink: DaemonQueueEventSink(),
             diagnosticTrace: trace
         )
-        let exporter = ChatDiagnosticExporter(trace: trace)
         var copied: Data?
 
-        try await coordinator.copyDiagnostics(for: chatID, exporter: exporter) { copied = $0 }
+        try await coordinator.copyDiagnostics(for: chatID) { copied = $0 }
 
         let data = try #require(copied)
         let snapshot = try JSONDecoder().decode(ChatDiagnosticMergedSnapshot.self, from: data)
+        #expect(!String(decoding: data, as: UTF8.self).contains("redacted from the diagnostic payload"))
         #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
         #expect(Set(snapshot.sources) == [.app, .daemon])
         #expect(snapshot.events.map(\.payload.detail).contains("app-display"))
         #expect(snapshot.events.map(\.payload.detail).contains("daemon-sync"))
+        #expect(snapshot.events.map(\.stage).contains(.renderPlanning))
+        #expect(snapshot.events.map(\.stage).contains(.domAcknowledgement))
         #expect(snapshot.daemonSummary["runtime"] == "daemon")
         #expect(snapshot.mergeOrder.contains("per-process-sequence"))
+        let daemonRetention = snapshot.retention.first { $0.source == .daemon }
+        #expect(daemonRetention?.droppedRecordCount == 3)
+        #expect(daemonRetention?.droppedByteCount == 144)
+        #expect(stub.diagnosticResetRequests == [.init(chat: correlation)])
 
-        let after = await trace.snapshot(chat: correlation)
+        let after = trace.snapshot(chat: correlation)
         #expect(after.events.isEmpty)
         #expect(after.process.instanceID != before.process.instanceID)
-        #expect(await trace.fingerprint("same content") != fingerprint)
+        #expect(trace.fingerprint("same content") != fingerprint)
     }
 
     @Test func failedDiagnosticCopyPreservesTraceForRetry() async {
         let chatID = ChatID(rawValue: "diagnostic-chat")
         let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
         let trace = ChatDiagnosticTrace(source: .app)
-        let fingerprint = await trace.fingerprint("same content")
-        _ = await trace.record(
+        let fingerprint = trace.fingerprint("same content")
+        _ = trace.record(
             stage: .displayProjection,
             outcome: .accepted,
             payload: .init(correlation: .init(chat: correlation), detail: "app-display")
         )
-        let before = await trace.snapshot(chat: correlation)
+        let before = trace.snapshot(chat: correlation)
+        let stub = StubChatDaemonCommands()
         let coordinator = ChatDaemonCoordinator(
-            client: StubChatDaemonCommands(),
+            client: stub,
             eventSink: DaemonQueueEventSink(),
             diagnosticTrace: trace
         )
@@ -184,7 +215,6 @@ struct ChatDaemonCoordinatorTests {
         do {
             try await coordinator.copyDiagnostics(
                 for: chatID,
-                exporter: ChatDiagnosticExporter(trace: trace)
             ) { _ in
                 throw StubError.throwing
             }
@@ -195,17 +225,18 @@ struct ChatDaemonCoordinatorTests {
             Issue.record("Unexpected diagnostic copy failure: \(error)")
         }
 
-        let after = await trace.snapshot(chat: correlation)
+        let after = trace.snapshot(chat: correlation)
         #expect(after.process.instanceID == before.process.instanceID)
         #expect(after.events == before.events)
-        #expect(await trace.fingerprint("same content") == fingerprint)
+        #expect(trace.fingerprint("same content") == fingerprint)
+        #expect(stub.diagnosticResetRequests.isEmpty)
     }
 
     @Test func jsonlDiagnosticsExportUsesCoordinatorSnapshotAndRotatesAfterWrite() async throws {
         let chatID = ChatID(rawValue: "jsonl-chat")
         let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
         let trace = ChatDiagnosticTrace(source: .app)
-        _ = await trace.record(
+        _ = trace.record(
             stage: .displayProjection,
             outcome: .accepted,
             payload: .init(correlation: .init(chat: correlation), detail: "app-display")
@@ -231,14 +262,15 @@ struct ChatDaemonCoordinatorTests {
 
         try await coordinator.writeDiagnosticsJSONL(
             for: chatID,
-            to: url,
-            exporter: ChatDiagnosticExporter(trace: trace)
+            to: url
         )
 
         let line = try #require(String(data: try Data(contentsOf: url), encoding: .utf8))
         #expect(line.contains("app-display"))
+        #expect(line.contains("retention"))
         #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
-        #expect((await trace.snapshot(chat: correlation)).events.isEmpty)
+        #expect(stub.diagnosticResetRequests == [.init(chat: correlation)])
+        #expect(trace.snapshot(chat: correlation).events.isEmpty)
     }
 
     @Test func rehydrateUsesAuthoritativeSnapshot() async {
@@ -427,6 +459,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var sessionStateRequests: [ChatID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
     var diagnosticSnapshotRequests: [ChatDiagnosticSnapshotRequest] = []
+    var diagnosticResetRequests: [ChatDiagnosticResetRequest] = []
 
     var nextSubmitChatID = ChatID(rawValue: "stub-submit-chat-id")
     var sessionState: ChatSyncSnapshot?
@@ -476,6 +509,12 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
             process: .init(source: .daemon),
             events: []
         )
+    }
+
+    func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
+        diagnosticResetRequests.append(request)
+        try request.validatingVersion()
+        if shouldThrow { throw StubError.throwing }
     }
 
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {

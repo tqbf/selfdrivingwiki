@@ -19,6 +19,51 @@ import WikiDaemonContract
 /// - The adaptive preamble + takeover logic are tested via AgentOperationRunner.
 struct DaemonChatHostTests {
 
+    @Test func daemonDiagnosticRingEvictsOldestAndRotatesAfterAcknowledgedExport() async {
+        let trace = DaemonChatDiagnostics()
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: "daemon-ring-chat")
+        for index in 0...256 {
+            await trace.record(
+                stage: .persistence,
+                outcome: .accepted,
+                correlation: .init(chat: chat, updateSequence: .init(UInt64(index))),
+                detail: "persisted"
+            )
+        }
+        let before = await trace.snapshot(chat: chat)
+        #expect(before.events.count == 256)
+        #expect(before.droppedRecordCount == 1)
+        #expect(before.droppedByteCount > 0)
+
+        await trace.resetAfterSuccessfulExport()
+        let after = await trace.snapshot(chat: chat)
+        #expect(after.events.isEmpty)
+        #expect(after.process.instanceID != before.process.instanceID)
+    }
+
+    @Test func daemonDiagnosticsCoalesceProviderUpdatesForTheSameDurableItem() async {
+        let trace = DaemonChatDiagnostics()
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: "coalesced-daemon-chat")
+        let item = ChatDiagnosticCorrelation.Value(rawValue: "coalesced-item")
+        for update in 1...3 {
+            await trace.record(
+                stage: .providerReceipt,
+                outcome: .accepted,
+                correlation: .init(
+                    chat: chat,
+                    updateSequence: .init(UInt64(update)),
+                    durableItem: item
+                ),
+                detail: "provider-delta"
+            )
+        }
+
+        let snapshot = await trace.snapshot(chat: chat)
+        #expect(snapshot.events.count == 1)
+        #expect(snapshot.events[0].outcome == .coalesced)
+        #expect(snapshot.events[0].payload.correlation.updateSequence == .init(3))
+    }
+
     private func makeTempDir() -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikid-chat-tests-\(UUID().uuidString)", isDirectory: true)
@@ -317,6 +362,53 @@ struct DaemonChatHostTests {
         #expect(decoded.projection.chatID == chat.id)
         #expect(decoded.projection.lastIncludedSequence == .initial)
         #expect(decoded.projection.committedCursor == .zero)
+    }
+
+    @Test func xpcChatDiagnosticSnapshotRoundTripsVersionedRedactedEnvelope() async throws {
+        let dir = makeTempDir()
+        let daemon = makeDaemon(dir: dir)
+        let exporter = WikiDaemonExporter(daemon: daemon)
+        let listener = NSXPCListener.anonymous()
+        let delegate = ChatTestListenerDelegate(exporter: exporter)
+        listener.delegate = delegate
+        listener.resume()
+        defer { listener.invalidate() }
+
+        let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
+        connection.remoteObjectInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        connection.resume()
+        defer { connection.invalidate() }
+
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
+        let request = try JSONEncoder().encode(ChatDiagnosticSnapshotRequest(chat: .init(rawValue: "chat-xpc")))
+        let replyData = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            proxy.chatDiagnosticSnapshot(request: request) { data in
+                continuation.resume(returning: data)
+            }
+        }
+
+        let snapshot = try JSONDecoder().decode(ChatDiagnosticSnapshotEnvelope.self, from: replyData)
+        try snapshot.validatingVersion()
+        #expect(snapshot.process.source == .daemon)
+        #expect(snapshot.events.allSatisfy { $0.payload.correlation.chat == .init(rawValue: "chat-xpc") })
+
+        let resetRequest = try JSONEncoder().encode(
+            ChatDiagnosticResetRequest(chat: .init(rawValue: "chat-xpc"))
+        )
+        let resetReply = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            proxy.resetChatDiagnostics(request: resetRequest) { data in
+                continuation.resume(returning: data)
+            }
+        }
+        #expect(resetReply == Data("{\"ok\":true}".utf8))
+
+        let afterResetReply = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            proxy.chatDiagnosticSnapshot(request: request) { data in
+                continuation.resume(returning: data)
+            }
+        }
+        let afterReset = try JSONDecoder().decode(ChatDiagnosticSnapshotEnvelope.self, from: afterResetReply)
+        #expect(afterReset.process.instanceID != snapshot.process.instanceID)
     }
 
     @Test func xpcChatSessionStateMissingChatReturnsEmptyData() async throws {

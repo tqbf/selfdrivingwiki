@@ -599,7 +599,8 @@ final class WikiDaemon: @unchecked Sendable {
             storeResolver: storeResolver,
             pushEvent: { [weak self] envelope in
                 self?.pushChatEnvelope(envelope)
-            })
+            },
+            diagnosticTrace: daemonChatDiagnostics)
 
         return queue.sync {
             if let existing = _chatHost {
@@ -730,7 +731,8 @@ final class WikiDaemon: @unchecked Sendable {
             await daemonChatDiagnostics.record(
                 stage: .syncAcceptance,
                 outcome: .accepted,
-                payload: .init(correlation: .init(chat: chat), detail: "diagnostic-snapshot-request")
+                correlation: .init(chat: chat),
+                detail: "diagnostic-snapshot-request"
             )
             let snapshot = await daemonChatDiagnostics.snapshot(chat: chat)
             return try JSONEncoder().encode(snapshot)
@@ -743,6 +745,18 @@ final class WikiDaemon: @unchecked Sendable {
                 DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData failed to encode version failure: \(error)")
                 return Data()
             }
+        }
+    }
+
+    func resetChatDiagnosticsData(request: Data) async -> Data {
+        do {
+            let decoded = try JSONDecoder().decode(ChatDiagnosticResetRequest.self, from: request)
+            try decoded.validatingVersion()
+            await daemonChatDiagnostics.resetAfterSuccessfulExport()
+            return Data("{\"ok\":true}".utf8)
+        } catch {
+            DebugLog.agent("WikiDaemon.resetChatDiagnosticsData rejected request: \(error)")
+            return Data()
         }
     }
 
