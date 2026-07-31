@@ -207,7 +207,7 @@ struct ChatDisplayProjectionTests {
 
 @MainActor
 struct ChatTranscriptRenderingInputTests {
-    @Test func failedReadOnlyToolCallSurvivesTheRendererBridgeWithErrorSemantics() {
+    @Test func toolCallKeepsItsTypedIdentityAtTheRendererBoundary() {
         let input = renderingInput(for: .toolCall(.init(
             toolCallID: ToolCallID(rawValue: "tool-read"),
             turnID: ChatTurnID(rawValue: "turn-1"),
@@ -218,15 +218,16 @@ struct ChatTranscriptRenderingInputTests {
             updatedAt: .distantPast
         )))
 
-        #expect(input.events == [.toolResult(isError: true, summary: "permission denied")])
-        #expect(input.events.transcriptVisible == input.events)
-        let html = ChatWebView.Coordinator.chatRowHTML(for: input.events[0])
+        #expect(input.rows.map(\.id) == [.toolCall(ToolCallID(rawValue: "tool-read"))])
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(input.rows[0])
         #expect(html.isEmpty == false)
+        #expect(html.contains("data-row-id=\"tool-tool-read\""))
+        #expect(html.contains("role=\"group\""))
         #expect(html.contains("is-error"))
         #expect(html.contains("permission denied"))
     }
 
-    @Test func completedToolCallUsesTerminalSuccessSemanticsAndRemainsFiltered() {
+    @Test func completedToolCallRemainsVisibleBetweenAssistantBlocks() {
         let input = renderingInput(for: .toolCall(.init(
             toolCallID: ToolCallID(rawValue: "tool-write"),
             turnID: ChatTurnID(rawValue: "turn-1"),
@@ -237,12 +238,15 @@ struct ChatTranscriptRenderingInputTests {
             updatedAt: .distantPast
         )))
 
-        #expect(input.events == [.toolResult(isError: false, summary: "updated page.md")])
-        #expect(input.events.transcriptVisible.isEmpty)
-        #expect(ChatWebView.Coordinator.chatRowHTML(for: input.events[0]).isEmpty)
+        #expect(input.visibleRows(hidingToolCalls: false).map(\.id) == [
+            .toolCall(ToolCallID(rawValue: "tool-write"))
+        ])
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(input.rows[0])
+        #expect(html.contains("Completed"))
+        #expect(html.contains("updated page.md"))
     }
 
-    @Test func cancelledToolCallUsesTerminalErrorSemantics() {
+    @Test func hideToolCallsFiltersRowsWithoutChangingOtherIdentity() {
         let input = renderingInput(for: .toolCall(.init(
             toolCallID: ToolCallID(rawValue: "tool-cancelled"),
             turnID: ChatTurnID(rawValue: "turn-1"),
@@ -253,21 +257,11 @@ struct ChatTranscriptRenderingInputTests {
             updatedAt: .distantPast
         )))
 
-        #expect(input.events == [.toolResult(isError: true, summary: "Write")])
-        #expect(input.events.transcriptVisible == input.events)
+        #expect(input.visibleRows(hidingToolCalls: true).isEmpty)
+        #expect(input.rows.map(\.id) == [.toolCall(ToolCallID(rawValue: "tool-cancelled"))])
     }
 
-    @Test func pendingAndRunningToolCallsRemainVisibleProgressRows() {
-        let pending = renderingInput(for: toolCall(status: .pending))
-        let running = renderingInput(for: toolCall(status: .running))
-
-        #expect(pending.events == [.toolUse(name: "Edit", inputSummary: "page.md")])
-        #expect(running.events == [.toolUse(name: "Edit", inputSummary: "page.md")])
-        #expect(pending.events.transcriptVisible == pending.events)
-        #expect(running.events.transcriptVisible == running.events)
-    }
-
-    @Test func noticeRemainsVisibleAndRenderableAtTheRendererBoundary() {
+    @Test func noticeRemainsDistinctFromAssistantContentAtTheRendererBoundary() {
         let input = renderingInput(for: .systemNotice(.init(
             noticeID: ChatTranscriptNoticeID(rawValue: "notice-1"),
             turnID: nil,
@@ -277,10 +271,10 @@ struct ChatTranscriptRenderingInputTests {
             createdAt: .distantPast
         )))
 
-        #expect(input.events == [.assistantText("Context updated\n\nThe agent resumed the session.")])
-        #expect(input.events.transcriptVisible == input.events)
-        let html = ChatWebView.Coordinator.chatRowHTML(for: input.events[0])
+        #expect(input.rows.map(\.id) == [.notice(ChatTranscriptNoticeID(rawValue: "notice-1"))])
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(input.rows[0])
         #expect(html.isEmpty == false)
+        #expect(html.contains("role=\"status\""))
         #expect(html.contains("Context updated"))
         #expect(html.contains("The agent resumed the session."))
     }
