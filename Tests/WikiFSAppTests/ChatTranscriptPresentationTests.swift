@@ -41,6 +41,7 @@ struct ChatTranscriptPresentationTests {
             toolName: "Read",
             status: .running,
             detail: "page.md",
+            output: nil,
             permissionRequestID: nil,
             updatedAt: .distantPast
         )
@@ -53,6 +54,34 @@ struct ChatTranscriptPresentationTests {
         #expect(toolHTML.contains("data-row-id=\"tool-tool-1\""))
         #expect(toolHTML.contains("Tool Read, Running"))
         #expect(toolHTML.contains("◌"))
+    }
+
+    @Test(arguments: [
+        ("```console\nfile changed\n```", "file changed"),
+        ("```json\n{\"ok\":true}\n```", "{\"ok\":true}"),
+        ("~~~text\nplain output\n~~~", "plain output"),
+    ])
+    func legacyToolOutputNeverUsesAMarkdownFenceAsItsCollapsedDescriptor(
+        _ output: String,
+        expectedSummary: String
+    ) {
+        let legacyRow = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-legacy"),
+            turnID: turnID,
+            toolName: "Bash",
+            status: .completed,
+            detail: output,
+            output: nil,
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(legacyRow)
+
+        #expect(html.contains("Completed — \(expectedSummary)"))
+        #expect(!html.contains("Completed — ```"))
+        #expect(!html.contains("Completed — ~~~"))
+        #expect(html.contains("<pre class=\"chat-tool-detail\">\(output)</pre>"))
     }
 
     @Test func noticesAndFailuresAreNotAssistantRows() {

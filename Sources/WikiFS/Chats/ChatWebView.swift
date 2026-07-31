@@ -926,15 +926,16 @@ struct ChatWebView: NSViewRepresentable {
                 <div class="row-thinking-body">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div></details>
                 """
 
-            case .toolCall(_, _, let toolName, let status, let detail, _, _):
+            case .toolCall(_, _, let toolName, let status, let detail, let output, _, _):
                 let statusText = toolStatusLabel(status)
                 let isError = status == .failed || status == .cancelled
-                let detailText = detail ?? ""
+                let summaryText = toolSummary(descriptor: detail, output: output, fallback: toolName)
+                let outputText = output ?? detail ?? ""
                 let cue = isError ? "⚠" : (status == .running || status == .pending ? "◌" : "✓")
                 return """
                 <details class="row chat-row chat-tool\(isError ? " is-error" : "")\((status == .running || status == .pending) ? " is-running" : "")" role="group" aria-label="Tool \(escape(toolName)), \(statusText)"\(attributes)>
-                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(detailText.isEmpty ? "" : " — \(escape(detailText.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""))")</span></summary>
-                \(detailText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(detailText))</pre>")</details>
+                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(summaryText.isEmpty ? "" : " — \(escape(summaryText))")</span></summary>
+                \(outputText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(outputText))</pre>")</details>
                 """
 
             case .notice(_, _, _, let title, let message, _):
@@ -947,6 +948,26 @@ struct ChatWebView: NSViewRepresentable {
                 <aside class="row row-turn-failed" role="alert" aria-label="Chat action failed"\(attributes)><span class="row-turn-failed-icon" aria-hidden="true">⚠︎</span><div class="row-turn-failed-body"><strong>Chat action failed</strong> \(escape(message))</div></aside>
                 """
             }
+        }
+
+        /// Returns a collapsed descriptor without mutating durable output. New
+        /// rows retain an input descriptor; legacy rows may have only output,
+        /// whose Markdown fence is skipped for this compact presentation.
+        private static func toolSummary(descriptor: String?, output: String?, fallback: String) -> String {
+            previewText(in: descriptor) ?? previewText(in: output) ?? fallback
+        }
+
+        private static func previewText(in text: String?) -> String? {
+            guard let text else { return nil }
+            return text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first(where: { line in
+                    !line.isEmpty && !isMarkdownFence(line)
+                })
+        }
+
+        private static func isMarkdownFence(_ line: String) -> Bool {
+            line.hasPrefix("```") || line.hasPrefix("~~~")
         }
 
         private static func toolStatusLabel(_ status: ChatToolCallStatus) -> String {
