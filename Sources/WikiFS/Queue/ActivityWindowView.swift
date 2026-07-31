@@ -632,7 +632,6 @@ struct ActivityWindowView: View {
         if !events.isEmpty {
             ChatWebView(
                 events: events,
-                style: .activityFeed,
                 // Selecting a different queue item reuses this representable's
                 // web view + coordinator (same structural identity, different
                 // associated value), so the differ needs the item id to know

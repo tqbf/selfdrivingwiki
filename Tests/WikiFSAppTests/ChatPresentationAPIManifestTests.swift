@@ -42,6 +42,17 @@ struct ChatPresentationAPIManifestTests {
         #expect(remoteSession.contains("ChatTranscriptProjection") == false)
     }
 
+    @Test func chatWebViewKeepsEventCompatibilityAtTheActivityFeedBoundary() throws {
+        let renderer = try source(named: "ChatWebView.swift")
+
+        #expect(renderer.contains("feedRowHTML") == true)
+        #expect(renderer.contains("chatDisplayRowHTML") == true)
+        #expect(renderer.contains("VisualStyle") == false)
+        #expect(renderer.contains("chatRowHTML") == false)
+        #expect(renderer.contains("assistantBubbleHTML") == false)
+        #expect(renderer.contains("timestamps: [Date?]") == false)
+    }
+
     @Test func legacyProjectionRemainsCoreOnlyPersistenceCompatibility() throws {
         let appSession = try source(named: "RemoteChatSession.swift")
         let appPresentation = try source(named: "ChatDetailPresentation.swift")

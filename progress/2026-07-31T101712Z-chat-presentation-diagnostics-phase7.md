@@ -40,8 +40,8 @@ diagnostics plan.
   `swiftpm-testing-helper` stopped producing output at 30 seconds and remained
   live past two minutes. The run was stopped without an aggregate result. This
   gate is bounded and inconclusive.
-- The SwiftUI runtime log query found no matching state-update warnings during
-  the hosted run.
+- The SwiftUI runtime log query was inconclusive because the hosted run did not
+  complete. It captured no aggregate runtime result.
 - The mutation command had started before this pass. Its log contains only the
   command start, and no mutation process was live. Mutation testing is bounded
   and inconclusive.

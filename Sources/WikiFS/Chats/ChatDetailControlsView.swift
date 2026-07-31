@@ -21,7 +21,7 @@ struct ChatDetailControlsView: View {
                         .controlSize(.small)
                 }
                 Menu {
-                    Toggle("Show internals", isOn: $showsInternals)
+                    Toggle("Show Full Activity", isOn: $showsInternals)
                     Toggle("Hide tool calls", isOn: $hideToolCalls)
                     Button("Copy Diagnostics", systemImage: "doc.on.doc") {
                         copyDiagnostics()
@@ -48,7 +48,7 @@ struct ChatDetailControlsView: View {
                 }
                 .labelStyle(.iconOnly)
                 .menuStyle(.borderlessButton)
-                .help("Show activity and transcript internals")
+                .help("Show activity controls while this chat is running")
             }
         }
     }
