@@ -1,8 +1,13 @@
-# Chat presentation Phase 5: keyed renderer
+---
+timestamp: 2026-07-30T174300Z
+title: Chat presentation Phase 5 keyed renderer
+branch: chat-presentation-diagnostics-phase5
+status: complete
+---
 
-Date: 2026-07-30
+# Chat presentation Phase 5 keyed renderer
 
-## Result
+## Progress
 
 The app chat transcript now uses a keyed render plan and an acknowledged WebKit command executor.
 
@@ -21,7 +26,10 @@ DOM commands target `data-row-id` values only.
 Commands return kind, revision, row ID, and outcome.
 The shell keeps focus, selection offsets, and a scroll anchor during replacements and controlled reloads.
 
-## Validation
+This change is Phase 5 only.
+It does not change other planned phases or the documentation index.
+
+## Verification
 
 - `make build` passed.
 - `make test` passed with 2,712 Swift Testing tests.
@@ -31,8 +39,3 @@ The shell keeps focus, selection offsets, and a scroll anchor during replacement
 - `log show` found no matching update-cycle warning for the focused hosted run.
 - `WIKIFS_APP_TESTS=1 swift test` stalled in the aggregate hosted suite after about three minutes.
 - The stalled helpers ran from this worktree and were terminated.
-
-## Scope
-
-This change is Phase 5 only.
-It does not change other planned phases or the documentation index.
