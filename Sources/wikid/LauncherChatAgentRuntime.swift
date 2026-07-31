@@ -226,6 +226,12 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                         await self.handleLiveEvent(event)
                     }
                 },
+                onLiveUsage: { [weak self] usage in
+                    guard let self else { return }
+                    Task {
+                        await self.emitLiveUsage(usage)
+                    }
+                },
                 onPendingPermission: { [weak self] permission in
                     guard let self else { return }
                     Task {
@@ -463,6 +469,20 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         state.lastFingerprint = fingerprint
         runtimeState = state
         await onStateUpdate(update)
+        if let usage = update.usageData.flatMap({ data in
+            DebugLog.trying("LauncherChatAgentRuntime.decodeUsage") {
+                try JSONDecoder().decode(SessionUsage.self, from: data)
+            }
+        }) {
+            if let turnID = state.activeTurnID {
+                await emit(.usage(turnID: turnID, usage: usage))
+            }
+        }
+    }
+
+    private func emitLiveUsage(_ usage: SessionUsage) async {
+        guard let turnID = runtimeState?.activeTurnID else { return }
+        await emit(.usage(turnID: turnID, usage: usage))
     }
 
     private func updateLatestProviderSessionID(_ sessionID: AcpSessionID?) {

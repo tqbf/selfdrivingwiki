@@ -2906,6 +2906,7 @@ public final class AgentLauncher {
         chatOverrideModelId: ModelID? = nil,
         onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void,
@@ -2994,6 +2995,9 @@ public final class AgentLauncher {
         }
 
         self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+        self.onLiveUsage = onLiveUsage
+        self.liveUsageProviderLabel = provider.label
+        await installLiveUsageCallback(on: self.backend)
         let loginShellPath = await PathPreflight.loginShellPATH()
 
         // Resolve the provider's spawn command (PATH-resolved) + the

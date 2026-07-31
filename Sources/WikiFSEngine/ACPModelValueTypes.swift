@@ -17,7 +17,7 @@ import WikiFSTypes
 
 /// Cumulative token/cost usage for a session. Populated by `ACPBackend` from
 /// ACP `Usage` / `UsageUpdate` events; emitted to the queue system and UI.
-public struct SessionUsage: Sendable, Codable, Equatable {
+public struct SessionUsage: Sendable, Codable, Equatable, Hashable {
     /// Cumulative input tokens across all turns (from `Usage.inputTokens`).
     public let inputTokens: Int
     /// Cumulative output tokens across all turns (from `Usage.outputTokens`).
@@ -26,6 +26,9 @@ public struct SessionUsage: Sendable, Codable, Equatable {
     public let totalTokens: Int
     /// Cumulative cached-read tokens (from `Usage.cachedReadTokens`), if reported.
     public let cachedReadTokens: Int?
+    /// Cumulative cached-write tokens, if the provider reports a separate
+    /// write-side cache counter.
+    public let cachedWriteTokens: Int?
     /// Cumulative thought/reasoning tokens (from `Usage.thoughtTokens`), if reported.
     public let thoughtTokens: Int?
     /// The last reported cost amount (from `UsageUpdate.cost.amount`), if any.
@@ -60,6 +63,7 @@ public struct SessionUsage: Sendable, Codable, Equatable {
         outputTokens: Int,
         totalTokens: Int,
         cachedReadTokens: Int?,
+        cachedWriteTokens: Int? = nil,
         thoughtTokens: Int?,
         cost: Double?,
         currency: String?,
@@ -74,6 +78,7 @@ public struct SessionUsage: Sendable, Codable, Equatable {
         self.outputTokens = outputTokens
         self.totalTokens = totalTokens
         self.cachedReadTokens = cachedReadTokens
+        self.cachedWriteTokens = cachedWriteTokens
         self.thoughtTokens = thoughtTokens
         self.cost = cost
         self.currency = currency
@@ -102,6 +107,7 @@ public struct SessionUsage: Sendable, Codable, Equatable {
             outputTokens: existing.outputTokens + new.outputTokens,
             totalTokens: existing.totalTokens + new.totalTokens,
             cachedReadTokens: (existing.cachedReadTokens ?? 0) + (new.cachedReadTokens ?? 0),
+            cachedWriteTokens: (existing.cachedWriteTokens ?? 0) + (new.cachedWriteTokens ?? 0),
             thoughtTokens: (existing.thoughtTokens ?? 0) + (new.thoughtTokens ?? 0),
             cost: mergedCost,
             currency: new.currency ?? existing.currency,
@@ -143,6 +149,7 @@ public struct SessionUsage: Sendable, Codable, Equatable {
             outputTokens: max(0, new.outputTokens - from.outputTokens),
             totalTokens: max(0, new.totalTokens - from.totalTokens),
             cachedReadTokens: max(0, (new.cachedReadTokens ?? 0) - (from.cachedReadTokens ?? 0)),
+            cachedWriteTokens: max(0, (new.cachedWriteTokens ?? 0) - (from.cachedWriteTokens ?? 0)),
             thoughtTokens: max(0, (new.thoughtTokens ?? 0) - (from.thoughtTokens ?? 0)),
             cost: deltaCost,
             currency: new.currency ?? from.currency,

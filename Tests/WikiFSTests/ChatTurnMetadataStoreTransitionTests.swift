@@ -47,6 +47,7 @@ struct ChatTurnMetadataStoreTransitionTests {
 
     @Test func usageUpdateRejectsStaleClaim() throws {
         let (store, chatID, turn) = try claimedStore()
+        let before = turn
         do {
             _ = try store.updatePersistedChatTurnUsage(
                 chatID: chatID, turnID: turn.submission.turnID, claimID: ChatTurnClaimID(rawValue: "stale"),
@@ -56,6 +57,7 @@ struct ChatTurnMetadataStoreTransitionTests {
         } catch let error as MetadataStoreError {
             #expect(error == .staleChatTurnClaim)
         }
+        #expect(try persistedTurn(store, chatID: chatID, turnID: turn.submission.turnID) == before)
     }
 
     @Test func finishClaimedTurnPersistsTerminalOutcomeAndFinalUsageAtomically() throws { try assertFinish(submitted: false) }
@@ -87,6 +89,32 @@ struct ChatTurnMetadataStoreTransitionTests {
         #expect(later.usage == winner.usage)
     }
 
+    @Test func rejectedStoreTransitionWritesNothingAndEmitsNothing() async throws {
+        let (store, chatID, turn) = try claimedStore()
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "transition-wiki"))
+        store.eventBus = bus
+        let recorder = SignalRecorder()
+        bus.subscribe(nil) { recorder.append($0) }
+        let before = try persistedTurn(store, chatID: chatID, turnID: turn.submission.turnID)
+
+        do {
+            _ = try store.updatePersistedChatTurnUsage(
+                chatID: chatID,
+                turnID: turn.submission.turnID,
+                claimID: ChatTurnClaimID(rawValue: "stale"),
+                usage: .init(inputTokens: 1)
+            )
+            Issue.record("stale claim must not update usage")
+        } catch let error as MetadataStoreError {
+            #expect(error == .staleChatTurnClaim)
+        }
+
+        await flushBusDeliveries()
+        await Task.yield()
+        #expect(recorder.snapshot.isEmpty)
+        #expect(try persistedTurn(store, chatID: chatID, turnID: turn.submission.turnID) == before)
+    }
+
     private func assertTerminalUsageRejected(_ state: ChatTurnPersistenceState) throws {
         let (store, chatID, turn) = try claimedStore()
         _ = try finish(store, chatID: chatID, turn: turn, state: state, finishedAt: 12)
@@ -106,7 +134,11 @@ struct ChatTurnMetadataStoreTransitionTests {
         let finished = try finish(store, chatID: chatID, turn: turn, state: .completed, finishedAt: 12)
         #expect(finished.state == .completed)
         #expect(finished.finishedAt == Date(timeIntervalSince1970: 12))
-        #expect(finished.usage.inputTokens == 4)
+        #expect(finished.terminalMessage == "winner")
+        #expect(finished.providerID == ProviderID(rawValue: "provider"))
+        #expect(finished.modelID == ModelID(rawValue: "model"))
+        #expect(finished.usage == usage())
+        #expect(try persistedTurn(store, chatID: chatID, turnID: turn.submission.turnID) == finished)
     }
 
     private func terminalRace() throws -> (PersistedChatTurn, PersistedChatTurn) {
@@ -123,8 +155,29 @@ struct ChatTurnMetadataStoreTransitionTests {
         try store.finishPersistedChatTurn(
             chatID: chatID, turnID: turn.submission.turnID, claimID: ChatTurnClaimID(rawValue: "claim"),
             state: state, terminalMessage: "winner", finishedAt: Date(timeIntervalSince1970: finishedAt),
-            usage: .init(inputTokens: 4, outputTokens: 5, thoughtTokens: 6, cacheReadTokens: 7,
-                         cacheWriteTokens: 8, cost: Decimal(string: "1.50"), currency: "USD")
+            usage: usage()
         )
+    }
+
+    private func usage() -> ChatTurnUsageValues {
+        .init(
+            inputTokens: 4,
+            outputTokens: 5,
+            thoughtTokens: 6,
+            cacheReadTokens: 7,
+            cacheWriteTokens: 8,
+            cost: Decimal(string: "1.50"),
+            currency: "USD"
+        )
+    }
+
+    private func persistedTurn(
+        _ store: GRDBWikiStore,
+        chatID: ChatID,
+        turnID: ChatTurnID
+    ) throws -> PersistedChatTurn {
+        try #require(try store.listPersistedChatTurns(chatID: chatID).first {
+            $0.submission.turnID == turnID
+        })
     }
 }

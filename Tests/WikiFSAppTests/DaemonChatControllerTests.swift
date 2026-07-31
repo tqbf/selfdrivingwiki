@@ -793,7 +793,7 @@ struct DaemonChatControllerTests {
     }
 }
 
-private final class ControllerHarness {
+final class ControllerHarness {
     enum HarnessError: Error {
         case timedOut(String)
     }
@@ -823,7 +823,8 @@ private final class ControllerHarness {
     }
 
     func makeController(
-        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics()
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) throws -> DaemonChatController {
         try DaemonChatController(
             chatID: chat.id,
@@ -833,7 +834,8 @@ private final class ControllerHarness {
             pushEvent: { [eventRecorder] envelope in
                 eventRecorder.record(envelope)
             },
-            diagnosticTrace: diagnosticTrace
+            diagnosticTrace: diagnosticTrace,
+            clock: clock
         )
     }
 
@@ -982,7 +984,7 @@ private actor IdleEvictionProbe {
     }
 }
 
-private actor StubControllerRuntime: ChatAgentRuntime {
+actor StubControllerRuntime: ChatAgentRuntime {
     struct Snapshot: Sendable {
         let startRequests: [ChatRuntimeStartRequest]
         let submitCalls: [ChatTurnSubmission]
