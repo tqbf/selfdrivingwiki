@@ -34,7 +34,7 @@ external-format boundary.
 - `make build` passed, including the signed development app bundle.
 - `swift build` passed after the Make prerequisites synchronized generated
   resources.
-- Targeted Phase 3 suites passed: 36 tests across
+- Targeted Phase 3 suites passed: 37 tests across
   `PageVersionSourceReadTests`, `PageVersionSourceWriterTests`,
   `ProvenanceDeletionRestrictionTests`, and `AgentCASTests`.
 - `make test` passed: 2,841 tests in 229 suites.
