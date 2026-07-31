@@ -7,6 +7,7 @@
 
 import Foundation
 import ACPModel
+import WikiFSTypes
 
 // MARK: - SessionUsage
 
@@ -16,7 +17,7 @@ import ACPModel
 
 /// Cumulative token/cost usage for a session. Populated by `ACPBackend` from
 /// ACP `Usage` / `UsageUpdate` events; emitted to the queue system and UI.
-public struct SessionUsage: Sendable, Codable {
+public struct SessionUsage: Sendable, Codable, Equatable {
     /// Cumulative input tokens across all turns (from `Usage.inputTokens`).
     public let inputTokens: Int
     /// Cumulative output tokens across all turns (from `Usage.outputTokens`).
@@ -157,16 +158,6 @@ public struct SessionUsage: Sendable, Codable {
 
 // `PendingPermission` was extracted from ACPPermissions.swift so the queue
 // system (QueueWorker, QueueIngestionProvider) compiles on Linux.
-
-/// Correlates a pending permission request with the tool call that asked for
-/// it. Born as a bare `String` on the ACP SDK's `ToolCallUpdate.toolCallId`
-/// (an external type we don't control), so the conversion to this strong type
-/// happens at the capture boundary in `ACPPermissions` — the raw string never
-/// propagates as a bare `String` through the permission state.
-public struct ToolCallID: Hashable, Sendable, RawRepresentable, Codable {
-    public let rawValue: String
-    public init(rawValue: String) { self.rawValue = rawValue }
-}
 
 /// A pending permission request surfaced by the agent for user approval.
 /// Captured by `ACPPermissionDelegate` and emitted to the UI / queue.

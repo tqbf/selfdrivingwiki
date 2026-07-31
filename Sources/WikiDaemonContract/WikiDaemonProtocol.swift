@@ -109,6 +109,10 @@ import Foundation
     /// reply is JSON `ChatStartReply` (`{"chatID": "<ulid>", "error": null}`).
     func startChat(request: Data, reply: @escaping (Data) -> Void)
 
+    /// Submit one typed chat turn. `request` is JSON-encoded
+    /// `ChatSubmitRequest`; reply is JSON `ChatSubmitReply`.
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void)
+
     /// Continue a persisted chat with a new user turn.
     /// `request` is JSON `ChatContinueRequest`; reply `{"error": null}`.
     func continueChat(request: Data, reply: @escaping (Data) -> Void)
@@ -120,8 +124,17 @@ import Foundation
     /// Cancel/stop the active turn (or end the session).
     func stopChat(chatID: String, reply: @escaping () -> Void)
 
-    /// Rehydrate a chat's live state after (re)connect. Reply is JSON `ChatSessionState`.
+    /// Rehydrate a chat's authoritative sync state after (re)connect. Reply is
+    /// JSON-encoded `ChatSyncSnapshotEnvelope` data.
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void)
+
+    /// Returns a versioned, redacted diagnostic snapshot. Both request and
+    /// reply are JSON `Data`; protocol versions are validated by the daemon.
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void)
+
+    /// Acknowledges a successfully delivered diagnostic export so `wikid` can
+    /// rotate its identity, fingerprint key, and bounded ring.
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void)
 
     /// Resolve a pending permission request for a chat (approve/reject).
     /// `request` is JSON `ChatPermissionResolveRequest`.

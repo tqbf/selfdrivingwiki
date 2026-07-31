@@ -16,7 +16,7 @@ import ACPModel
 /// card announces itself to VoiceOver.
 struct PermissionApprovalView: View {
     let permission: PendingPermission
-    let onResolve: (String) -> Void
+    let onResolve: (ChatPermissionResolutionIntent) -> Void
 
     /// Split the offered options into the allow (Approve) and deny (Reject)
     /// buckets. An option whose `kind` starts with `allow` is Approve; the
@@ -55,13 +55,13 @@ struct PermissionApprovalView: View {
             Spacer(minLength: 8)
             HStack(spacing: 8) {
                 if let reject = rejectOption {
-                    Button("Reject") { onResolve(reject.optionId) }
+                    Button("Reject") { onResolve(resolutionIntent(for: reject)) }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .help("Deny this request")
                 }
                 if let allow = allowOption {
-                    Button("Approve") { onResolve(allow.optionId) }
+                    Button("Approve") { onResolve(resolutionIntent(for: allow)) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .help("Allow this request")
@@ -95,5 +95,16 @@ struct PermissionApprovalView: View {
     /// caption.
     private var showsDetail: Bool {
         detailText != nil
+    }
+
+    private func resolutionIntent(for option: PermissionOption) -> ChatPermissionResolutionIntent {
+        let optionID = PermissionOptionID(rawValue: option.optionId)
+        if option.kind.hasPrefix("allow") {
+            return .approve(optionID: optionID)
+        }
+        if option.kind == "cancel" {
+            return .cancel(optionID: optionID)
+        }
+        return .deny(optionID: optionID)
     }
 }

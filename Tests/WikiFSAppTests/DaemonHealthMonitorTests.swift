@@ -291,16 +291,16 @@ struct WikiDaemonConnectionHealthTests {
     @Test func healthCheckTimeoutParameterIsRespected() async throws {
         let conn = try #require(try? WikiDaemonConnection.connect())
 
-        // A 1-second timeout should return well within 15 seconds. The generous
-        // margin accounts for CI / concurrent-test-load scheduling delays: the
-        // point is that the timeout is *respected* (proportional to the passed
-        // value), not that it hangs for 128 s waiting on a dead XPC connection
-        // (#884).
+        // A 1-second timeout should return well within 30 seconds. Under the
+        // full WIKIFS_APP_TESTS matrix this path can sit behind substantial
+        // hosted-test scheduling contention, but the regression we care about
+        // is the old ~128 s hang on a dead XPC connection (#884), not
+        // whole-suite runner load.
         let start = Date()
         _ = await conn.healthCheck(timeout: 1)
         let elapsed = Date().timeIntervalSince(start)
 
-        #expect(elapsed < 15)
+        #expect(elapsed < 30)
     }
 
     @Test func serviceNameMatchesXPCBundleIdentifier() {

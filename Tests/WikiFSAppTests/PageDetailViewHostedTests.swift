@@ -35,10 +35,10 @@ struct PageDetailViewHostedTests {
         return app
     }()
 
-    private func tempDatabaseURL() -> URL {
+    private func tempDatabaseURL() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("page-detail-hosted-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
@@ -55,15 +55,15 @@ struct PageDetailViewHostedTests {
         window.orderFront(nil)
         defer { window.orderOut(nil) }
 
-        // Poll up to ~2s. The WKWebView mounts asynchronously after the first
-        // SwiftUI render (the reader kicks off an async load). When we DON'T
-        // expect a web view, wait the full window to be confident it never
-        // appears; when we do, return as soon as it's found.
+        // Condition-based wait: the WKWebView mounts asynchronously after the
+        // first SwiftUI render. Poll on wall clock with a bounded sleep so the
+        // hosted assertion still exercises the real mount path instead of only
+        // burning scheduler yields.
         var found = false
         for _ in 0..<40 {
-            try await Task.sleep(nanoseconds: 50_000_000)
             found = firstSubview(of: hosting.view, ofType: WKWebView.self) != nil
             if expectWebView && found { break }
+            try await Task.sleep(for: .milliseconds(50))
         }
         return found
     }
@@ -77,11 +77,25 @@ struct PageDetailViewHostedTests {
         return nil
     }
 
+    /// Shared host configuration for `PageDetailView` so every hosted mount
+    /// gets the same environment model set, including the window-owned
+    /// inspector controller the live app injects from `ContentView`.
+    private func makeHostedPageDetailView(store model: WikiStoreModel) throws -> some View {
+        PageDetailView(
+            store: model,
+            launcher: AgentLauncher(),
+            session: try makeMinimalSession(),
+            fileProvider: FileProviderFacade())
+            .environment(FindModel())
+            .environment(QueueActivityTracker())
+            .environment(WindowRightInspectorController())
+    }
+
     // MARK: - New page (Add Page) opens in the editor, NOT the reader
 
     @Test
     func newPageInNewTab_mountsPageDetailViewInEditingMode() async throws {
-        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: try tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         model.reloadFromStore()
 
@@ -91,13 +105,7 @@ struct PageDetailViewHostedTests {
         model.newPageInNewTab(title: "Brand New Page")
         #expect(model.activeTab?.isEditing == true)
 
-        let view = PageDetailView(
-            store: model,
-            launcher: AgentLauncher(),
-            session: try makeMinimalSession(),
-            fileProvider: FileProviderFacade())
-            .environment(FindModel())
-            .environment(QueueActivityTracker())
+        let view = try makeHostedPageDetailView(store: model)
 
         // Editing branch ⇒ ScrollableTextEditor (NSTextView), NO WKWebView.
         let foundWebView = try await hasWebViewAfterMount(view, expectWebView: false)
@@ -108,7 +116,7 @@ struct PageDetailViewHostedTests {
 
     @Test
     func navigationOpenedPage_mountsPageDetailViewInReaderMode() async throws {
-        let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
+        let store = try StoreBackend.current.makeStore(databaseURL: try tempDatabaseURL())
         let existing = try store.createPage(title: "Existing Page")
         let model = WikiStoreModel(store: store)
         model.reloadFromStore()
@@ -118,13 +126,7 @@ struct PageDetailViewHostedTests {
         model.openTab(.page(existing.id))
         #expect(model.activeTab?.isEditing == false)
 
-        let view = PageDetailView(
-            store: model,
-            launcher: AgentLauncher(),
-            session: try makeMinimalSession(),
-            fileProvider: FileProviderFacade())
-            .environment(FindModel())
-            .environment(QueueActivityTracker())
+        let view = try makeHostedPageDetailView(store: model)
 
         // Reader branch ⇒ WikiReaderView (WKWebView). Behavior is unchanged for
         // navigation-opened pages — this is the scope guard.

@@ -18,6 +18,7 @@ final class WikiDaemon: @unchecked Sendable {
 
     private let containerDirectory: URL
     private let makeStore: (URL) throws -> WikiStore
+    private let daemonChatDiagnostics = DaemonChatDiagnostics()
 
     // MARK: - State (accessed on `queue`)
 
@@ -582,6 +583,9 @@ final class WikiDaemon: @unchecked Sendable {
                 containerDirectory: containerDirectory,
                 localExtractorFactory: { LocalPdf2MarkdownExtractor() })
         }
+        let generationGate = await MainActor.run {
+            GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
@@ -591,16 +595,12 @@ final class WikiDaemon: @unchecked Sendable {
         let host = DaemonChatHost(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
+            generationGate: generationGate,
             storeResolver: storeResolver,
-            resolveSelectedProvider: {
-                AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
-            },
-            resolveProviderConfig: {
-                AgentProvidersConfig.loadOrSeed(from: dir)
-            },
             pushEvent: { [weak self] envelope in
                 self?.pushChatEnvelope(envelope)
-            })
+            },
+            diagnosticTrace: daemonChatDiagnostics)
 
         return queue.sync {
             if let existing = _chatHost {
@@ -626,6 +626,24 @@ final class WikiDaemon: @unchecked Sendable {
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
             let reply = ChatStartReply(chatID: nil, error: error.localizedDescription)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        }
+        #else
+        return Data()
+        #endif
+    }
+
+    /// Submit one typed chat turn. Returns JSON `ChatSubmitReply`.
+    func submitChatTurnData(request: Data) async -> Data {
+        #if canImport(WikiFSEngine)
+        do {
+            let host = try await ensureChatHost()
+            let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
+            let chatID = try await host.submitTurn(req)
+            let reply = ChatSubmitReply(chatID: chatID, error: nil)
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
+        } catch {
+            let reply = ChatSubmitReply(chatID: nil, error: error.localizedDescription)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         }
         #else
@@ -683,19 +701,67 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
-    /// Get the chat session state. Returns JSON `ChatSessionState`.
+    /// Get the authoritative chat sync snapshot. Returns JSON
+    /// `ChatSyncSnapshotEnvelope` data.
     func chatSessionStateData(chatID: ChatID) async -> Data {
         #if canImport(WikiFSEngine)
         do {
             let host = try await ensureChatHost()
             let state = try await host.chatSessionState(chatID: chatID)
-            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(state) })) ?? Data()
+            return (DebugLog.trying("encode chat sync snapshot envelope", operation: {
+                try ChatSyncSnapshotEnvelope(snapshot: state).encodedData()
+            })) ?? Data()
         } catch {
+            DebugLog.agent("WikiDaemon.chatSessionStateData failed for \(chatID.rawValue): \(error)")
             return Data()
         }
         #else
         return Data()
         #endif
+    }
+
+    /// Validates the version at the daemon's XPC boundary before handing out a
+    /// redacted, process-local trace. Invalid requests still receive a typed
+    /// version-failure snapshot rather than an ambiguous empty `Data` reply.
+    func chatDiagnosticSnapshotData(request: Data) async -> Data {
+        do {
+            let decoded = try JSONDecoder().decode(ChatDiagnosticSnapshotRequest.self, from: request)
+            try decoded.validatingVersion()
+            let chat = decoded.chat
+            await daemonChatDiagnostics.record(
+                stage: .syncAcceptance,
+                outcome: .accepted,
+                correlation: .init(chat: chat),
+                detail: "diagnostic-snapshot-request"
+            )
+            let snapshot = await daemonChatDiagnostics.snapshot(chat: chat)
+            // The caller may successfully copy this artifact but fail before
+            // the reset acknowledgement returns. Retire the key now while the
+            // ring remains available for that retry.
+            await daemonChatDiagnostics.rotateFingerprintKeyPreservingRecords()
+            return try JSONEncoder().encode(snapshot)
+        } catch {
+            DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData rejected request: \(error)")
+            let snapshot = await daemonChatDiagnostics.versionFailureSnapshot()
+            do {
+                return try JSONEncoder().encode(snapshot)
+            } catch {
+                DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData failed to encode version failure: \(error)")
+                return Data()
+            }
+        }
+    }
+
+    func resetChatDiagnosticsData(request: Data) async -> Data {
+        do {
+            let decoded = try JSONDecoder().decode(ChatDiagnosticResetRequest.self, from: request)
+            try decoded.validatingVersion()
+            await daemonChatDiagnostics.resetAfterSuccessfulExport()
+            return Data("{\"ok\":true}".utf8)
+        } catch {
+            DebugLog.agent("WikiDaemon.resetChatDiagnosticsData rejected request: \(error)")
+            return Data()
+        }
     }
 
     /// Resolve a chat permission.

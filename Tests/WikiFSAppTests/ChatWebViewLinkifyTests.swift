@@ -4,6 +4,7 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 @testable import WikiFSCore
+@testable import WikiFSTypes
 
 /// Tests for the agent transcript's wiki-link linkify pre-pass. Assistant/result
 /// rows run their markdown through `ReaderMarkdown.prepared` so `[[wiki-links]]`
@@ -11,15 +12,30 @@ import Testing
 /// the markdown renderer so attachment references from drag-to-chat (#385)
 /// render as clickable links.
 ///
-/// Phase A.2 adds a `WikiRenderContext`-aware variant (`renderedMarkdown(_:context:)`,
-/// `feedRowHTML(for:context:isFinal:)`, `chatRowHTML(for:context:isFinal:)`) so
-/// chat transcripts render source references exactly as the reader does — healed
+/// Phase A.2 adds a `WikiRenderContext`-aware renderer (`renderedMarkdown(_:context:)`,
+/// `feedRowHTML(for:context:isFinal:)`, `chatDisplayRowHTML(_:context:)`) so
+/// chat transcript rows render source references exactly as the reader does — healed
 /// display names, `&pin=` quote links, `![[source:…]]` embeds via `wiki-blob://`,
 /// and ghost styling for broken links. See the "Phase A.2" section below.
 @MainActor
 struct ChatWebViewLinkifyTests {
 
     private typealias Transcript = ChatWebView.Coordinator
+
+    private let turnID = ChatTurnID(rawValue: "turn-linkify")
+
+    private func assistantRow(
+        _ text: String,
+        state: ChatDisplayContentState = .final
+    ) -> ChatDisplayRow {
+        .assistantMessage(
+            id: ChatMessageID(rawValue: "assistant-linkify"),
+            turnID: turnID,
+            text: text,
+            createdAt: .distantPast,
+            contentState: state
+        )
+    }
 
     @Test func renderedMarkdownLinkifiesWikiLinks() {
         let html = Transcript.renderedMarkdown("See [[Page Name]] here.")
@@ -48,94 +64,46 @@ struct ChatWebViewLinkifyTests {
         #expect(html.contains("wiki://"))
     }
 
-    @Test func chatAssistantRowLinkifies() {
-        let html = Transcript.chatRowHTML(for: .assistantText("See [[Page]] here."))
+    @Test func typedAssistantRowLinkifies() {
+        let html = Transcript.chatDisplayRowHTML(assistantRow("See [[Page]] here."))
         #expect(html.contains("wiki://"))
         #expect(html.contains("<a "))
     }
 
-    @Test func chatUserRowLinkifiesWikiLinks() {
-        // User text is now rendered through the markdown renderer so that
-        // attachment references ([[source:Name]]) render as clickable links
-        // (issue #385).
-        let html = Transcript.chatRowHTML(for: .userText("See [[Page]] here."))
+    @Test func typedUserRowLinkifiesWikiLinks() {
+        let row = ChatDisplayRow.userMessage(
+            id: ChatMessageID(rawValue: "user-linkify"),
+            turnID: turnID,
+            text: "See [[Page]] here.",
+            createdAt: .distantPast
+        )
+        let html = Transcript.chatDisplayRowHTML(row)
         #expect(html.contains("<a "))
         #expect(html.contains("wiki://"))
     }
 
-    @Test func chatResultRowLinkifies() {
-        let html = Transcript.chatRowHTML(for: .result(isError: false, text: "See [[Page]] here."))
-        #expect(html.contains("wiki://"))
-    }
-
-    // MARK: - Concise tool-call summaries (issue #173)
-
-    @Test func chatToolUseRowRendersConciseSummary() {
-        let html = Transcript.chatRowHTML(for: .toolUse(name: "Read", inputSummary: "page.md"))
-        #expect(html.contains("chat-tool"))
-        #expect(html.contains("Read"))
-        #expect(html.contains("page.md"))
-        // Not a chat bubble — it's a status line.
-        #expect(!html.contains("bubble"))
-    }
-
-    @Test func chatToolUseRowWithoutSummaryStillShowsName() {
-        let html = Transcript.chatRowHTML(for: .toolUse(name: "Grep", inputSummary: ""))
-        #expect(html.contains("Grep"))
-        #expect(html.contains("chat-tool"))
-    }
-
-    @Test func chatToolResultErrorRowRenders() {
-        let html = Transcript.chatRowHTML(for: .toolResult(isError: true, summary: "file not found"))
-        #expect(html.contains("chat-tool"))
-        #expect(html.contains("is-error"))
-        #expect(html.contains("file not found"))
-    }
-
-    @Test func chatToolResultSuccessRowIsEmpty() {
-        let html = Transcript.chatRowHTML(for: .toolResult(isError: false, summary: "ok"))
-        #expect(html.isEmpty)
-    }
-
-    // MARK: - Copy button (issue #285)
-
-    @Test func chatAssistantRowHasCopyButtonWithRawText() {
-        let html = Transcript.chatRowHTML(for: .assistantText("Hello **world**."))
+    @Test func typedAssistantRowHasEscapedRawCopyText() {
+        let html = Transcript.chatDisplayRowHTML(assistantRow(#"Say "hi" <b> & bye"#))
         #expect(html.contains("copy-btn"))
-        // The raw markdown (not rendered HTML) is in data-copy.
-        #expect(html.contains(#"data-copy="Hello **world**.""#))
-    }
-
-    @Test func chatResultRowHasCopyButtonWithRawText() {
-        let html = Transcript.chatRowHTML(for: .result(isError: false, text: "Done."))
-        #expect(html.contains("copy-btn"))
-        #expect(html.contains(#"data-copy="Done.""#))
-    }
-
-    @Test func chatUserRowHasNoCopyButton() {
-        let html = Transcript.chatRowHTML(for: .userText("Hello"))
-        #expect(!html.contains("copy-btn"))
-    }
-
-    @Test func chatToolRowsHaveNoCopyButton() {
-        let toolUse = Transcript.chatRowHTML(for: .toolUse(name: "Read", inputSummary: "x"))
-        let toolResult = Transcript.chatRowHTML(for: .toolResult(isError: true, summary: "fail"))
-        #expect(!toolUse.contains("copy-btn"))
-        #expect(!toolResult.contains("copy-btn"))
-    }
-
-    @Test func copyDataAttributeEscapesHtmlSpecialChars() {
-        let html = Transcript.chatRowHTML(for: .assistantText(#"Say "hi" <b> & bye"#))
-        #expect(html.contains("data-copy="))
-        // Double quotes → &quot;, < → &lt;, > → &gt;, & → &amp;.
         #expect(html.contains("&quot;hi&quot;"))
         #expect(html.contains("&lt;b&gt;"))
         #expect(html.contains("&amp; bye"))
     }
 
-    @Test func emptyResultRowHasNoCopyButton() {
-        let html = Transcript.chatRowHTML(for: .result(isError: false, text: ""))
-        #expect(html.isEmpty)
+    @Test func typedToolRowUsesDisclosureMarkup() {
+        let row = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-linkify"),
+            turnID: turnID,
+            toolName: "Read",
+            status: .running,
+            detail: "page.md",
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+        let html = Transcript.chatDisplayRowHTML(row)
+        #expect(html.contains("<details"))
+        #expect(html.contains("Read"))
+        #expect(html.contains("page.md"))
     }
 
     // MARK: - Phase A.2: nil-context path is behavior-preserving
@@ -166,7 +134,7 @@ struct ChatWebViewLinkifyTests {
 /// chat containing a canonical `[[source:ULID|old name]]` (heals to the current
 /// name), a `#"quote"` link with `@vN` (emits `&pin=`), an `![[source:…]]`
 /// image embed (inline `wiki-blob://`), and a broken link (ghost `wiki://missing`)
-/// must render through `renderedMarkdown(_:context:)` / `chatRowHTML(for:context:)`
+/// must render through `renderedMarkdown(_:context:)` / `chatDisplayRowHTML(_:context:)`
 /// exactly as the reader does. Also covers the two-tier `isFinal` streaming tier
 /// (links only while streaming → embeds appear on finalize).
 @MainActor
@@ -253,12 +221,19 @@ struct AgentTranscriptRenderContextTests {
         #expect(html.contains("wiki://missing"))
     }
 
-    @Test func chatRowHTMLThreadsContextIntoAssistantBubble() throws {
+    @Test func typedAssistantRowThreadsContextIntoAssistantMarkup() throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
-        let row = Transcript.chatRowHTML(
-            for: .assistantText("See [[source:\(paperID.rawValue)|stale]]."),
-            context: ctx, isFinal: true)
+        let row = Transcript.chatDisplayRowHTML(
+            .assistantMessage(
+                id: ChatMessageID(rawValue: "context-assistant"),
+                turnID: ChatTurnID(rawValue: "context-turn"),
+                text: "See [[source:\(paperID.rawValue)|stale]].",
+                createdAt: .distantPast,
+                contentState: .final
+            ),
+            context: ctx
+        )
         // The healed name appears inside the chat bubble's link; the stale alias
         // does not. Note: the raw text survives in the copy button's `data-copy`
         // attribute (issue #285), so we check the *rendered link* text, not the
@@ -301,8 +276,26 @@ struct AgentTranscriptRenderContextTests {
         // Simulate the coordinator's two-tier sequence: the same assistant row is
         // first rendered streaming (links only), then re-rendered final (embeds).
         let text = "Embedded: ![[source:Paper.pdf]] and [[source:\(paperID.rawValue)|old]]."
-        let streaming = Transcript.chatRowHTML(for: .assistantText(text), context: ctx, isFinal: false)
-        let finalized = Transcript.chatRowHTML(for: .assistantText(text), context: ctx, isFinal: true)
+        let streaming = Transcript.chatDisplayRowHTML(
+            .assistantMessage(
+                id: ChatMessageID(rawValue: "streaming-assistant"),
+                turnID: ChatTurnID(rawValue: "streaming-turn"),
+                text: text,
+                createdAt: .distantPast,
+                contentState: .streaming
+            ),
+            context: ctx
+        )
+        let finalized = Transcript.chatDisplayRowHTML(
+            .assistantMessage(
+                id: ChatMessageID(rawValue: "final-assistant"),
+                turnID: ChatTurnID(rawValue: "streaming-turn"),
+                text: text,
+                createdAt: .distantPast,
+                contentState: .final
+            ),
+            context: ctx
+        )
         // Streaming: no embed; the link still heals.
         #expect(!streaming.contains("wiki-blob://source/\(paperID.rawValue)"))
         #expect(streaming.contains("My Paper"))

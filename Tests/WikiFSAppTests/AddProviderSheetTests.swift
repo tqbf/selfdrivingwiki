@@ -66,7 +66,7 @@ struct AddProviderSheetTests {
         #expect(config.providers.first?.isDefault == true)
         // The default-model seed stays — the spawn refusal guard (#635)
         // still depends on it for day-one spawnability.
-        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
     }
 
     @Test func normalizedEmptyReturnsClaudeAcpDefaultOnly() {

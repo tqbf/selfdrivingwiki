@@ -48,6 +48,13 @@ struct PageContextMenuHostedTests {
     }
 
     @Test func mountedReaderOffersBackForwardAndPrint() async throws {
+        // This mounts a live NSWindow + WKWebView in the single `swift test`
+        // host process, same as every sibling hosted suite — without this
+        // lease it can overlap with another window-owning suite (e.g. the
+        // Editor/Composer autocomplete or QuoteHighlight suites) and wedge
+        // the shared AppKit/WebKit environment (see AutocompleteHostedTestGate.swift).
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         _ = Self.app
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")

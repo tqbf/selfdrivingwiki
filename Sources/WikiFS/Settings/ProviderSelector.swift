@@ -69,8 +69,8 @@ struct ProviderSelector: View {
     init(remoteSession: RemoteChatSession, store: WikiStoreModel) {
         self.remoteSession = remoteSession
         self.store = store
-        // Seed off-main via the session's accessor so the composer never
-        // blocks on file I/O at first paint.
+        // The session owns an observable cached sidecar; this initializer
+        // reads memory only, never decodes config during composer rendering.
         _config = State(initialValue: remoteSession.providersConfig())
     }
 
@@ -129,8 +129,9 @@ struct ProviderSelector: View {
         .help(defaultHelpText)
         .onAppear { refresh() }
         // Keep in sync if a session flips (the composer is rebuilt when a chat
-        // becomes live). Cheap: it's a single file read.
-        .onChange(of: remoteSession.activeChatID) { _, _ in refresh() }
+        // becomes live).
+        .onChange(of: remoteSession.runState) { _, _ in refresh() }
+        .onChange(of: remoteSession.providerConfiguration) { _, _ in refresh() }
     }
 
     // MARK: - Popover content (search + gear + flat list)

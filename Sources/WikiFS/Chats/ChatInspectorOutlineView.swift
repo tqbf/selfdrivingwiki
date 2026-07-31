@@ -3,14 +3,14 @@ import SwiftUI
 /// Inspector-body content for the chat surface's outline.
 struct ChatInspectorOutlineView: View {
     let entries: [ChatOutlineEntry]
-    let onSelect: (Int) -> Void
+    let onSelect: (ChatOutlineEntry.ID) -> Void
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                ForEach(entries, id: \.id) { entry in
                     Button {
-                        onSelect(index)
+                        onSelect(entry.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 0) {
                             if let ts = entry.questionTimestamp {

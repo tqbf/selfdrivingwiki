@@ -11,7 +11,7 @@ struct AgentRunStatusView: View {
     let now: Date
 
     var body: some View {
-        if remoteSession.isRunning, let startedAt = remoteSession.runStartedAt {
+        if remoteSession.runState.isLive, let startedAt = remoteSession.runStartedAt {
             HStack(spacing: 6) {
                 Image(systemName: isQuiet ? "hourglass" : "waveform.path")
                     .font(.caption)

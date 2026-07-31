@@ -1,10 +1,21 @@
 import Foundation
 import WikiFSCore
 
+enum EventBusDeliveryWaitError: Error, CustomStringConvertible {
+    case timedOut(expectedCount: Int, actualCount: Int, timeoutMs: Int)
+
+    var description: String {
+        switch self {
+        case let .timedOut(expectedCount, actualCount, timeoutMs):
+            "Timed out after \(timeoutMs)ms waiting for \(expectedCount) event(s); received \(actualCount)."
+        }
+    }
+}
+
 /// Shared test support: a thread-safe recorder for `ResourceChangeEvent` plus a
 /// bounded "wait for the async bus delivery" helper. The bus dispatches each
-/// `@MainActor` handler via `Task { @MainActor in … }`, so delivered events land
-/// a runloop tick after `emit`; tests poll until they arrive (no timing flakes).
+/// `@MainActor` handler via `Task { @MainActor in … }`, so tests wait for an
+/// observed delivery rather than a fixed delay.
 final class SignalRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var events: [ResourceChangeEvent] = []
@@ -14,17 +25,21 @@ final class SignalRecorder: @unchecked Sendable {
     var count: Int { lock.lock(); defer { lock.unlock() }; return events.count }
     var snapshot: [ResourceChangeEvent] { lock.lock(); defer { lock.unlock() }; return events }
 
-    /// Wait until at least one event has been delivered (bounded), so a missing
-    /// delivery fails the test rather than hanging. Each iteration flushes the
-    /// main actor (`await MainActor.run { }`) so the bus's `Task { @MainActor in … }`
-    /// dispatch path runs promptly even under parallel test load, where
-    /// `Task.sleep` alone may not pump the main run loop.
+    /// Wait until at least one event has been delivered. A missing delivery
+    /// throws with the observed count instead of silently returning.
     func awaitNonEmpty(timeoutMs: Int = 1000) async throws {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
+        while true {
             if count > 0 { return }
+            guard Date() < deadline else {
+                throw EventBusDeliveryWaitError.timedOut(
+                    expectedCount: 1,
+                    actualCount: count,
+                    timeoutMs: timeoutMs
+                )
+            }
             await MainActor.run { }
-            try? await Task.sleep(for: .milliseconds(2))
+            await Task.yield()
         }
     }
 }

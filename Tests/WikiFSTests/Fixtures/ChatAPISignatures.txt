@@ -20,6 +20,19 @@ Sources/WikiFSCore/Store/WikiStore.swift	func updateChatAcpSessionId(chatID: Cha
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func getChat(id: ChatID) throws -> ChatSummary
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
+Sources/WikiFSCore/Store/WikiStore.swift	func finalizeStaleDrafts(forChat chatID: ChatID) throws
+Sources/WikiFSCore/Store/WikiStore.swift	func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) throws -> PersistedChatTurn
+Sources/WikiFSCore/Store/WikiStore.swift	func listPersistedChatTurns(chatID: ChatID) throws -> [PersistedChatTurn]
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> Bool
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
+Sources/WikiFSCore/Store/WikiStore.swift	func chatTranscriptCheckpoint(chatID: ChatID) throws -> ChatTranscriptCursor
 Sources/WikiFSCore/Store/WikiStore.swift	func resolveChatByTitle(_ title: String) throws -> ChatID?
 Sources/WikiFSCore/Store/WikiStore.swift	func storeChatChunks(id: ChatID, chunks: [Data]) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func missingChatEmbeddingWork() -> [(id: ChatID, text: String)]
@@ -36,15 +49,31 @@ Sources/WikiFSEngine/AgentLauncher.swift	        onStreamingCheckpoint: (@MainAc
 Sources/WikiFSEngine/AgentOperationRunner.swift	        let persistedChatID: ChatID? = chat?.id
 Sources/WikiFSEngine/AgentOperationRunner.swift	        let continuedChatID: ChatID = chatID
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID?
+Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID?
+Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
+Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
+Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
 Sources/WikiFSEngine/ChatXPCRequests.swift	public let chatID: ChatID
 Sources/WikiFSEngine/QueueEventEnvelope.swift	public let chatID: ChatID?
 Sources/WikiFS/Chats/ChatSessionKey.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatWebView.swift	    case chat(ChatID)
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(_ chatID: ChatID) async throws
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(chatID: ChatID) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func setThinkingEffort(chatID: ChatID, value: String) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func rehydrate(chatID: ChatID) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func discard(chatID: ChatID?) {
 Sources/WikiFS/Settings/AgentToolsView.swift	        activeChatID: ChatID?, isGenerating: Bool, chatID: ChatID
 Sources/WikiCtlCore/ChatCommand.swift	        case id(ChatID)
-Sources/wikid/DaemonChatHost.swift	        let persistedChatID: ChatID = chat.id
-Sources/wikid/DaemonChatHost.swift	        let continuedChatID: ChatID = chatID
+Sources/wikid/DaemonChatHost.swift	    func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+Sources/wikid/DaemonChatHost.swift	        let resolvedChatID: ChatID
 Sources/wikid/DaemonChatHost.swift	    ) async throws -> ChatID {
 Sources/wikid/DaemonChatHost.swift	    func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
+Sources/wikid/DaemonChatHost.swift	    func sendChatMessage(chatID: ChatID, message: String) async throws {
+Sources/wikid/DaemonChatHost.swift	    func stopChat(chatID: ChatID) async {
+Sources/wikid/DaemonChatHost.swift	    func chatSessionState(chatID: ChatID) async throws -> ChatSyncSnapshot {
+Sources/wikid/DaemonChatHost.swift	    func setChatConfigOption(chatID: ChatID, option: String, value: String) async throws {

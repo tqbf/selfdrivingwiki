@@ -318,6 +318,14 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.submitChatTurnData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
     func continueChat(request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
@@ -346,6 +354,22 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
             let data = await daemon.chatSessionStateData(chatID: ChatID(rawValue: chatID))
+            sendableReply.reply(data)
+        }
+    }
+
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.chatDiagnosticSnapshotData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.resetChatDiagnosticsData(request: request)
             sendableReply.reply(data)
         }
     }
@@ -404,6 +428,10 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
         reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
+    func submitChatTurn(request: Data, reply: @escaping (Data) -> Void) {
+        let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
+        reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
+    }
     func continueChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
         reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
@@ -414,6 +442,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
     func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]

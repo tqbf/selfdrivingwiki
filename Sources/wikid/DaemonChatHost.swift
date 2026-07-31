@@ -6,27 +6,13 @@ import WikiFSEngine
 
 #if canImport(WikiFSEngine)
 
-/// The daemon-side host for interactive chat sessions (Phase C).
+/// The daemon-side transport facade for interactive chat sessions.
 ///
-/// Owns a `[chatID → ChatSession]` registry of long-lived `AgentLauncher`
-/// instances — one per chat. Unlike `DaemonQueueIngestionProvider` which
-/// creates a per-run launcher and discards it, the chat host RETAINS the
-/// launcher across turns AND across app ⌘Q, so a chat survives the client
-/// disconnecting and reconnecting.
-///
-/// **RC3:** all chat launchers share a SINGLE `GenerationGate` so N
-/// concurrent chats still serialize active generation (one turn at a time
-/// across all chats).
-///
-/// **RC1:** `sendChatMessage` detects a dead session (process died between
-/// turns) and re-routes to the `continueChat` path.
-///
-/// **RC4:** the takeover decision only retains the `.refused` case
-/// (mid-generation guard). There is no cross-chat `.betweenTurns` stop —
-/// each chat has its own launcher.
-///
-/// **RC2:** reads the per-wiki system prompt via `GRDBWikiStore.getSystemPrompt()`,
-/// NOT a hardcoded `defaultBody`.
+/// The typed controller owns lifecycle and state. This host retains only the
+/// raw XPC adapters that still form a compatibility boundary.
+// pattern: Mixed (unavoidable)
+// Reason: this transport facade coordinates persistence, controller lifecycle,
+// and raw XPC compatibility adapters at the daemon boundary.
 final class DaemonChatHost: @unchecked Sendable {
 
     // MARK: - Dependencies
@@ -34,78 +20,82 @@ final class DaemonChatHost: @unchecked Sendable {
     private let containerDirectory: URL
     private let extractionCoordinator: ExtractionCoordinator
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
-    private let resolveSelectedProvider: @Sendable () -> AgentProvider
-    private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
+    private let diagnosticTrace: DaemonChatDiagnostics
 
-    // MARK: - Shared generation gate (RC3)
+    private let sharedGate: GenerationGate
+    private let registry = ControllerRegistry()
+    private let idleEvictionDelay: Duration
 
-    /// One gate shared across ALL chat launchers so concurrent chats serialize
-    /// active generation (RC3). Created lazily on the main actor (GenerationGate
-    /// is @MainActor). Accessed only from `makeLauncher` (main-actor context).
-    private var _sharedGate: GenerationGate?
-
-    // MARK: - Session registry (guarded by `queue`)
-
-    private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid.chat")
-    private var sessions: [ChatID: ChatSession] = [:]
-    private var statePollTasks: [ChatID: Task<Void, Never>] = [:]
-
-    private struct ChatSession {
-        let wikiID: WikiID
-        let chatID: ChatID
-        let launcher: AgentLauncher
-    }
+    private static let idleEvictionSeconds = 300
+    private static let defaultIdleEvictionDelay: Duration = .seconds(idleEvictionSeconds)
 
     // MARK: - Init
 
     init(
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
+        generationGate: GenerationGate,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
-        resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
-        resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
-        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void
+        pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
+        idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
+        self.sharedGate = generationGate
         self.storeResolver = storeResolver
-        self.resolveSelectedProvider = resolveSelectedProvider
-        self.resolveProviderConfig = resolveProviderConfig
         self.pushEvent = pushEvent
+        self.diagnosticTrace = diagnosticTrace
+        self.idleEvictionDelay = idleEvictionDelay
     }
 
-    // MARK: - Launcher construction
+    // MARK: - Unified submit path
 
-    /// Create a new `AgentLauncher` for a chat, injecting the shared gate.
-    private func makeLauncher() async -> AgentLauncher {
-        await MainActor.run {
-            let gate: GenerationGate
-            if let existing = self._sharedGate {
-                gate = existing
-            } else {
-                gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-                self._sharedGate = gate
+    @discardableResult
+    func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        let trimmed = request.submission.userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw DaemonChatError.emptyMessage
+        }
+        let resolvedChatID: ChatID
+        if let existingChatID = request.chatID {
+            resolvedChatID = existingChatID
+        } else {
+            guard let store = storeResolver(request.wikiID) else {
+                throw DaemonChatError.noStore(request.wikiID)
             }
-            let launcher = AgentLauncher(
-                generationGate: gate,
-                extractionCoordinator: self.extractionCoordinator)
-            launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-            return launcher
+            let title = ChatSummary.title(fromFirstMessage: request.submission.userText)
+            resolvedChatID = try store.createChat(
+                kind: .edit,
+                title: title,
+                modelProviderId: request.providerId,
+                modelId: request.modelId
+            ).id
         }
-    }
 
-    /// Get an existing launcher for a chat, or create a new one.
-    private func getOrCreateLauncher(chatID: ChatID, wikiID: WikiID) async -> AgentLauncher {
-        if let existing = queue.sync(execute: { sessions[chatID]?.launcher }) {
-            return existing
+        let controller = try await makeOrGetController(chatID: resolvedChatID, wikiID: request.wikiID)
+        do {
+            _ = try await controller.submit(request)
+            return resolvedChatID
+        } catch {
+            if request.chatID == nil,
+               let store = storeResolver(request.wikiID) {
+                do {
+                    try store.deleteChat(id: resolvedChatID)
+                    let removed = await evictIdleController(chatID: resolvedChatID)
+                    if removed == false {
+                        // A close may be in flight. Keep a bounded retry for
+                        // this now-deleted draft instead of retaining its
+                        // controller until an unrelated state update occurs.
+                        await scheduleIdleEviction(for: resolvedChatID)
+                    }
+                } catch {
+                    DebugLog.store("DaemonChatHost.submitTurn rollback failed: \(error)")
+                }
+            }
+            throw error
         }
-        let launcher = await makeLauncher()
-        let session = ChatSession(wikiID: wikiID, chatID: chatID, launcher: launcher)
-        queue.sync {
-            sessions[chatID] = session
-        }
-        return launcher
     }
 
     // MARK: - Start a new chat
@@ -119,84 +109,19 @@ final class DaemonChatHost: @unchecked Sendable {
         wikiID: WikiID, firstMessage: String,
         providerId: ProviderID? = nil, modelId: ModelID? = nil
     ) async throws -> ChatID {
-        guard let store = storeResolver(wikiID) else {
-            throw DaemonChatError.noStore(wikiID)
-        }
-
-        let trimmed = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw DaemonChatError.emptyMessage
-        }
-
-        DebugLog.agent("DaemonChatHost.startChat: wikiID=\(wikiID.rawValue) msg=\"\(trimmed.prefix(80))\" providerId=\(providerId?.rawValue ?? "nil") modelId=\(modelId?.rawValue ?? "nil")")
-
-        // 1. Create the chat row + seed the first user message.
-        let title = ChatSummary.title(fromFirstMessage: trimmed)
-        let chat = try store.createChat(
-            kind: .edit, title: title, modelProviderId: providerId, modelId: modelId)
-        _ = try store.appendChatMessages(chatID: chat.id, events: [.userText(trimmed)])
-
-        // 2. Build wiki-state markdown + read the system prompt (RC2).
-        let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
-        let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
-
-        // 3. Create the launcher + register the session.
-        let launcher = await getOrCreateLauncher(chatID: chat.id, wikiID: wikiID)
-
-        // 4. Start the interactive session.
-        let persistedChatID: ChatID = chat.id
-        let wikiIDCapture = wikiID
-        await launcher.startInteractiveQuery(
-            firstMessage: trimmed,
-            stateMarkdown: stateMarkdown,
+        try await submitTurn(ChatSubmitRequest(
             wikiID: wikiID,
-            wikiRoot: "",
-            systemPrompt: systemPromptBody,
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            chatID: persistedChatID,
-            firstMessagePrePersisted: true,
-            chatOverrideProviderId: providerId,
-            chatOverrideModelId: modelId,
-            onAcpSessionId: { [weak self] sessionId in
-                self?.handleAcpSessionId(
-                    chatID: persistedChatID, sessionId: sessionId, wikiID: wikiIDCapture)
-            },
-            onLock: { },
-            onUnlock: {
-                DarwinNotifier.postChange(forWikiID: wikiIDCapture.rawValue)
-            },
-            onTranscript: { [weak self] events in
-                self?.handleTranscript(
-                    chatID: persistedChatID, events: events, wikiID: wikiIDCapture)
-            },
-            onMessageSummary: { [weak self] id in
-                self?.summarizePendingMessages(
-                    chatID: id, wikiID: wikiIDCapture, launcher: launcher)
-            },
-            onStreamingCheckpoint: { chatID, handle, event, isDraft in
-                (DebugLog.trying("checkpointStreamingMessage", operation: {
-                    try store.checkpointStreamingMessage(
-                        chatID: chatID, handle: handle, event: event, isDraft: isDraft)
-                })) != nil
-            }
-        )
-
-        // 5. Wire the event stream (after startInteractiveQuery so
-        //    resetRunArtifacts doesn't clear it).
-        await wireEventStream(chatID: chat.id, launcher: launcher)
-
-        // 6. Start the state-change poll.
-        startStatePoll(for: chat.id, launcher: launcher)
-
-        // 7. Preflight failure → rollback the chat row.
-        let preflightError = await MainActor.run { launcher.preflightError }
-        if preflightError != nil {
-            DebugLog.agent("DaemonChatHost.startChat: ROLLBACK chat=\(chat.id.rawValue) error=\(preflightError ?? "?")")
-            DebugLog.trying("deleteChat", operation: { try store.deleteChat(id: chat.id) })
-            throw DaemonChatError.preflightFailed(preflightError ?? "unknown")
-        }
-
-        return persistedChatID
+            chatID: nil,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: ULID.generate()),
+                turnID: ChatTurnID(rawValue: ULID.generate()),
+                userText: firstMessage,
+                contextReferences: [],
+                submittedAt: Date()
+            ),
+            providerId: providerId,
+            modelId: modelId
+        ))
     }
 
     // MARK: - Continue a persisted chat
@@ -205,101 +130,17 @@ final class DaemonChatHost: @unchecked Sendable {
     /// from the store, builds the adaptive preamble, and starts a fresh
     /// interactive session writing to the SAME chat row.
     func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
-        guard let store = storeResolver(wikiID) else {
-            throw DaemonChatError.noStore(wikiID)
-        }
-
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw DaemonChatError.emptyMessage
-        }
-
-        let chatIDPage = chatID
-        DebugLog.agent("DaemonChatHost.continueChat: chatID=\(chatID.rawValue) msg=\"\(trimmed.prefix(80))\"")
-
-        // RC4: per-chat takeover — only refuse mid-generation on THIS chat.
-        // No cross-chat stopAgent (each chat has its own launcher).
-        let launcher = await getOrCreateLauncher(chatID: chatID, wikiID: wikiID)
-        let decision = await MainActor.run {
-            AgentOperationRunner.continueTakeoverDecision(
-                isRunning: launcher.isRunning,
-                isInteractiveSession: launcher.isInteractiveSession,
-                isGenerating: launcher.isGenerating,
-                isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot)
-        }
-        if decision == .refused {
-            DebugLog.agent("DaemonChatHost.continueChat: refused — mid-generation on chat \(chatID.rawValue)")
-            throw DaemonChatError.midGeneration
-        }
-
-        // Finalize stale drafts from an interrupted turn.
-        try store.finalizeStaleDrafts(forChat: chatIDPage)
-
-        // Read history + prior ACP session ID + the chat's own model override
-        // (`ChatSummary.modelProviderId`/`.modelId`, set by the composer's
-        // `ProviderSelector`) in one fetch.
-        let history = try store.chatMessages(chatID: chatIDPage)
-        let chatRow = try store.getChat(id: chatIDPage)
-        let priorAcpSessionId = chatRow.acpSessionId
-
-        // Build the adaptive preamble (#825) — these are @MainActor static
-        // funcs on AgentOperationRunner, so we hop to the main actor.
-        let firstMessage = await MainActor.run {
-            let budget = AgentOperationRunner.adaptivePreambleBudget(
-                eligibleTurns: AgentOperationRunner.projectedPreambleTurns(from: history).count)
-            return AgentOperationRunner.continuationPreamble(
-                from: history, newMessage: trimmed,
-                maxTurns: budget.maxTurns, maxBytes: budget.maxBytes)
-        }
-
-        // Build wiki-state markdown + system prompt (RC2).
-        let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
-        let systemPromptBody = (DebugLog.trying("getSystemPrompt", operation: { try store.getSystemPrompt() }))?.body ?? SystemPrompt.defaultBody
-
-        DebugLog.agent("DaemonChatHost.continueChat: history=\(history.count) priorAcpSession=\(priorAcpSessionId?.rawValue ?? "nil")")
-
-        let continuedChatID: ChatID = chatID
-        let wikiIDCapture = wikiID
-        await launcher.startInteractiveQuery(
-            firstMessage: firstMessage,
-            firstMessageDisplay: trimmed,
-            stateMarkdown: stateMarkdown,
+        _ = try await submitTurn(ChatSubmitRequest(
             wikiID: wikiID,
-            wikiRoot: "",
-            systemPrompt: systemPromptBody,
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            chatID: continuedChatID,
-            historySeed: history.map(\.event),
-            priorAcpSessionId: priorAcpSessionId,
-            chatOverrideProviderId: chatRow.modelProviderId,
-            chatOverrideModelId: chatRow.modelId,
-            onAcpSessionId: { [weak self] sessionId in
-                self?.handleAcpSessionId(
-                    chatID: continuedChatID, sessionId: sessionId, wikiID: wikiIDCapture)
-            },
-            onLock: { },
-            onUnlock: {
-                DarwinNotifier.postChange(forWikiID: wikiIDCapture.rawValue)
-            },
-            onTranscript: { [weak self] events in
-                self?.handleTranscript(
-                    chatID: continuedChatID, events: events, wikiID: wikiIDCapture)
-            },
-            onMessageSummary: { [weak self] id in
-                self?.summarizePendingMessages(
-                    chatID: id, wikiID: wikiIDCapture, launcher: launcher)
-            },
-            onStreamingCheckpoint: { chatID, handle, event, isDraft in
-                (DebugLog.trying("checkpointStreamingMessage", operation: {
-                    try store.checkpointStreamingMessage(
-                        chatID: chatID, handle: handle, event: event, isDraft: isDraft)
-                })) != nil
-            }
-        )
-
-        // Re-wire the event stream (resetRunArtifacts cleared it).
-        await wireEventStream(chatID: continuedChatID, launcher: launcher)
-        startStatePoll(for: continuedChatID, launcher: launcher)
+            chatID: chatID,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: ULID.generate()),
+                turnID: ChatTurnID(rawValue: ULID.generate()),
+                userText: message,
+                contextReferences: [],
+                submittedAt: Date()
+            )
+        ))
     }
 
     // MARK: - Send a follow-up turn (RC1)
@@ -307,86 +148,51 @@ final class DaemonChatHost: @unchecked Sendable {
     /// Send a message to an active chat. If the session died between turns
     /// (RC1), re-route to the continueChat path which re-spawns.
     func sendChatMessage(chatID: ChatID, message: String) async throws {
-        let session = queue.sync { sessions[chatID] }
-        guard let session else {
-            throw DaemonChatError.noSession(chatID.rawValue)
-        }
-
-        // RC1: detect dead session.
-        let isAlive = await MainActor.run {
-            session.launcher.isInteractiveSession && session.launcher.isRunning
-        }
-
-        if isAlive {
-            DebugLog.agent("DaemonChatHost.sendChatMessage: alive — sending turn to chat \(chatID.rawValue)")
-            await MainActor.run {
-                session.launcher.sendInteractiveMessage(message)
-            }
-        } else {
-            // RC1: re-route to continueChat (re-invokes startInteractiveQuery
-            // which re-seeds sinks).
-            DebugLog.agent("DaemonChatHost.sendChatMessage: DEAD session — re-routing to continueChat for \(chatID.rawValue)")
-            try await continueChat(
-                wikiID: session.wikiID, chatID: chatID, message: message)
-        }
+        _ = try await submitTurn(ChatSubmitRequest(
+            wikiID: try await resolveWikiID(for: chatID),
+            chatID: chatID,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: ULID.generate()),
+                turnID: ChatTurnID(rawValue: ULID.generate()),
+                userText: message,
+                contextReferences: [],
+                submittedAt: Date()
+            )
+        ))
     }
 
     // MARK: - Stop a chat
 
-    /// Stop the active turn and end the session. The launcher is retained in
-    /// the registry (D1: no idle eviction for Phase C).
+    /// Stop the active turn and end the session.
     func stopChat(chatID: ChatID) async {
-        let session = queue.sync { sessions[chatID] }
-        guard let session else { return }
-        DebugLog.agent("DaemonChatHost.stopChat: stopping chat \(chatID.rawValue)")
-        await MainActor.run {
-            session.launcher.stopAgent()
-        }
+        guard let controller = await registry.controller(for: chatID) else { return }
+        await controller.stopSession()
+        await scheduleIdleEviction(for: chatID)
     }
 
     // MARK: - Chat session state (rehydration)
 
-    /// Return the live state of a chat for client rehydration. If the daemon
-    /// still has the launcher, reads from it; otherwise throws (the client
-    /// falls back to reading from its local store).
-    func chatSessionState(chatID: ChatID) async throws -> ChatSessionState {
-        let session = queue.sync { sessions[chatID] }
-        guard let session else {
-            throw DaemonChatError.noSession(chatID.rawValue)
+    /// Return the authoritative sync snapshot for a chat. If the daemon still
+    /// has a live controller, reads from it; otherwise synthesizes the same
+    /// typed projection from persisted state.
+    func chatSessionState(chatID: ChatID) async throws -> ChatSyncSnapshot {
+        if let controller = await registry.controller(for: chatID) {
+            return try await controller.chatSyncSnapshot()
         }
-
-        let launcher = session.launcher
-        return await MainActor.run {
-            let usageData = launcher.runTotalUsage.flatMap { usage in
-                DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
-            }
-            return ChatSessionState(
-                chatID: chatID,
-                events: launcher.events,
-                isRunning: launcher.isRunning,
-                isGenerating: launcher.isGenerating,
-                isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot,
-                preflightError: launcher.preflightError,
-                thinkingOption: launcher.thinkingOption,
-                usageData: usageData,
-                logFileURL: launcher.logFileURL(forChat: chatID.rawValue),
-                debugFolderURL: launcher.debugFolderURL(forChat: chatID.rawValue),
-                runKindRaw: launcher.runningKind.map { "\($0)" },
-                runStartedAt: launcher.runStartedAt,
-                stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
-                lastActivityAt: launcher.lastActivityAt,
-                currentProcessID: launcher.currentProcessID.map(Int.init))
+        let wikiID = try await resolveWikiID(for: chatID)
+        guard let store = storeResolver(wikiID) else {
+            throw DaemonChatError.noStore(wikiID)
         }
+        _ = try store.getChat(id: chatID)
+        return try Self.persistedOnlySessionState(chatID: chatID, store: store)
     }
 
     // MARK: - Resolve a pending permission
 
     /// Forward a permission resolution to the launcher's backend.
     func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
-        let session = queue.sync { sessions[chatID] }
-        guard let session else { return }
-        DebugLog.agent("DaemonChatHost.resolvePermission: chat=\(chatID.rawValue) option=\(optionId) approve=\(approve)")
-        await session.launcher.resolvePendingPermission(optionId: optionId)
+        guard let controller = await registry.controller(for: chatID) else { return }
+        await controller.resolvePermission(optionID: optionId)
     }
 
     // MARK: - Set a config option (C4 follow-up)
@@ -396,138 +202,188 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `setConfigOption(configId:value:)`, which calls the ACP backend's
     /// `session/set_config_option`. Throws if no live session is held.
     func setChatConfigOption(chatID: ChatID, option: String, value: String) async throws {
-        let session = queue.sync { sessions[chatID] }
-        guard let session else {
-            throw DaemonChatError.noSession(chatID.rawValue)
-        }
-        DebugLog.agent("DaemonChatHost.setChatConfigOption: chat=\(chatID.rawValue) option=\(option) value=\(value)")
-        await MainActor.run {
-            session.launcher.setConfigOption(configId: option, value: value)
-        }
+        let controller = try await makeOrGetController(
+            chatID: chatID,
+            wikiID: try await resolveWikiID(for: chatID)
+        )
+        try await controller.setConfiguration(option: option, value: value)
     }
 
     // MARK: - Test accessors
 
     /// Whether the host currently holds a live session for `chatID`.
-    func hasLiveSession(_ chatID: ChatID) -> Bool {
-        queue.sync { sessions[chatID] != nil }
+    func hasLiveSession(_ chatID: ChatID) async -> Bool {
+        await registry.controller(for: chatID) != nil
     }
 
     /// The shared generation gate (for cross-chat serialization tests, RC3).
     /// Must be accessed on the main actor.
-    @MainActor var testSharedGenerationGate: GenerationGate? { _sharedGate }
+    @MainActor var testSharedGenerationGate: GenerationGate? { sharedGate }
 
-    // MARK: - Private: event stream wiring
-
-    /// Set `onAgentEvent` on the launcher so every streamed event is pushed
-    /// to the client. Called after `startInteractiveQuery` (which clears it
-    /// via `resetRunArtifacts`).
-    private func wireEventStream(chatID: ChatID, launcher: AgentLauncher) async {
-        await MainActor.run {
-            let push = self.pushEvent
-            launcher.onAgentEvent = { event in
-                push(.chatEvent(chatID: chatID, event: event))
-            }
-            // Also wire onPendingPermission so the client sees permission requests.
-            launcher.onPendingPermission = { permission in
-                push(.chatPendingPermission(chatID: chatID, permission: permission))
-            }
-        }
+    func controllerUsesStreamingCheckpointForTesting(
+        chatID: ChatID,
+        wikiID: WikiID
+    ) async throws -> Bool {
+        let controller = try await makeOrGetController(chatID: chatID, wikiID: wikiID)
+        return await controller.runtimeUsesStreamingCheckpointForTesting()
     }
 
-    // MARK: - Private: state-change poll
+    func evictIdleControllerForTesting(chatID: ChatID) async -> Bool {
+        await evictIdleController(chatID: chatID)
+    }
 
-    /// Start a 150ms poll that pushes `ChatStateUpdate` envelopes when the
-    /// launcher's run flags change. Mirrors the existing `pendingPollTask`
-    /// pattern in AgentLauncher.
-    private func startStatePoll(for chatID: ChatID, launcher: AgentLauncher) {
-        // Cancel any existing poll for this chat.
-        queue.sync { statePollTasks[chatID]?.cancel() }
+    func liveControllerCountForTesting() async -> Int {
+        await registry.count()
+    }
 
-        let task = Task { @MainActor [weak self, weak launcher] in
-            var lastFingerprint = ""
-            while let launcher,
-                  launcher.isRunning || launcher.isInteractiveSession {
-                let fingerprint = Self.stateFingerprint(launcher)
-                if fingerprint != lastFingerprint {
-                    lastFingerprint = fingerprint
-                    self?.pushStateUpdate(chatID: chatID, launcher: launcher)
+    func isIdleEvictionScheduledForTesting(chatID: ChatID) async -> Bool {
+        await registry.isIdleEvictionScheduled(for: chatID)
+    }
+
+    func idleEvictionTaskCountForTesting(chatID: ChatID) async -> Int {
+        await registry.idleEvictionTaskCount(for: chatID)
+    }
+
+    private func makeOrGetController(chatID: ChatID, wikiID: WikiID) async throws -> DaemonChatController {
+        guard let store = storeResolver(wikiID) else {
+            throw DaemonChatError.noStore(wikiID)
+        }
+
+        if let existing = await registry.acquireController(for: chatID) {
+            await scheduleIdleEviction(for: chatID)
+            return existing
+        }
+
+        let runtime = LauncherChatAgentRuntime(
+            chatID: chatID,
+            wikiID: wikiID,
+            store: store,
+            extractionCoordinator: extractionCoordinator,
+            generationGate: sharedGate,
+            pushEvent: pushEvent,
+            onSessionID: { [weak self] sessionID in
+                guard let self else { return }
+                if let controller = await self.registry.controller(for: chatID) {
+                    await controller.didUpdateProviderSessionID(sessionID)
                 }
-                // Task.sleep only throws CancellationError — expected, not actionable.
-                // swiftlint:disable:next silent_try_optional
-                try? await Task.sleep(for: .milliseconds(150))
+                do {
+                    try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionID)
+                } catch {
+                    DebugLog.store("DaemonChatHost session-id writeback failed: \(error)")
+                }
+            },
+            onStateUpdate: { [weak self] update in
+                guard let self else { return }
+                if let controller = await self.registry.controller(for: chatID) {
+                    await controller.didUpdateCompatibilityState(update)
+                }
+                if update.isGenerating {
+                    await self.registry.cancelIdleEviction(for: chatID)
+                } else {
+                    await self.scheduleIdleEviction(for: chatID)
+                }
+            },
+            onLiveEvents: { [weak self] events in
+                guard let self else { return }
+                if let controller = await self.registry.controller(for: chatID) {
+                    await controller.didReceiveLiveEvents(events)
+                }
+            },
+            onMessageSummary: { [weak self] chatID in
+                guard let self else { return }
+                self.summarizePendingMessages(chatID: chatID, wikiID: wikiID)
+            },
+            // Phase 3's typed per-delta controller persistence is the sole
+            // owner of compatibility `chat_messages` rows in the daemon path.
+            // Wiring the legacy checkpoint sink here would dual-write the same
+            // assistant message under a second identity and reopen #982/#990.
+            onStreamingCheckpoint: nil
+        )
+        let controller = try DaemonChatController(
+            chatID: chatID,
+            wikiID: wikiID,
+            store: store,
+            runtime: runtime,
+            pushEvent: pushEvent,
+            diagnosticTrace: diagnosticTrace
+        )
+        let resolvedController = await registry.insertIfAbsent(
+            controller,
+            chatID: chatID,
+            wikiID: wikiID
+        )
+        await scheduleIdleEviction(for: chatID)
+        return resolvedController
+    }
+
+    private func resolveWikiID(for chatID: ChatID) async throws -> WikiID {
+        if let wikiID = await registry.wikiID(for: chatID) {
+            return wikiID
+        }
+        let wikiRegistry = WikiRegistry.load(from: containerDirectory)
+        for descriptor in wikiRegistry.wikis {
+            guard let store = storeResolver(descriptor.id) else { continue }
+            do {
+                _ = try store.getChat(id: chatID)
+                return descriptor.id
+            } catch {
+                DebugLog.store("DaemonChatHost.resolveWikiID skipped \(descriptor.id.rawValue): \(error)")
+                continue
             }
-            // Final push after the session ends.
-            if let launcher {
-                self?.pushStateUpdate(chatID: chatID, launcher: launcher)
-            }
         }
-        queue.sync {
-            statePollTasks[chatID] = task
+        throw DaemonChatError.noSession(chatID.rawValue)
+    }
+
+    private static func persistedOnlySessionState(chatID: ChatID, store: GRDBWikiStore) throws -> ChatSyncSnapshot {
+        let generation = ChatSessionGenerationID(rawValue: "persisted-\(chatID.rawValue)")
+        let runtimeSnapshot = try DaemonChatController.bootstrapSnapshot(
+            chatID: chatID,
+            store: store,
+            generation: generation
+        )
+        let committedCursor = try store.chatTranscriptCheckpoint(chatID: chatID)
+        return ChatSyncSnapshot(
+            projection: ChatSyncProjection.from(
+                snapshot: runtimeSnapshot,
+                committedCursor: committedCursor,
+                pendingPermission: nil,
+                runMetadata: .empty,
+                usage: nil,
+                diagnostics: ChatDiagnosticsState()
+            )
+        )
+    }
+
+    // MARK: - Idle controller eviction
+
+    private func scheduleIdleEviction(for chatID: ChatID) async {
+        await registry.scheduleIdleEviction(
+            for: chatID,
+            after: idleEvictionDelay
+        ) { [weak self] chatID in
+            guard let self else { return }
+            _ = await self.evictIdleController(chatID: chatID)
         }
     }
 
-    @MainActor
-    private static func stateFingerprint(_ launcher: AgentLauncher) -> String {
-        "\(launcher.isRunning)|\(launcher.isGenerating)|"
-        + "\(launcher.isAwaitingGenerationSlot)|"
-        + "\(launcher.preflightError ?? "")|"
-        + "\(launcher.thinkingOption?.currentValue ?? "")"
-    }
-
-    @MainActor
-    private func pushStateUpdate(chatID: ChatID, launcher: AgentLauncher) {
-        let usageData = launcher.runTotalUsage.flatMap { usage in
-            DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(usage) })
+    private func evictIdleController(chatID: ChatID) async -> Bool {
+        let reservation = await registry.reserveForIdleEviction(for: chatID)
+        guard case .reserved(let controller) = reservation else {
+            return false
         }
-        let update = ChatStateUpdate(
-            isRunning: launcher.isRunning,
-            isGenerating: launcher.isGenerating,
-            isAwaitingGenerationSlot: launcher.isAwaitingGenerationSlot,
-            preflightError: launcher.preflightError,
-            thinkingOption: launcher.thinkingOption,
-            usageData: usageData,
-            logFileURL: launcher.logFileURL(forChat: chatID.rawValue),
-            debugFolderURL: launcher.debugFolderURL(forChat: chatID.rawValue),
-            runKindRaw: launcher.runningKind.map { "\($0)" },
-            runStartedAt: launcher.runStartedAt,
-            stderr: launcher.stderr.isEmpty ? nil : launcher.stderr,
-            lastActivityAt: launcher.lastActivityAt,
-            currentProcessID: launcher.currentProcessID.map(Int.init))
-        // TEMPORARY (stuck "responding…" badge): seam 1 of 6. If the terminal
-        // update (running=false gen=false) never appears here, the daemon never
-        // observed the session end and nothing downstream can clear the badge.
-        DebugLog.chatLive(
-            "1.daemon.push chat=\(chatID.rawValue) running=\(launcher.isRunning) "
-            + "gen=\(launcher.isGenerating) awaiting=\(launcher.isAwaitingGenerationSlot)")
-        pushEvent(.chatState(chatID: chatID, update: update))
-    }
-
-    // MARK: - Private: store sink handlers
-
-    private func handleAcpSessionId(
-        chatID: ChatID, sessionId: AcpSessionID?, wikiID: WikiID
-    ) {
-        guard let store = storeResolver(wikiID) else { return }
-        do {
-            try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionId)
-            // Push the session-id writeback to the client (#830).
-            pushEvent(.chatAcpSessionId(
-                chatID: chatID, sessionId: sessionId))
-        } catch {
-            DebugLog.store("DaemonChatHost: updateChatAcpSessionId failed: \(error)")
+        guard await controller.closeIfIdle() else {
+            await registry.abandonIdleEviction(for: chatID, controller: controller)
+            await scheduleIdleEviction(for: chatID)
+            return false
         }
-    }
-
-    private func handleTranscript(
-        chatID: ChatID, events: [AgentEvent], wikiID: WikiID
-    ) {
-        guard let store = storeResolver(wikiID) else { return }
-        do {
-            _ = try store.appendChatMessages(chatID: chatID, events: events)
-        } catch {
-            DebugLog.store("DaemonChatHost: appendChatMessages failed: \(error)")
+        let removed = await registry.removeIfIdleEvictionReserved(controller, for: chatID)
+        if removed == false {
+            // A command can revoke our reservation while `closeIfIdle` is
+            // awaiting the runtime. The warm path owns a new timer too, but
+            // re-arming here keeps direct eviction callers equally safe.
+            await scheduleIdleEviction(for: chatID)
         }
+        return removed
     }
 
     // MARK: - Private: message summarization (RC5)
@@ -543,7 +399,7 @@ final class DaemonChatHost: @unchecked Sendable {
     /// `chats.summary` (issue #411) — the sole writer of that column now that
     /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
-        chatID: ChatID, wikiID: WikiID, launcher: AgentLauncher
+        chatID: ChatID, wikiID: WikiID
     ) {
         guard let store = storeResolver(wikiID) else { return }
 
@@ -630,6 +486,151 @@ final class DaemonChatHost: @unchecked Sendable {
                 DebugLog.store("DaemonChatHost.runModelSummarization: write failed: \(error)")
             }
         }
+    }
+}
+
+/// Internal only so the daemon-host regression suite can directly exercise
+/// reservation revocation; production access remains private to the host.
+actor ControllerRegistry {
+    private struct Entry {
+        let wikiID: WikiID
+        let controller: DaemonChatController
+        var isIdleEvictionReserved = false
+    }
+
+    private struct IdleEvictionTask {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+
+    enum IdleEvictionReservation {
+        case missing
+        case alreadyReserved
+        case reserved(DaemonChatController)
+    }
+
+    private var entries: [ChatID: Entry] = [:]
+    private var idleEvictionTasks: [ChatID: IdleEvictionTask] = [:]
+
+    func controller(for chatID: ChatID) -> DaemonChatController? {
+        entries[chatID]?.controller
+    }
+
+    /// Acquiring a controller for a command revokes a pending eviction before
+    /// the caller can await the controller. This prevents an idle timer from
+    /// removing a controller between lookup and submit.
+    func acquireController(for chatID: ChatID) -> DaemonChatController? {
+        guard var entry = entries[chatID] else { return nil }
+        entry.isIdleEvictionReserved = false
+        entries[chatID] = entry
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        return entry.controller
+    }
+
+    func wikiID(for chatID: ChatID) -> WikiID? {
+        entries[chatID]?.wikiID
+    }
+
+    func count() -> Int {
+        entries.count
+    }
+
+    func insertIfAbsent(
+        _ controller: DaemonChatController,
+        chatID: ChatID,
+        wikiID: WikiID
+    ) -> DaemonChatController {
+        if let existing = entries[chatID] {
+            return existing.controller
+        }
+        entries[chatID] = Entry(wikiID: wikiID, controller: controller)
+        return controller
+    }
+
+    func scheduleIdleEviction(
+        for chatID: ChatID,
+        after delay: Duration,
+        eviction: @escaping @Sendable (ChatID) async -> Void
+    ) {
+        let token = UUID()
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        let task = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch is CancellationError {
+                return
+            } catch {
+                DebugLog.agent("DaemonChatHost idle eviction sleep failed: \(error)")
+                return
+            }
+            await self?.runScheduledIdleEviction(
+                for: chatID,
+                token: token,
+                eviction: eviction
+            )
+        }
+        idleEvictionTasks[chatID] = IdleEvictionTask(token: token, task: task)
+    }
+
+    func cancelIdleEviction(for chatID: ChatID) {
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+    }
+
+    func isIdleEvictionScheduled(for chatID: ChatID) -> Bool {
+        idleEvictionTasks[chatID] != nil
+    }
+
+    func idleEvictionTaskCount(for chatID: ChatID) -> Int {
+        idleEvictionTasks[chatID] == nil ? 0 : 1
+    }
+
+    func reserveForIdleEviction(for chatID: ChatID) -> IdleEvictionReservation {
+        guard var entry = entries[chatID] else {
+            return .missing
+        }
+        guard entry.isIdleEvictionReserved == false else {
+            return .alreadyReserved
+        }
+        entry.isIdleEvictionReserved = true
+        entries[chatID] = entry
+        return .reserved(entry.controller)
+    }
+
+    /// Test-only observation of the actual reservation state; this is kept
+    /// separate from task state because a close may be active after its timer
+    /// has fired and been removed.
+    func isIdleEvictionReservedForTesting(for chatID: ChatID) -> Bool {
+        entries[chatID]?.isIdleEvictionReserved == true
+    }
+
+    func abandonIdleEviction(for chatID: ChatID, controller: DaemonChatController) {
+        guard var current = entries[chatID], current.controller === controller else { return }
+        current.isIdleEvictionReserved = false
+        entries[chatID] = current
+    }
+
+    func removeIfIdleEvictionReserved(_ controller: DaemonChatController, for chatID: ChatID) -> Bool {
+        guard let current = entries[chatID],
+              current.controller === controller,
+              current.isIdleEvictionReserved else {
+            return false
+        }
+        entries.removeValue(forKey: chatID)
+        idleEvictionTasks.removeValue(forKey: chatID)?.task.cancel()
+        return true
+    }
+
+    private func runScheduledIdleEviction(
+        for chatID: ChatID,
+        token: UUID,
+        eviction: @escaping @Sendable (ChatID) async -> Void
+    ) async {
+        guard idleEvictionTasks[chatID]?.token == token else { return }
+        // The delayed task is complete before the host begins its async
+        // reservation/close work. A refusal can now reliably install exactly
+        // one replacement timer instead of leaving a completed task recorded.
+        idleEvictionTasks.removeValue(forKey: chatID)
+        await eviction(chatID)
     }
 }
 

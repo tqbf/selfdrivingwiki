@@ -6,8 +6,8 @@ import Foundation
 ///
 /// Delivery is async: `emit` dispatches each `@MainActor` handler via
 /// `Task { @MainActor in … }`. The tests use a lock-guarded collector and a
-/// bounded poll (rather than sleeps) so they wait exactly until the expected
-/// events land — no timing flakes.
+/// bounded condition wait (rather than sleeps) so they wait exactly until the
+/// expected events land — no timing flakes.
 struct WikiEventBusTests {
 
     /// Lock-guarded, synchronous collector — handlers append from the main
@@ -29,10 +29,17 @@ struct WikiEventBusTests {
     /// missing delivery fails the test rather than hanging).
     private func awaitCount(_ collector: Collector, _ expected: Int, timeoutMs: Int = 800) async throws {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
+        while true {
             if collector.count >= expected { return }
+            guard Date() < deadline else {
+                throw EventBusDeliveryWaitError.timedOut(
+                    expectedCount: expected,
+                    actualCount: collector.count,
+                    timeoutMs: timeoutMs
+                )
+            }
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            await Task.yield()
         }
     }
 
@@ -63,6 +70,7 @@ struct WikiEventBusTests {
         bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: .source, id: "s1", change: .created))
         bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: .bookmark, id: "b1", change: .created))
         try await awaitCount(pageCollector, 1)
+        try await awaitCount(sourceCollector, 1)
 
         let pages = pageCollector.snapshot.map { $0.id }
         let sources = sourceCollector.snapshot.map { $0.id }

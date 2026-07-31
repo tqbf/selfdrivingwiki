@@ -37,11 +37,11 @@ struct AgentsSettingsViewModelStatusTests {
             providers: [claude],
             providerModels: [
                 "claude-acp": [
-                    CachedModelInfo(modelId: "sonnet", name: "Sonnet 4.5"),
-                    CachedModelInfo(modelId: "opus", name: "Opus 4.5"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "sonnet"), name: "Sonnet 4.5"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "opus"), name: "Opus 4.5"),
                 ]
             ],
-            selectedModelIds: ["claude-acp": "sonnet"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")])
         let status = AgentsSettingsView.modelStatus(for: claude, in: config)
         #expect(status == .selected(name: "Sonnet 4.5"))
     }
@@ -56,10 +56,10 @@ struct AgentsSettingsViewModelStatusTests {
             providers: [claude],
             providerModels: [
                 "claude-acp": [
-                    CachedModelInfo(modelId: "sonnet", name: "Sonnet 4.5"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "sonnet"), name: "Sonnet 4.5"),
                 ]
             ],
-            selectedModelIds: ["claude-acp": "gpt-5"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "gpt-5")])
         let status = AgentsSettingsView.modelStatus(for: claude, in: config)
         #expect(status == .selected(name: "gpt-5"))
     }
@@ -92,7 +92,7 @@ struct AgentsSettingsViewModelStatusTests {
             providers: [provider],
             providerModels: [
                 "opencode": [
-                    CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7"),
+                    CachedModelInfo(modelId: ModelID(rawValue: "glm-4.7"), name: "GLM-4.7"),
                 ]
             ])
         #expect(AgentsSettingsView.modelStatus(for: provider, in: config) == .noSelectionPickable)
@@ -107,8 +107,8 @@ struct AgentsSettingsViewModelStatusTests {
         let provider = AgentProvider.claudeAcpDefault
         let config = AgentProvidersConfig(
             providers: [provider],
-            providerModels: ["claude-acp": [CachedModelInfo(modelId: "sonnet", name: "Sonnet 4.5")]],
-            selectedModelIds: ["claude-acp": ""])
+            providerModels: ["claude-acp": [CachedModelInfo(modelId: ModelID(rawValue: "sonnet"), name: "Sonnet 4.5")]],
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "")])
         #expect(AgentsSettingsView.modelStatus(for: provider, in: config) == .noSelectionPickable)
     }
 

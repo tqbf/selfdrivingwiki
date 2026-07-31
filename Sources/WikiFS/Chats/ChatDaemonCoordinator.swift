@@ -10,11 +10,11 @@ import WikiFSEngine
 /// registry + routing + rehydration logic is unit-testable without a live XPC
 /// connection.
 public protocol ChatDaemonCommands: AnyObject, Sendable {
-    func startChat(_ request: ChatStartRequest) async throws -> ChatID
-    func continueChat(_ request: ChatContinueRequest) async throws
-    func sendChatMessage(chatID: ChatID, message: String) async throws
+    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
     func stopChat(_ chatID: ChatID) async throws
-    func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState
+    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+    func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope
+    func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -24,7 +24,7 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// App-side coordinator for daemon-hosted chat sessions (Phase C4).
 ///
 /// Owns the per-chat `RemoteChatSession` registry, routes chat event envelopes
-/// demuxed by `DaemonQueueEventSink`, wraps the 7 chat XPC commands behind
+/// demuxed by `DaemonQueueEventSink`, wraps the five current chat XPC commands behind
 /// typed Swift methods, and rehydrates sessions from the daemon's live state.
 /// This is the replacement for the per-wiki chat `AgentLauncher` — after C4
 /// the app no longer runs chat in-process; the daemon owns every chat session.
@@ -38,13 +38,14 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// daemon reports as running (from `chatState` envelopes), even for chats the
 /// app has not opened. `isChatGenerating(_:)` / `anyChatGenerating` back the sidebar
 /// + chats-list "responding…" indicators that previously read
-/// `chatLauncher.activeChatID` / `chatLauncher.isRunning`.
+    /// the session's `chatID` / `runState`.
 @MainActor
 @Observable
 public final class ChatDaemonCoordinator {
 
     private let client: ChatDaemonCommands
     private let eventSink: DaemonQueueEventSink
+    private let diagnosticTrace: ChatDiagnosticTrace
 
     /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
     private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
@@ -75,12 +76,17 @@ public final class ChatDaemonCoordinator {
 
     private var routerTask: Task<Void, Never>?
 
-    init(client: ChatDaemonCommands, eventSink: DaemonQueueEventSink) {
+    init(
+        client: ChatDaemonCommands,
+        eventSink: DaemonQueueEventSink,
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
+    ) {
         // Intentionally non-`public` — `DaemonQueueEventSink` is internal, so
         // the coordinator can only be constructed from within the WikiFS module
         // (the app wires it in `WikiFSApp`; tests inject a stub `ChatDaemonCommands`).
         self.client = client
         self.eventSink = eventSink
+        self.diagnosticTrace = diagnosticTrace
         startRouting()
     }
 
@@ -97,6 +103,88 @@ public final class ChatDaemonCoordinator {
         return session
     }
 
+    /// Builds the redacted app/daemon diagnostic artifact for an existing chat.
+    /// Request failures become an explicit app-side snapshot event so exports
+    /// explain whether the daemon half was unavailable, malformed, or old.
+    func diagnosticSnapshot(for chatID: ChatID?) async -> ChatDiagnosticMergedSnapshot {
+        let correlation = chatID.map { ChatDiagnosticCorrelation.Value(rawValue: $0.rawValue) }
+        let app = diagnosticTrace.snapshot(
+            chat: correlation,
+            summary: ["sync": "app-coordinator", "chat": correlation?.rawValue ?? "draft"]
+        )
+        guard chatID != nil else { return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: nil) }
+        do {
+            let daemon = try await client.chatDiagnosticSnapshot(.init(chat: correlation))
+            return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: daemon)
+        } catch let error as DaemonXPCError {
+            let outcome: ChatDiagnosticOutcome
+            switch error {
+            case .timeout: outcome = .timeout
+            case .diagnosticDecode: outcome = .decodeFailure
+            case .diagnosticVersion: outcome = .versionFailure
+            default: outcome = .failed
+            }
+            _ = diagnosticTrace.record(
+                stage: .syncAcceptance,
+                outcome: outcome,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            let updated = diagnosticTrace.snapshot(chat: correlation)
+            return ChatDiagnosticSnapshotMerge.merge(app: updated, daemon: nil)
+        } catch {
+            _ = diagnosticTrace.record(
+                stage: .syncAcceptance,
+                outcome: .failed,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            return ChatDiagnosticSnapshotMerge.merge(app: diagnosticTrace.snapshot(chat: correlation), daemon: nil)
+        }
+    }
+
+    /// Requests the app/daemon snapshot through the normal coordinator path,
+    /// then writes the redacted artifact to the caller-provided destination.
+    /// A written artifact immediately retires both fingerprint epochs. The
+    /// daemon reset still drains both rings on success; a failed reset retains
+    /// retry evidence without reusing an exported fingerprint key.
+    func copyDiagnostics(
+        for chatID: ChatID?,
+        write: (Data) throws -> Void
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
+        try await exporter.copy(snapshot, write: write)
+        if let chatID {
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
+        }
+        exporter.resetAfterSuccessfulExport()
+    }
+
+    /// Writes the same redacted coordinator snapshot as JSONL for explicit
+    /// diagnostic collection. Full-content ACP artifacts remain the separate
+    /// debug-folder workflow owned by the chat runtime.
+    func writeDiagnosticsJSONL(
+        for chatID: ChatID?,
+        to url: URL
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
+        try await exporter.writeJSONL(snapshot, to: url)
+        if let chatID {
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
+        }
+        exporter.resetAfterSuccessfulExport()
+    }
+
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a
     /// fresh draft). The daemon's own session is unaffected.
     public func discard(chatID: ChatID?) {
@@ -105,7 +193,9 @@ public final class ChatDaemonCoordinator {
 
     /// Replace the draft session with a fresh one (used by "start new chat").
     public func resetDraft() {
-        sessions[.draft] = RemoteChatSession(chatID: .draft)
+        let session = RemoteChatSession(chatID: .draft)
+        wireSessionCallbacks(session)
+        sessions[.draft] = session
     }
 
     // MARK: - Event routing
@@ -114,8 +204,8 @@ public final class ChatDaemonCoordinator {
         routerTask?.cancel()
         routerTask = Task { [weak self] in
             guard let self else { return }
-            for await (chatID, envelope) in self.eventSink.chatEnvelopes {
-                self.route(chatID: chatID, envelope: envelope)
+            for await (chatID, update) in self.eventSink.chatEnvelopes {
+                self.route(chatID: chatID, update: update)
             }
         }
     }
@@ -123,20 +213,9 @@ public final class ChatDaemonCoordinator {
     /// chatID arrives in wire form (a `ChatID`) off the daemon's envelope
     /// stream — the sink already decoded it from the envelope's `chatID`
     /// field, so nothing past here handles a raw chat-id string.
-    private func route(chatID: ChatID, envelope: QueueEventEnvelope) {
-        // Track the running set from state envelopes so the sidebar can badge
-        // chats the daemon is running even without an open app session.
-        if envelope.kind == .chatState, let update = envelope.chatStateUpdate {
-            // TEMPORARY (stuck "responding…" badge): seam 2 of 6. Seam 1 firing
-            // without this one means the envelope never crossed XPC into the
-            // app — an event-sink blackout, not a UI bug (cf. #904/#907).
-            DebugLog.chatLive(
-                "2.app.route chat=\(chatID) running=\(update.isRunning) "
-                + "gen=\(update.isGenerating) awaiting=\(update.isAwaitingGenerationSlot)")
-            setChatGenerating(chatID, generating: update.isGenerating)
-        }
-        // Deliver to the open session if one exists.
-        sessions[.chat(chatID)]?.ingest(envelope)
+    private func route(chatID: ChatID, update: ChatSyncUpdate) {
+        setChatGenerating(chatID, generating: update.projection.isAnswering)
+        sessions[.chat(chatID)]?.ingest(update)
     }
 
     // MARK: - Sidebar liveness aggregate
@@ -152,10 +231,6 @@ public final class ChatDaemonCoordinator {
             ? generatingChatIDs.insert(chatID).inserted
             : generatingChatIDs.remove(chatID) != nil
         if didChange { runningStateToken &+= 1 }
-        // TEMPORARY (stuck "responding…" badge): seam 3 of 8.
-        DebugLog.chatLive(
-            "3.app.setGenerating chat=\(chatID) generating=\(generating) didChange=\(didChange) "
-            + "token=\(runningStateToken) set=[\(generatingChatIDs.map(\.rawValue).sorted().joined(separator: ","))]")
     }
 
     /// True while the daemon is actively answering this chat. Backs the sidebar
@@ -166,7 +241,7 @@ public final class ChatDaemonCoordinator {
     /// `isRunning` would pin the badge on for the life of the session).
     public func isChatGenerating(_ chatID: ChatID) -> Bool {
         if generatingChatIDs.contains(chatID) { return true }
-        if let s = sessions[.chat(chatID)], s.isGenerating { return true }
+        if let s = sessions[.chat(chatID)], s.runState.isAnswering { return true }
         return false
     }
 
@@ -174,32 +249,17 @@ public final class ChatDaemonCoordinator {
     /// app-level "is the agent busy" check (the ⌘Q confirmation).
     public var anyChatGenerating: Bool {
         if !generatingChatIDs.isEmpty { return true }
-        return sessions.values.contains { $0.isGenerating }
+        return sessions.values.contains { $0.runState.isAnswering }
     }
 
     // MARK: - Commands (wrap DaemonWorkloadClient)
 
-    /// Start a new chat on the daemon. Returns the assigned chat ULID.
-    /// `providerId`/`modelId` thread a `.draft`-session `ProviderSelector` pick
-    /// (there's no `chats` row to write it to before the chat exists).
+    /// Submit one typed turn through the daemon's unified chat-submit path.
+    /// The daemon creates a chat for draft submissions and decides whether an
+    /// existing chat is warm, dead, or persisted-only.
     @discardableResult
-    public func startChat(
-        wikiID: WikiID, firstMessage: String,
-        providerId: ProviderID? = nil, modelId: ModelID? = nil
-    ) async throws -> ChatID {
-        try await client.startChat(ChatStartRequest(
-            wikiID: wikiID, firstMessage: firstMessage,
-            providerId: providerId, modelId: modelId))
-    }
-
-    /// Continue a persisted chat with a new user turn.
-    public func continueChat(wikiID: WikiID, chatID: ChatID, message: String) async throws {
-        try await client.continueChat(ChatContinueRequest(wikiID: wikiID, chatID: chatID, message: message))
-    }
-
-    /// Send a follow-up turn to an active chat session.
-    public func sendMessage(chatID: ChatID, message: String) async throws {
-        try await client.sendChatMessage(chatID: chatID, message: message)
+    public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        try await client.submitChatTurn(request)
     }
 
     /// Stop/cancel the active chat turn. Errors are logged (best-effort).
@@ -209,10 +269,15 @@ public final class ChatDaemonCoordinator {
     }
 
     /// Resolve a pending permission request (approve/reject). Errors logged.
-    public func resolvePermission(chatID: ChatID, optionId: String, approve: Bool) async {
+    func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
         do {
             try await client.resolveChatPermission(
-                ChatPermissionResolveRequest(chatID: chatID, optionId: optionId, approve: approve))
+                ChatPermissionResolveRequest(
+                    chatID: chatID,
+                    optionId: intent.optionID.rawValue,
+                    approve: intent.isApproval
+                )
+            )
         } catch {
             DebugLog.agent("ChatDaemonCoordinator.resolvePermission failed for \(chatID.rawValue): \(error)")
         }
@@ -250,17 +315,20 @@ public final class ChatDaemonCoordinator {
                 DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
             }
         }
+        session.onRequestAuthoritativeSnapshot = {
+            try await client.chatSessionState(chatID)
+        }
     }
 
     /// Rehydrate a session from the daemon's live state. Call on view appear
     /// and whenever the active chat changes so the mirror reflects the
-    /// daemon's held-alive launcher (or the persisted rows once evicted).
+    /// daemon's live controller (or the persisted rows once evicted).
     public func rehydrate(chatID: ChatID) async {
         let session = self.session(for: chatID)
         do {
             let state = try await client.chatSessionState(chatID)
             session.hydrate(from: state)
-            setChatGenerating(chatID, generating: state.isGenerating)
+            setChatGenerating(chatID, generating: state.projection.isAnswering)
         } catch {
             // A rehydrate failure (e.g. the daemon evicted the session, so
             // `chatSessionState` throws `noSession`) is non-fatal — but the
@@ -280,7 +348,11 @@ public final class ChatDaemonCoordinator {
     /// Direct event injection (tests). Routes exactly like a daemon envelope.
     func ingestForTesting(_ envelope: QueueEventEnvelope) {
         guard let chatID = envelope.chatID else { return }
-        route(chatID: chatID, envelope: envelope)
+        do {
+            route(chatID: chatID, update: try envelope.decodedChatSyncUpdate())
+        } catch {
+            DebugLog.agent("ChatDaemonCoordinator.ingestForTesting rejected chat sync update for \(chatID): \(error)")
+        }
     }
 }
 

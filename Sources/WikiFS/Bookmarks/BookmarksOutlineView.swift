@@ -783,8 +783,9 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
             menu.addItem(.separator())
         }
 
-        // Edit — single item only.
-        if !isBatch && clicked.kind == .folder {
+        // Edit — single item only. Folders rename in place; leaf references
+        // retarget to a different page/source/chat from the same entry point.
+        if !isBatch {
             menu.addItem(menuItem("Edit…", systemImage: "pencil",
                                   action: #selector(editAction(_:)), payload: payload))
         }

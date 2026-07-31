@@ -30,7 +30,7 @@ public enum ChatQuoteResolver {
     }
 
     /// The searchable prose of one transcript event — the text a quote anchor
-    /// can match. Mirrors what `ChatWebView.chatRowHTML` renders in each
+    /// can match. Mirrors what `ChatWebView.chatDisplayRowHTML` renders in each
     /// `.chat-row`: user/assistant/result prose (+ tool-call summaries). Empty
     /// for events that render no searchable row (deltas, messageStop, raw,
     /// empty result), so `messageIndex` naturally skips them.

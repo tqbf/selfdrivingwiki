@@ -126,25 +126,33 @@ public final class WikiDaemonConnection: @unchecked Sendable {
             // Timeout — fires if the daemon never responds (no LaunchAgent
             // registered, or a half-open connection). This is what guarantees
             // the method always returns within `timeout`.
-            Task {
-                // Task.sleep only throws CancellationError, expected when the
-                // health check completes before the timeout fires — not actionable.
-                // swiftlint:disable:next silent_try_optional
-                try? await Task.sleep(for: .seconds(timeout))
-                box.resume(false, cont)
+            let timeoutTask = Task.detached(priority: .userInitiated) {
+                do {
+                    try await Task.sleep(for: .seconds(timeout))
+                    box.resume(false, cont)
+                } catch is CancellationError {
+                    // The health check completed before the timeout fired.
+                } catch {
+                    DebugLog.store("WikiDaemonConnection.healthCheck timeout task failed unexpectedly: \(error)")
+                }
+            }
+
+            func finish(_ value: Bool) {
+                timeoutTask.cancel()
+                box.resume(value, cont)
             }
 
             // XPC error handler — fires if the connection is dead/invalidated.
             let proxy = self.connection.remoteObjectProxyWithErrorHandler { _ in
-                box.resume(false, cont)
+                finish(false)
             }
             guard let daemon = proxy as? WikiDaemonProtocol else {
-                box.resume(false, cont)
+                finish(false)
                 return
             }
             // XPC reply — fires if the daemon responds.
             daemon.queueSnapshot { _ in
-                box.resume(true, cont)
+                finish(true)
             }
         }
     }

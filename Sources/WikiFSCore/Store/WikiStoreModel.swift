@@ -4028,14 +4028,17 @@ public final class WikiStoreModel {
     }
 
     /// Rename a folder.
-    public func renameBookmarkNode(id: BookmarkID, to label: String) {
-        do {
-            try store.renameBookmarkFolder(id: id, to: label)
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // store write.
-        } catch {
-            DebugLog.store("WikiStoreModel.renameBookmarkNode failed: \(error)")
-        }
+    public func renameBookmarkNode(id: BookmarkID, to label: String) throws {
+        try store.renameBookmarkFolder(id: id, to: label)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
+    }
+
+    /// Retarget a bookmark reference to a new page/source/chat target.
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try store.retargetBookmarkNode(id: id, to: content)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
     }
 
     /// Delete a bookmark node (cascade-deletes children for folders).
@@ -4185,6 +4188,26 @@ public final class WikiStoreModel {
 
     public func chatMessages(chatID: ChatID) -> [ChatMessage] {
         DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chatID) }) ?? []
+    }
+
+    public func readChatTranscriptPage(
+        chatID: ChatID,
+        after cursor: ChatTranscriptCursor?,
+        limit: Int
+    ) -> ChatTranscriptPage {
+        DebugLog.trying("readChatTranscriptPage", operation: {
+            try store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: limit)
+        }) ?? ChatTranscriptPage(
+            items: [],
+            checkpoint: cursor ?? .zero,
+            nextCursor: nil
+        )
+    }
+
+    public func chatTranscriptCheckpoint(chatID: ChatID) -> ChatTranscriptCursor {
+        DebugLog.trying("chatTranscriptCheckpoint", operation: {
+            try store.chatTranscriptCheckpoint(chatID: chatID)
+        }) ?? .zero
     }
 
     public func renameChat(id: ChatID, to title: String) {

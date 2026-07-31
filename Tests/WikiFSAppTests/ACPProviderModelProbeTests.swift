@@ -47,7 +47,7 @@ struct ACPProviderModelProbeTests {
             ])
         let cached = ACPProviderModelProbe.mapModelsToCache(models)
         #expect(cached.count == 3)
-        #expect(cached.map(\.modelId) == ["sonnet", "opus", "haiku"])
+        #expect(cached.map { $0.modelId } == [ModelID(rawValue: "sonnet"), ModelID(rawValue: "opus"), ModelID(rawValue: "haiku")])
         #expect(cached[0].name == "Claude Sonnet")
         #expect(cached[0].description == "Fast")
         #expect(cached[2].description == nil)
@@ -94,7 +94,7 @@ struct ACPProviderModelProbeTests {
         ]
         let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
         #expect(cached.count == 2)
-        #expect(cached.map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(cached.map { $0.modelId } == [ModelID(rawValue: "glm-4.7"), ModelID(rawValue: "glm-4-7")])
         #expect(cached[0].name == "GLM-4.7")
         #expect(cached[0].description == "Fast")
         #expect(cached[1].description == nil)
@@ -135,7 +135,7 @@ struct ACPProviderModelProbeTests {
         ]
         let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
         #expect(cached.count == 3)
-        #expect(cached.map(\.modelId) == ["haiku", "sonnet", "opus"])
+        #expect(cached.map { $0.modelId } == [ModelID(rawValue: "haiku"), ModelID(rawValue: "sonnet"), ModelID(rawValue: "opus")])
     }
 
     /// #654 + `category == "model"` convention. The polytoken daemon
@@ -158,7 +158,7 @@ struct ACPProviderModelProbeTests {
         ]
         let cached = ACPProviderModelProbe.mapModelsToCache(nil, configOptions: configOptions)
         #expect(cached.count == 1)
-        #expect(cached.first?.modelId == "gpt-5")
+        #expect(cached.first?.modelId == ModelID(rawValue: "gpt-5"))
     }
 
     /// #654: the missing-model-list edge case. `availableModels` is EMPTY
@@ -180,7 +180,7 @@ struct ACPProviderModelProbeTests {
         ]
         let cached = ACPProviderModelProbe.mapModelsToCache(models, configOptions: configOptions)
         #expect(cached.count == 1)
-        #expect(cached.first?.modelId == "glm-4.7")
+        #expect(cached.first?.modelId == ModelID(rawValue: "glm-4.7"))
     }
 
     /// Precedence: when BOTH `availableModels` and a `configOptions` model
@@ -206,7 +206,7 @@ struct ACPProviderModelProbeTests {
         ]
         let cached = ACPProviderModelProbe.mapModelsToCache(models, configOptions: configOptions)
         #expect(cached.count == 1)
-        #expect(cached.first?.modelId == "sonnet")
+        #expect(cached.first?.modelId == ModelID(rawValue: "sonnet"))
     }
 
     /// Fallback returns [] when `configOptions` is present but has NO model
@@ -254,7 +254,7 @@ struct ACPProviderModelProbeTests {
 
     @Test func shouldThrowNoModelsFalseForNonEmpty() {
         #expect(ACPProviderModelProbe.shouldThrowNoModels([
-            CachedModelInfo(modelId: "x", name: "X"),
+            CachedModelInfo(modelId: ModelID(rawValue: "x"), name: "X"),
         ]) == false)
     }
 
@@ -341,15 +341,15 @@ struct ACPProviderModelProbeTests {
         let provider = AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"])
         let original = AgentProvidersConfig(
             providers: [provider],
-            selectedModelIds: ["hermes": "glm-4.7"],
-            favoriteModelIds: ["hermes": ["glm-4.7"]],
+            selectedModelIds: ["hermes": ModelID(rawValue: "glm-4.7")],
+            favoriteModelIds: ["hermes": [ModelID(rawValue: "glm-4.7")]],
             maxConcurrent: ["hermes": 3])
         try original.save(to: tmp)
 
         // The probe's discovered list.
         let discovered = [
-            CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7", description: "Fast"),
-            CachedModelInfo(modelId: "glm-4-7", name: "GLM 4.7 (legacy)", description: nil),
+            CachedModelInfo(modelId: ModelID(rawValue: "glm-4.7"), name: "GLM-4.7", description: "Fast"),
+            CachedModelInfo(modelId: ModelID(rawValue: "glm-4-7"), name: "GLM 4.7 (legacy)", description: nil),
         ]
 
         // The persist path the sheet's `onRefreshModels` closure drives —
@@ -360,13 +360,13 @@ struct ACPProviderModelProbeTests {
         // Reload from disk and assert the discovered list round-tripped AND
         // the OTHER fields (maxConcurrent, favorites, selection) survived.
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
-        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == ["glm-4.7", "glm-4-7"])
+        #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == [ModelID(rawValue: "glm-4.7"), ModelID(rawValue: "glm-4-7")])
         #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).first?.name == "GLM-4.7")
         // maxConcurrent carried through (the parent's `save(_:)` helper drops
         // this — pinning that the probe persist does NOT).
         #expect(reloaded.maxConcurrent["hermes"] == 3)
-        #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == "glm-4.7")
-        #expect(reloaded.favoriteModels(forProvider: ProviderID(rawValue: "hermes")) == ["glm-4.7"])
+        #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == ModelID(rawValue: "glm-4.7"))
+        #expect(reloaded.favoriteModels(forProvider: ProviderID(rawValue: "hermes")) == [ModelID(rawValue: "glm-4.7")])
     }
 
     /// The probe's success → cachedModels path: a sheet that already has a
@@ -377,15 +377,15 @@ struct ACPProviderModelProbeTests {
         let stale = AgentProvidersConfig(
             providers: [provider],
             providerModels: ["hermes": [
-                CachedModelInfo(modelId: "stale-model", name: "Stale"),
+                CachedModelInfo(modelId: ModelID(rawValue: "stale-model"), name: "Stale"),
             ]])
         let fresh = [
-            CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7"),
-            CachedModelInfo(modelId: "glm-4-7", name: "GLM 4.7"),
+            CachedModelInfo(modelId: ModelID(rawValue: "glm-4.7"), name: "GLM-4.7"),
+            CachedModelInfo(modelId: ModelID(rawValue: "glm-4-7"), name: "GLM 4.7"),
         ]
         let updated = stale.settingCachedModels(fresh, forProvider: ProviderID(rawValue: "hermes"))
         #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).count == 2)
-        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).contains { $0.modelId == "stale-model" } == false)
+        #expect(updated.cachedModels(forProvider: ProviderID(rawValue: "hermes")).contains { $0.modelId == ModelID(rawValue: "stale-model") } == false)
     }
 
     /// Refresh failure (`.error`) does NOT wipe the last-known cache. Paseo
@@ -397,7 +397,7 @@ struct ACPProviderModelProbeTests {
         let config = AgentProvidersConfig(
             providers: [provider],
             providerModels: ["hermes": [
-                CachedModelInfo(modelId: "glm-4.7", name: "GLM-4.7"),
+                CachedModelInfo(modelId: ModelID(rawValue: "glm-4.7"), name: "GLM-4.7"),
             ]])
         // Simulate a refresh failure: the sheet's `refreshModels()` Task
         // catches the error and sets `.error(message)` — it does NOT touch
@@ -405,7 +405,7 @@ struct ACPProviderModelProbeTests {
         // invoked on SUCCESS. So the cache stays at its prior state.
         let stillCached = config.cachedModels(forProvider: ProviderID(rawValue: "hermes"))
         #expect(stillCached.count == 1)
-        #expect(stillCached.first?.modelId == "glm-4.7")
+        #expect(stillCached.first?.modelId == ModelID(rawValue: "glm-4.7"))
     }
 
     // MARK: - AC.4: SpawnModelGuard unchanged (correctness backstop)
@@ -530,7 +530,7 @@ struct ACPProviderModelProbeLiveTests {
             // the model list should be non-empty.
             if let key = apiKey, !key.isEmpty {
                 #expect(!models.isEmpty, "expected the agent to advertise models with a valid key")
-                #expect(models.allSatisfy { !$0.modelId.isEmpty })
+                #expect(models.allSatisfy { !$0.modelId.rawValue.isEmpty })
             } else {
                 // Without a key we still got SOME response (even an empty one)
                 // — proves launch + initialize + newSession + terminate all

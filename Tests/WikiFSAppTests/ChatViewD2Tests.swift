@@ -62,7 +62,7 @@ struct ChatViewD2Tests {
         launcher.resolveSelectedProvider = { provider }
         let config = AgentProvidersConfig(
             providers: [provider],
-            selectedModelIds: [provider.id.rawValue: "fake-model"]
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "fake-model")]
         )
         try config.save(to: tempDir)
         launcher.resolveProvidersContainerDirectory = { tempDir }
@@ -316,10 +316,9 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
-            hasDraftText: true) == true)
+            runState: .idle,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
     }
 
     /// `canSendPredicate` returns true even when the mount is NOT available —
@@ -327,40 +326,37 @@ struct ChatViewD2Tests {
     @Test func canSendPredicateTrueWithoutMount() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: false,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
-            hasDraftText: true) == true)
+            runState: .idle,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
     }
 
     /// `canSendPredicate` returns false when generating (can't send mid-response).
     @Test func canSendPredicateFalseWhileGenerating() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: true,
-            isAwaitingSlot: false,
-            hasDraftText: true) == false)
+            runState: .answering,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
     }
 
-    /// `canSendPredicate` returns false when the composer is disabled.
-    @Test func canSendPredicateFalseWhenCannotType() {
+    /// `canSendPredicate` returns false while a turn is queued for the
+    /// generation gate.
+    @Test func canSendPredicateFalseWhileQueued() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: false,
-            isGenerating: false,
-            isAwaitingSlot: false,
-            hasDraftText: true) == false)
+            runState: .queued,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
     }
 
     /// `canSendPredicate` returns false with no draft text.
     @Test func canSendPredicateFalseWithNoDraftText() {
         #expect(ChatDetailView.canSendPredicate(
             hasMount: true,
-            canType: true,
-            isGenerating: false,
-            isAwaitingSlot: false,
-            hasDraftText: false) == false)
+            runState: .idle,
+            hasDraftText: false,
+            isChatOperationConfigured: true) == false)
     }
 
 }#endif

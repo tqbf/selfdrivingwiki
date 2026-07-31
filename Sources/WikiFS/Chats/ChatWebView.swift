@@ -4,6 +4,46 @@ import SwiftUI
 import WebKit
 import WikiFSCore
 
+extension ChatDisplayRowID {
+    /// Prefixes make the DOM namespace explicit even where raw durable IDs
+    /// happen to share the same string representation.
+    var domValue: String {
+        switch self {
+        case .message(let id): "message-\(id.rawValue)"
+        case .toolCall(let id): "tool-\(id.rawValue)"
+        case .notice(let id): "notice-\(id.rawValue)"
+        case .failure(let id): "failure-\(id.rawValue)"
+        }
+    }
+
+    init?(domValue: String) {
+        if domValue.hasPrefix("message-") {
+            self = .message(ChatMessageID(rawValue: String(domValue.dropFirst("message-".count))))
+        } else if domValue.hasPrefix("tool-") {
+            self = .toolCall(ToolCallID(rawValue: String(domValue.dropFirst("tool-".count))))
+        } else if domValue.hasPrefix("notice-") {
+            self = .notice(ChatTranscriptNoticeID(rawValue: String(domValue.dropFirst("notice-".count))))
+        } else if domValue.hasPrefix("failure-") {
+            self = .failure(ChatTranscriptFailureID(rawValue: String(domValue.dropFirst("failure-".count))))
+        } else {
+            return nil
+        }
+    }
+}
+
+/// Compatibility filtering belongs to the legacy activity-feed renderer, not
+/// the typed chat transcript adapter. Retaining it here preserves the separate
+/// activity/history surface without letting chat presentation use event arrays.
+extension [AgentEvent] {
+    var transcriptVisibleIndices: [Int] {
+        indices.filter { self[$0].isVisibleInTranscript(in: self) }
+    }
+
+    var transcriptVisible: [AgentEvent] {
+        transcriptVisibleIndices.map { self[$0] }
+    }
+}
+
 /// Renders an entire `AgentEvent` transcript as **one** native text surface
 /// inside a single, internally-scrolling `WKWebView` — so mouse drag-selection
 /// (and Cmd+A / copy) spans every row in the feed, not just one message.
@@ -14,23 +54,23 @@ import WikiFSCore
 /// sibling one — every message was an island. Folding the whole feed into one
 /// document removes that boundary entirely.
 ///
-/// `events` is expected to only grow in length, or have its LAST element mutated
+/// Activity-feed `events` are expected to only grow in length, or have their LAST element mutated
 /// in place (a streamed text delta merged into an in-progress `.assistantText`,
 /// issue #121), except for an explicit reset to `[]` (`AgentLauncher.events`'s
 /// contract): new events are inserted into the live DOM via `appendRows`, and an
 /// in-place growth of the last row is patched via `replaceLastRow`, rather than a
 /// full reload — so an in-progress text selection survives a streaming run. A
 /// count *decrease* (a reset), a `showsInternals` change (which changes which
-/// underlying events are visible), or a `transcriptID` change (the events now
+/// underlying activity events are visible), or a `transcriptID` change (the events now
 /// describe a different conversation entirely) forces a full rebuild.
 ///
 /// A versioned request to scroll the chat transcript to a user turn. Mirrors the
 /// reader's anchor-version pattern: `version` bumps to signal a new request;
-/// `turnIndex` is the 0-based index among the `.chat-user` rows the transcript
-/// renders. Consumed in `ChatWebView.updateNSView`.
-struct ChatScrollRequest: Equatable {
+/// `rowID` targets the durable prompt row without deriving identity from a
+/// rendered index. Consumed in `ChatWebView.updateNSView`.
+struct ChatWebScrollRequest: Equatable {
     let version: Int
-    let turnIndex: Int
+    let rowID: ChatDisplayRowID
 }
 
 /// A versioned request to highlight a quoted passage in the chat transcript and
@@ -62,16 +102,10 @@ enum TranscriptID: Hashable, Sendable {
 }
 
 struct ChatWebView: NSViewRepresentable {
-    /// `.activityFeed` is the inspector look (labeled rows, tool calls,
-    /// diagnostics). `.chat` is the Query page look (right-aligned capsule
-    /// for the user, plain prose for the assistant, no row labels).
-    enum VisualStyle {
-        case activityFeed
-        case chat
-    }
-
+    /// The legacy activity-feed input. Chat transcripts use `chatRows` so the
+    /// presentation layer does not discard durable row identity.
     let events: [AgentEvent]
-    let style: VisualStyle
+    let chatRows: [ChatDisplayRow]?
     /// Identity of the transcript these `events` belong to (a chat ULID, a
     /// queue item id, …). The coordinator renders **incrementally** — it
     /// appends only `events[renderedCount...]` — which is only sound while
@@ -91,7 +125,7 @@ struct ChatWebView: NSViewRepresentable {
     var transcriptID: TranscriptID? = nil
     /// A value that, when it changes, forces a full rebuild rather than an
     /// append — for callers whose event→visible-row filtering can change
-    /// retroactively (e.g. `AgentQueueView`'s "Show internals" toggle).
+    /// retroactively (e.g. an activity-feed filtering toggle).
     /// Callers whose filtering never changes mid-stream can ignore this.
     var showsInternals: Bool = false
     /// Invoked when the user clicks a `wiki://` link inside the transcript
@@ -125,25 +159,68 @@ struct ChatWebView: NSViewRepresentable {
     var zoom: Double = Double(ZoomScale.defaultScale)
     /// Versioned request to scroll to a user turn (outline click). `nil` (default)
     /// never scrolls; consumed in `updateNSView`.
-    var scrollRequest: ChatScrollRequest? = nil
+    var scrollRequest: ChatWebScrollRequest? = nil
     /// Versioned request to highlight + scroll to a `[[chat:Title#"quote"]]`
     /// passage (issue #281). `nil` (default) never highlights; consumed in
     /// `updateNSView` (re-click on a loaded transcript) and `didFinish` (fresh
     /// load). The coordinator stashes it and applies once rows are rendered.
     var quoteAnchor: ChatHighlightRequest? = nil
 
-    /// Wall-clock timestamps parallel to `events`. Indexed per-row so the
-    /// coordinator can compute a duration ("Worked for Xs") and a completion
-    /// timestamp for each assistant bubble. Entry `nil` → no footer for that
-    /// row. Empty array (default) → no footers at all (activity-feed callers
-    /// that don't track timing are unaffected).
-    var timestamps: [Date?] = []
+    /// Typed UI callback used only by the chat transcript. The activity-feed
+    /// API retains its existing raw navigation closure for compatibility.
+    var onChatIntent: ((ChatTranscriptIntent) -> Void)? = nil
 
     /// Name of the `WKScriptMessage` channel the per-bubble "Copy" button posts
     /// to (issue #285). The JS click listener calls
     /// `window.webkit.messageHandlers.copyText.postMessage(text)`; the coordinator
     /// writes `text` to `NSPasteboard`.
     static let copyMessageName = "copyText"
+    static let followMessageName = "chatFollowState"
+
+    init(
+        events: [AgentEvent],
+        transcriptID: TranscriptID? = nil,
+        showsInternals: Bool = false,
+        onWikiLink: ((URL, Bool) -> Void)? = nil,
+        renderContext: (() -> WikiRenderContext?)? = nil,
+        blobStore: WikiStoreModel? = nil,
+        zoom: Double = Double(ZoomScale.defaultScale),
+        scrollRequest: ChatWebScrollRequest? = nil,
+        quoteAnchor: ChatHighlightRequest? = nil
+    ) {
+        self.events = events
+        self.chatRows = nil
+        self.transcriptID = transcriptID
+        self.showsInternals = showsInternals
+        self.onWikiLink = onWikiLink
+        self.renderContext = renderContext
+        self.blobStore = blobStore
+        self.zoom = zoom
+        self.scrollRequest = scrollRequest
+        self.quoteAnchor = quoteAnchor
+    }
+
+    init(
+        chatRows: [ChatDisplayRow],
+        transcriptID: TranscriptID?,
+        onChatIntent: @escaping (ChatTranscriptIntent) -> Void,
+        renderContext: (() -> WikiRenderContext?)? = nil,
+        blobStore: WikiStoreModel? = nil,
+        zoom: Double = Double(ZoomScale.defaultScale),
+        scrollRequest: ChatWebScrollRequest? = nil,
+        quoteAnchor: ChatHighlightRequest? = nil
+    ) {
+        self.events = []
+        self.chatRows = chatRows
+        self.transcriptID = transcriptID
+        self.onWikiLink = nil
+        self.renderContext = renderContext
+        self.blobStore = blobStore
+        self.zoom = zoom
+        self.scrollRequest = scrollRequest
+        self.quoteAnchor = quoteAnchor
+        self.onChatIntent = onChatIntent
+    }
 
     func makeNSView(context: Context) -> WKWebView {
         // Register the blob scheme handler BEFORE the first load (same wiring
@@ -158,6 +235,7 @@ struct ChatWebView: NSViewRepresentable {
         // WikiReaderView's LinkHoverMessageHandler).
         let cc = WKUserContentController()
         cc.add(context.coordinator, name: Self.copyMessageName)
+        cc.add(context.coordinator, name: Self.followMessageName)
         config.userContentController = cc
         let blobHandler = BlobSchemeHandler(store: blobStore)
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
@@ -168,30 +246,39 @@ struct ChatWebView: NSViewRepresentable {
         webView.pageZoom = zoom
         webView.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = webView
-        context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
+        context.coordinator.onChatIntent = onChatIntent
         context.coordinator.renderContext = renderContext
-        context.coordinator.reload(events: events, showsInternals: showsInternals,
-                                   timestamps: timestamps, transcriptID: transcriptID)
+        if let chatRows {
+            context.coordinator.reload(chatRows: chatRows, transcriptID: transcriptID)
+        } else {
+            context.coordinator.reload(events: events, showsInternals: showsInternals,
+                                       transcriptID: transcriptID)
+        }
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         webView.pageZoom = zoom
-        context.coordinator.style = style
         context.coordinator.onWikiLink = onWikiLink
+        context.coordinator.onChatIntent = onChatIntent
         context.coordinator.renderContext = renderContext
         // Keep the blob handler's store fresh (a wiki switch swaps the store).
         if let handler = webView.configuration.urlSchemeHandler(forURLScheme: BlobSchemeHandler.scheme) as? BlobSchemeHandler {
             handler.store = blobStore
         }
-        context.coordinator.apply(events: events, showsInternals: showsInternals,
-                                  timestamps: timestamps, transcriptID: transcriptID)
+        if let chatRows {
+            context.coordinator.apply(chatRows: chatRows, transcriptID: transcriptID)
+        } else {
+            context.coordinator.apply(events: events, showsInternals: showsInternals,
+                                      transcriptID: transcriptID)
+        }
         // Outline click → scroll the i-th user bubble into view. Only fires when
         // the version advances, so unrelated re-renders (streaming) don't re-scroll.
         if let req = scrollRequest, req.version != context.coordinator.appliedScrollVersion {
             context.coordinator.appliedScrollVersion = req.version
-            let js = "(function(){var u=document.querySelectorAll('.chat-user');var el=u[\(req.turnIndex)];if(el){el.scrollIntoView({block:'start'});}})()"
+            let rowID = ChatWebView.Coordinator.jsEscape(req.rowID.domValue)
+            let js = "(function(){var el=document.querySelector('[data-row-id=\\\"\(rowID)\\\"]');if(el){el.scrollIntoView({block:'start'});}})()"
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
         // Quote-anchor highlight (issue #281): stash the latest quote and ask
@@ -207,12 +294,13 @@ struct ChatWebView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
-        var style: VisualStyle = .activityFeed
         /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
         /// closure (built where the store lives). Refreshed each update.
         var onWikiLink: ((URL, Bool) -> Void)?
+        var onChatIntent: ((ChatTranscriptIntent) -> Void)?
         /// Provider of the current `WikiRenderContext` (Phase A.2). Refreshed
         /// each update. Resolved to a value once per render pass (see
         /// `currentContext`); the value is `Sendable` so it can flow into the
@@ -237,14 +325,9 @@ struct ChatWebView: NSViewRepresentable {
         /// *different* transcript and must not be used — see
         /// `ChatWebView.transcriptID`.
         private var renderedTranscriptID: TranscriptID?
+        private var pendingTranscriptID: TranscriptID?
         private var isLoaded = false
         private var pendingEvents: [AgentEvent] = []
-        /// Pending timestamps to render once the page finishes loading (stashed by
-        /// `apply` when the view isn't loaded yet). Parallel to `pendingEvents`.
-        private var pendingTimestamps: [Date?] = []
-        /// The full timestamps array — refreshed each `apply` call. Used to
-        /// compute "Worked for Xs" duration + completion timestamp per row.
-        private var timestamps: [Date?] = []
         /// The last event actually rendered, so `apply` can detect "no new row, but
         /// `AgentLauncher` grew the last one in place" (a streamed `.assistantText`
         /// delta merge, issue #121) and patch that row instead of no-op'ing.
@@ -253,6 +336,18 @@ struct ChatWebView: NSViewRepresentable {
         /// non-final only when it is the LAST row of a still-live event stream —
         /// i.e. it may still grow via `replaceLastRow`). Captured in `apply`.
         private var renderedEvents: [AgentEvent] = []
+        private var rendersTypedChatRows = false
+        private var followState: ChatTranscriptFollowState = .following
+        private var pendingChatReloadAcknowledgement: (@MainActor (ChatTranscriptRenderAcknowledgement) -> Void)?
+        private lazy var chatRenderExecutor = ChatTranscriptRenderExecutor(
+            mutate: { [weak self] command, revision, acknowledge in
+                guard let self else { return }
+                self.performChatRenderMutation(command, revision: revision, acknowledge: acknowledge)
+            },
+            reportAnomaly: { anomaly in
+                DebugLog.store("chat transcript renderer anomaly: \(anomaly)")
+            }
+        )
 
         /// Resolve the provider once per render pass on the main actor. Returns
         /// the current `WikiRenderContext` (or nil → constant-true behavior).
@@ -270,7 +365,7 @@ struct ChatWebView: NSViewRepresentable {
         ///
         /// `nonisolated`: a pure predicate over value types, so tests can call
         /// it without hopping to the main actor (same discipline as
-        /// `ChatDetailView.displayMessages`).
+        /// `ChatTranscriptRenderingInput`).
         nonisolated static func needsFullReload(
             transcriptID: TranscriptID?, renderedTranscriptID: TranscriptID?,
             showsInternals: Bool, renderedShowsInternals: Bool?,
@@ -281,23 +376,44 @@ struct ChatWebView: NSViewRepresentable {
             return eventCount < renderedCount
         }
 
-        func reload(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = [],
+        func reload(events: [AgentEvent], showsInternals: Bool,
                     transcriptID: TranscriptID? = nil) {
+            rendersTypedChatRows = false
             renderedCount = 0
             renderedShowsInternals = showsInternals
             renderedTranscriptID = transcriptID
             renderedLastEvent = nil
             renderedEvents = events
-            self.timestamps = timestamps
             isLoaded = false
             pendingEvents = events
-            pendingTimestamps = timestamps
+            pendingTranscriptID = transcriptID
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
         }
 
-        func apply(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = [],
+        /// Chat-only presentation path. This stays intentionally direct: it
+        /// compares the current typed rows with the existing document and calls
+        /// the document's existing append/replace helpers directly.
+        func reload(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
+            rendersTypedChatRows = true
+            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
+                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
+                rows: chatRows
+            ))
+        }
+
+        func apply(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
+            guard rendersTypedChatRows else {
+                reload(chatRows: chatRows, transcriptID: transcriptID)
+                return
+            }
+            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
+                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
+                rows: chatRows
+            ))
+        }
+
+        func apply(events: [AgentEvent], showsInternals: Bool,
                    transcriptID: TranscriptID? = nil) {
-            self.timestamps = timestamps
             // Checked BEFORE the `isLoaded` guard, so a transcript switch that
             // lands mid-load also replaces `pendingEvents` — otherwise
             // `didFinish` would render the PREVIOUS transcript's rows and seed
@@ -314,20 +430,23 @@ struct ChatWebView: NSViewRepresentable {
                 transcriptID: transcriptID, renderedTranscriptID: renderedTranscriptID,
                 showsInternals: showsInternals, renderedShowsInternals: renderedShowsInternals,
                 eventCount: events.count, renderedCount: renderedCount) {
-                // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
-                DebugLog.chatLive(
-                    "8.web.reload count=\(events.count) renderedCount=\(renderedCount)")
+                ChatDiagnostics.observe(
+                    stage: .recoveryReload,
+                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
+                    detail: "reload; rows=\(events.count); rendered=\(renderedCount)"
+                )
                 reload(events: events, showsInternals: showsInternals,
-                       timestamps: timestamps, transcriptID: transcriptID)
+                       transcriptID: transcriptID)
                 return
             }
             guard isLoaded else {
-                // TEMPORARY: rows arriving before the shell finishes loading are
-                // stashed, not drawn. A run of these with no `8.web.didFinish`
-                // after them means the shell load never completed.
-                DebugLog.chatLive("8.web.pending count=\(events.count)")
+                ChatDiagnostics.observe(
+                    stage: .renderPlanning,
+                    outcome: .coalesced,
+                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
+                    detail: "pending; rows=\(events.count)"
+                )
                 pendingEvents = events
-                pendingTimestamps = timestamps
                 return
             }
             guard events.count > renderedCount else {
@@ -339,7 +458,7 @@ struct ChatWebView: NSViewRepresentable {
                     // The last row of a live stream is still growing → render it
                     // in the streaming (links-only) tier so a half-typed
                     // `![[source:…` never instantiates a broken iframe/player.
-                    replaceLastRow(last, at: events.count - 1, isStreaming: true, allEvents: events)
+                    replaceLastRow(last, isStreaming: true)
                     renderedLastEvent = last
                 }
                 renderedEvents = events
@@ -351,14 +470,17 @@ struct ChatWebView: NSViewRepresentable {
             let context = currentContext()
             if let prevLast = renderedEvents.last, events.count > renderedEvents.count,
                renderedEvents.count > 0 {
-                replaceLastRow(prevLast, at: renderedEvents.count - 1, isStreaming: false, allEvents: events, context: context)
+                replaceLastRow(prevLast, isStreaming: false, context: context)
             }
-            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8. The
-            // `from` index is the tell — a non-zero `from` on a chat's FIRST
-            // append means rows 0..<from were never drawn (the missing
-            // "thinking" rows before "read").
-            DebugLog.chatLive(
-                "8.web.append from=\(renderedCount) to=\(events.count)")
+            ChatDiagnostics.observe(
+                stage: .renderPlanning,
+                correlation: .init(
+                    chat: diagnosticChat(transcriptID),
+                    eventKind: .init(rawValue: "legacy-web"),
+                    content: events.last.flatMap(diagnosticContent)
+                ),
+                detail: "append; from=\(renderedCount); to=\(events.count)"
+            )
             appendRows(Array(events[renderedCount...]), startingIndex: renderedCount, context: context)
             renderedCount = events.count
             renderedLastEvent = events.last
@@ -367,11 +489,17 @@ struct ChatWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
-            DebugLog.chatLive("8.web.didFinish pending=\(pendingEvents.count)")
+            ChatDiagnostics.observe(
+                stage: .domAcknowledgement,
+                correlation: .init(chat: diagnosticChat(pendingTranscriptID ?? renderedTranscriptID), eventKind: .init(rawValue: "legacy-web")),
+                detail: "shell-finished; pending=\(pendingEvents.count)"
+            )
+            if rendersTypedChatRows {
+                beginControlledChatReloadIfNeeded()
+                return
+            }
             let toRender = pendingEvents
             pendingEvents = []
-            pendingTimestamps = []
             // Initial load: every row is final (persisted chats load all-at-once;
             // a freshly-opened live view's events are all complete at this point).
             let context = currentContext()
@@ -385,6 +513,20 @@ struct ChatWebView: NSViewRepresentable {
             // rows are in the DOM (issue #281).
             if pendingHighlightQuote != nil {
                 applyHighlight()
+            }
+        }
+
+        private func diagnosticChat(_ transcriptID: TranscriptID?) -> ChatDiagnosticCorrelation.Value? {
+            guard case .chat(let chatID)? = transcriptID else { return nil }
+            return .init(rawValue: chatID.rawValue)
+        }
+
+        private func diagnosticContent(_ event: AgentEvent) -> ChatDiagnosticContentFingerprint? {
+            switch event {
+            case .userText(let text), .assistantText(let text), .thinking(let text), .thinkingDelta(let text), .assistantTextDelta(let text), .result(_, let text):
+                return ChatDiagnostics.fingerprint(text)
+            default:
+                return nil
             }
         }
 
@@ -417,7 +559,11 @@ struct ChatWebView: NSViewRepresentable {
                 if url.scheme == "wiki" {
                     // ⌘-click opens a new tab; plain click navigates in place.
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
-                    onWikiLink?(url, openInNewTab)
+                    if let onChatIntent {
+                        onChatIntent(.openWikiLink(url, inNewTab: openInNewTab))
+                    } else {
+                        onWikiLink?(url, openInNewTab)
+                    }
                     decisionHandler(.cancel)
                     return
                 }
@@ -436,13 +582,8 @@ struct ChatWebView: NSViewRepresentable {
             // `replaceLastRow(..., isStreaming: true)` path — uses the
             // links-only tier.
             var html = ""
-            // Hoist the concatenation above the loop: `renderedEvents + events`
-            // was rebuilt per-row, making the loop O(n²) in array copies (#503 P2).
-            let allEvents = renderedEvents + events
-            for (offset, event) in events.enumerated() {
-                let absoluteIndex = startingIndex + offset
-                let ts = absoluteIndex < timestamps.count ? timestamps[absoluteIndex] : nil
-                html += Self.rowHTML(for: event, style: style, context: context, isFinal: true, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: absoluteIndex)
+            for event in events {
+                html += Self.feedRowHTML(for: event, context: context, isFinal: true)
             }
             guard !html.isEmpty,
                   let data = DebugLog.trying("serialize chat rows", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
@@ -460,13 +601,190 @@ struct ChatWebView: NSViewRepresentable {
         /// a half-typed `![[source:…` never instantiates a broken iframe/player
         /// that churns per token. When false, the row is being *re-finalized*
         /// (a new event landed = turn boundary) → render the full context.
-        private func replaceLastRow(_ event: AgentEvent, at index: Int, isStreaming: Bool, allEvents: [AgentEvent], context: WikiRenderContext? = nil) {
-            let ts = index < timestamps.count ? timestamps[index] : nil
-            let html = Self.rowHTML(for: event, style: style, context: context, isFinal: !isStreaming, timestamp: ts, allEvents: allEvents, allTimestamps: timestamps, index: index)
+        private func replaceLastRow(_ event: AgentEvent, isStreaming: Bool, context: WikiRenderContext? = nil) {
+            let html = Self.feedRowHTML(for: event, context: context, isFinal: !isStreaming)
             guard let data = DebugLog.trying("serialize replaced row", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
                   let jsonString = String(data: data, encoding: .utf8)
             else { return }
             webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)
+        }
+
+        private func performChatRenderMutation(
+            _ command: ChatTranscriptRenderCommand,
+            revision: ChatTranscriptRenderRevision,
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            guard let webView else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: command.kind, revision: revision, rowID: command.rowID, outcome: .error
+                ))
+                return
+            }
+            if case .reload = command {
+                followState = ChatTranscriptFollowState.reducing(followState, event: .transcriptReset)
+                if isLoaded {
+                    guard let reload = chatRenderExecutor.beginReloadMutation() else { return }
+                    runControlledChatReload(reload, acknowledge: acknowledge)
+                    return
+                }
+                pendingChatReloadAcknowledgement = acknowledge
+                isLoaded = false
+                webView.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
+                return
+            }
+            guard let script = chatMutationScript(command, revision: revision, context: currentContext()) else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: command.kind, revision: revision, rowID: command.rowID, outcome: .error
+                ))
+                return
+            }
+            evaluateChatMutation(
+                script,
+                expectedKind: command.kind,
+                revision: revision,
+                expectedRowID: command.rowID,
+                acknowledge: acknowledge
+            )
+        }
+
+        private func beginControlledChatReloadIfNeeded() {
+            guard let pendingChatReloadAcknowledgement,
+                  let reload = chatRenderExecutor.beginReloadMutation()
+            else { return }
+            self.pendingChatReloadAcknowledgement = nil
+            runControlledChatReload(reload, acknowledge: pendingChatReloadAcknowledgement)
+        }
+
+        private func runControlledChatReload(
+            _ reload: (snapshot: ChatTranscriptRenderSnapshot, revision: ChatTranscriptRenderRevision),
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            let html = reload.snapshot.rows.map { Self.chatDisplayRowHTML($0, context: currentContext()) }.joined()
+            guard let htmlJSON = Self.jsonString(for: html)
+            else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: .reload, revision: reload.revision, rowID: nil, outcome: .error
+                ))
+                return
+            }
+            let follows = followState.followsStreamingContent ? "true" : "false"
+            let script = "replaceChatTranscript(\(htmlJSON), \(follows), \(reload.revision.rawValue))"
+            evaluateChatMutation(
+                script,
+                expectedKind: .reload,
+                revision: reload.revision,
+                expectedRowID: nil,
+                acknowledge: acknowledge
+            )
+        }
+
+        private func chatMutationScript(
+            _ command: ChatTranscriptRenderCommand,
+            revision: ChatTranscriptRenderRevision,
+            context: WikiRenderContext?
+        ) -> String? {
+            let follows = followState.followsStreamingContent ? "true" : "false"
+            let revisionValue = revision.rawValue
+            switch command {
+            case .reload:
+                return nil
+            case .append(let rows):
+                let html = rows.map { Self.chatDisplayRowHTML($0, context: context) }.joined()
+                guard let htmlJSON = Self.jsonString(for: html),
+                      let rowIDJSON = Self.jsonString(for: rows.last?.id.domValue ?? "")
+                else { return nil }
+                return "appendChatRows(\(htmlJSON), \(follows), \(revisionValue), \(rowIDJSON))"
+            case .insert(let row, let before):
+                guard let rowIDJSON = Self.jsonString(for: row.id.domValue),
+                      let beforeIDJSON = Self.jsonString(for: before.domValue),
+                      let htmlJSON = Self.jsonString(for: Self.chatDisplayRowHTML(row, context: context))
+                else { return nil }
+                return "insertChatRow(\(rowIDJSON), \(beforeIDJSON), \(htmlJSON), \(follows), \(revisionValue))"
+            case .replace(let row):
+                guard let rowIDJSON = Self.jsonString(for: row.id.domValue),
+                      let htmlJSON = Self.jsonString(for: Self.chatDisplayRowHTML(row, context: context))
+                else { return nil }
+                return "replaceChatRow(\(rowIDJSON), \(htmlJSON), \(follows), \(revisionValue))"
+            case .remove(let rowID):
+                guard let rowIDJSON = Self.jsonString(for: rowID.domValue) else { return nil }
+                return "removeChatRow(\(rowIDJSON), \(revisionValue))"
+            }
+        }
+
+        private func evaluateChatMutation(
+            _ script: String,
+            expectedKind: ChatTranscriptRenderCommandKind,
+            revision: ChatTranscriptRenderRevision,
+            expectedRowID: ChatDisplayRowID?,
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            guard let webView else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error
+                ))
+                return
+            }
+            Task { @MainActor in
+                let result = await webView.chatTranscriptJavaScriptResult(script)
+                acknowledge(Self.acknowledgement(
+                    from: result,
+                    expectedKind: expectedKind,
+                    revision: revision,
+                    expectedRowID: expectedRowID
+                ))
+            }
+        }
+
+        private static func acknowledgement(
+            from result: ChatTranscriptJavaScriptResult,
+            expectedKind: ChatTranscriptRenderCommandKind,
+            revision: ChatTranscriptRenderRevision,
+            expectedRowID: ChatDisplayRowID?
+        ) -> ChatTranscriptRenderAcknowledgement {
+            switch result {
+            case .undefined:
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .undefined)
+            case .javaScriptException(let message):
+                DebugLog.store("chat transcript JavaScript exception: \(message)")
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .javaScriptException)
+            case .timeout:
+                DebugLog.store("chat transcript JavaScript evaluation timed out")
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .timeout)
+            case .success(let value):
+                guard JSONSerialization.isValidJSONObject(value) else {
+                    return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                }
+                do {
+                    let data = try JSONSerialization.data(withJSONObject: value)
+                    let wire = try JSONDecoder().decode(DOMAcknowledgement.self, from: data)
+                    guard let kind = ChatTranscriptRenderCommandKind(rawValue: wire.kind) else {
+                        return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                    }
+                    return .init(
+                        kind: kind,
+                        revision: .init(rawValue: wire.revision),
+                        rowID: wire.rowID.flatMap(ChatDisplayRowID.init(domValue:)),
+                        outcome: ChatTranscriptRenderAcknowledgementOutcome(rawValue: wire.outcome) ?? .error
+                    )
+                } catch {
+                    DebugLog.store("decode chat transcript acknowledgement: \(error)")
+                    return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                }
+            }
+        }
+
+        private struct DOMAcknowledgement: Decodable {
+            let kind: String
+            let revision: Int
+            let rowID: String?
+            let outcome: String
+        }
+
+        private static func jsonString(for value: String) -> String? {
+            guard let data = DebugLog.trying("serialize chat row", operation: {
+                try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+            }) else { return nil }
+            return String(data: data, encoding: .utf8)
         }
 
         // MARK: - Copy button (issue #285)
@@ -479,20 +797,23 @@ struct ChatWebView: NSViewRepresentable {
         ) {
             guard message.name == ChatWebView.copyMessageName,
                   let text = message.body as? String
-            else { return }
+            else {
+                if message.name == ChatWebView.followMessageName,
+                   let body = message.body as? [String: Any],
+                   let distance = body["distanceFromBottom"] as? Double {
+                    followState = ChatTranscriptFollowState.reducing(
+                        followState,
+                        event: .viewportChanged(distanceFromBottom: distance)
+                    )
+                }
+                return
+            }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
         }
 
         // MARK: - Row rendering
-
-        private static func rowHTML(for event: AgentEvent, style: VisualStyle, context: WikiRenderContext?, isFinal: Bool, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
-            switch style {
-            case .activityFeed: feedRowHTML(for: event, context: context, isFinal: isFinal)
-            case .chat: chatRowHTML(for: event, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
-            }
-        }
 
         /// Render assistant/result markdown with the shared footnote + wiki-link
         /// pre-pass. With a `WikiRenderContext` (Phase A.2), it threads the
@@ -566,38 +887,75 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
-        /// The Query page chat look: a right-aligned capsule for the user, plain
-        /// prose for the assistant (matching `QueryMessageBubble`'s prior
-        /// SwiftUI rendering), no row labels. Tool calls render as a concise,
-        /// muted one-line progress indicator (issue #173) — independent of the
-        /// "Show internals" toggle, which still gates the full raw feed.
-        static func chatRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
-            switch event {
-            case .userText(let text):
-                // Run user text through the markdown renderer so prepended
-                // attachment refs ([[source:Name]]) render as clickable
-                // wikilinks, not raw escaped text (issue #385).
+        /// Direct typed chat markup used by the Phase 4 transcript surface.
+        /// Every durable row becomes one semantic DOM element with a stable
+        /// attribute; that attribute is presentation metadata, not a rendering
+        /// command protocol.
+        static func chatDisplayRowHTML(_ row: ChatDisplayRow, context: WikiRenderContext? = nil) -> String {
+            let rowID = htmlAttributeEscape(row.id.domValue)
+            let turnAttribute = row.turnID.map { " data-turn-id=\"\(htmlAttributeEscape($0.rawValue))\"" } ?? ""
+            let attributes = " data-row-id=\"\(rowID)\"\(turnAttribute)"
+
+            switch row {
+            case .userMessage(_, _, let text, _):
                 return """
-                <div class="row chat-row chat-user"><div class="bubble">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
+                <article class="row chat-row chat-user" role="article" aria-label="Your message"\(attributes)>
+                <div class="bubble">\(renderedMarkdown(text, context: context))</div></article>
                 """
-            case .assistantText(let text):
-                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
-            case .thinking(let text):
-                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
-            case .result(_, let text):
-                guard !text.isEmpty else { return "" }
-                return assistantBubbleHTML(text: text, context: context, isFinal: isFinal, timestamp: timestamp, allEvents: allEvents, allTimestamps: allTimestamps, index: index)
-            case .toolUse(let name, let summary):
-                return chatToolRowHTML(name: name, summary: summary, isError: false)
-            case .toolResult(let isError, let summary):
-                // Only error results reach a chat-styled transcript (successes are
-                // filtered out upstream in `ChatTranscriptView.visibleEvents`).
-                guard isError else { return "" }
-                return chatToolRowHTML(name: nil, summary: summary, isError: true)
-            case .systemInit, .subagent, .messageStop, .raw, .assistantTextDelta, .thinkingDelta:
-                return ""
-            case .turnFailed(let reason):
-                return turnFailedBannerHTML(reason: reason)
+
+            case .assistantMessage(_, _, let text, let createdAt, let contentState):
+                let stateLabel = contentState == .streaming ? "Streaming response" : "Assistant response"
+                let status = contentState == .streaming ? "Streaming" : "Completed"
+                let timestamp = formatTimestamp(createdAt)
+                return """
+                <article class="row chat-row chat-assistant\(contentState == .streaming ? " is-streaming" : "")" role="article" aria-label="\(stateLabel)" aria-busy="\(contentState == .streaming ? "true" : "false")"\(attributes)>
+                <div class="bubble">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div>
+                <div class="turn-footer"><span class="row-status" aria-label="\(status)">\(contentState == .streaming ? "◌ Streaming" : "✓ Completed")</span><button class="copy-btn" type="button" data-copy="\(htmlAttributeEscape(text))" data-focus-key="copy" aria-label="Copy assistant response" title="Copy assistant response">\(Self.copyIconSVG)</button><span class="turn-meta" aria-label="Response recorded at \(escape(timestamp))"><span class="turn-timestamp">\(escape(timestamp))</span></span></div>
+                </article>
+                """
+
+            case .reasoning(_, _, let text, _, let contentState):
+                let state = contentState == .streaming ? "streaming" : "completed"
+                let preview = String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+                let previewShort = preview.count > ChatTranscriptPresentationMetrics.reasoningPreviewLength
+                    ? String(preview.prefix(ChatTranscriptPresentationMetrics.reasoningPreviewLength)) + "…"
+                    : preview
+                return """
+                <details class="row chat-row row-thinking collapsible\(contentState == .streaming ? " is-streaming" : "")" role="group" aria-label="Reasoning, \(state)"\(attributes)>
+                <summary data-focus-key="disclosure" aria-label="Show reasoning, \(state)"><span class="row-status" aria-hidden="true">\(contentState == .streaming ? "◌" : "✓")</span> <span class="row-thinking-label">Reasoning</span> <span class="row-thinking-preview">\(escape(previewShort))</span></summary>
+                <div class="row-thinking-body">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div></details>
+                """
+
+            case .toolCall(_, _, let toolName, let status, let detail, _, _):
+                let statusText = toolStatusLabel(status)
+                let isError = status == .failed || status == .cancelled
+                let detailText = detail ?? ""
+                let cue = isError ? "⚠" : (status == .running || status == .pending ? "◌" : "✓")
+                return """
+                <details class="row chat-row chat-tool\(isError ? " is-error" : "")\((status == .running || status == .pending) ? " is-running" : "")" role="group" aria-label="Tool \(escape(toolName)), \(statusText)"\(attributes)>
+                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(detailText.isEmpty ? "" : " — \(escape(detailText.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""))")</span></summary>
+                \(detailText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(detailText))</pre>")</details>
+                """
+
+            case .notice(_, _, _, let title, let message, _):
+                return """
+                <aside class="row chat-notice" role="status" aria-label="Notice: \(escape(title))"\(attributes)><span class="row-status" aria-hidden="true">ⓘ</span><div><strong>\(escape(title))</strong><div>\(renderedMarkdown(message, context: context))</div></div></aside>
+                """
+
+            case .failure(_, _, _, let message, _):
+                return """
+                <aside class="row row-turn-failed" role="alert" aria-label="Chat action failed"\(attributes)><span class="row-turn-failed-icon" aria-hidden="true">⚠︎</span><div class="row-turn-failed-body"><strong>Chat action failed</strong> \(escape(message))</div></aside>
+                """
+            }
+        }
+
+        private static func toolStatusLabel(_ status: ChatToolCallStatus) -> String {
+            switch status {
+            case .pending: "Pending"
+            case .running: "Running"
+            case .completed: "Completed"
+            case .failed: "Failed"
+            case .cancelled: "Cancelled"
             }
         }
 
@@ -610,24 +968,8 @@ struct ChatWebView: NSViewRepresentable {
         /// ~1.5 s to confirm the clipboard write landed.
         private static let checkIconSVG = #"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#
 
-        /// Format a duration (seconds) as a compact string: "47s", "2m 12s",
-        /// "1h 5m". Mirrors Paseo's `formatDuration` (utils/time.ts).
-        static func formatDuration(_ seconds: TimeInterval) -> String {
-            let s = max(0, Int(seconds.rounded(.down)))
-            if s < 60 { return "\(s)s" }
-            let m = s / 60
-            if m < 60 {
-                let rem = s % 60
-                return rem == 0 ? "\(m)m" : "\(m)m \(rem)s"
-            }
-            let h = m / 60
-            let remMin = m % 60
-            return remMin == 0 ? "\(h)h" : "\(h)h \(remMin)m"
-        }
-
-        /// Format a timestamp for the hover-reveal label — same-day shows just
-        /// the time; older shows the date + time. Mirrors Paseo's
-        /// `formatMessageTimestamp` (utils/time.ts).
+        /// Format a typed row's creation time. Same-day rows show only the time;
+        /// older rows show the date and time.
         static func formatTimestamp(_ date: Date, now: Date = Date()) -> String {
             let timeFmt = DateFormatter()
             timeFmt.timeStyle = .short
@@ -638,80 +980,6 @@ struct ChatWebView: NSViewRepresentable {
                 return "\(dateFmt.string(from: date)), \(timeStr)"
             }
             return timeStr
-        }
-
-        /// Compute the "Worked for Xs" duration for a row: the gap between
-        /// this row's timestamp and the previous non-nil timestamp in the
-        /// parallel array. If there's no predecessor, returns nil.
-        private static func workDuration(at index: Int, timestamps: [Date?]) -> TimeInterval? {
-            guard index < timestamps.count, let ts = timestamps[index] else { return nil }
-            for i in stride(from: min(index - 1, timestamps.count - 1), through: 0, by: -1) {
-                if let prev = timestamps[i] {
-                    return ts.timeIntervalSince(prev)
-                }
-            }
-            return nil
-        }
-
-        /// A chat-style assistant bubble (markdown prose + a hover-revealed copy
-        /// icon button). Shared by `.assistantText` and `.result` rows (issue #285).
-        /// The button's `data-copy` attribute carries the **raw markdown** (HTML-
-        /// attribute-escaped) — not the rendered HTML — so the clipboard gets the
-        /// plain text the user would have drag-selected. The icon swaps to a green
-        /// checkmark for ~1.5 s after clicking (mirrors Paseo's `TurnCopyButton`).
-        ///
-        /// When `timestamp` is non-nil, a "Worked for Xs" footer is appended below
-        /// the prose. On hover, the duration swaps to the completion timestamp
-        /// (CSS-only, no JS) — mirroring Paseo's `AssistantTurnFooter`.
-        private static func assistantBubbleHTML(text: String, context: WikiRenderContext?, isFinal: Bool, timestamp: Date? = nil, allEvents: [AgentEvent] = [], allTimestamps: [Date?] = [], index: Int = -1) -> String {
-            var html = """
-            <div class="row chat-row chat-assistant"><div class="bubble">\
-            \(renderedMarkdown(text, context: context, isFinal: isFinal))</div>
-            """
-
-            // Footer action bar: sits on its own line directly beneath the bubble
-            // so it reads as attached to the response. Holds the copy button and,
-            // when a timestamp is available, the "Worked for Xs" label (which
-            // hover-swaps to the completion timestamp).
-            var metaHTML = ""
-            if let ts = timestamp {
-                let duration = Self.workDuration(at: index, timestamps: allTimestamps)
-                let durationLabel = duration.map { "Worked for \(Self.formatDuration($0))" } ?? ""
-                let timestampLabel = Self.formatTimestamp(ts)
-                // The meta: a sizer (hidden, reserves width) + the visible
-                // duration label + the timestamp (hidden by default). On hover,
-                // the duration fades out and the timestamp fades in — pure CSS,
-                // width stays stable (sizer reserves the wider of the two).
-                let durationHTML = durationLabel.isEmpty ? "" : #"<span class="turn-duration">\#(escape(durationLabel))</span>"#
-                metaHTML = #"<span class="turn-meta"><span class="turn-sizer">\#(escape(timestampLabel))</span>\#(durationHTML)<span class="turn-timestamp">\#(escape(timestampLabel))</span></span>"#
-            }
-            html += #"<div class="turn-footer"><button class="copy-btn" type="button" data-copy="\#(htmlAttributeEscape(text))" aria-label="Copy">\#(Self.copyIconSVG)</button>\#(metaHTML)</div>"#
-
-            html += "</div>"
-            return html
-        }
-
-        /// A single muted, left-aligned progress line for a tool call — the
-        /// lightweight in-transcript indicator (issue #173). Not a chat bubble:
-        /// it reads like a status line, so it stays subordinate to the prose.
-        private static func chatToolRowHTML(name: String?, summary: String, isError: Bool) -> String {
-            let nameHTML = name.map { "<span class=\"chat-tool-name\">\(escape($0))</span>" } ?? ""
-            let body = summary.isEmpty ? (isError ? "(error)" : "") : summary
-            let summaryHTML = body.isEmpty ? "" : "<span class=\"chat-tool-summary\">\(escape(body))</span>"
-            // Expandable tool row (issue #381): a <details> element so the user
-            // can click to reveal the full summary. Only adds the disclosure if
-            // there's content to expand into; otherwise renders as before.
-            if body.isEmpty {
-                return """
-                <div class="row chat-row chat-tool\(isError ? " is-error" : "")">\
-                \(nameHTML)\(summaryHTML)</div>
-                """
-            }
-            return """
-            <details class="row chat-row chat-tool\(isError ? " is-error" : "")">\
-            <summary>\(nameHTML)\(summaryHTML)</summary>\
-            <pre class="chat-tool-detail\">\(escape(body))</pre></details>
-            """
         }
 
         /// A styled amber banner for a turn failure (timeout, ceiling, agent
@@ -819,7 +1087,7 @@ struct ChatWebView: NSViewRepresentable {
 
         /// Escape a string for safe embedding in a double-quoted JS string
         /// literal. Mirrors `WikiReaderRep.jsString`.
-        private static func jsEscape(_ s: String) -> String {
+        static func jsEscape(_ s: String) -> String {
             s.replacingOccurrences(of: "\\", with: "\\\\")
              .replacingOccurrences(of: "\"", with: "\\\"")
              .replacingOccurrences(of: "\n", with: "\\n")
@@ -863,7 +1131,7 @@ struct ChatWebView: NSViewRepresentable {
           html, body { margin: 0; padding: 0; background: transparent; }
           body {
             font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-            font-size: 13px; line-height: 1.5; color: var(--text);
+            font-size: 13px; line-height: 1.55; color: var(--text);
             /* Right-side padding keeps content clear of the WebView's scrollbar
                so the right margin matches the left (which has no scrollbar). */
             padding: 10px 12px 10px 0; -webkit-font-smoothing: antialiased;
@@ -873,6 +1141,14 @@ struct ChatWebView: NSViewRepresentable {
             overflow-wrap: break-word; word-wrap: break-word;
           }
           .row { margin: 0 0 8px; }
+          article.row, aside.row { max-width: 72ch; }
+          .row-status { font-variant-numeric: tabular-nums; font-size: 11px; }
+          .is-streaming .row-status, .is-running .row-status { font-weight: 600; }
+          .chat-notice {
+            display: flex; gap: 7px; align-items: first baseline; padding: 8px 10px;
+            background: var(--code-bg); border-left: 3px solid var(--border);
+            border-radius: 6px; color: var(--text); font-size: 12px;
+          }
           .row-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
           .row-body { white-space: pre-wrap; }
           .row-meta, .row-tool, .row-tool-result, .row-subagent {
@@ -940,9 +1216,7 @@ struct ChatWebView: NSViewRepresentable {
             padding: 11px 16px; white-space: pre-wrap; font-size: 13.5px;
           }
           .chat-assistant .bubble { position: relative; }
-          /* Footer action bar beneath the response: copy button + "Worked for Xs"
-             label share one line, left-aligned under the bubble so they read as
-             attached to it. */
+          /* Footer actions and completion metadata stay attached to each typed response. */
           .turn-footer {
             display: flex; align-items: center; gap: 4px;
             margin-top: 4px; margin-left: 6px; min-height: 20px;
@@ -956,30 +1230,14 @@ struct ChatWebView: NSViewRepresentable {
             color: var(--muted);
           }
           .chat-assistant:hover .copy-btn { opacity: 0.55; }
+          .chat-assistant:focus-within .copy-btn { opacity: 1; }
           .copy-btn:hover { opacity: 1; color: var(--text); background: var(--code-bg); }
           .copy-btn.copied { opacity: 1; color: #34c759; }
           .copy-btn svg { display: block; }
-          /* "Worked for Xs" with hover-swap to timestamp. Mirrors Paseo's
-             AssistantTurnFooter — a sizer reserves width so the label doesn't
-             shift when swapping. */
           .turn-meta {
-            position: relative; display: inline-block;
-            min-height: 16px;
+            font-size: 11px; color: var(--muted); white-space: nowrap;
           }
-          .turn-sizer {
-            visibility: hidden; opacity: 0;
-            font-size: 11px; color: var(--muted);
-            white-space: nowrap; height: 0; display: block;
-          }
-          .turn-duration, .turn-timestamp {
-            position: absolute; top: 0; left: 0;
-            font-size: 11px; color: var(--muted);
-            white-space: nowrap; transition: opacity 0.15s ease;
-          }
-          .turn-duration { opacity: 0.6; }
-          .turn-timestamp { opacity: 0; }
-          .chat-assistant:hover .turn-duration { opacity: 0; }
-          .chat-assistant:hover .turn-timestamp { opacity: 0.7; }
+          .turn-timestamp { opacity: 0.7; }
           .chat-tool {
             justify-content: flex-start; align-items: baseline;
             gap: 6px; font-size: 11.5px; color: var(--muted);
@@ -1034,21 +1292,172 @@ struct ChatWebView: NSViewRepresentable {
             margin: 0 0 0.6em; padding: 0 0 0 0.8em;
             border-left: 3px solid var(--border); color: var(--muted);
           }
+          .sr-only {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+          }
+          @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+          }
         </style>
         </head><body>
+        <main id="chat-transcript" aria-live="polite"></main>
         <script>
-          function appendRows(html) {
-            document.body.insertAdjacentHTML('beforeend', html);
-            window.scrollTo(0, document.body.scrollHeight);
+          function transcriptRoot() { return document.getElementById('chat-transcript'); }
+          function renderAcknowledgement(kind, revision, rowID, outcome) {
+            return {kind: kind, revision: revision, rowID: rowID || null, outcome: outcome};
+          }
+          function isNearBottom() {
+            return Math.max(0, document.documentElement.scrollHeight - (window.scrollY + window.innerHeight)) <= 72;
+          }
+          function reportFollowState() {
+            try {
+              window.webkit.messageHandlers.chatFollowState.postMessage({distanceFromBottom: Math.max(0, document.documentElement.scrollHeight - (window.scrollY + window.innerHeight))});
+            } catch (err) { }
+          }
+          function appendRows(html, shouldFollow) {
+            var wasNearBottom = isNearBottom();
+            transcriptRoot().insertAdjacentHTML('beforeend', html);
+            if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+            reportFollowState();
           }
           function replaceLastRow(html) {
-            if (document.body.lastElementChild) {
-              document.body.lastElementChild.outerHTML = html;
+            var root = transcriptRoot();
+            if (root.lastElementChild) {
+              root.lastElementChild.outerHTML = html;
             } else {
-              document.body.insertAdjacentHTML('beforeend', html);
+              root.insertAdjacentHTML('beforeend', html);
             }
             window.scrollTo(0, document.body.scrollHeight);
           }
+          function selectionOffsets(root) {
+            var selection = window.getSelection();
+            if (!selection || selection.rangeCount !== 1) return null;
+            var range = selection.getRangeAt(0);
+            if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+            function offset(node, container, offset) {
+              var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null);
+              var count = 0, current;
+              while ((current = walker.nextNode())) {
+                if (current === container) return count + offset;
+                count += current.nodeValue.length;
+              }
+              return count;
+            }
+            return [offset(root, range.startContainer, range.startOffset), offset(root, range.endContainer, range.endOffset)];
+          }
+          function textPoint(root, target) {
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            var count = 0, current;
+            while ((current = walker.nextNode())) {
+              var next = count + current.nodeValue.length;
+              if (target <= next) return [current, Math.max(0, target - count)];
+              count = next;
+            }
+            return [root, root.childNodes.length];
+          }
+          function restoreRowInteraction(state) {
+            if (!state) return;
+            var anchor = state.anchorRowID && document.querySelector('[data-row-id="' + CSS.escape(state.anchorRowID) + '"]');
+            if (anchor && !state.wasNearBottom) window.scrollBy(0, anchor.getBoundingClientRect().top - state.anchorTop);
+            var focusRow = state.focusRowID && document.querySelector('[data-row-id="' + CSS.escape(state.focusRowID) + '"]');
+            if (focusRow && state.focusKey) {
+              var focus = focusRow.querySelector('[data-focus-key="' + CSS.escape(state.focusKey) + '"]');
+              if (focus) focus.focus({preventScroll:true});
+            }
+            var selectionRow = state.selectionRowID && document.querySelector('[data-row-id="' + CSS.escape(state.selectionRowID) + '"]');
+            if (selectionRow && state.offsets) {
+              var start = textPoint(selectionRow, state.offsets[0]), end = textPoint(selectionRow, state.offsets[1]);
+              var range = document.createRange(); range.setStart(start[0], start[1]); range.setEnd(end[0], end[1]);
+              var selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+            }
+          }
+          function currentRowInteraction() {
+            var root = transcriptRoot();
+            var active = document.activeElement;
+            var activeRow = active && active.closest && active.closest('[data-row-id]');
+            var selection = window.getSelection();
+            var selectionRow = selection && selection.rangeCount === 1 && selection.getRangeAt(0).startContainer.parentElement && selection.getRangeAt(0).startContainer.parentElement.closest('[data-row-id]');
+            var anchorRow = Array.from(root.children).find(function(row) { return row.getBoundingClientRect().bottom >= 0; });
+            return {
+              wasNearBottom: isNearBottom(),
+              focusRowID: activeRow && activeRow.getAttribute('data-row-id'),
+              focusKey: activeRow && active.getAttribute('data-focus-key'),
+              selectionRowID: selectionRow && selectionRow.getAttribute('data-row-id'),
+              offsets: selectionRow && selectionOffsets(selectionRow),
+              anchorRowID: anchorRow && anchorRow.getAttribute('data-row-id'),
+              anchorTop: anchorRow ? anchorRow.getBoundingClientRect().top : 0
+            };
+          }
+          function appendChatRows(html, shouldFollow, revision, rowID) {
+            try {
+              appendRows(html, shouldFollow);
+              var row = rowID && document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+              return renderAcknowledgement('append', revision, rowID, rowID && !row ? 'missingRow' : 'success');
+            } catch (error) {
+              return renderAcknowledgement('append', revision, rowID, 'error');
+            }
+          }
+          function insertChatRow(rowID, beforeRowID, html, shouldFollow, revision) {
+            try {
+              var before = document.querySelector('[data-row-id="' + CSS.escape(beforeRowID) + '"]');
+              if (!before) return renderAcknowledgement('insert', revision, rowID, 'missingRow');
+              var wasNearBottom = isNearBottom();
+              before.insertAdjacentHTML('beforebegin', html);
+              if (!document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]')) return renderAcknowledgement('insert', revision, rowID, 'missingRow');
+              if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+              reportFollowState();
+              return renderAcknowledgement('insert', revision, rowID, 'success');
+            } catch (error) {
+              return renderAcknowledgement('insert', revision, rowID, 'error');
+            }
+          }
+          function removeChatRow(rowID, revision) {
+            try {
+              var row = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+              if (!row) return renderAcknowledgement('remove', revision, rowID, 'missingRow');
+              row.remove(); reportFollowState();
+              return renderAcknowledgement('remove', revision, rowID, 'success');
+            } catch (error) {
+              return renderAcknowledgement('remove', revision, rowID, 'error');
+            }
+          }
+          function replaceChatTranscript(html, shouldFollow, revision) {
+            try {
+              var state = currentRowInteraction();
+              transcriptRoot().innerHTML = html;
+              restoreRowInteraction(state);
+              if (shouldFollow && state.wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+              reportFollowState();
+              return renderAcknowledgement('reload', revision, null, 'success');
+            } catch (error) {
+              return renderAcknowledgement('reload', revision, null, 'error');
+            }
+          }
+          function replaceChatRow(rowID, html, shouldFollow, revision) {
+            var oldRow = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+            if (!oldRow) return renderAcknowledgement('replace', revision, rowID, 'missingRow');
+            var wasNearBottom = isNearBottom();
+            var active = document.activeElement;
+            var focusKey = active && oldRow.contains(active) ? active.getAttribute('data-focus-key') : null;
+            var offsets = selectionOffsets(oldRow);
+            oldRow.outerHTML = html;
+            var newRow = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+            if (!newRow) return renderAcknowledgement('replace', revision, rowID, 'missingRow');
+            if (focusKey) {
+              var replacementFocus = newRow.querySelector('[data-focus-key="' + CSS.escape(focusKey) + '"]');
+              if (replacementFocus) replacementFocus.focus({preventScroll:true});
+            }
+            if (offsets) {
+              var start = textPoint(newRow, offsets[0]), end = textPoint(newRow, offsets[1]);
+              var range = document.createRange(); range.setStart(start[0], start[1]); range.setEnd(end[0], end[1]);
+              var selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+            }
+            if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+            reportFollowState();
+            return renderAcknowledgement('replace', revision, rowID, 'success');
+          }
+          window.addEventListener('scroll', reportFollowState, {passive:true});
           // Delegated click handler for the per-bubble copy icon (issue #285).
           // Works on dynamically-appended rows since it's on `document`. Posts the
           // raw markdown text (from `data-copy`) to the Swift message handler, then

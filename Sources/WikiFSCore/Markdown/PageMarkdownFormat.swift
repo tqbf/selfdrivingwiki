@@ -80,6 +80,31 @@ public enum PageMarkdownFormat {
 /// (origin, processing date, extraction technique) without a side channel.
 public enum SourceMarkdownFormat {
 
+    /// Return the Markdown body without a delimiter-balanced leading YAML
+    /// frontmatter block. Source storage remains verbatim so metadata readers
+    /// and File Provider projections retain the original frontmatter.
+    ///
+    /// An opening delimiter without a matching closing delimiter is ordinary
+    /// Markdown and is therefore preserved unchanged.
+    public static func stripped(body: String) -> String {
+        let lines = body.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else {
+            return body
+        }
+
+        guard let closingIndex = lines.dropFirst().firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "---"
+        }) else {
+            return body
+        }
+
+        let content = lines.index(after: closingIndex)
+        let bodyStart = lines[content...].drop(while: {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })
+        return bodyStart.joined(separator: "\n")
+    }
+
     public static func fileContent(for version: SourceMarkdownVersion, metadata: SourceOKFMetadata) -> String {
         let fm = OKFFrontmatter.concept(
             type: .source,

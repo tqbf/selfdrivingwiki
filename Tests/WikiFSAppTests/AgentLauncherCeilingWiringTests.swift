@@ -75,7 +75,7 @@ struct AgentLauncherCeilingWiringTests {
         launcher.resolveSelectedProvider = { noCommandProvider }
         let config = AgentProvidersConfig(
             providers: [noCommandProvider],
-            selectedModelIds: [noCommandProvider.id.rawValue: "fake-model"])
+            selectedModelIds: [noCommandProvider.id.rawValue: ModelID(rawValue: "fake-model")])
         do {
             try config.save(to: tempDir)
         } catch {

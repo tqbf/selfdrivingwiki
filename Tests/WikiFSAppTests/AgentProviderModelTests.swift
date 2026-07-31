@@ -114,6 +114,30 @@ import ACPModel
         #expect(config.selectedProvider().id == ProviderID(rawValue: "claude-acp"))
     }
 
+    @Test func chatOperationConfigurationRequiresEnabledResolvedProviderAndModel() {
+        let providerID = ProviderID(rawValue: "configured")
+        let modelID = ModelID(rawValue: "configured-model")
+        let missingModel = AgentProvidersConfig(providers: [
+            AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+        ])
+        let disabledProvider = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: providerID, label: "Configured", enabled: false, isDefault: true),
+            ],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+        let configured = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+            ],
+            selectedModelIds: [providerID.rawValue: modelID]
+        )
+
+        #expect(missingModel.isChatOperationConfigured() == false)
+        #expect(disabledProvider.isChatOperationConfigured() == false)
+        #expect(configured.isChatOperationConfigured())
+    }
+
     // MARK: - Persistence round-trip
 
     @Test func persistenceRoundTrip() throws {
@@ -151,12 +175,12 @@ import ACPModel
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"], enabled: true, isDefault: true),
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
         ])
-        .settingStageProvider("gemini", forStage: "summarizer")
+        .settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         try original.save(to: tmp)
 
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(reloaded.stageProviderIds["summarizer"] == "gemini")
+        #expect(reloaded.stageProviderIds["summarizer"] == ProviderID(rawValue: "gemini"))
         #expect(reloaded.provider(forStage: "summarizer").id == ProviderID(rawValue: "gemini"))
     }
 
@@ -166,12 +190,12 @@ import ACPModel
             AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: true, isDefault: false),
             AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
         ])
-        .settingStageProvider("gemini", forStage: "summarizer")
+        .settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
 
         let switched = config.settingDefault(id: ProviderID(rawValue: "hermes"))
 
         #expect(switched.defaultProvider.id == ProviderID(rawValue: "hermes"))
-        #expect(switched.stageProviderIds["summarizer"] == "gemini")
+        #expect(switched.stageProviderIds["summarizer"] == ProviderID(rawValue: "gemini"))
         #expect(switched.provider(forStage: "summarizer").id == ProviderID(rawValue: "gemini"))
     }
 
@@ -234,38 +258,38 @@ import ACPModel
 
     @Test func togglingFavoriteAddsThenRemoves() {
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-        #expect(!config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(!config.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp")))
 
-        let favorited = config.togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
-        #expect(favorited.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
-        #expect(favorited.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == ["opus"])
+        let favorited = config.togglingFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
+        #expect(favorited.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(favorited.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == [ModelID(rawValue: "opus")])
 
         // Toggling again clears it (and drops the now-empty provider key).
-        let cleared = favorited.togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
-        #expect(!cleared.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
+        let cleared = favorited.togglingFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
+        #expect(!cleared.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp")))
         #expect(cleared.favoriteModelIds["claude-acp"] == nil)
     }
 
     @Test func favoritesArePerProviderAndOrdered() {
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
-            .togglingFavoriteModel("haiku", forProvider: ProviderID(rawValue: "claude-acp"))
-            .togglingFavoriteModel("gpt", forProvider: ProviderID(rawValue: "other"))
+            .togglingFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel(ModelID(rawValue: "haiku"), forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel(ModelID(rawValue: "gpt"), forProvider: ProviderID(rawValue: "other"))
         // Insertion order is preserved; providers are isolated.
-        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == ["opus", "haiku"])
-        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "other")) == ["gpt"])
-        #expect(!config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "other")))
+        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "claude-acp")) == [ModelID(rawValue: "opus"), ModelID(rawValue: "haiku")])
+        #expect(config.favoriteModels(forProvider: ProviderID(rawValue: "other")) == [ModelID(rawValue: "gpt")])
+        #expect(!config.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "other")))
     }
 
     @Test func favoritesSurviveSelectionAndDefaultRewraps() {
         // Favorites must be threaded through the other setting* mutators, not
         // wiped when the selection or default provider changes.
         let config = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
-            .settingSelectedModel("sonnet", forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
+            .settingSelectedModel(ModelID(rawValue: "sonnet"), forProvider: ProviderID(rawValue: "claude-acp"))
             .settingDefault(id: ProviderID(rawValue: "claude-acp"))
-        #expect(config.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
-        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == "sonnet")
+        #expect(config.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
     }
 
     @Test func favoritesRoundTripThroughDisk() throws {
@@ -275,11 +299,11 @@ import ACPModel
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let original = AgentProvidersConfig(providers: [.claudeAcpDefault])
-            .togglingFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp"))
+            .togglingFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
         try original.save(to: tmp)
 
         let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
-        #expect(loaded.isFavoriteModel("opus", forProvider: ProviderID(rawValue: "claude-acp")))
+        #expect(loaded.isFavoriteModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp")))
     }
 
     // MARK: - SpawnModelGuard precondition (diagnosed 2026-07-18 bug state)
@@ -526,11 +550,11 @@ import ACPModel
                 AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["bun"], enabled: true, isDefault: true),
                 AgentProvider(id: ProviderID(rawValue: "hermes"), label: "Hermes", command: ["hermes", "acp"], enabled: true, isDefault: false),
             ],
-            selectedModelIds: ["claude-acp": "sonnet"])
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")])
         let provider = config.selectedProvider()
         let modelId = config.selectedModelId(forProvider: provider.id)
         #expect(provider.id == ProviderID(rawValue: "claude-acp"))
-        #expect(modelId == "sonnet")
+        #expect(modelId == ModelID(rawValue: "sonnet"))
         // The planner/executor/finalizer no longer have a distinct API;
         // they all use this single resolution.
     }

@@ -1,437 +1,510 @@
 #if os(macOS)
 import Foundation
 import Testing
+@testable import WikiFS
 @testable import WikiFSCore
 @testable import WikiFSEngine
-@testable import WikiFS
 
-/// Tests for `ChatDaemonCoordinator` (Phase C4) — the app-side registry + event
-/// router + command wrapper for daemon-hosted chat sessions. These are pure
-/// (no live XPC): a `StubChatDaemonCommands` stands in for the
-/// `DaemonWorkloadClient`, and `ingestForTesting` drives the event router.
 @MainActor
 struct ChatDaemonCoordinatorTests {
+    @Test func sessionRegistryUsesStableInstances() {
+        let coordinator = makeCoordinator()
 
-    // MARK: - Session registry
+        let first = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let second = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let draft = coordinator.session(for: nil)
 
-    @Test func sessionForChatID_isGetOrCreate_sameInstance() {
-        let coord = makeCoordinator()
-        let a = coord.session(for: ChatID(rawValue: "chat-1"))
-        let b = coord.session(for: ChatID(rawValue: "chat-1"))
-        #expect(a === b)
-        #expect(a.chatID == .chat(ChatID(rawValue: "chat-1")))
-    }
-
-    @Test func sessionForNil_returnsSharedDraftSession() {
-        let coord = makeCoordinator()
-        let draft = coord.session(for: nil)
+        #expect(first === second)
         #expect(draft.chatID == .draft)
-        // Repeated nil lookups return the same draft instance.
-        #expect(coord.session(for: nil) === draft)
     }
 
-    @Test func discard_removesCachedSession() {
-        let coord = makeCoordinator()
-        let first = coord.session(for: ChatID(rawValue: "chat-1"))
-        coord.discard(chatID: ChatID(rawValue: "chat-1"))
-        let second = coord.session(for: ChatID(rawValue: "chat-1"))
-        // After discard, a fresh session is created.
-        #expect(first !== second)
+    @Test func resetDraftReplacesDraftSession() {
+        let coordinator = makeCoordinator()
+        let first = coordinator.session(for: nil)
+
+        coordinator.resetDraft()
+
+        #expect(coordinator.session(for: nil) !== first)
     }
 
-    @Test func resetDraft_replacesDraftSession() {
-        let coord = makeCoordinator()
-        let draft = coord.session(for: nil)
-        coord.resetDraft()
-        #expect(coord.session(for: nil) !== draft)
+    @Test func ingestForTestingDeliversSyncUpdateToOpenSession() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = makeSnapshot(sequence: 0)
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(
+                    sequence: 1,
+                    activeTurn: makeActiveTurn(state: .responding),
+                    overlay: [makeMessage(role: .assistant, text: "hello")]
+                )
+            )
+        )
+
+        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.runState.isAnswering)
+        #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
+        #expect(coordinator.anyChatGenerating)
     }
 
-    // MARK: - Event routing
+    @Test func runningStateTokenBumpsOnlyOnGeneratingMembershipChanges() {
+        let coordinator = makeCoordinator()
+        let before = coordinator.runningStateToken
 
-    @Test func ingestForTesting_deliversChatEventToOpenSession() {
-        let coord = makeCoordinator()
-        let session = coord.session(for: ChatID(rawValue: "chat-1"))
-        coord.ingestForTesting(.chatEvent(chatID: ChatID(rawValue: "chat-1"), event: .assistantText("hello")))
-        #expect(session.events == [.assistantText("hello")])
-    }
-
-    @Test func ingestForTesting_doesNotCreateSessionForUnopenedChat() {
-        // An envelope for a chat with no open session is consumed by the
-        // running-set tracker but does NOT materialize a session.
-        let coord = makeCoordinator()
-        coord.ingestForTesting(.chatEvent(chatID: ChatID(rawValue: "chat-orphan"), event: .assistantText("x")))
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-orphan")) == false)
-    }
-
-    // MARK: - Running-set aggregate (sidebar liveness)
-
-    @Test func isChatGenerating_trueWhileAnswering() {
-        let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-run")))
-        #expect(coord.anyChatGenerating)
-    }
-
-    @Test func isChatGenerating_falseAfterSessionEnds() {
-        let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-run")))
-        #expect(!coord.anyChatGenerating)
-    }
-
-    @Test func runningStateToken_bumpsOnRunningStateChange() {
-        let coord = makeCoordinator()
-        let before = coord.runningStateToken
-
-        // Start → token bumps.
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        let afterStart = coord.runningStateToken
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(sequence: 1, activeTurn: makeActiveTurn(state: .responding))
+            )
+        )
+        let afterStart = coordinator.runningStateToken
         #expect(afterStart == before + 1)
 
-        // Duplicate running envelope (no change) → token does NOT bump.
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.runningStateToken == afterStart)
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(sequence: 2, activeTurn: makeActiveTurn(state: .responding))
+            )
+        )
+        #expect(coordinator.runningStateToken == afterStart)
 
-        // Stop → token bumps again.
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-run"), update: ChatStateUpdate(
-            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.runningStateToken == afterStart + 1)
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(sequence: 3, activeTurn: nil)
+            )
+        )
+        #expect(coordinator.runningStateToken == afterStart + 1)
+        #expect(!coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
-    @Test func isChatGenerating_reflectsOpenSessionGeneratingFlag() {
-        // An open session that reports generating via hydrate also counts.
-        let coord = makeCoordinator()
-        let session = coord.session(for: ChatID(rawValue: "chat-open"))
-        session.hydrate(from: ChatSessionState(
-            chatID: ChatID(rawValue: "chat-open"), events: [],
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil))
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-open")))
-    }
-
-    @Test func isChatGenerating_falseForWarmIdleInteractiveSession() {
-        // REGRESSION: the stuck "responding…" badge. For an interactive chat,
-        // `AgentLauncher.isRunning` means "the agent process is alive ACROSS
-        // TURNS", so it stays true while the session sits idle waiting for the
-        // next message — the daemon pushes exactly this state
-        // (running=true gen=false) the moment a turn ends, and kept pushing
-        // nothing after, because nothing had changed.
-        //
-        // The badge previously keyed off `isRunning || isGenerating`, so it
-        // latched on for the whole life of the session. It must key off
-        // `isGenerating` alone (the flag `AgentLauncher` documents as the one
-        // "every UI spinner / Stop affordance keys off").
-        let coord = makeCoordinator()
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-warm"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-warm")), "badge on while answering")
-
-        // Turn ends; the process stays warm for the next message.
-        coord.ingestForTesting(.chatState(chatID: ChatID(rawValue: "chat-warm"), update: ChatStateUpdate(
-            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)))
-        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-warm")), "badge must clear when the turn ends")
-        #expect(!coord.anyChatGenerating)
-    }
-
-    @Test func isChatGenerating_falseForOpenSessionThatIsMerelyAlive() {
-        // Same contract via the hydrate path rather than the envelope path.
-        let coord = makeCoordinator()
-        let session = coord.session(for: ChatID(rawValue: "chat-warm-hydrate"))
-        session.hydrate(from: ChatSessionState(
-            chatID: ChatID(rawValue: "chat-warm-hydrate"), events: [],
-            isRunning: true, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil))
-        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-warm-hydrate")))
-    }
-
-    // MARK: - Commands (forwarded to the daemon client stub)
-
-    @Test func startChat_forwardsRequestAndReturnsChatID() async throws {
+    @Test func commandMethodsForwardTypedRequests() async throws {
         let stub = StubChatDaemonCommands()
-        stub.nextStartChatID = ChatID(rawValue: "01NEW")
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let id = try await coord.startChat(wikiID: WikiID(rawValue: "wiki-1"), firstMessage: "hi")
-        #expect(id == ChatID(rawValue: "01NEW"))
-        let req = try #require(stub.startChatCalls.first)
-        #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
-        #expect(req.firstMessage == "hi")
-    }
+        stub.nextSubmitChatID = ChatID(rawValue: "submit-id")
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
 
-    @Test func continueChat_forwardsTypedRequest() async throws {
-        let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        try await coord.continueChat(wikiID: WikiID(rawValue: "wiki-1"), chatID: ChatID(rawValue: "chat-1"), message: "more")
-        let req = try #require(stub.continueChatCalls.first)
-        #expect(req.wikiID == WikiID(rawValue: "wiki-1"))
-        #expect(req.chatID == ChatID(rawValue: "chat-1"))
-        #expect(req.message == "more")
-    }
+        let submitID = try await coordinator.submitTurn(
+            ChatSubmitRequest(
+                wikiID: WikiID(rawValue: "wiki-1"),
+                chatID: nil,
+                submission: ChatTurnSubmission(
+                    commandID: ChatCommandID(rawValue: "command-1"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    userText: "question",
+                    contextReferences: [],
+                    submittedAt: Date(timeIntervalSince1970: 10)
+                )
+            )
+        )
+        await coordinator.resolvePermission(
+            chatID: ChatID(rawValue: "chat-1"),
+            intent: .approve(optionID: PermissionOptionID(rawValue: "allow"))
+        )
+        await coordinator.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
+        await coordinator.stop(chatID: ChatID(rawValue: "chat-1"))
 
-    @Test func sendMessage_forwardsChatIDAndMessage() async throws {
-        let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        try await coord.sendMessage(chatID: ChatID(rawValue: "chat-1"), message: "follow up")
-        #expect(stub.sendCalls.count == 1)
-        #expect(stub.sendCalls.first?.0 == ChatID(rawValue: "chat-1"))
-        #expect(stub.sendCalls.first?.1 == "follow up")
-    }
-
-    @Test func stop_swallowsErrorsAndForwardsID() async {
-        let stub = StubChatDaemonCommands(shouldThrow: true)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        // Best-effort: a throwing stop is swallowed (logged), not rethrown.
-        await coord.stop(chatID: ChatID(rawValue: "chat-1"))
+        #expect(submitID == ChatID(rawValue: "submit-id"))
+        #expect(stub.submitTurnCalls.count == 1)
+        #expect(stub.resolveCalls.first?.optionId == "allow")
+        #expect(stub.configOptionCalls.first?.value == "high")
         #expect(stub.stopCalls == [ChatID(rawValue: "chat-1")])
     }
 
-    @Test func resolvePermission_forwardsApproveAndOptionId() async throws {
+    @Test func copyDiagnosticsUsesCoordinatorSnapshotAndRotatesOnlyAfterCopySucceeds() async throws {
+        let chatID = ChatID(rawValue: "diagnostic-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        let fingerprint = trace.fingerprint("same content")
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let renderer = ChatTranscriptRenderExecutor(
+            mutate: { command, revision, acknowledgement in
+                acknowledgement(.init(
+                    kind: command.kind,
+                    revision: revision,
+                    rowID: command.rowID,
+                    outcome: .success
+                ))
+            },
+            reportAnomaly: { _ in Issue.record("Unexpected renderer anomaly.") },
+            diagnosticTrace: trace
+        )
+        renderer.submit(.init(
+            context: .init(transcriptID: .chat(chatID)),
+            rows: [.assistantMessage(
+                id: ChatMessageID(rawValue: "diagnostic-message"),
+                turnID: ChatTurnID(rawValue: "diagnostic-turn"),
+                text: "redacted from the diagnostic payload",
+                createdAt: .distantPast,
+                contentState: .final
+            )]
+        ))
+        let before = trace.snapshot(chat: correlation)
         let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.resolvePermission(chatID: ChatID(rawValue: "chat-1"), optionId: "allow_once", approve: true)
-        let req = try #require(stub.resolveCalls.first)
-        #expect(req.chatID == ChatID(rawValue: "chat-1"))
-        #expect(req.optionId == "allow_once")
-        #expect(req.approve)
+        stub.diagnosticSnapshot = ChatDiagnosticSnapshotEnvelope(
+            process: .init(source: .daemon),
+            events: [
+                .init(
+                    process: .init(source: .daemon),
+                    sequence: .init(1),
+                    stage: .syncAcceptance,
+                    payload: .init(correlation: .init(chat: correlation), detail: "daemon-sync"),
+                    outcome: .accepted
+                )
+            ],
+            droppedRecordCount: 3,
+            droppedByteCount: 144,
+            summary: ["runtime": "daemon"]
+        )
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+        var copied: Data?
+
+        try await coordinator.copyDiagnostics(for: chatID) { copied = $0 }
+
+        let data = try #require(copied)
+        let snapshot = try JSONDecoder().decode(ChatDiagnosticMergedSnapshot.self, from: data)
+        #expect(!String(decoding: data, as: UTF8.self).contains("redacted from the diagnostic payload"))
+        #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
+        #expect(Set(snapshot.sources) == [.app, .daemon])
+        #expect(snapshot.events.map(\.payload.detail).contains("app-display"))
+        #expect(snapshot.events.map(\.payload.detail).contains("daemon-sync"))
+        #expect(snapshot.events.map(\.stage).contains(.renderPlanning))
+        #expect(snapshot.events.map(\.stage).contains(.domAcknowledgement))
+        #expect(snapshot.daemonSummary["runtime"] == "daemon")
+        #expect(snapshot.mergeOrder == "source-instance-sequence; timestamps-informational")
+        let daemonRetention = snapshot.retention.first { $0.source == .daemon }
+        #expect(daemonRetention?.droppedRecordCount == 3)
+        #expect(daemonRetention?.droppedByteCount == 144)
+        #expect(stub.diagnosticResetRequests == [.init(chat: correlation)])
+
+        let after = trace.snapshot(chat: correlation)
+        #expect(after.events.isEmpty)
+        #expect(after.process.instanceID != before.process.instanceID)
+        #expect(trace.fingerprint("same content") != fingerprint)
     }
 
-    // MARK: - Phase C4 follow-up: setChatConfigOption (7th XPC method)
-
-    @Test func setThinkingEffort_forwardsConfigOptionRequest() async throws {
+    @Test func failedDiagnosticCopyPreservesTraceForRetry() async {
+        let chatID = ChatID(rawValue: "diagnostic-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        let fingerprint = trace.fingerprint("same content")
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let before = trace.snapshot(chat: correlation)
         let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
-        let req = try #require(stub.configOptionCalls.first)
-        #expect(req.chatID == ChatID(rawValue: "chat-1"))
-        #expect(req.option == "thought_level")
-        #expect(req.value == "high")
-    }
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
 
-    @Test func setThinkingEffort_swallowsClientError() async {
-        // A throwing client must not crash; the optimistic flip stays.
-        let stub = StubChatDaemonCommands(shouldThrow: true)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
-        #expect(stub.configOptionCalls.count == 1)
-    }
-
-    @Test func session_wiresOnSetChatConfigOptionCallback() async throws {
-        // When the coordinator creates a session, the session's
-        // onSetChatConfigOption closure should be wired so
-        // setThinkingEffort routes through the daemon.
-        let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let session = coord.session(for: ChatID(rawValue: "chat-wired"))
-        session.thinkingOption = ThinkingEffortOption(
-            configId: "thought_level", currentValue: "low",
-            choices: [ThinkingEffortOption.Choice(value: "low", label: "Low"),
-                      ThinkingEffortOption.Choice(value: "high", label: "High")])
-        session.setThinkingEffort("high")
-        // The callback fires in a detached Task; poll until it lands.
-        for _ in 0..<100 {
-            if !stub.configOptionCalls.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(10))
+        do {
+            try await coordinator.copyDiagnostics(
+                for: chatID,
+            ) { _ in
+                throw StubError.throwing
+            }
+            Issue.record("Expected the diagnostic destination to fail.")
+        } catch StubError.throwing {
+            // Expected: the trace remains available for a retry.
+        } catch {
+            Issue.record("Unexpected diagnostic copy failure: \(error)")
         }
-        #expect(session.thinkingOption?.currentValue == "high")
-        let req = try #require(stub.configOptionCalls.first)
-        #expect(req.chatID == ChatID(rawValue: "chat-wired"))
-        #expect(req.option == "thought_level")
-        #expect(req.value == "high")
+
+        let after = trace.snapshot(chat: correlation)
+        #expect(after.process.instanceID == before.process.instanceID)
+        #expect(after.events == before.events)
+        #expect(trace.fingerprint("same content") == fingerprint)
+        #expect(stub.diagnosticResetRequests.isEmpty)
     }
 
-    @Test func draftSession_doesNotWireConfigOptionCallback() {
-        // The draft session (nil chatID) should NOT wire the callback — there
-        // is no real chatID to target on the daemon.
+    @Test func failedDaemonDiagnosticResetRetiresAppFingerprintEpochButKeepsRetryRing() async {
+        let chatID = ChatID(rawValue: "diagnostic-reset-failure")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let fingerprint = trace.fingerprint("same content")
+        let before = trace.snapshot(chat: correlation)
         let stub = StubChatDaemonCommands()
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let draft = coord.session(for: nil)
-        #expect(draft.onSetChatConfigOption == nil)
+        stub.shouldThrowDiagnosticReset = true
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+
+        do {
+            try await coordinator.copyDiagnostics(for: chatID) { _ in }
+            Issue.record("Expected daemon diagnostic reset failure.")
+        } catch StubError.throwing {
+            // The artifact was written, so the key must not remain reusable.
+        } catch {
+            Issue.record("Unexpected reset failure: \(error)")
+        }
+
+        let after = trace.snapshot(chat: correlation)
+        #expect(after.events == before.events)
+        #expect(after.process.instanceID == before.process.instanceID)
+        #expect(trace.fingerprint("same content") != fingerprint)
     }
 
-    @Test func rehydrate_hydratesOpenSessionFromStubState() async {
+    @Test func jsonlDiagnosticsExportUsesCoordinatorSnapshotAndRotatesAfterWrite() async throws {
+        let chatID = ChatID(rawValue: "jsonl-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+            .appendingPathComponent("tmp/chat-diagnostics-export-tests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            do {
+                try fileManager.removeItem(at: directory)
+            } catch {
+                DebugLog.store("chat diagnostics export test cleanup failed: \(error)")
+            }
+        }
+        let url = directory.appendingPathComponent("chat-diagnostics.jsonl")
         let stub = StubChatDaemonCommands()
-        stub.sessionState = ChatSessionState(
-            chatID: ChatID(rawValue: "chat-1"), events: [.userText("seed")],
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-1"))
-        let session = coord.session(for: ChatID(rawValue: "chat-1"))
-        #expect(session.events == [.userText("seed")])
-        #expect(session.isRunning)
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-1")))
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+
+        try await coordinator.writeDiagnosticsJSONL(
+            for: chatID,
+            to: url
+        )
+
+        let line = try #require(String(data: try Data(contentsOf: url), encoding: .utf8))
+        #expect(line.contains("app-display"))
+        #expect(line.contains("retention"))
+        #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
+        #expect(stub.diagnosticResetRequests == [.init(chat: correlation)])
+        #expect(trace.snapshot(chat: correlation).events.isEmpty)
     }
 
-    @Test func rehydrate_swallowsClientFailure() async {
-        // A throwing chatSessionState (e.g. daemon evicted the session) must
-        // not crash; the session keeps its prior state.
-        let stub = StubChatDaemonCommands(shouldThrow: true)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-1"))
-        // No assertion crash; session simply remains default-empty.
-        #expect(coord.session(for: ChatID(rawValue: "chat-1")).events.isEmpty)
-    }
-
-    @Test func rehydrateFailure_clearsLivenessSoPersistedRowsRender() async {
-        // Regression: the daemon throws `noSession` for any chat whose launcher
-        // it has evicted (every chat from a previous app run). If the mirror is
-        // left claiming liveness, `ChatDetailView.isLiveChat` is true with zero
-        // events and the view renders an empty live stream — a chat with a full
-        // persisted transcript showed "Ask a question to start a chat.".
-        let stub = StubChatDaemonCommands(shouldThrow: true)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
-        let session = coord.session(for: ChatID(rawValue: "chat-evicted"))
-        #expect(session.activeChatID == nil)
-        #expect(session.isInteractiveSession == false)
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-evicted")) == false)
-    }
-
-    @Test func freshSessionDoesNotClaimLivenessBeforeHydration() async {
-        // A mirror the daemon has never reported on must not pass the
-        // source-of-truth rule: `activeChatID` is daemon-derived, so it stays
-        // nil until `hydrate`/`applyStateUpdate` sets it.
-        let coord = makeCoordinator()
-        #expect(coord.session(for: ChatID(rawValue: "chat-new")).activeChatID == nil)
-        #expect(coord.session(for: nil).activeChatID == nil)
-    }
-
-    @Test func rehydrateIdleState_leavesSessionNotLive() async {
-        // The daemon still holds the launcher but reports it idle — the mirror
-        // must render persisted rows, not the launcher's in-memory events.
+    @Test func rehydrateUsesAuthoritativeSnapshot() async {
         let stub = StubChatDaemonCommands()
-        stub.sessionState = ChatSessionState(
-            chatID: ChatID(rawValue: "chat-idle"), events: [],
-            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-idle"))
-        #expect(coord.session(for: ChatID(rawValue: "chat-idle")).activeChatID == nil)
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-idle")) == false)
+        stub.sessionState = makeSnapshot(
+            sequence: 4,
+            activeTurn: makeActiveTurn(state: .responding),
+            overlay: [makeMessage(role: .assistant, text: "seed")]
+        )
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        #expect(session.displayTranscript.rows.count == 1)
+        #expect(session.runState.isAnswering)
+        #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
-    // MARK: - runningStateToken (rehydrate path)
-
-    @Test func rehydrateGenerating_bumpsRunningStateToken() async {
+    @Test func rehydrateFailureClearsLivenessClaim() async {
         let stub = StubChatDaemonCommands()
-        stub.sessionState = ChatSessionState(
-            chatID: ChatID(rawValue: "chat-run"), events: [],
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let before = coord.runningStateToken
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-run"))
-        #expect(coord.runningStateToken == before + 1)
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-run")))
-    }
+        stub.sessionState = makeSnapshot(sequence: 1, activeTurn: makeActiveTurn(state: .responding))
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
 
-    @Test func rehydrateIdle_doesNotBumpTokenWhenAlreadyIdle() async {
-        let stub = StubChatDaemonCommands()
-        stub.sessionState = ChatSessionState(
-            chatID: ChatID(rawValue: "chat-idle"), events: [],
-            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let before = coord.runningStateToken
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-idle"))
-        // Was idle, stays idle → no change → no bump.
-        #expect(coord.runningStateToken == before)
-    }
-
-    @Test func rehydrateFailure_bumpsTokenWhenClearingPriorLiveness() async {
-        // A chat that was running (token already bumped) then gets a rehydrate
-        // failure (daemon evicted the session). Clearing the stale liveness
-        // claim must bump the token so the sidebar drops "responding…".
-        let stub = StubChatDaemonCommands()
-        stub.sessionState = ChatSessionState(
-            chatID: ChatID(rawValue: "chat-evicted"), events: [],
-            isRunning: true, isGenerating: true, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
-        let coord = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
-        let afterRunning = coord.runningStateToken
-        #expect(coord.isChatGenerating(ChatID(rawValue: "chat-evicted")))
-
-        // Now the daemon evicts the session — rehydrate throws.
         stub.shouldThrow = true
-        await coord.rehydrate(chatID: ChatID(rawValue: "chat-evicted"))
-        #expect(coord.runningStateToken == afterRunning + 1)
-        // Both liveness sources clear: generatingChatIDs via setChatGenerating, and
-        // the session's isGenerating via markNotLive (which now clears the flags).
-        #expect(!coord.isChatGenerating(ChatID(rawValue: "chat-evicted")))
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        #expect(session.runState == .idle)
+        #expect(!coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
 
-    // MARK: - Helpers
+    @Test func sessionWiresAuthoritativeSnapshotLoaderForGapRecovery() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = makeSnapshot(sequence: 1)
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        stub.sessionState = makeSnapshot(
+            sequence: 4,
+            runMetadata: ChatRunMetadata(preflightError: "resynced")
+        )
+
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(sequence: 4)
+            )
+        )
+
+        await expectEventually(session.preflightError == "resynced")
+        #expect(stub.sessionStateRequests.count >= 2)
+    }
+
+    @Test func persistedOnlyBaselineAcceptsFirstLiveUpdateWithoutSnapshotRoundTrip() async {
+        let stub = StubChatDaemonCommands()
+        stub.sessionState = makeSnapshot(
+            sequence: 0,
+            generation: "persisted-chat-1",
+            activeTurn: nil
+        )
+        let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
+        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        stub.sessionStateRequests.removeAll()
+
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(
+                    sequence: 1,
+                    generation: "generation-live",
+                    activeTurn: makeActiveTurn(state: .responding),
+                    overlay: [makeMessage(role: .assistant, text: "live")]
+                )
+            )
+        )
+
+        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        await expectEventually(session.runState.isAnswering)
+        #expect(stub.sessionStateRequests.isEmpty)
+    }
+
+    @Test func draftSessionDoesNotWireConfigCallback() {
+        let coordinator = makeCoordinator()
+        #expect(coordinator.session(for: nil).onSetChatConfigOption == nil)
+    }
 
     private func makeCoordinator() -> ChatDaemonCoordinator {
         ChatDaemonCoordinator(client: StubChatDaemonCommands(), eventSink: DaemonQueueEventSink())
     }
+
+    private func makeSnapshot(
+        sequence: Int64,
+        generation: String = "generation-1",
+        activeTurn: ChatTurnSnapshot? = nil,
+        overlay: [ChatTranscriptItem] = [],
+        runMetadata: ChatRunMetadata = .empty
+    ) -> ChatSyncSnapshot {
+        ChatSyncSnapshot(
+            projection: ChatSyncProjection(
+                chatID: ChatID(rawValue: "chat-1"),
+                generation: ChatSessionGenerationID(rawValue: generation),
+                lifecycle: activeTurn == nil ? .closed : .ready,
+                activeTurn: activeTurn,
+                queuedTurns: [],
+                attention: .none,
+                capabilities: .unavailable,
+                providerState: ChatProviderState(
+                    providerID: ProviderID(rawValue: "provider-1"),
+                    modelID: ModelID(rawValue: "model-1"),
+                    providerSessionID: nil
+                ),
+                usage: nil,
+                diagnostics: ChatDiagnosticsState(),
+                transcriptOverlay: overlay,
+                committedCursor: .zero,
+                lastIncludedSequence: ChatUpdateSequence(rawValue: sequence),
+                pendingPermission: nil,
+                runMetadata: runMetadata
+            )
+        )
+    }
+
+    private func makeUpdate(
+        sequence: Int64,
+        generation: String = "generation-1",
+        activeTurn: ChatTurnSnapshot? = nil,
+        overlay: [ChatTranscriptItem] = []
+    ) -> ChatSyncUpdate {
+        ChatSyncUpdate(
+            reason: .sessionEvent(.started(turnID: ChatTurnID(rawValue: "turn-1"))),
+            projection: makeSnapshot(
+                sequence: sequence,
+                generation: generation,
+                activeTurn: activeTurn,
+                overlay: overlay
+            ).projection
+        )
+    }
+
+    private func makeActiveTurn(state: ChatTurnState) -> ChatTurnSnapshot {
+        ChatTurnSnapshot(
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            commandID: ChatCommandID(rawValue: "command-1"),
+            visibleText: "visible",
+            contextReferences: [],
+            submittedAt: Date(timeIntervalSince1970: 10),
+            state: state
+        )
+    }
+
+    private func makeMessage(
+        role: ChatTranscriptMessageRole,
+        text: String
+    ) -> ChatTranscriptItem {
+        .message(
+            ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "\(role.rawValue)-\(text)"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                role: role,
+                text: text,
+                createdAt: Date(timeIntervalSince1970: 20)
+            )
+        )
+    }
+
+    private func expectEventually(
+        _ condition: @autoclosure @escaping @MainActor () -> Bool
+    ) async {
+        for _ in 0..<50 {
+            if condition() { return }
+            await Task.yield()
+        }
+        Issue.record("Condition was not met before timeout.")
+    }
 }
 
-/// A stub `ChatDaemonCommands` that records every call and returns
-/// configurable results. `@unchecked Sendable` so it can cross the
-/// `ChatDaemonCommands: Sendable` boundary; tests are `@MainActor` so access
-/// is race-free.
 @MainActor
 final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
-    var startChatCalls: [ChatStartRequest] = []
-    var continueChatCalls: [ChatContinueRequest] = []
-    var sendCalls: [(ChatID, String)] = []
+    var submitTurnCalls: [ChatSubmitRequest] = []
     var stopCalls: [ChatID] = []
     var resolveCalls: [ChatPermissionResolveRequest] = []
     var sessionStateRequests: [ChatID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
+    var diagnosticSnapshotRequests: [ChatDiagnosticSnapshotRequest] = []
+    var diagnosticResetRequests: [ChatDiagnosticResetRequest] = []
 
-    var nextStartChatID: ChatID = ChatID(rawValue: "stub-chat-id")
-    var sessionState: ChatSessionState?
-    var shouldThrow: Bool
+    var nextSubmitChatID = ChatID(rawValue: "stub-submit-chat-id")
+    var sessionState: ChatSyncSnapshot?
+    var diagnosticSnapshot: ChatDiagnosticSnapshotEnvelope?
+    var shouldThrow = false
+    var shouldThrowDiagnosticReset = false
 
-    init(shouldThrow: Bool = false) {
-        self.shouldThrow = shouldThrow
-    }
-
-    func startChat(_ request: ChatStartRequest) async throws -> ChatID {
-        startChatCalls.append(request)
+    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
+        submitTurnCalls.append(request)
         if shouldThrow { throw StubError.throwing }
-        return nextStartChatID
-    }
-
-    func continueChat(_ request: ChatContinueRequest) async throws {
-        continueChatCalls.append(request)
-        if shouldThrow { throw StubError.throwing }
-    }
-
-    func sendChatMessage(chatID: ChatID, message: String) async throws {
-        sendCalls.append((chatID, message))
-        if shouldThrow { throw StubError.throwing }
+        return nextSubmitChatID
     }
 
     func stopChat(_ chatID: ChatID) async throws {
@@ -439,14 +512,45 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         if shouldThrow { throw StubError.throwing }
     }
 
-    func chatSessionState(_ chatID: ChatID) async throws -> ChatSessionState {
+    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot {
         sessionStateRequests.append(chatID)
         if shouldThrow { throw StubError.throwing }
-        return sessionState ?? ChatSessionState(
-            chatID: chatID, events: [],
-            isRunning: false, isGenerating: false, isAwaitingGenerationSlot: false,
-            preflightError: nil, thinkingOption: nil, usageData: nil,
-            logFileURL: nil, debugFolderURL: nil, runKindRaw: nil, runStartedAt: nil)
+        return sessionState ?? ChatSyncSnapshot(
+            projection: ChatSyncProjection(
+                chatID: chatID,
+                generation: ChatSessionGenerationID(rawValue: "generation-default"),
+                lifecycle: .closed,
+                activeTurn: nil,
+                queuedTurns: [],
+                attention: .none,
+                capabilities: .unavailable,
+                providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil),
+                usage: nil,
+                diagnostics: ChatDiagnosticsState(),
+                transcriptOverlay: [],
+                committedCursor: .zero,
+                lastIncludedSequence: .initial,
+                pendingPermission: nil,
+                runMetadata: .empty
+            )
+        )
+    }
+
+    func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope {
+        diagnosticSnapshotRequests.append(request)
+        try request.validatingVersion()
+        if shouldThrow { throw StubError.throwing }
+        return diagnosticSnapshot ?? ChatDiagnosticSnapshotEnvelope(
+            process: .init(source: .daemon),
+            events: []
+        )
+    }
+
+    func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
+        diagnosticResetRequests.append(request)
+        try request.validatingVersion()
+        if shouldThrowDiagnosticReset { throw StubError.throwing }
+        if shouldThrow { throw StubError.throwing }
     }
 
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
@@ -460,5 +564,7 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     }
 }
 
-private enum StubError: Error { case throwing }
+private enum StubError: Error {
+    case throwing
+}
 #endif
