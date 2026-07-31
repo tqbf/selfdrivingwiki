@@ -114,6 +114,133 @@ struct ChatDaemonCoordinatorTests {
         #expect(stub.stopCalls == [ChatID(rawValue: "chat-1")])
     }
 
+    @Test func copyDiagnosticsUsesCoordinatorSnapshotAndRotatesOnlyAfterCopySucceeds() async throws {
+        let chatID = ChatID(rawValue: "diagnostic-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        let fingerprint = await trace.fingerprint("same content")
+        _ = await trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let before = await trace.snapshot(chat: correlation)
+        let stub = StubChatDaemonCommands()
+        stub.diagnosticSnapshot = ChatDiagnosticSnapshotEnvelope(
+            process: .init(source: .daemon),
+            events: [
+                .init(
+                    process: .init(source: .daemon),
+                    sequence: .init(1),
+                    stage: .syncAcceptance,
+                    payload: .init(correlation: .init(chat: correlation), detail: "daemon-sync"),
+                    outcome: .accepted
+                )
+            ],
+            summary: ["runtime": "daemon"]
+        )
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+        let exporter = ChatDiagnosticExporter(trace: trace)
+        var copied: Data?
+
+        try await coordinator.copyDiagnostics(for: chatID, exporter: exporter) { copied = $0 }
+
+        let data = try #require(copied)
+        let snapshot = try JSONDecoder().decode(ChatDiagnosticMergedSnapshot.self, from: data)
+        #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
+        #expect(Set(snapshot.sources) == [.app, .daemon])
+        #expect(snapshot.events.map(\.payload.detail).contains("app-display"))
+        #expect(snapshot.events.map(\.payload.detail).contains("daemon-sync"))
+        #expect(snapshot.daemonSummary["runtime"] == "daemon")
+        #expect(snapshot.mergeOrder.contains("per-process-sequence"))
+
+        let after = await trace.snapshot(chat: correlation)
+        #expect(after.events.isEmpty)
+        #expect(after.process.instanceID != before.process.instanceID)
+        #expect(await trace.fingerprint("same content") != fingerprint)
+    }
+
+    @Test func failedDiagnosticCopyPreservesTraceForRetry() async {
+        let chatID = ChatID(rawValue: "diagnostic-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        let fingerprint = await trace.fingerprint("same content")
+        _ = await trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let before = await trace.snapshot(chat: correlation)
+        let coordinator = ChatDaemonCoordinator(
+            client: StubChatDaemonCommands(),
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+
+        do {
+            try await coordinator.copyDiagnostics(
+                for: chatID,
+                exporter: ChatDiagnosticExporter(trace: trace)
+            ) { _ in
+                throw StubError.throwing
+            }
+            Issue.record("Expected the diagnostic destination to fail.")
+        } catch StubError.throwing {
+            // Expected: the trace remains available for a retry.
+        } catch {
+            Issue.record("Unexpected diagnostic copy failure: \(error)")
+        }
+
+        let after = await trace.snapshot(chat: correlation)
+        #expect(after.process.instanceID == before.process.instanceID)
+        #expect(after.events == before.events)
+        #expect(await trace.fingerprint("same content") == fingerprint)
+    }
+
+    @Test func jsonlDiagnosticsExportUsesCoordinatorSnapshotAndRotatesAfterWrite() async throws {
+        let chatID = ChatID(rawValue: "jsonl-chat")
+        let correlation = ChatDiagnosticCorrelation.Value(rawValue: chatID.rawValue)
+        let trace = ChatDiagnosticTrace(source: .app)
+        _ = await trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: correlation), detail: "app-display")
+        )
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+            .appendingPathComponent("tmp/chat-diagnostics-export-tests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            do {
+                try fileManager.removeItem(at: directory)
+            } catch {
+                DebugLog.store("chat diagnostics export test cleanup failed: \(error)")
+            }
+        }
+        let url = directory.appendingPathComponent("chat-diagnostics.jsonl")
+        let stub = StubChatDaemonCommands()
+        let coordinator = ChatDaemonCoordinator(
+            client: stub,
+            eventSink: DaemonQueueEventSink(),
+            diagnosticTrace: trace
+        )
+
+        try await coordinator.writeDiagnosticsJSONL(
+            for: chatID,
+            to: url,
+            exporter: ChatDiagnosticExporter(trace: trace)
+        )
+
+        let line = try #require(String(data: try Data(contentsOf: url), encoding: .utf8))
+        #expect(line.contains("app-display"))
+        #expect(stub.diagnosticSnapshotRequests == [.init(chat: correlation)])
+        #expect((await trace.snapshot(chat: correlation)).events.isEmpty)
+    }
+
     @Test func rehydrateUsesAuthoritativeSnapshot() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = makeSnapshot(
@@ -299,9 +426,11 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var resolveCalls: [ChatPermissionResolveRequest] = []
     var sessionStateRequests: [ChatID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
+    var diagnosticSnapshotRequests: [ChatDiagnosticSnapshotRequest] = []
 
     var nextSubmitChatID = ChatID(rawValue: "stub-submit-chat-id")
     var sessionState: ChatSyncSnapshot?
+    var diagnosticSnapshot: ChatDiagnosticSnapshotEnvelope?
     var shouldThrow = false
 
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
@@ -340,8 +469,10 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     }
 
     func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope {
+        diagnosticSnapshotRequests.append(request)
         try request.validatingVersion()
-        return ChatDiagnosticSnapshotEnvelope(
+        if shouldThrow { throw StubError.throwing }
+        return diagnosticSnapshot ?? ChatDiagnosticSnapshotEnvelope(
             process: .init(source: .daemon),
             events: []
         )

@@ -41,4 +41,65 @@ struct ChatDiagnosticsTests {
         #expect(merged.events.filter { $0.process.source == .app }.map(\.sequence.rawValue) == [1, 2])
         #expect(merged.mergeOrder.contains("per-process-sequence"))
     }
+
+    @Test func selectedChatWithoutDropsDoesNotReportAnotherChatsEvictions() async {
+        let trace = ChatDiagnosticTrace(source: .app)
+        let evictedChat = ChatDiagnosticCorrelation.Value(rawValue: "evicted-chat")
+        let retainedChat = ChatDiagnosticCorrelation.Value(rawValue: "retained-chat")
+
+        for index in 0...ChatDiagnosticPolicy.maximumRecordsPerChat {
+            _ = await trace.record(
+                stage: .syncAcceptance,
+                outcome: .accepted,
+                payload: .init(correlation: .init(chat: evictedChat), detail: "event-\(index)")
+            )
+        }
+        _ = await trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: retainedChat), detail: "retained")
+        )
+
+        let snapshot = await trace.snapshot(chat: retainedChat)
+        #expect(snapshot.events.count == 1)
+        #expect(snapshot.droppedRecordCount == 0)
+        #expect(snapshot.droppedByteCount == 0)
+    }
+
+    @Test func jsonlWriterRotatesBoundedRedactedRecords() async throws {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+            .appendingPathComponent("tmp/chat-diagnostics-tests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            do {
+                try fileManager.removeItem(at: directory)
+            } catch {
+                DebugLog.store("chat diagnostics test cleanup failed: \(error)")
+            }
+        }
+
+        let url = directory.appendingPathComponent("chat-diagnostics.jsonl")
+        let writer = ChatDiagnosticJSONLWriter()
+        let identity = ChatDiagnosticProcessIdentity(source: .app)
+        let detail = String(repeating: "x", count: 7_000)
+        for sequence in 1...75 {
+            _ = try await writer.append(
+                .init(
+                    process: identity,
+                    sequence: .init(UInt64(sequence)),
+                    stage: .displayProjection,
+                    payload: .init(detail: detail),
+                    outcome: .accepted
+                ),
+                to: url
+            )
+        }
+
+        let rotated = url.deletingPathExtension().appendingPathExtension("previous.jsonl")
+        #expect(fileManager.fileExists(atPath: url.path))
+        #expect(fileManager.fileExists(atPath: rotated.path))
+        #expect(try Data(contentsOf: url).isEmpty == false)
+        #expect(try Data(contentsOf: rotated).isEmpty == false)
+    }
 }

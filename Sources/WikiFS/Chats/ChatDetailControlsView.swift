@@ -10,6 +10,8 @@ struct ChatDetailControlsView: View {
     @Binding var hideToolCalls: Bool
     let exitStatus: Int32?
     let debugFolderURL: URL?
+    let copyDiagnostics: () -> Void
+    let writeDiagnosticsJSONL: (URL) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -21,6 +23,10 @@ struct ChatDetailControlsView: View {
                 Menu {
                     Toggle("Show internals", isOn: $showsInternals)
                     Toggle("Hide tool calls", isOn: $hideToolCalls)
+                    Button("Copy Diagnostics", systemImage: "doc.on.doc") {
+                        copyDiagnostics()
+                    }
+                    .help("Copy a redacted app and daemon diagnostic snapshot")
                     if let exitStatus {
                         Label(
                             exitStatus == 0 ? "Ended" : "Exited \(exitStatus)",
@@ -28,6 +34,10 @@ struct ChatDetailControlsView: View {
                         )
                     }
                     if let debugFolderURL {
+                        Button("Write Redacted Diagnostics JSONL", systemImage: "doc.text") {
+                            writeDiagnosticsJSONL(debugFolderURL.appendingPathComponent("chat-diagnostics.jsonl"))
+                        }
+                        .help("Append redacted trace records to the debug folder")
                         Button("Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
                             NSWorkspace.shared.activateFileViewerSelecting([debugFolderURL])
                         }

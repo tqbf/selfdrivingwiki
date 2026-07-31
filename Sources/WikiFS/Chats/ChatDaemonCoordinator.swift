@@ -44,6 +44,7 @@ public final class ChatDaemonCoordinator {
 
     private let client: ChatDaemonCommands
     private let eventSink: DaemonQueueEventSink
+    private let diagnosticTrace: ChatDiagnosticTrace
 
     /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
     private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
@@ -74,12 +75,17 @@ public final class ChatDaemonCoordinator {
 
     private var routerTask: Task<Void, Never>?
 
-    init(client: ChatDaemonCommands, eventSink: DaemonQueueEventSink) {
+    init(
+        client: ChatDaemonCommands,
+        eventSink: DaemonQueueEventSink,
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
+    ) {
         // Intentionally non-`public` — `DaemonQueueEventSink` is internal, so
         // the coordinator can only be constructed from within the WikiFS module
         // (the app wires it in `WikiFSApp`; tests inject a stub `ChatDaemonCommands`).
         self.client = client
         self.eventSink = eventSink
+        self.diagnosticTrace = diagnosticTrace
         startRouting()
     }
 
@@ -101,7 +107,7 @@ public final class ChatDaemonCoordinator {
     /// explain whether the daemon half was unavailable, malformed, or old.
     func diagnosticSnapshot(for chatID: ChatID?) async -> ChatDiagnosticMergedSnapshot {
         let correlation = chatID.map { ChatDiagnosticCorrelation.Value(rawValue: $0.rawValue) }
-        let app = await ChatDiagnostics.appTrace.snapshot(
+        let app = await diagnosticTrace.snapshot(
             chat: correlation,
             summary: ["sync": "app-coordinator", "chat": correlation?.rawValue ?? "draft"]
         )
@@ -117,21 +123,46 @@ public final class ChatDaemonCoordinator {
             case .diagnosticVersion: outcome = .versionFailure
             default: outcome = .failed
             }
-            _ = await ChatDiagnostics.appTrace.record(
+            _ = await diagnosticTrace.record(
                 stage: .syncAcceptance,
                 outcome: outcome,
                 payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
             )
-            let updated = await ChatDiagnostics.appTrace.snapshot(chat: correlation)
+            let updated = await diagnosticTrace.snapshot(chat: correlation)
             return ChatDiagnosticSnapshotMerge.merge(app: updated, daemon: nil)
         } catch {
-            _ = await ChatDiagnostics.appTrace.record(
+            _ = await diagnosticTrace.record(
                 stage: .syncAcceptance,
                 outcome: .failed,
                 payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
             )
-            return ChatDiagnosticSnapshotMerge.merge(app: await ChatDiagnostics.appTrace.snapshot(chat: correlation), daemon: nil)
+            return ChatDiagnosticSnapshotMerge.merge(app: await diagnosticTrace.snapshot(chat: correlation), daemon: nil)
         }
+    }
+
+    /// Requests the app/daemon snapshot through the normal coordinator path,
+    /// then writes the redacted artifact to the caller-provided destination.
+    /// The exporter rotates app-local trace material only after that write
+    /// succeeds, preserving retry evidence when a pasteboard write fails.
+    func copyDiagnostics(
+        for chatID: ChatID?,
+        exporter: ChatDiagnosticExporter = .init(),
+        write: (Data) throws -> Void
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        try await exporter.copy(snapshot, write: write)
+    }
+
+    /// Writes the same redacted coordinator snapshot as JSONL for explicit
+    /// diagnostic collection. Full-content ACP artifacts remain the separate
+    /// debug-folder workflow owned by the chat runtime.
+    func writeDiagnosticsJSONL(
+        for chatID: ChatID?,
+        to url: URL,
+        exporter: ChatDiagnosticExporter = .init()
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        try await exporter.writeJSONL(snapshot, to: url)
     }
 
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a

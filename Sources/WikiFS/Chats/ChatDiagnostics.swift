@@ -95,8 +95,8 @@ actor ChatDiagnosticTrace {
 
     func snapshot(chat: ChatDiagnosticCorrelation.Value? = nil, summary: [String: String] = [:]) -> ChatDiagnosticSnapshotEnvelope {
         let selected = chat.map { recordsByChat[$0] ?? [] } ?? recordsByChat.values.flatMap { $0 }
-        let droppedRecords = chat.flatMap { droppedRecordsByChat[$0] } ?? droppedRecordsByChat.values.reduce(0, +)
-        let droppedBytes = chat.flatMap { droppedBytesByChat[$0] } ?? droppedBytesByChat.values.reduce(0, +)
+        let droppedRecords = chat.map { droppedRecordsByChat[$0] ?? 0 } ?? droppedRecordsByChat.values.reduce(0, +)
+        let droppedBytes = chat.map { droppedBytesByChat[$0] ?? 0 } ?? droppedBytesByChat.values.reduce(0, +)
         return ChatDiagnosticSnapshotEnvelope(
             process: identity,
             events: selected.map(\.event),
@@ -173,6 +173,46 @@ enum ChatDiagnostics {
     }
 }
 
+/// App-side export boundary for the redacted diagnostic artifact. The caller
+/// supplies the destination so AppKit pasteboard access stays at the UI edge
+/// and tests can exercise real coordinator snapshots without a hosted view.
+@MainActor
+struct ChatDiagnosticExporter {
+    private let trace: ChatDiagnosticTrace
+    private let jsonlWriter: ChatDiagnosticJSONLWriter
+
+    init(
+        trace: ChatDiagnosticTrace = ChatDiagnostics.appTrace,
+        jsonlWriter: ChatDiagnosticJSONLWriter = ChatDiagnosticJSONLWriter()
+    ) {
+        self.trace = trace
+        self.jsonlWriter = jsonlWriter
+    }
+
+    /// Copies one complete redacted merged snapshot. Trace material rotates
+    /// strictly after the destination confirms the write succeeded.
+    func copy(
+        _ snapshot: ChatDiagnosticMergedSnapshot,
+        write: (Data) throws -> Void
+    ) async throws {
+        let data = try JSONEncoder().encode(snapshot)
+        try write(data)
+        await trace.resetAfterSuccessfulExport()
+    }
+
+    /// Appends the merged trace records to a redacted JSONL artifact. This is
+    /// deliberately separate from the full-content debug-folder workflow.
+    func writeJSONL(
+        _ snapshot: ChatDiagnosticMergedSnapshot,
+        to url: URL
+    ) async throws {
+        for event in snapshot.events {
+            _ = try await jsonlWriter.append(event, to: url)
+        }
+        await trace.resetAfterSuccessfulExport()
+    }
+}
+
 actor ChatDiagnosticJSONLWriter {
     private let fileManager: FileManager
 
@@ -185,7 +225,9 @@ actor ChatDiagnosticJSONLWriter {
         }
         let newline = Data("\n".utf8)
         let target = try rotatedURLIfNeeded(forAdditionalBytes: encoded.count + newline.count, url: url)
-        if !fileManager.fileExists(atPath: target.path) { fileManager.createFile(atPath: target.path, contents: nil) }
+        if !fileManager.fileExists(atPath: target.path) {
+            try Data().write(to: target, options: .withoutOverwriting)
+        }
         let handle = try FileHandle(forWritingTo: target)
         defer {
             do { try handle.close() }
@@ -198,6 +240,7 @@ actor ChatDiagnosticJSONLWriter {
     }
 
     private func rotatedURLIfNeeded(forAdditionalBytes additional: Int, url: URL) throws -> URL {
+        guard fileManager.fileExists(atPath: url.path) else { return url }
         let current: Int
         do {
             current = (try fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
@@ -215,4 +258,9 @@ actor ChatDiagnosticJSONLWriter {
 
 enum ChatDiagnosticJSONLError: Error, Equatable {
     case recordTooLarge(Int)
+}
+
+enum ChatDiagnosticExportError: Error, Equatable {
+    case invalidUTF8
+    case pasteboardWriteFailed
 }

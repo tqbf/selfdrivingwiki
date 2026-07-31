@@ -104,7 +104,9 @@ struct ChatDetailView: View {
                     showsInternals: $showsInternals,
                     hideToolCalls: $hideToolCalls,
                     exitStatus: remoteSession.exitStatus,
-                    debugFolderURL: remoteSession.debugFolderURL
+                    debugFolderURL: remoteSession.debugFolderURL,
+                    copyDiagnostics: copyDiagnostics,
+                    writeDiagnosticsJSONL: writeDiagnosticsJSONL
                 )
                 .padding(.top, ChatMetrics.debugTopInset)
                 .padding(.trailing, ChatMetrics.contentInset)
@@ -190,6 +192,35 @@ struct ChatDetailView: View {
                 version: (quoteAnchor?.version ?? 0) + 1,
                 quote: quote
             )
+        }
+    }
+
+    private func copyDiagnostics() {
+        Task { @MainActor in
+            do {
+                try await coordinator.copyDiagnostics(for: chatID) { data in
+                    guard let text = String(data: data, encoding: .utf8) else {
+                        throw ChatDiagnosticExportError.invalidUTF8
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    guard pasteboard.setString(text, forType: .string) else {
+                        throw ChatDiagnosticExportError.pasteboardWriteFailed
+                    }
+                }
+            } catch {
+                DebugLog.store("chat diagnostic copy failed: \(error)")
+            }
+        }
+    }
+
+    private func writeDiagnosticsJSONL(to url: URL) {
+        Task { @MainActor in
+            do {
+                try await coordinator.writeDiagnosticsJSONL(for: chatID, to: url)
+            } catch {
+                DebugLog.store("chat diagnostic JSONL export failed: \(error)")
+            }
         }
     }
 
