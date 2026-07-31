@@ -35,10 +35,11 @@ struct ChatsListView: NSViewControllerRepresentable {
         let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
         let needs = vc.needsReload(visible)
         DebugLog.tabs("ChatsListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
-        // TEMPORARY (stuck "responding…" badge): seam 5 of 6. Seam 4 firing
-        // without this one means `AgentToolsView`'s re-render did not reach the
-        // representable (an unchanged-input short-circuit above us).
-        DebugLog.chatLive("5.sidebar.updateNSVC rows=\(visible.count) needsReload=\(needs)")
+        ChatDiagnostics.observe(
+            stage: .displayProjection,
+            correlation: .init(eventKind: .init(rawValue: "sidebar")),
+            detail: "\(needs ? "reload" : "reconfigure"); rows=\(visible.count)"
+        )
         if needs {
             vc.reloadData(from: visible)
         } else {
@@ -178,9 +179,11 @@ final class ChatsListViewController: NSViewController {
         let live = Set(items.map(\.id).filter { chatDaemon?.isChatGenerating($0) ?? false })
         guard live != loggedLiveIDs else { return }
         loggedLiveIDs = live
-        DebugLog.chatLive(
-            "6.sidebar.\(reason) live=[\(live.map(\.rawValue).sorted().joined(separator: ","))] "
-            + "reconfigured=\(reconfigured)/\(candidates)")
+        ChatDiagnostics.observe(
+            stage: .displayProjection,
+            correlation: .init(eventKind: .init(rawValue: "sidebar-\(reason)")),
+            detail: "live-count=\(live.count); reconfigured=\(reconfigured)/\(candidates)"
+        )
     }
 
     private func signature(_ rows: [ChatSummary]) -> String {

@@ -28,10 +28,13 @@ struct AgentToolsView: View {
         // because `isChatGenerating(_:)` is called from the NSTableView data
         // source, which SwiftUI can't observe.
         let _ = chatDaemon?.runningStateToken
-        // TEMPORARY (stuck "responding…" badge): seam 4 of 6. A token bump at
-        // seam 3 with no matching line here means the read above did not
-        // register with Observation, so the sidebar is never invalidated.
-        let _ = DebugLog.chatLive("4.sidebar.body token=\(chatDaemon?.runningStateToken ?? -1)")
+        // Debug-only observation of the sidebar's tracked generation token.
+        // It contains no chat content and is retained only in the redacted trace.
+        let _ = ChatDiagnostics.observe(
+            stage: .displayProjection,
+            correlation: .init(updateSequence: .init(UInt64(chatDaemon?.runningStateToken ?? 0))),
+            detail: "sidebar-body"
+        )
         VStack(spacing: 0) {
             chatsHeader
             chatSearchBar

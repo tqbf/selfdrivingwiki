@@ -164,7 +164,11 @@ struct ChatDetailView: View {
             updateRightSidebarRegistration()
         }
         .onChange(of: liveDebugKey, initial: true) { _, key in
-            DebugLog.chatLive("7.detail \(key)")
+            ChatDiagnostics.observe(
+                stage: .displayProjection,
+                correlation: .init(eventKind: .init(rawValue: "chat-detail")),
+                detail: "presentation-change-\(key)"
+            )
         }
         .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {

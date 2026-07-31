@@ -13,6 +13,7 @@ public protocol ChatDaemonCommands: AnyObject, Sendable {
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
     func stopChat(_ chatID: ChatID) async throws
     func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+    func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -93,6 +94,44 @@ public final class ChatDaemonCoordinator {
         wireSessionCallbacks(session)
         sessions[key] = session
         return session
+    }
+
+    /// Builds the redacted app/daemon diagnostic artifact for an existing chat.
+    /// Request failures become an explicit app-side snapshot event so exports
+    /// explain whether the daemon half was unavailable, malformed, or old.
+    func diagnosticSnapshot(for chatID: ChatID?) async -> ChatDiagnosticMergedSnapshot {
+        let correlation = chatID.map { ChatDiagnosticCorrelation.Value(rawValue: $0.rawValue) }
+        let app = await ChatDiagnostics.appTrace.snapshot(
+            chat: correlation,
+            summary: ["sync": "app-coordinator", "chat": correlation?.rawValue ?? "draft"]
+        )
+        guard chatID != nil else { return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: nil) }
+        do {
+            let daemon = try await client.chatDiagnosticSnapshot(.init(chat: correlation))
+            return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: daemon)
+        } catch let error as DaemonXPCError {
+            let outcome: ChatDiagnosticOutcome
+            switch error {
+            case .timeout: outcome = .timeout
+            case .diagnosticDecode: outcome = .decodeFailure
+            case .diagnosticVersion: outcome = .versionFailure
+            default: outcome = .failed
+            }
+            _ = await ChatDiagnostics.appTrace.record(
+                stage: .syncAcceptance,
+                outcome: outcome,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            let updated = await ChatDiagnostics.appTrace.snapshot(chat: correlation)
+            return ChatDiagnosticSnapshotMerge.merge(app: updated, daemon: nil)
+        } catch {
+            _ = await ChatDiagnostics.appTrace.record(
+                stage: .syncAcceptance,
+                outcome: .failed,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            return ChatDiagnosticSnapshotMerge.merge(app: await ChatDiagnostics.appTrace.snapshot(chat: correlation), daemon: nil)
+        }
     }
 
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a

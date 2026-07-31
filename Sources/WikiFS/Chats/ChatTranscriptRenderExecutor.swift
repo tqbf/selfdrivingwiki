@@ -2,6 +2,7 @@
 
 import Foundation
 import WebKit
+import WikiFSCore
 
 struct ChatTranscriptRenderRevision: Hashable, Sendable {
     let rawValue: Int
@@ -98,20 +99,24 @@ final class ChatTranscriptRenderExecutor {
         }
         guard let expected else { return }
         guard acknowledgement.revision == expected.revision else {
+            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
             reportAnomaly(.staleAcknowledgement(expected: expected.revision, received: acknowledgement.revision))
             return
         }
         guard acknowledgement.kind == expected.command.kind else {
+            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
             reportAnomaly(.invalidAcknowledgement(expected: expected.command.kind, received: acknowledgement.kind))
             scheduleRecovery(after: expected.command)
             return
         }
         guard acknowledgement.rowID == expected.command.rowID else {
+            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
             reportAnomaly(.rowMismatch(expected: expected.command.rowID, received: acknowledgement.rowID))
             scheduleRecovery(after: expected.command)
             return
         }
         guard acknowledgement.outcome == .success else {
+            observe(stage: .domFailure, outcome: .failed, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
             reportAnomaly(.failedAcknowledgement(acknowledgement.outcome))
             scheduleRecovery(after: expected.command)
             return
@@ -125,6 +130,7 @@ final class ChatTranscriptRenderExecutor {
             acknowledgedSnapshot = applying(expected.command, to: acknowledgedSnapshot)
         }
         state = .idle
+        observe(stage: .domAcknowledgement, outcome: .accepted, revision: acknowledgement.revision, rowID: acknowledgement.rowID)
         reloadRevision = nil
         recoveryReloadAttempted = false
         drain()
@@ -145,6 +151,7 @@ final class ChatTranscriptRenderExecutor {
             command = first
         }
         let revision = makeRevision()
+        observe(stage: .renderPlanning, outcome: .accepted, revision: revision, rowID: command.rowID)
         if case .reload = command {
             state = .awaitingReload
             reloadRevision = revision
@@ -162,6 +169,7 @@ final class ChatTranscriptRenderExecutor {
         reloadSnapshot = nil
         guard case .reload = command else {
             if !recoveryReloadAttempted {
+                observe(stage: .recoveryReload, outcome: .recovered, revision: nil, rowID: command.rowID)
                 requiresRecoveryReload = true
                 drain()
             }
@@ -174,6 +182,23 @@ final class ChatTranscriptRenderExecutor {
     private func makeRevision() -> ChatTranscriptRenderRevision {
         nextRevision += 1
         return ChatTranscriptRenderRevision(rawValue: nextRevision)
+    }
+
+    private func observe(
+        stage: ChatDiagnosticStage,
+        outcome: ChatDiagnosticOutcome,
+        revision: ChatTranscriptRenderRevision?,
+        rowID: ChatDisplayRowID?
+    ) {
+        ChatDiagnostics.observe(
+            stage: stage,
+            outcome: outcome,
+            correlation: .init(
+                displayRow: rowID.map { .init(rawValue: $0.domValue) },
+                rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
+            ),
+            detail: "renderer"
+        )
     }
 
     private func applying(

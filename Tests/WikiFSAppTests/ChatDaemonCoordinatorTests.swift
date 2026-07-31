@@ -339,6 +339,14 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         )
     }
 
+    func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope {
+        try request.validatingVersion()
+        return ChatDiagnosticSnapshotEnvelope(
+            process: .init(source: .daemon),
+            events: []
+        )
+    }
+
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
         resolveCalls.append(request)
         if shouldThrow { throw StubError.throwing }
