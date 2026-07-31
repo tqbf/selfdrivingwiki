@@ -48,11 +48,17 @@ public struct ProvenanceDeletionBlocker: Equatable, Hashable, Sendable {
 
 /// A non-empty, persistently ordered collection of provenance deletion blockers.
 public struct NonEmptyProvenanceDeletionBlockers: Equatable, Sendable {
-    public let values: [ProvenanceDeletionBlocker]
+    /// SQLite's deterministic page, version, source order. Consumers preserve
+    /// this order when they present or further classify the restriction.
+    public let ordered: [ProvenanceDeletionBlocker]
+
+    /// Compatibility spelling for callers introduced before the order contract
+    /// was named explicitly.
+    public var values: [ProvenanceDeletionBlocker] { ordered }
 
     public init?(_ values: [ProvenanceDeletionBlocker]) {
         guard !values.isEmpty else { return nil }
-        self.values = values
+        self.ordered = values
     }
 }
 

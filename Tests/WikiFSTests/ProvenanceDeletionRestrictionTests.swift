@@ -83,4 +83,13 @@ struct ProvenanceDeletionRestrictionTests {
     @Test func emptyBlockerCollectionCannotBeConstructed() {
         #expect(NonEmptyProvenanceDeletionBlockers([]) == nil)
     }
+
+    @Test func nonEmptyBlockersExposeTheirPersistenceOrder() {
+        let blocker = ProvenanceDeletionBlocker(
+            sourceID: SourceID(rawValue: "source"),
+            pageVersionID: PageVersionID(rawValue: "version"),
+            pageID: PageID(rawValue: "page"))
+
+        #expect(NonEmptyProvenanceDeletionBlockers([blocker])?.ordered == [blocker])
+    }
 }
