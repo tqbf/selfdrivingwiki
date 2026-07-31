@@ -4,7 +4,7 @@ import SwiftUI
 import WebKit
 import WikiFSCore
 
-private extension ChatDisplayRowID {
+extension ChatDisplayRowID {
     /// Prefixes make the DOM namespace explicit even where raw durable IDs
     /// happen to share the same string representation.
     var domValue: String {
@@ -13,6 +13,20 @@ private extension ChatDisplayRowID {
         case .toolCall(let id): "tool-\(id.rawValue)"
         case .notice(let id): "notice-\(id.rawValue)"
         case .failure(let id): "failure-\(id.rawValue)"
+        }
+    }
+
+    init?(domValue: String) {
+        if domValue.hasPrefix("message-") {
+            self = .message(ChatMessageID(rawValue: String(domValue.dropFirst("message-".count))))
+        } else if domValue.hasPrefix("tool-") {
+            self = .toolCall(ToolCallID(rawValue: String(domValue.dropFirst("tool-".count))))
+        } else if domValue.hasPrefix("notice-") {
+            self = .notice(ChatTranscriptNoticeID(rawValue: String(domValue.dropFirst("notice-".count))))
+        } else if domValue.hasPrefix("failure-") {
+            self = .failure(ChatTranscriptFailureID(rawValue: String(domValue.dropFirst("failure-".count))))
+        } else {
+            return nil
         }
     }
 }
@@ -302,6 +316,7 @@ struct ChatWebView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var style: VisualStyle = .activityFeed
@@ -349,10 +364,18 @@ struct ChatWebView: NSViewRepresentable {
         /// non-final only when it is the LAST row of a still-live event stream —
         /// i.e. it may still grow via `replaceLastRow`). Captured in `apply`.
         private var renderedEvents: [AgentEvent] = []
-        private var renderedChatRows: [ChatDisplayRow] = []
-        private var pendingChatRows: [ChatDisplayRow] = []
         private var rendersTypedChatRows = false
         private var followState: ChatTranscriptFollowState = .following
+        private var pendingChatReloadAcknowledgement: (@MainActor (ChatTranscriptRenderAcknowledgement) -> Void)?
+        private lazy var chatRenderExecutor = ChatTranscriptRenderExecutor(
+            mutate: { [weak self] command, revision, acknowledge in
+                guard let self else { return }
+                self.performChatRenderMutation(command, revision: revision, acknowledge: acknowledge)
+            },
+            reportAnomaly: { anomaly in
+                DebugLog.store("chat transcript renderer anomaly: \(anomaly)")
+            }
+        )
 
         /// Resolve the provider once per render pass on the main actor. Returns
         /// the current `WikiRenderContext` (or nil → constant-true behavior).
@@ -401,16 +424,10 @@ struct ChatWebView: NSViewRepresentable {
         /// the document's existing append/replace helpers directly.
         func reload(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
             rendersTypedChatRows = true
-            renderedCount = 0
-            renderedShowsInternals = false
-            renderedTranscriptID = transcriptID
-            renderedChatRows = []
-            pendingChatRows = chatRows
-            renderedEvents = []
-            renderedLastEvent = nil
-            followState = ChatTranscriptFollowState.reducing(followState, event: .transcriptReset)
-            isLoaded = false
-            webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
+            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
+                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
+                rows: chatRows
+            ))
         }
 
         func apply(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
@@ -418,27 +435,10 @@ struct ChatWebView: NSViewRepresentable {
                 reload(chatRows: chatRows, transcriptID: transcriptID)
                 return
             }
-            guard transcriptID == renderedTranscriptID,
-                  chatRows.count >= renderedChatRows.count,
-                  zip(chatRows, renderedChatRows).allSatisfy({ $0.0.id == $0.1.id })
-            else {
-                reload(chatRows: chatRows, transcriptID: transcriptID)
-                return
-            }
-            guard isLoaded else {
-                pendingChatRows = chatRows
-                return
-            }
-
-            let existingCount = renderedChatRows.count
-            for index in 0..<existingCount where chatRows[index] != renderedChatRows[index] {
-                replaceChatRow(chatRows[index], context: currentContext())
-            }
-            if chatRows.count > existingCount {
-                appendChatRows(Array(chatRows[existingCount...]), context: currentContext())
-            }
-            renderedChatRows = chatRows
-            renderedCount = chatRows.count
+            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
+                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
+                rows: chatRows
+            ))
         }
 
         func apply(events: [AgentEvent], showsInternals: Bool, timestamps: [Date?] = [],
@@ -516,16 +516,7 @@ struct ChatWebView: NSViewRepresentable {
             // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
             DebugLog.chatLive("8.web.didFinish pending=\(pendingEvents.count)")
             if rendersTypedChatRows {
-                let toRender = pendingChatRows
-                pendingChatRows = []
-                if !toRender.isEmpty {
-                    appendChatRows(toRender, context: currentContext())
-                }
-                renderedChatRows = toRender
-                renderedCount = toRender.count
-                if pendingHighlightQuote != nil {
-                    applyHighlight()
-                }
+                beginControlledChatReloadIfNeeded()
                 return
             }
             let toRender = pendingEvents
@@ -632,26 +623,175 @@ struct ChatWebView: NSViewRepresentable {
             webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)
         }
 
-        private func appendChatRows(_ rows: [ChatDisplayRow], context: WikiRenderContext?) {
-            let html = rows.map { Self.chatDisplayRowHTML($0, context: context) }.joined()
-            guard !html.isEmpty,
-                  let jsonString = Self.jsonString(for: html)
-            else { return }
-            let follows = followState.followsStreamingContent ? "true" : "false"
-            webView?.evaluateJavaScript("appendRows(\(jsonString), \(follows))", completionHandler: nil)
+        private func performChatRenderMutation(
+            _ command: ChatTranscriptRenderCommand,
+            revision: ChatTranscriptRenderRevision,
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            guard let webView else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: command.kind, revision: revision, rowID: command.rowID, outcome: .error
+                ))
+                return
+            }
+            if case .reload = command {
+                followState = ChatTranscriptFollowState.reducing(followState, event: .transcriptReset)
+                if isLoaded {
+                    guard let reload = chatRenderExecutor.beginReloadMutation() else { return }
+                    runControlledChatReload(reload, acknowledge: acknowledge)
+                    return
+                }
+                pendingChatReloadAcknowledgement = acknowledge
+                isLoaded = false
+                webView.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
+                return
+            }
+            guard let script = chatMutationScript(command, revision: revision, context: currentContext()) else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: command.kind, revision: revision, rowID: command.rowID, outcome: .error
+                ))
+                return
+            }
+            evaluateChatMutation(
+                script,
+                expectedKind: command.kind,
+                revision: revision,
+                expectedRowID: command.rowID,
+                acknowledge: acknowledge
+            )
         }
 
-        /// Replace one semantic chat row in the existing one-document surface.
-        /// The JavaScript routine retains an in-row focus target and selection
-        /// offsets, so changing a streaming block or tool status does not turn a
-        /// reader's current interaction into a new focus destination.
-        private func replaceChatRow(_ row: ChatDisplayRow, context: WikiRenderContext?) {
-            let html = Self.chatDisplayRowHTML(row, context: context)
-            guard let rowID = Self.jsonString(for: row.id.domValue),
-                  let rowHTML = Self.jsonString(for: html)
+        private func beginControlledChatReloadIfNeeded() {
+            guard let pendingChatReloadAcknowledgement,
+                  let reload = chatRenderExecutor.beginReloadMutation()
             else { return }
+            self.pendingChatReloadAcknowledgement = nil
+            runControlledChatReload(reload, acknowledge: pendingChatReloadAcknowledgement)
+        }
+
+        private func runControlledChatReload(
+            _ reload: (snapshot: ChatTranscriptRenderSnapshot, revision: ChatTranscriptRenderRevision),
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            let html = reload.snapshot.rows.map { Self.chatDisplayRowHTML($0, context: currentContext()) }.joined()
+            guard let htmlJSON = Self.jsonString(for: html)
+            else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: .reload, revision: reload.revision, rowID: nil, outcome: .error
+                ))
+                return
+            }
             let follows = followState.followsStreamingContent ? "true" : "false"
-            webView?.evaluateJavaScript("replaceChatRow(\(rowID), \(rowHTML), \(follows))", completionHandler: nil)
+            let script = "replaceChatTranscript(\(htmlJSON), \(follows), \(reload.revision.rawValue))"
+            evaluateChatMutation(
+                script,
+                expectedKind: .reload,
+                revision: reload.revision,
+                expectedRowID: nil,
+                acknowledge: acknowledge
+            )
+        }
+
+        private func chatMutationScript(
+            _ command: ChatTranscriptRenderCommand,
+            revision: ChatTranscriptRenderRevision,
+            context: WikiRenderContext?
+        ) -> String? {
+            let follows = followState.followsStreamingContent ? "true" : "false"
+            let revisionValue = revision.rawValue
+            switch command {
+            case .reload:
+                return nil
+            case .append(let rows):
+                let html = rows.map { Self.chatDisplayRowHTML($0, context: context) }.joined()
+                guard let htmlJSON = Self.jsonString(for: html),
+                      let rowIDJSON = Self.jsonString(for: rows.last?.id.domValue ?? "")
+                else { return nil }
+                return "appendChatRows(\(htmlJSON), \(follows), \(revisionValue), \(rowIDJSON))"
+            case .insert(let row, let before):
+                guard let rowIDJSON = Self.jsonString(for: row.id.domValue),
+                      let beforeIDJSON = Self.jsonString(for: before.domValue),
+                      let htmlJSON = Self.jsonString(for: Self.chatDisplayRowHTML(row, context: context))
+                else { return nil }
+                return "insertChatRow(\(rowIDJSON), \(beforeIDJSON), \(htmlJSON), \(follows), \(revisionValue))"
+            case .replace(let row):
+                guard let rowIDJSON = Self.jsonString(for: row.id.domValue),
+                      let htmlJSON = Self.jsonString(for: Self.chatDisplayRowHTML(row, context: context))
+                else { return nil }
+                return "replaceChatRow(\(rowIDJSON), \(htmlJSON), \(follows), \(revisionValue))"
+            case .remove(let rowID):
+                guard let rowIDJSON = Self.jsonString(for: rowID.domValue) else { return nil }
+                return "removeChatRow(\(rowIDJSON), \(revisionValue))"
+            }
+        }
+
+        private func evaluateChatMutation(
+            _ script: String,
+            expectedKind: ChatTranscriptRenderCommandKind,
+            revision: ChatTranscriptRenderRevision,
+            expectedRowID: ChatDisplayRowID?,
+            acknowledge: @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+        ) {
+            guard let webView else {
+                acknowledge(ChatTranscriptRenderAcknowledgement(
+                    kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error
+                ))
+                return
+            }
+            Task { @MainActor in
+                let result = await webView.chatTranscriptJavaScriptResult(script)
+                acknowledge(Self.acknowledgement(
+                    from: result,
+                    expectedKind: expectedKind,
+                    revision: revision,
+                    expectedRowID: expectedRowID
+                ))
+            }
+        }
+
+        private static func acknowledgement(
+            from result: ChatTranscriptJavaScriptResult,
+            expectedKind: ChatTranscriptRenderCommandKind,
+            revision: ChatTranscriptRenderRevision,
+            expectedRowID: ChatDisplayRowID?
+        ) -> ChatTranscriptRenderAcknowledgement {
+            switch result {
+            case .undefined:
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .undefined)
+            case .javaScriptException(let message):
+                DebugLog.store("chat transcript JavaScript exception: \(message)")
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .javaScriptException)
+            case .timeout:
+                DebugLog.store("chat transcript JavaScript evaluation timed out")
+                return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .timeout)
+            case .success(let value):
+                guard JSONSerialization.isValidJSONObject(value) else {
+                    return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                }
+                do {
+                    let data = try JSONSerialization.data(withJSONObject: value)
+                    let wire = try JSONDecoder().decode(DOMAcknowledgement.self, from: data)
+                    guard let kind = ChatTranscriptRenderCommandKind(rawValue: wire.kind) else {
+                        return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                    }
+                    return .init(
+                        kind: kind,
+                        revision: .init(rawValue: wire.revision),
+                        rowID: wire.rowID.flatMap(ChatDisplayRowID.init(domValue:)),
+                        outcome: ChatTranscriptRenderAcknowledgementOutcome(rawValue: wire.outcome) ?? .error
+                    )
+                } catch {
+                    DebugLog.store("decode chat transcript acknowledgement: \(error)")
+                    return .init(kind: expectedKind, revision: revision, rowID: expectedRowID, outcome: .error)
+                }
+            }
+        }
+
+        private struct DOMAcknowledgement: Decodable {
+            let kind: String
+            let revision: Int
+            let rowID: String?
+            let outcome: String
         }
 
         private static func jsonString(for value: String) -> String? {
@@ -1326,7 +1466,12 @@ struct ChatWebView: NSViewRepresentable {
           }
         </style>
         </head><body>
+        <main id="chat-transcript" aria-live="polite"></main>
         <script>
+          function transcriptRoot() { return document.getElementById('chat-transcript'); }
+          function renderAcknowledgement(kind, revision, rowID, outcome) {
+            return {kind: kind, revision: revision, rowID: rowID || null, outcome: outcome};
+          }
           function isNearBottom() {
             return Math.max(0, document.documentElement.scrollHeight - (window.scrollY + window.innerHeight)) <= 72;
           }
@@ -1337,15 +1482,16 @@ struct ChatWebView: NSViewRepresentable {
           }
           function appendRows(html, shouldFollow) {
             var wasNearBottom = isNearBottom();
-            document.body.insertAdjacentHTML('beforeend', html);
+            transcriptRoot().insertAdjacentHTML('beforeend', html);
             if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
             reportFollowState();
           }
           function replaceLastRow(html) {
-            if (document.body.lastElementChild) {
-              document.body.lastElementChild.outerHTML = html;
+            var root = transcriptRoot();
+            if (root.lastElementChild) {
+              root.lastElementChild.outerHTML = html;
             } else {
-              document.body.insertAdjacentHTML('beforeend', html);
+              root.insertAdjacentHTML('beforeend', html);
             }
             window.scrollTo(0, document.body.scrollHeight);
           }
@@ -1375,16 +1521,94 @@ struct ChatWebView: NSViewRepresentable {
             }
             return [root, root.childNodes.length];
           }
-          function replaceChatRow(rowID, html, shouldFollow) {
+          function restoreRowInteraction(state) {
+            if (!state) return;
+            var anchor = state.anchorRowID && document.querySelector('[data-row-id="' + CSS.escape(state.anchorRowID) + '"]');
+            if (anchor && !state.wasNearBottom) window.scrollBy(0, anchor.getBoundingClientRect().top - state.anchorTop);
+            var focusRow = state.focusRowID && document.querySelector('[data-row-id="' + CSS.escape(state.focusRowID) + '"]');
+            if (focusRow && state.focusKey) {
+              var focus = focusRow.querySelector('[data-focus-key="' + CSS.escape(state.focusKey) + '"]');
+              if (focus) focus.focus({preventScroll:true});
+            }
+            var selectionRow = state.selectionRowID && document.querySelector('[data-row-id="' + CSS.escape(state.selectionRowID) + '"]');
+            if (selectionRow && state.offsets) {
+              var start = textPoint(selectionRow, state.offsets[0]), end = textPoint(selectionRow, state.offsets[1]);
+              var range = document.createRange(); range.setStart(start[0], start[1]); range.setEnd(end[0], end[1]);
+              var selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+            }
+          }
+          function currentRowInteraction() {
+            var root = transcriptRoot();
+            var active = document.activeElement;
+            var activeRow = active && active.closest && active.closest('[data-row-id]');
+            var selection = window.getSelection();
+            var selectionRow = selection && selection.rangeCount === 1 && selection.getRangeAt(0).startContainer.parentElement && selection.getRangeAt(0).startContainer.parentElement.closest('[data-row-id]');
+            var anchorRow = Array.from(root.children).find(function(row) { return row.getBoundingClientRect().bottom >= 0; });
+            return {
+              wasNearBottom: isNearBottom(),
+              focusRowID: activeRow && activeRow.getAttribute('data-row-id'),
+              focusKey: activeRow && active.getAttribute('data-focus-key'),
+              selectionRowID: selectionRow && selectionRow.getAttribute('data-row-id'),
+              offsets: selectionRow && selectionOffsets(selectionRow),
+              anchorRowID: anchorRow && anchorRow.getAttribute('data-row-id'),
+              anchorTop: anchorRow ? anchorRow.getBoundingClientRect().top : 0
+            };
+          }
+          function appendChatRows(html, shouldFollow, revision, rowID) {
+            try {
+              appendRows(html, shouldFollow);
+              var row = rowID && document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+              return renderAcknowledgement('append', revision, rowID, rowID && !row ? 'missingRow' : 'success');
+            } catch (error) {
+              return renderAcknowledgement('append', revision, rowID, 'error');
+            }
+          }
+          function insertChatRow(rowID, beforeRowID, html, shouldFollow, revision) {
+            try {
+              var before = document.querySelector('[data-row-id="' + CSS.escape(beforeRowID) + '"]');
+              if (!before) return renderAcknowledgement('insert', revision, rowID, 'missingRow');
+              var wasNearBottom = isNearBottom();
+              before.insertAdjacentHTML('beforebegin', html);
+              if (!document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]')) return renderAcknowledgement('insert', revision, rowID, 'missingRow');
+              if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+              reportFollowState();
+              return renderAcknowledgement('insert', revision, rowID, 'success');
+            } catch (error) {
+              return renderAcknowledgement('insert', revision, rowID, 'error');
+            }
+          }
+          function removeChatRow(rowID, revision) {
+            try {
+              var row = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
+              if (!row) return renderAcknowledgement('remove', revision, rowID, 'missingRow');
+              row.remove(); reportFollowState();
+              return renderAcknowledgement('remove', revision, rowID, 'success');
+            } catch (error) {
+              return renderAcknowledgement('remove', revision, rowID, 'error');
+            }
+          }
+          function replaceChatTranscript(html, shouldFollow, revision) {
+            try {
+              var state = currentRowInteraction();
+              transcriptRoot().innerHTML = html;
+              restoreRowInteraction(state);
+              if (shouldFollow && state.wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
+              reportFollowState();
+              return renderAcknowledgement('reload', revision, null, 'success');
+            } catch (error) {
+              return renderAcknowledgement('reload', revision, null, 'error');
+            }
+          }
+          function replaceChatRow(rowID, html, shouldFollow, revision) {
             var oldRow = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
-            if (!oldRow) { appendRows(html, shouldFollow); return; }
+            if (!oldRow) return renderAcknowledgement('replace', revision, rowID, 'missingRow');
             var wasNearBottom = isNearBottom();
             var active = document.activeElement;
             var focusKey = active && oldRow.contains(active) ? active.getAttribute('data-focus-key') : null;
             var offsets = selectionOffsets(oldRow);
             oldRow.outerHTML = html;
             var newRow = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
-            if (!newRow) return;
+            if (!newRow) return renderAcknowledgement('replace', revision, rowID, 'missingRow');
             if (focusKey) {
               var replacementFocus = newRow.querySelector('[data-focus-key="' + CSS.escape(focusKey) + '"]');
               if (replacementFocus) replacementFocus.focus({preventScroll:true});
@@ -1396,6 +1620,7 @@ struct ChatWebView: NSViewRepresentable {
             }
             if (shouldFollow && wasNearBottom) window.scrollTo(0, document.body.scrollHeight);
             reportFollowState();
+            return renderAcknowledgement('replace', revision, rowID, 'success');
           }
           window.addEventListener('scroll', reportFollowState, {passive:true});
           // Delegated click handler for the per-bubble copy icon (issue #285).
