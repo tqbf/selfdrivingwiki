@@ -37,6 +37,21 @@ public enum DebugLog {
     ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatlive"' \
     ///              --style compact --info --last 10m
     public static func chatLive(_ message: @autoclosure () -> String) { emit("chatlive", message()) }
+    /// Stable redacted chat diagnostic predicate:
+    ///
+    ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatdiagnostics"' --style compact --info --debug --last 10m
+    public static func chatDiagnostics(_ message: @autoclosure () -> String, verbose: Bool) {
+        if verbose {
+            guard verboseLogging else { return }
+            #if canImport(os)
+            emit("chatdiagnostics", message(), level: .debug)
+            #else
+            emit("chatdiagnostics", message())
+            #endif
+        } else {
+            emit("chatdiagnostics", message())
+        }
+    }
 
     // MARK: - try? replacement
 
@@ -142,6 +157,7 @@ public enum DebugLog {
         "reader": Logger(subsystem: subsystem, category: "reader"),
         "editor": Logger(subsystem: subsystem, category: "editor"),
         "chatlive": Logger(subsystem: subsystem, category: "chatlive"),
+        "chatdiagnostics": Logger(subsystem: subsystem, category: "chatdiagnostics"),
     ]
 
     // `.default` is the "notice" level (persisted by `log show`); `.debug` is

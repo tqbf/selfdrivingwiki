@@ -21,6 +21,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private let extractionCoordinator: ExtractionCoordinator
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
+    private let diagnosticTrace: DaemonChatDiagnostics
 
     private let sharedGate: GenerationGate
     private let registry = ControllerRegistry()
@@ -37,6 +38,7 @@ final class DaemonChatHost: @unchecked Sendable {
         generationGate: GenerationGate,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
         idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
     ) {
         self.containerDirectory = containerDirectory
@@ -44,6 +46,7 @@ final class DaemonChatHost: @unchecked Sendable {
         self.sharedGate = generationGate
         self.storeResolver = storeResolver
         self.pushEvent = pushEvent
+        self.diagnosticTrace = diagnosticTrace
         self.idleEvictionDelay = idleEvictionDelay
     }
 
@@ -301,7 +304,8 @@ final class DaemonChatHost: @unchecked Sendable {
             wikiID: wikiID,
             store: store,
             runtime: runtime,
-            pushEvent: pushEvent
+            pushEvent: pushEvent,
+            diagnosticTrace: diagnosticTrace
         )
         let resolvedController = await registry.insertIfAbsent(
             controller,

@@ -87,6 +87,15 @@ public final class RemoteChatSession {
 
     func ingest(_ update: ChatSyncUpdate) {
         guard update.projection.chatID == chatID.chatID else { return }
+        ChatDiagnostics.observe(
+            stage: .syncAcceptance,
+            correlation: .init(
+                chat: .init(rawValue: update.projection.chatID.rawValue),
+                generation: .init(rawValue: update.projection.generation.rawValue),
+                updateSequence: .init(UInt64(max(0, update.projection.lastIncludedSequence.rawValue)))
+            ),
+            detail: "live-update"
+        )
         apply(.applyUpdate(update))
     }
 
@@ -115,6 +124,12 @@ public final class RemoteChatSession {
     private func apply(_ action: ChatClientSyncAction) {
         guard let state = syncState else { return }
         let reduction = ChatClientSyncReducer.reduce(state, action)
+        ChatDiagnostics.observe(
+            stage: .syncReconciliation,
+            outcome: reduction.state.syncStatus == .synchronized ? .accepted : .recovered,
+            correlation: .init(chat: .init(rawValue: state.chatID.rawValue)),
+            detail: "client-sync"
+        )
         syncState = reduction.state
         if reduction.state.syncStatus == .synchronized {
             clearAuthoritativeSnapshotRetryBackoff()

@@ -18,6 +18,7 @@ final class WikiDaemon: @unchecked Sendable {
 
     private let containerDirectory: URL
     private let makeStore: (URL) throws -> WikiStore
+    private let daemonChatDiagnostics = DaemonChatDiagnostics()
 
     // MARK: - State (accessed on `queue`)
 
@@ -598,7 +599,8 @@ final class WikiDaemon: @unchecked Sendable {
             storeResolver: storeResolver,
             pushEvent: { [weak self] envelope in
                 self?.pushChatEnvelope(envelope)
-            })
+            },
+            diagnosticTrace: daemonChatDiagnostics)
 
         return queue.sync {
             if let existing = _chatHost {
@@ -716,6 +718,50 @@ final class WikiDaemon: @unchecked Sendable {
         #else
         return Data()
         #endif
+    }
+
+    /// Validates the version at the daemon's XPC boundary before handing out a
+    /// redacted, process-local trace. Invalid requests still receive a typed
+    /// version-failure snapshot rather than an ambiguous empty `Data` reply.
+    func chatDiagnosticSnapshotData(request: Data) async -> Data {
+        do {
+            let decoded = try JSONDecoder().decode(ChatDiagnosticSnapshotRequest.self, from: request)
+            try decoded.validatingVersion()
+            let chat = decoded.chat
+            await daemonChatDiagnostics.record(
+                stage: .syncAcceptance,
+                outcome: .accepted,
+                correlation: .init(chat: chat),
+                detail: "diagnostic-snapshot-request"
+            )
+            let snapshot = await daemonChatDiagnostics.snapshot(chat: chat)
+            // The caller may successfully copy this artifact but fail before
+            // the reset acknowledgement returns. Retire the key now while the
+            // ring remains available for that retry.
+            await daemonChatDiagnostics.rotateFingerprintKeyPreservingRecords()
+            return try JSONEncoder().encode(snapshot)
+        } catch {
+            DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData rejected request: \(error)")
+            let snapshot = await daemonChatDiagnostics.versionFailureSnapshot()
+            do {
+                return try JSONEncoder().encode(snapshot)
+            } catch {
+                DebugLog.agent("WikiDaemon.chatDiagnosticSnapshotData failed to encode version failure: \(error)")
+                return Data()
+            }
+        }
+    }
+
+    func resetChatDiagnosticsData(request: Data) async -> Data {
+        do {
+            let decoded = try JSONDecoder().decode(ChatDiagnosticResetRequest.self, from: request)
+            try decoded.validatingVersion()
+            await daemonChatDiagnostics.resetAfterSuccessfulExport()
+            return Data("{\"ok\":true}".utf8)
+        } catch {
+            DebugLog.agent("WikiDaemon.resetChatDiagnosticsData rejected request: \(error)")
+            return Data()
+        }
     }
 
     /// Resolve a chat permission.

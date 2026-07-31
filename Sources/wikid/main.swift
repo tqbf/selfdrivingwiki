@@ -358,6 +358,22 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.chatDiagnosticSnapshotData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            let data = await daemon.resetChatDiagnosticsData(request: request)
+            sendableReply.reply(data)
+        }
+    }
+
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
@@ -426,6 +442,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
     func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
     func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]

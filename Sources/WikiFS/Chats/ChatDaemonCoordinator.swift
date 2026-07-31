@@ -13,6 +13,8 @@ public protocol ChatDaemonCommands: AnyObject, Sendable {
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
     func stopChat(_ chatID: ChatID) async throws
     func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+    func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope
+    func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
     func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws
 }
@@ -43,6 +45,7 @@ public final class ChatDaemonCoordinator {
 
     private let client: ChatDaemonCommands
     private let eventSink: DaemonQueueEventSink
+    private let diagnosticTrace: ChatDiagnosticTrace
 
     /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
     private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
@@ -73,12 +76,17 @@ public final class ChatDaemonCoordinator {
 
     private var routerTask: Task<Void, Never>?
 
-    init(client: ChatDaemonCommands, eventSink: DaemonQueueEventSink) {
+    init(
+        client: ChatDaemonCommands,
+        eventSink: DaemonQueueEventSink,
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
+    ) {
         // Intentionally non-`public` — `DaemonQueueEventSink` is internal, so
         // the coordinator can only be constructed from within the WikiFS module
         // (the app wires it in `WikiFSApp`; tests inject a stub `ChatDaemonCommands`).
         self.client = client
         self.eventSink = eventSink
+        self.diagnosticTrace = diagnosticTrace
         startRouting()
     }
 
@@ -93,6 +101,88 @@ public final class ChatDaemonCoordinator {
         wireSessionCallbacks(session)
         sessions[key] = session
         return session
+    }
+
+    /// Builds the redacted app/daemon diagnostic artifact for an existing chat.
+    /// Request failures become an explicit app-side snapshot event so exports
+    /// explain whether the daemon half was unavailable, malformed, or old.
+    func diagnosticSnapshot(for chatID: ChatID?) async -> ChatDiagnosticMergedSnapshot {
+        let correlation = chatID.map { ChatDiagnosticCorrelation.Value(rawValue: $0.rawValue) }
+        let app = diagnosticTrace.snapshot(
+            chat: correlation,
+            summary: ["sync": "app-coordinator", "chat": correlation?.rawValue ?? "draft"]
+        )
+        guard chatID != nil else { return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: nil) }
+        do {
+            let daemon = try await client.chatDiagnosticSnapshot(.init(chat: correlation))
+            return ChatDiagnosticSnapshotMerge.merge(app: app, daemon: daemon)
+        } catch let error as DaemonXPCError {
+            let outcome: ChatDiagnosticOutcome
+            switch error {
+            case .timeout: outcome = .timeout
+            case .diagnosticDecode: outcome = .decodeFailure
+            case .diagnosticVersion: outcome = .versionFailure
+            default: outcome = .failed
+            }
+            _ = diagnosticTrace.record(
+                stage: .syncAcceptance,
+                outcome: outcome,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            let updated = diagnosticTrace.snapshot(chat: correlation)
+            return ChatDiagnosticSnapshotMerge.merge(app: updated, daemon: nil)
+        } catch {
+            _ = diagnosticTrace.record(
+                stage: .syncAcceptance,
+                outcome: .failed,
+                payload: .init(correlation: .init(chat: correlation), detail: "daemon-diagnostic-snapshot")
+            )
+            return ChatDiagnosticSnapshotMerge.merge(app: diagnosticTrace.snapshot(chat: correlation), daemon: nil)
+        }
+    }
+
+    /// Requests the app/daemon snapshot through the normal coordinator path,
+    /// then writes the redacted artifact to the caller-provided destination.
+    /// A written artifact immediately retires both fingerprint epochs. The
+    /// daemon reset still drains both rings on success; a failed reset retains
+    /// retry evidence without reusing an exported fingerprint key.
+    func copyDiagnostics(
+        for chatID: ChatID?,
+        write: (Data) throws -> Void
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
+        try await exporter.copy(snapshot, write: write)
+        if let chatID {
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
+        }
+        exporter.resetAfterSuccessfulExport()
+    }
+
+    /// Writes the same redacted coordinator snapshot as JSONL for explicit
+    /// diagnostic collection. Full-content ACP artifacts remain the separate
+    /// debug-folder workflow owned by the chat runtime.
+    func writeDiagnosticsJSONL(
+        for chatID: ChatID?,
+        to url: URL
+    ) async throws {
+        let snapshot = await diagnosticSnapshot(for: chatID)
+        let exporter = ChatDiagnosticExporter(trace: diagnosticTrace)
+        try await exporter.writeJSONL(snapshot, to: url)
+        if let chatID {
+            do {
+                try await client.resetChatDiagnostics(.init(chat: .init(rawValue: chatID.rawValue)))
+            } catch {
+                exporter.rotateFingerprintKeyPreservingRecords()
+                throw error
+            }
+        }
+        exporter.resetAfterSuccessfulExport()
     }
 
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a

@@ -721,6 +721,47 @@ struct DaemonChatControllerTests {
         #expect(persistedTools.first?.status == .completed)
     }
 
+    @Test func runtimeTranscriptBurstCoalescesDiagnosticsByRealDurableMessageID() async throws {
+        let harness = try ControllerHarness()
+        let trace = DaemonChatDiagnostics()
+        let controller = try harness.makeController(diagnosticTrace: trace)
+        let submission = harness.makeSubmission(commandID: "command-diagnostic-burst", turnID: "turn-diagnostic-burst")
+        let messageID = ChatMessageID(rawValue: "assistant-diagnostic-burst")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
+        for text in ["A", "B", "C"] {
+            await harness.runtime.emit(.transcript([.messageDelta(
+                messageID: messageID,
+                turnID: submission.turnID,
+                role: .assistant,
+                delta: text,
+                createdAt: .distantPast
+            )]))
+        }
+        try await harness.waitUntilOverlay(
+            controller,
+            matches: { items in
+                items.contains {
+                    guard case .message(let message) = $0 else { return false }
+                    return message.messageID == messageID && message.text == "ABC"
+                }
+            },
+            failureMessage: "expected the real runtime burst to reach the transcript overlay"
+        )
+
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: harness.chat.id.rawValue)
+        let item = ChatDiagnosticCorrelation.Value(rawValue: messageID.rawValue)
+        let events = await trace.snapshot(chat: chat).events
+        for stage in [ChatDiagnosticStage.providerReceipt, .reduction, .persistence] {
+            let matching = events.filter {
+                $0.stage == stage && $0.payload.correlation.durableItem == item
+            }
+            #expect(matching.count == 1)
+            #expect(matching[0].outcome == .coalesced)
+            #expect(matching[0].payload.correlation.content?.length == 1)
+        }
+    }
+
     @Test func completedTurnClearsTransientTranscriptOverlay() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -781,7 +822,9 @@ private final class ControllerHarness {
         try? FileManager.default.removeItem(at: rootDirectory)
     }
 
-    func makeController() throws -> DaemonChatController {
+    func makeController(
+        diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics()
+    ) throws -> DaemonChatController {
         try DaemonChatController(
             chatID: chat.id,
             wikiID: WikiID(rawValue: "wiki-controller"),
@@ -789,7 +832,8 @@ private final class ControllerHarness {
             runtime: runtime,
             pushEvent: { [eventRecorder] envelope in
                 eventRecorder.record(envelope)
-            }
+            },
+            diagnosticTrace: diagnosticTrace
         )
     }
 

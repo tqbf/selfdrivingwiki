@@ -348,6 +348,7 @@ struct ChatWebView: NSViewRepresentable {
         /// *different* transcript and must not be used — see
         /// `ChatWebView.transcriptID`.
         private var renderedTranscriptID: TranscriptID?
+        private var pendingTranscriptID: TranscriptID?
         private var isLoaded = false
         private var pendingEvents: [AgentEvent] = []
         /// Pending timestamps to render once the page finishes loading (stashed by
@@ -415,6 +416,7 @@ struct ChatWebView: NSViewRepresentable {
             self.timestamps = timestamps
             isLoaded = false
             pendingEvents = events
+            pendingTranscriptID = transcriptID
             pendingTimestamps = timestamps
             webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
         }
@@ -460,18 +462,22 @@ struct ChatWebView: NSViewRepresentable {
                 transcriptID: transcriptID, renderedTranscriptID: renderedTranscriptID,
                 showsInternals: showsInternals, renderedShowsInternals: renderedShowsInternals,
                 eventCount: events.count, renderedCount: renderedCount) {
-                // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
-                DebugLog.chatLive(
-                    "8.web.reload count=\(events.count) renderedCount=\(renderedCount)")
+                ChatDiagnostics.observe(
+                    stage: .recoveryReload,
+                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
+                    detail: "reload; rows=\(events.count); rendered=\(renderedCount)"
+                )
                 reload(events: events, showsInternals: showsInternals,
                        timestamps: timestamps, transcriptID: transcriptID)
                 return
             }
             guard isLoaded else {
-                // TEMPORARY: rows arriving before the shell finishes loading are
-                // stashed, not drawn. A run of these with no `8.web.didFinish`
-                // after them means the shell load never completed.
-                DebugLog.chatLive("8.web.pending count=\(events.count)")
+                ChatDiagnostics.observe(
+                    stage: .renderPlanning,
+                    outcome: .coalesced,
+                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
+                    detail: "pending; rows=\(events.count)"
+                )
                 pendingEvents = events
                 pendingTimestamps = timestamps
                 return
@@ -499,12 +505,15 @@ struct ChatWebView: NSViewRepresentable {
                renderedEvents.count > 0 {
                 replaceLastRow(prevLast, at: renderedEvents.count - 1, isStreaming: false, allEvents: events, context: context)
             }
-            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8. The
-            // `from` index is the tell — a non-zero `from` on a chat's FIRST
-            // append means rows 0..<from were never drawn (the missing
-            // "thinking" rows before "read").
-            DebugLog.chatLive(
-                "8.web.append from=\(renderedCount) to=\(events.count)")
+            ChatDiagnostics.observe(
+                stage: .renderPlanning,
+                correlation: .init(
+                    chat: diagnosticChat(transcriptID),
+                    eventKind: .init(rawValue: "legacy-web"),
+                    content: events.last.flatMap(diagnosticContent)
+                ),
+                detail: "append; from=\(renderedCount); to=\(events.count)"
+            )
             appendRows(Array(events[renderedCount...]), startingIndex: renderedCount, context: context)
             renderedCount = events.count
             renderedLastEvent = events.last
@@ -513,8 +522,11 @@ struct ChatWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            // TEMPORARY (chat transcript freezes mid-stream): seam 8 of 8.
-            DebugLog.chatLive("8.web.didFinish pending=\(pendingEvents.count)")
+            ChatDiagnostics.observe(
+                stage: .domAcknowledgement,
+                correlation: .init(chat: diagnosticChat(pendingTranscriptID ?? renderedTranscriptID), eventKind: .init(rawValue: "legacy-web")),
+                detail: "shell-finished; pending=\(pendingEvents.count)"
+            )
             if rendersTypedChatRows {
                 beginControlledChatReloadIfNeeded()
                 return
@@ -535,6 +547,20 @@ struct ChatWebView: NSViewRepresentable {
             // rows are in the DOM (issue #281).
             if pendingHighlightQuote != nil {
                 applyHighlight()
+            }
+        }
+
+        private func diagnosticChat(_ transcriptID: TranscriptID?) -> ChatDiagnosticCorrelation.Value? {
+            guard case .chat(let chatID)? = transcriptID else { return nil }
+            return .init(rawValue: chatID.rawValue)
+        }
+
+        private func diagnosticContent(_ event: AgentEvent) -> ChatDiagnosticContentFingerprint? {
+            switch event {
+            case .userText(let text), .assistantText(let text), .thinking(let text), .thinkingDelta(let text), .assistantTextDelta(let text), .result(_, let text):
+                return ChatDiagnostics.fingerprint(text)
+            default:
+                return nil
             }
         }
 
