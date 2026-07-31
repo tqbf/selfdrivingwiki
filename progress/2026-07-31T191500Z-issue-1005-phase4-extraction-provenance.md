@@ -25,6 +25,25 @@ markdown records. It does not add inspector, hydration, or SwiftUI code.
 - PDF extraction compatibility, HTML, materializer sidecars, transcript paths,
   and the `wikictl` refresh path route through the typed derived seam.
 
+## Exact-head audit correction
+
+The corrective implementation commit
+`21cced015a3e894ac6af987b77a8b6667b6a553b` closes the exact-head audit's
+coverage findings without expanding into Phase 5 UI or hydration work.
+
+- Added real writer-contract tests for every required PDF, backend, local-tool,
+  materializer, transcript, and `wikictl` seam. Each writes through production
+  code and reads the resulting typed `ExtractionProvenance`.
+- Added compatibility tests that prove legacy `appendProcessedMarkdown` and
+  transcript entry points reach `appendDerivedMarkdown` with typed producers.
+- Added missing hook rollback assertions for activity plans, source-version
+  links, active heads, blobs/refcounts, and no event emission.
+- Added `ExtractionTool.vimeoTranscript` for imported Vimeo transcript
+  compatibility and `ExtractionTool.bytelessOEmbedSynthetic` codec/projection
+  coverage. This phase does not introduce a native Vimeo network fetcher.
+- Reconciled the normative AC matrix and callable/branch manifest with the
+  concrete test files and names.
+
 ## Verification
 
 Implementation commit: `59381b25fed367c8cb054725a5fa1bc280f96451`.
@@ -33,9 +52,14 @@ Implementation commit: `59381b25fed367c8cb054725a5fa1bc280f96451`.
 - `make test` passed: 2,920 tests in 236 suites, with two explicitly skipped
   opt-in ACP integration tests.
 - `swift build` passed.
-- `swift test` passed.
+- `swift test` passed: 2,945 tests in 238 suites, with four existing opt-in or
+  flaky skips.
 - Focused codec, projection, derived-write, hook, event-emission, manifest,
   CLI, source-version, and legacy extraction regression suites passed.
+- Corrective focused Phase 4 suites passed: 53 tests in five suites.
+- Corrective Phase 4 plus Phase 3 regression suites passed: 139 tests in 15
+  suites.
 - `git diff --check` passed. The source audit found no new bare `try?`, no new
-  raw page/source ID comparisons, and only the intended user/source callers at
-  the `appendProcessedMarkdown` compatibility boundary.
+  raw page/source ID comparisons, and canonical routing through
+  `recordMarkdownExtraction` or `appendDerivedMarkdown` at every reviewed
+  writer seam.
