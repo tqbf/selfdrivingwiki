@@ -1,4 +1,5 @@
 ---
+name: sqlite-concurrency
 description: This app's SQLite concurrency discipline — the store is method-atomic (internal recursive lock + savepoint transactions); writes flow through the main-actor model, off-main reads go through WikiReadPool, and connection state must never cross a call boundary. Read before adding anything that touches the store off the main actor or composes transactions.
 ---
 

@@ -1,4 +1,5 @@
 ---
+name: reproducing-live-ui-bugs
 description: Steps for debugging a live UI bug that passes all unit tests but fails in the running app, when you cannot see the screen. Also covers SwiftUI runtime issues that only Xcode displays — "Modifying state during view update", purple runtime warnings, Hang Risk — including how to capture them from the CLI via `log stream` and bisect a view body to find the real source.
 ---
 
