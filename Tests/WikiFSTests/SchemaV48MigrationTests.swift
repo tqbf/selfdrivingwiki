@@ -232,6 +232,54 @@ struct SchemaV48MigrationTests {
         try assertV48ObjectsAbsent(at: url)
     }
 
+    @Test func orphanedCascadeChildrenAreRepairedAndMigrationSucceeds() throws {
+        let url = try v47URL()
+        // Mirror the real-world corruption: a `sources` row was deleted while
+        // foreign-key enforcement was off, leaving its ON DELETE CASCADE
+        // children behind. source_chunks is WITHOUT ROWID (exercises the
+        // NULL-rowid reporting path); source_search is a rowid table.
+        try MetadataSQLiteFixtureSupport.execute("""
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO source_chunks (source_id, chunk_idx, embedding) VALUES
+            ('ghost-source', 0, x'00'),
+            ('ghost-source', 1, x'00');
+        INSERT INTO source_search (source_id, title, body) VALUES
+            ('ghost-source', 'ghost', 'body');
+        PRAGMA foreign_keys = ON;
+        """, at: url)
+        #expect(try scalar("SELECT COUNT(*) FROM pragma_foreign_key_check", at: url) == "3")
+
+        // The store must open despite the orphans: the gate repairs the
+        // cascade children, then re-checks clean.
+        let store = try migrationStore(at: url)
+        #expect(store.pragmaValue("user_version") == "48")
+        #expect(try scalar("SELECT COUNT(*) FROM source_chunks WHERE source_id = 'ghost-source'", at: url) == "0")
+        #expect(try scalar("SELECT COUNT(*) FROM source_search WHERE source_id = 'ghost-source'", at: url) == "0")
+        #expect(try scalar("SELECT COUNT(*) FROM pragma_foreign_key_check", at: url) == "0")
+    }
+
+    @Test func nonCascadeOrphanStillAbortsMigration() throws {
+        let url = try v47URL()
+        // page_links references pages with the default NO ACTION — an orphan
+        // there is not something a cascade-cleanup can repair, so the
+        // migration must still abort rather than mask the damage.
+        try MetadataSQLiteFixtureSupport.execute("""
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO page_links (from_page_id, to_page_id, link_text)
+        VALUES ('missing-page', 'missing-page', 'link');
+        PRAGMA foreign_keys = ON;
+        """, at: url)
+        #expect(try scalar("SELECT COUNT(*) FROM pragma_foreign_key_check", at: url) == "2")
+
+        do {
+            _ = try migrationStore(at: url)
+            Issue.record("expected non-cascade orphan to abort")
+        } catch let error as SchemaV48MigrationError {
+            #expect(error.description.contains("foreign-key check returned"))
+        }
+        try assertV48ObjectsAbsent(at: url)
+    }
+
     @Test func productionForeignKeyCheckerRunsRealCleanPragmaWithEnforcementEnabled() throws {
         let store = try migrationStore(at: v47URL())
         #expect(store.pragmaValue("foreign_keys") == "1")
