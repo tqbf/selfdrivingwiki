@@ -3992,6 +3992,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// The page-version provenance edges that prevent `sourceID` from being
+    /// deleted (issue #219). Read-only wrapper over the private
+    /// `provenanceDeletionBlockers` so the model + UI can show the restriction
+    /// before attempting a delete that would throw.
+    public func sourceProvenanceBlockers(sourceID: SourceID) throws -> [ProvenanceDeletionBlocker] {
+        try dbWriter.read { db in
+            try self.provenanceDeletionBlockers(sourceID: sourceID, on: db)?.values ?? []
+        }
+    }
+
     /// Finds the complete, deterministic provenance impact before source
     /// deletion. Raw ordering remains at this SQLite boundary.
     private func provenanceDeletionBlockers(
@@ -10254,6 +10264,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 db,
                 sql: "SELECT DISTINCT from_page_id FROM source_links WHERE to_source_id = ?;",
                 arguments: [sourceID.rawValue]
+            )
+            return rows.map { PageID(rawValue: $0) }
+        }
+    }
+
+    /// Pages whose bodies link to `pageID` via `[[wiki-link]]` — the incoming
+    /// page-link edge set (issue #219). Mirrors `sourceLinkingPages`.
+    public func pageLinkingPages(to pageID: PageID) throws -> [PageID] {
+        try dbWriter.read { db in
+            let rows = try String.fetchAll(
+                db,
+                sql: "SELECT DISTINCT from_page_id FROM page_links WHERE to_page_id = ?;",
+                arguments: [pageID.rawValue]
             )
             return rows.map { PageID(rawValue: $0) }
         }
