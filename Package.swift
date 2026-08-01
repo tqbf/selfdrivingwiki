@@ -397,7 +397,7 @@ let package = Package(
         ),
         .testTarget(
             name: "DynamicRendererPRSeriesAuditTests",
-            dependencies: ["DynamicRendererPRSeriesAudit"],
+            dependencies: ["DynamicRendererPRSeriesAudit", "WikiFSTypes"],
             path: "Tests/DynamicRendererPRSeriesAuditTests",
             swiftSettings: strictSwiftSettings
         ),

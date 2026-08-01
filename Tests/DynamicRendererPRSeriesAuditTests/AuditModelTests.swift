@@ -1,7 +1,7 @@
 import Foundation
-import CryptoKit
 import Testing
 @testable import DynamicRendererPRSeriesAudit
+import WikiFSTypes
 
 struct DynamicRendererPRSeriesAuditModelTests {
     @Test func rejectsRecordWithMismatchedHeads() throws {
@@ -417,7 +417,7 @@ private func writeAuditFixture(in directory: URL, base: String) throws -> String
     try schema.write(to: plans.appendingPathComponent("dynamic-renderer-gate-record.schema.json"))
     let native = Data("{\"files\":{\"/Sources/WikiFSTypes/Renderer/RendererConstraints.swift\":{\"mutants\":[{\"id\":\"m1\",\"status\":\"Crash\"}]}}}".utf8)
     try native.write(to: temporary.appendingPathComponent("dynamic-renderer-pr1-native-mutation-report.json"))
-    let digest = SHA256.hash(data: native).map { String(format: "%02x", $0) }.joined()
+    let digest = RendererSHA256.digest(native).hex
     try Data("{\"schemaVersion\":2,\"auditedSHA\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"baseOID\":\"\(base)\",\"generatedAt\":\"2026-08-01T00:00:00+00:00\",\"command\":\"make mutate-scope SOURCES_PATH=Sources/WikiFSTypes/Renderer\",\"toolVersion\":\"1.3.0\",\"nativeReport\":\"tmp/dynamic-renderer-pr1-native-mutation-report.json\",\"nativeReportSHA256\":\"\(digest)\",\"scope\":\"Sources/WikiFSTypes/Renderer\",\"coveredSymbols\":[\"RendererRelativePath\"],\"result\":{\"killed\":1,\"survived\":0,\"unviable\":0},\"threshold\":{\"maximumSurvivors\":0,\"maximumUnviable\":0},\"mutants\":[{\"id\":\"m1\",\"outcome\":\"killed\",\"severity\":\"low\",\"disposition\":\"fixed\",\"rationale\":\"native test crash killed mutant\"}],\"passed\":true}".utf8).write(to: temporary.appendingPathComponent("dynamic-renderer-pr1-mutation-evidence.json"))
     return plans.appendingPathComponent("series.json").path
 }
