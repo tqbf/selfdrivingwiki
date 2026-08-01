@@ -151,6 +151,49 @@ struct WikiDaemonWorkloadHostTests {
         #expect(snapshot.activeItems.isEmpty)
     }
 
+    @Test func typedQueueTranscriptRoundTripsThroughXPC() async throws {
+        let dir = makeTempDir()
+        let queueURL = dir.appendingPathComponent("queue.sqlite")
+        let store = try QueueStore(databaseURL: queueURL)
+        let item = try store.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "typed-xpc-wiki"),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "typed-xpc-source")])
+        ))
+        let expected = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "typed-xpc-message"),
+            turnID: QueueAttemptID(itemID: item.id, attempt: item.attempt).chatTurnID,
+            role: .assistant,
+            text: "typed transcript through XPC",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        try store.upsertTranscriptItems(
+            attemptID: QueueAttemptID(itemID: item.id, attempt: item.attempt),
+            items: [expected]
+        )
+        store.close()
+
+        let daemon = WikiDaemon(containerDirectory: dir)
+        let exporter = WikiDaemonExporter(daemon: daemon)
+        let listener = NSXPCListener.anonymous()
+        let delegate = TestListenerDelegate(exporter: exporter)
+        listener.delegate = delegate
+        listener.resume()
+        defer { listener.invalidate() }
+
+        let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
+        connection.remoteObjectInterface = NSXPCInterface(with: WikiDaemonProtocol.self)
+        connection.resume()
+        defer { connection.invalidate() }
+
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
+        let data = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            proxy.loadTranscript(itemID: item.id.rawValue) { continuation.resume(returning: $0) }
+        }
+
+        #expect(try JSONDecoder().decode([ChatTranscriptItem].self, from: data) == [expected])
+    }
+
     @Test func xpcRegisterEventSinkRoundTrip() async throws {
         let dir = makeTempDir()
         let daemon = WikiDaemon(containerDirectory: dir)

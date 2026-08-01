@@ -87,7 +87,7 @@ public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendabl
         .failure(Error.unavailable(reason: reason))
     }
 
-    public func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] { [] }
+    public func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { [] }
 
     public func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
 }

@@ -59,6 +59,9 @@ public actor QueueEngine {
     /// ``events`` subscribes a fresh stream and the broadcaster yields every
     /// event to all live subscribers.
     private nonisolated let broadcaster = QueueEventBroadcaster()
+    /// Synchronous provider callbacks cannot await this actor. The dedicated
+    /// lock-backed state store owns only per-attempt translation/reduction.
+    private nonisolated let transcriptState = QueueTranscriptStateStore()
 
     /// A fresh event-stream subscription. Every access returns a NEW stream
     /// that receives all events emitted from this point on — safe for any
@@ -292,6 +295,7 @@ public actor QueueEngine {
     /// Retry a failed item: `failed` → `queued`, `attempt + 1`, new
     /// `orderingKey` (back of queue). Triggers a dispatch scan.
     public func retryItem(_ id: QueueItem.ID) async throws {
+        transcriptState.invalidate(itemID: id)
         try store.retryItem(id: id)
         if let updated = try store.getItem(id) {
             emit(.enqueued(updated))
@@ -467,24 +471,23 @@ public actor QueueEngine {
         }
     }
 
-    /// A `Sendable` closure the worker factory captures to yield `.transcript`
-    /// events onto the engine's broadcaster (bypassing `emit()` which is
-    /// actor-isolated). The broadcaster is `Sendable`, so this is safe to
-    /// call from the worker's detached `Task`.
-    public func makeEmitTranscript() -> @Sendable (QueueItem.ID, AgentEvent) -> Void {
-        return { [broadcaster, store] id, event in
-            broadcaster.yield(.transcript(id, event))
-            // Persist to SQLite for cross-session transcript survival —
-            // final events only. Streaming deltas / turn boundaries are
-            // display plumbing; the final `.assistantText` carries the full
-            // text, so persisting every delta bloats rows AND rehydrates as
-            // one row per word-fragment.
-                guard event.isPersistable else { return }
-                do {
-                    try store.appendItemEvent(itemID: id, event: event)
-                } catch {
-                    DebugLog.store("QueueEngine: appendItemEvent failed for item=\(id): \(error)")
+    /// A synchronous callback that accepts a provider event attributed to the
+    /// immutable attempt captured by its worker. Translation/reduction happens
+    /// under the per-attempt lock. SQLite and broadcast run after it releases.
+    public func makeEmitTranscript() -> @Sendable (QueueAttemptID, AgentEvent) -> Void {
+        { [broadcaster, store, transcriptState] attemptID, event in
+            transcriptState.accept(
+                event: event,
+                for: attemptID,
+                persist: { update in
+                    try store.upsertTranscriptItems(
+                        attemptID: update.attemptID,
+                        items: update.changedItems)
+                },
+                broadcast: { update in
+                    broadcaster.yield(.transcript(update))
                 }
+            )
         }
     }
 
@@ -554,27 +557,24 @@ public actor QueueEngine {
         }
     }
 
-    /// Load persisted agent events (transcript) for a queue item from the DB.
-    /// Used by the Activity tracker to show transcripts for items rehydrated
-    /// from a previous session. Deltas are folded into whole rows on the way
-    /// out — rows persisted before deltas were filtered contain fragments.
-    public func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
-        let events: [AgentEvent]
+    /// Load durable typed transcript items for a queue item.
+    public func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] {
+        let items: [ChatTranscriptItem]
         do {
-            events = try store.loadItemEvents(itemID: itemID)
+            items = try store.loadTranscriptItems(itemID: itemID)
         } catch {
-            DebugLog.store("QueueEngine.loadTranscript: failed to load events for \(itemID.rawValue): \(error)")
-            events = []
+            DebugLog.store("QueueEngine.loadTranscript: failed to load items for \(itemID.rawValue): \(error)")
+            items = []
         }
-        return AgentEvent.mergingStreamDeltas(events)
+        return items
     }
 
-    /// Delete persisted events for an item (e.g. on retry).
+    /// Delete persisted typed items for an item.
     public func clearTranscript(for itemID: QueueItem.ID) async {
         do {
-            try store.deleteItemEvents(itemID: itemID)
+            try store.deleteTranscriptItems(itemID: itemID)
         } catch {
-            DebugLog.store("QueueEngine.clearTranscript: failed to delete events for \(itemID.rawValue): \(error)")
+            DebugLog.store("QueueEngine.clearTranscript: failed to delete items for \(itemID.rawValue): \(error)")
         }
     }
 
@@ -756,12 +756,15 @@ public actor QueueEngine {
     /// `cancelItem`), the item is requeued (halt) or marked cancelled
     /// (cancel). After the worker finishes, triggers a dispatch scan.
     private func runWorker(_ item: QueueItem) async {
+        let attemptID = QueueAttemptID(itemID: item.id, attempt: item.attempt)
+        transcriptState.begin(attemptID)
         let worker: any QueueWorker
         do {
             worker = try await workerFactory.worker(for: item)
         } catch {
             // Factory failed to produce a worker — mark the item failed.
             await handleWorkerFinished(item, result: .failure(error))
+            transcriptState.finish(attemptID)
             return
         }
 
@@ -778,6 +781,7 @@ public actor QueueEngine {
         }
 
         await handleWorkerFinished(item, result: result)
+        transcriptState.finish(attemptID)
     }
 
     /// Handle the completion of a worker. Transitions the item to a terminal
@@ -934,6 +938,139 @@ public actor QueueEngine {
     /// Emit a `QueueEvent` to all subscribers.
     private func emit(_ event: QueueEvent) {
         broadcaster.yield(event)
+    }
+}
+
+// MARK: - Queue transcript callback state
+
+/// Serializes synchronous provider callbacks per queue attempt. This class is
+/// `@unchecked Sendable` only because every mutable member is protected by its
+/// private lock, and no mutable reference escapes the critical section.
+/// The synchronous callback-side state machine. It is `internal` so the
+/// concurrency suite can exercise its lock/SQLite boundary directly; clients
+/// still enter it only through `QueueEngine.makeEmitTranscript()`.
+// swiftlint:disable:next unchecked_sendable
+final class QueueTranscriptStateStore: @unchecked Sendable {
+    private struct AttemptState {
+        var translator = AgentEventTranscriptTranslator()
+        var items: [ChatTranscriptItem] = []
+        var nextBatchNumber = 0
+        var pending: [QueueTranscriptUpdate] = []
+        var isDraining = false
+        /// Terminal completion has started. Existing accepted batches may
+        /// drain, but no callback may translate or enqueue another batch.
+        var isClosing = false
+    }
+
+    private let lock = NSLock()
+    private var currentAttemptByItem: [QueueItem.ID: QueueAttemptID] = [:]
+    private var states: [QueueAttemptID: AttemptState] = [:]
+
+    func begin(_ attemptID: QueueAttemptID) {
+        lock.withLock {
+            guard currentAttemptByItem[attemptID.itemID] != attemptID else { return }
+            currentAttemptByItem[attemptID.itemID] = attemptID
+            states[attemptID] = AttemptState()
+        }
+    }
+
+    func invalidate(itemID: QueueItem.ID) {
+        lock.withLock {
+            guard let oldAttempt = currentAttemptByItem.removeValue(forKey: itemID) else { return }
+            states.removeValue(forKey: oldAttempt)
+        }
+    }
+
+    func finish(_ attemptID: QueueAttemptID) {
+        lock.withLock {
+            guard currentAttemptByItem[attemptID.itemID] == attemptID,
+                  var state = states[attemptID]
+            else { return }
+            state.isClosing = true
+            guard state.pending.isEmpty, state.isDraining == false else {
+                states[attemptID] = state
+                return
+            }
+            currentAttemptByItem.removeValue(forKey: attemptID.itemID)
+            states.removeValue(forKey: attemptID)
+        }
+    }
+
+    func accept(
+        event: AgentEvent,
+        for attemptID: QueueAttemptID,
+        persist: @Sendable (QueueTranscriptUpdate) throws -> Void,
+        broadcast: @Sendable (QueueTranscriptUpdate) -> Void
+    ) {
+        let shouldDrain = lock.withLock { () -> Bool in
+            guard currentAttemptByItem[attemptID.itemID] == attemptID,
+                  var state = states[attemptID],
+                  state.isClosing == false
+            else { return false }
+
+            let previousItems = state.items
+            let deltas = state.translator.translate([event], turnID: attemptID.chatTurnID)
+            let reduced = ChatTranscriptReducer.reducing(items: previousItems, with: deltas)
+            state.items = reduced
+
+            var previousByIdentity: [QueueTranscriptItemIdentity: ChatTranscriptItem] = [:]
+            for item in previousItems {
+                previousByIdentity[QueueTranscriptItemIdentity(item)] = item
+            }
+            let changed = reduced.filter { previousByIdentity[QueueTranscriptItemIdentity($0)] != $0 }
+            guard changed.isEmpty == false else {
+                states[attemptID] = state
+                return false
+            }
+
+            let update = QueueTranscriptUpdate(
+                attemptID: attemptID,
+                batchNumber: state.nextBatchNumber,
+                changedItems: changed)
+            state.nextBatchNumber += 1
+            state.pending.append(update)
+            let electDrainer = state.isDraining == false
+            state.isDraining = true
+            states[attemptID] = state
+            return electDrainer
+        }
+
+        guard shouldDrain else { return }
+        drain(attemptID: attemptID, persist: persist, broadcast: broadcast)
+    }
+
+    private func drain(
+        attemptID: QueueAttemptID,
+        persist: @Sendable (QueueTranscriptUpdate) throws -> Void,
+        broadcast: @Sendable (QueueTranscriptUpdate) -> Void
+    ) {
+        while true {
+            let next = lock.withLock { () -> QueueTranscriptUpdate? in
+                guard currentAttemptByItem[attemptID.itemID] == attemptID,
+                      var state = states[attemptID]
+                else { return nil }
+                guard state.pending.isEmpty == false else {
+                    state.isDraining = false
+                    if state.isClosing {
+                        currentAttemptByItem.removeValue(forKey: attemptID.itemID)
+                        states.removeValue(forKey: attemptID)
+                    } else {
+                        states[attemptID] = state
+                    }
+                    return nil
+                }
+                let update = state.pending.removeFirst()
+                states[attemptID] = state
+                return update
+            }
+            guard let next else { return }
+            do {
+                try persist(next)
+                broadcast(next)
+            } catch {
+                DebugLog.store("QueueEngine: typed transcript persistence failed for \(attemptID.itemID.rawValue): \(error)")
+            }
+        }
     }
 }
 

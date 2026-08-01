@@ -186,7 +186,9 @@ public final class QueueStore: @unchecked Sendable {
     /// - v4: `queue_item_activity` table — per-item usage JSON, log/debug URLs,
     ///   and progress-log text (persisted Activity-window metadata).
     /// - v5: `queue_item_transcript_items` table — additive typed transcript
-    ///   storage. The legacy `queue_item_events` table remains for old callers.
+    ///   storage.
+    /// - v6: final typed transcript cutover. Drops only the approved legacy
+    ///   `queue_item_events` table.
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -295,9 +297,9 @@ public final class QueueStore: @unchecked Sendable {
             """)
         }
 
-        // v5: additive typed queue transcript storage. The separately planned
-        // cutover migration drops `queue_item_events`; do not combine that data
-        // reset with this independently deployable storage API phase.
+        // v5: additive typed queue transcript storage. The v6 cutover below
+        // drops the approved legacy table after all runtime callers use these
+        // typed APIs.
         m.registerMigration("v5_add_typed_transcript_items") { db in
             try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS queue_item_transcript_items (
@@ -314,6 +316,12 @@ public final class QueueStore: @unchecked Sendable {
                 UNIQUE (item_id, attempt, item_kind, identity)
             ) WITHOUT ROWID;
             """)
+        }
+
+        // v6 is intentionally only the approved legacy transcript reset. Do
+        // not alter queue metadata, activity rows, or any wiki/chat database.
+        m.registerMigration("v6_drop_legacy_item_events") { db in
+            try db.execute(sql: "DROP TABLE IF EXISTS queue_item_events;")
         }
 
         return m
@@ -766,6 +774,9 @@ public final class QueueStore: @unchecked Sendable {
                     WHERE id = ?;
                     """,
                     arguments: [newOrderingKey, id.rawValue])
+                try db.execute(
+                    sql: "DELETE FROM queue_item_transcript_items WHERE item_id = ?;",
+                    arguments: [id.rawValue])
             }
         }
     }
@@ -897,64 +908,6 @@ public final class QueueStore: @unchecked Sendable {
                         """,
                         arguments: [kind.rawValue, Int64(maxPerQueue)])
                 }
-            }
-        }
-    }
-
-    // MARK: - Public API: Item events (transcripts)
-
-    /// Append a typed agent event to the persisted transcript for a queue item.
-    /// Events are stored in insertion order (seq is auto-incremented by SQLite).
-    /// Safe to call from a background thread — the store serializes via GRDB.
-    public func appendItemEvent(itemID: QueueItem.ID, event: AgentEvent) throws {
-        let data = try JSONEncoder().encode(event)
-        let json = String(data: data, encoding: .utf8) ?? "{}"
-        let now = Self.nowMillis()
-
-        try Self.wrap {
-            let queue = try self.queue()
-            try queue.write { db in
-                try db.execute(
-                    sql: """
-                    INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
-                    VALUES (?, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?), -1) + 1, ?, ?);
-                    """,
-                    arguments: [itemID.rawValue, itemID.rawValue, json, now])
-            }
-        }
-    }
-
-    /// Load all persisted agent events for a queue item, ordered by seq.
-    public func loadItemEvents(itemID: QueueItem.ID) throws -> [AgentEvent] {
-        try Self.wrap {
-            let queue = try self.queue()
-            return try queue.read { db in
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: "SELECT event_json FROM queue_item_events WHERE item_id = ? ORDER BY seq;",
-                    arguments: [itemID.rawValue])
-                return rows.compactMap { row -> AgentEvent? in
-                    let json: String = row["event_json"]
-                    guard let data = json.data(using: .utf8) else { return nil }
-                    do {
-                        return try JSONDecoder().decode(AgentEvent.self, from: data)
-                    } catch {
-                        DebugLog.store("QueueStore.loadItemEvents: decode failed for event row — \(error.localizedDescription)")
-                        return nil
-                    }
-                }
-            }
-        }
-    }
-
-    /// Delete all persisted events for an item (e.g. on retry — clears the old transcript).
-    public func deleteItemEvents(itemID: QueueItem.ID) throws {
-        try Self.wrap {
-            let queue = try self.queue()
-            try queue.write { db in
-                try db.execute(
-                    sql: "DELETE FROM queue_item_events WHERE item_id = ?;",
-                    arguments: [itemID.rawValue])
             }
         }
     }

@@ -282,8 +282,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
             if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let events = await engine.loadTranscript(for: QueueItemID(rawValue: itemID))
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(events) })) ?? Data()
+                let items = await engine.loadTranscript(for: QueueItemID(rawValue: itemID))
+                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(items) })) ?? Data()
                 sendableReply.reply(data)
             } else {
                 sendableReply.reply(Data())

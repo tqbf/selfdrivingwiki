@@ -2,6 +2,63 @@ import SwiftUI
 import WikiFSCore
 import WikiFSEngine
 
+/// Value-only input for the Activity window's typed transcript surface. It
+/// keeps canonical merge, copy text, transcript identity, and renderer
+/// dependencies together so the hosted window and its tests use one seam.
+@MainActor
+struct ActivityTranscriptPresentation {
+    let items: [ChatTranscriptItem]
+    let progressText: String
+    let transcriptID: TranscriptID
+    let isStreaming: Bool
+    let onIntent: (ChatTranscriptIntent) -> Void
+    let renderContext: (() -> WikiRenderContext?)?
+    let blobStore: WikiStoreModel?
+
+    static func canonicalItems(
+        persisted: [ChatTranscriptItem],
+        live: [ChatTranscriptItem]
+    ) -> [ChatTranscriptItem] {
+        QueueTranscriptCanonicalMerge.merging(persisted: persisted, live: live)
+    }
+
+    var usesProgressFallback: Bool {
+        items.isEmpty && progressText.isEmpty == false
+    }
+
+    var copyText: String? {
+        if items.isEmpty == false {
+            let lines = items.map(Self.plainText).filter { $0.isEmpty == false }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
+        }
+        return progressText.isEmpty ? nil : progressText
+    }
+
+    func transcriptView() -> ChatTranscriptView {
+        ChatTranscriptView(
+            rendering: .init(transcript: ChatDisplayProjection.project(
+                items: items,
+                activeContentBlock: nil
+            ).transcript),
+            transcriptID: transcriptID,
+            emptyStateMessage: "No activity yet.",
+            isStreaming: isStreaming,
+            onIntent: onIntent,
+            renderContext: renderContext,
+            blobStore: blobStore
+        )
+    }
+
+    private static func plainText(_ item: ChatTranscriptItem) -> String {
+        switch item {
+        case .message(let message): return message.text
+        case .toolCall(let tool): return [tool.toolName, tool.detail, tool.output].compactMap { $0 }.joined(separator: "\n")
+        case .systemNotice(let notice): return [notice.title, notice.message].compactMap { $0 }.joined(separator: "\n")
+        case .turnFailure(let failure): return failure.message
+        }
+    }
+}
+
 /// A per-queue activity window — one instance shows the Ingestion queue, the
 /// other the Extraction queue, so the two pipelines read as the separate
 /// systems they are. A real `NSWindow` (not transient) listing this queue's
@@ -16,7 +73,7 @@ import WikiFSEngine
 /// **Detail (right):** A header (sources, wiki, state, error, primary action)
 /// over the selected item's transcript — rendered via `ChatWebView` fed from
 /// `activityTracker.transcripts[itemID]`. For extraction items (which produce
-/// progress strings, not typed `AgentEvent`s), falls back to the accumulated
+/// progress strings, not transcript rows), falls back to the accumulated
 /// progress text.
 ///
 /// **Toolbar:** This queue's pause/resume/halt menu (global actions live in
@@ -36,7 +93,7 @@ struct ActivityWindowView: View {
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
-    @State private var loadedEvents: [AgentEvent] = []
+    @State private var loadedTranscriptItems: [ChatTranscriptItem] = []
     @State private var didAutoSelect = false
 
     private var queueTitle: String {
@@ -312,7 +369,7 @@ struct ActivityWindowView: View {
                 }
                 // #608: surface a pending always-ask permission stall as a
                 // yellow "Permission pending: <cmd>" row. Mirrors how streamed
-                // `AgentEvent`s + live usage flow into the row — the tracker's
+                // Typed transcript updates + live usage flow into the row — the tracker's
                 // `.pendingPermission` event sets/clears this. Reuses the
                 // `exclamationmark.triangle.fill` + `.orange` pattern from the
                 // Agents-settings model-warning (PR #605). ACP agents gate one
@@ -472,13 +529,11 @@ struct ActivityWindowView: View {
                 transcriptContent(for: item)
             }
             .task(id: itemID) {
-                // If the tracker has no in-memory events for this item,
-                // try loading persisted events from the DB.
-                if activityTracker.transcript(for: itemID).isEmpty {
-                    loadedEvents = await queueEngine.loadTranscript(for: itemID)
-                } else {
-                    loadedEvents = []
-                }
+                // Prevent the previous selection's durable rows from briefly
+                // merging into this item's live transcript while its load is
+                // in flight.
+                loadedTranscriptItems = []
+                loadedTranscriptItems = await queueEngine.loadTranscript(for: itemID)
             }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState
@@ -624,38 +679,18 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func transcriptContent(for item: QueueItem) -> some View {
-        // Prefer in-memory events (live); fall back to persisted (rehydrated).
-        let inMemoryEvents = activityTracker.transcript(for: item.id)
-        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
-        let progressText = activityTracker.progressLog(for: item.id)
+        let presentation = transcriptPresentation(for: item)
 
-        if !events.isEmpty {
-            ChatWebView(
-                events: events,
-                // Selecting a different queue item reuses this representable's
-                // web view + coordinator (same structural identity, different
-                // associated value), so the differ needs the item id to know
-                // the DOM it built belongs to a different run.
-                transcriptID: .queueItem(item.id),
-                showsInternals: false,
-                onWikiLink: wikiLinkHandler(for: item.wikiID),
-                // Resolve ghost-link coloring + blob serving from THIS item's
-                // wiki store (the transcript's `[[wiki-links]]` point into the
-                // wiki the agent ran against, not a different one). nil when
-                // the wiki window is closed — links still render but without
-                // resolution-based styling (the same degradation the in-wiki
-                // feed tolerates when a store is mid-swap).
-                renderContext: renderContextProvider(for: item.wikiID),
-                blobStore: store(for: item.wikiID)
-            )
+        if !presentation.items.isEmpty {
+            presentation.transcriptView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Match `detailHeader`'s 16pt inset. ChatWebView's CSS sets
                 // body left-padding to 0 by design (PR #457) — the left margin
                 // is the host's responsibility, so provide it here.
                 .padding(.horizontal, 16)
-        } else if !progressText.isEmpty {
+        } else if presentation.usesProgressFallback {
             ScrollView {
-                Text(progressText)
+                Text(presentation.progressText)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -837,21 +872,27 @@ struct ActivityWindowView: View {
 
     // MARK: - Copy
 
-    /// The plain-text content available to copy for this item, or `nil` if
-    /// there's nothing to copy. Uses the same event/progress-fallback logic as
-    /// `transcriptContent(for:)` so Copy always reflects what's on screen.
+    /// The copy path uses the same canonical typed rows as the renderer.
     private func copyableText(for item: QueueItem) -> String? {
-        let inMemoryEvents = activityTracker.transcript(for: item.id)
-        let events = inMemoryEvents.isEmpty ? loadedEvents : inMemoryEvents
+        transcriptPresentation(for: item).copyText
+    }
 
-        if !events.isEmpty {
-            let lines = events.map(\.plainText).filter { !$0.isEmpty }
-            if lines.isEmpty { return nil }
-            return lines.joined(separator: "\n\n")
-        }
-
-        let progressText = activityTracker.progressLog(for: item.id)
-        return progressText.isEmpty ? nil : progressText
+    private func transcriptPresentation(for item: QueueItem) -> ActivityTranscriptPresentation {
+        ActivityTranscriptPresentation(
+            items: ActivityTranscriptPresentation.canonicalItems(
+            persisted: loadedTranscriptItems,
+            live: activityTracker.transcript(for: item.id)),
+            progressText: activityTracker.progressLog(for: item.id),
+            transcriptID: TranscriptID.queueItem(item.id),
+            isStreaming: item.state == .running,
+            onIntent: { intent in
+                if case .openWikiLink(let url, let inNewTab) = intent {
+                    wikiLinkHandler(for: item.wikiID)(url, inNewTab)
+                }
+            },
+            renderContext: renderContextProvider(for: item.wikiID),
+            blobStore: store(for: item.wikiID)
+        )
     }
 
     /// #635: retry the given queue item WITHOUT swallowing the throw. The
