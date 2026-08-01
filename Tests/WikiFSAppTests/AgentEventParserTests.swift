@@ -248,8 +248,12 @@ struct AgentEventParserTests {
         #expect(AgentEvent.toolResult(isError: false, summary: "done").plainText == "done")
     }
 
-    @Test func plainTextToolResultError() {
+    @Test func plainTextToolResultErrorPreservesLegacyEmptySummaryRendering() {
         #expect(AgentEvent.toolResult(isError: true, summary: "").plainText == "Error: (error)")
+    }
+
+    @Test func nilToolResultHasNoSyntheticPlainText() {
+        #expect(AgentEvent.toolResult(isError: true, summary: nil).plainText.isEmpty)
     }
 
     @Test func plainTextSubagentStart() {

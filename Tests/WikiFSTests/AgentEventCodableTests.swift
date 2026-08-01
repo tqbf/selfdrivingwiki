@@ -55,6 +55,19 @@ import Foundation
         #expect(try roundTrip(event) == event)
     }
 
+    @Test func nilToolResultRoundTripsWithoutSyntheticSummary() throws {
+        let event = AgentEvent.toolResult(isError: false, summary: nil)
+        #expect(try roundTrip(event) == event)
+    }
+
+    @Test func existingNonemptyToolResultPayloadDecodes() throws {
+        let data = Data(#"{"toolResult":{"isError":true,"summary":"command not found"}}"#.utf8)
+        #expect(try JSONDecoder().decode(AgentEvent.self, from: data) == .toolResult(
+            isError: true,
+            summary: "command not found"
+        ))
+    }
+
     @Test func subagentRoundTrips() throws {
         let event = AgentEvent.subagent(
             subagentType: "source-reader", description: "Digest pages 1-20", isCompletion: false)

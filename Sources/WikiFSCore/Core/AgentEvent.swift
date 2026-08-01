@@ -114,8 +114,9 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     case toolUse(name: String, inputSummary: String)
 
     /// A tool finished (`user` message → `tool_result` content block). `summary` is
-    /// the (possibly truncated) result text; `isError` flags a failed tool.
-    case toolResult(isError: Bool, summary: String)
+    /// the optional, possibly truncated result text; `isError` flags a failed tool.
+    /// A terminal provider update can intentionally have no renderable output.
+    case toolResult(isError: Bool, summary: String?)
 
     /// A subagent delegation lifecycle event (`{"type":"system",
     /// "subtype":"task_started" | "task_completed"}`), emitted when the Opus curator
@@ -176,6 +177,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         case .toolUse(let name, let inputSummary):
             return inputSummary.isEmpty ? name : "\(name)  \(inputSummary)"
         case .toolResult(let isError, let summary):
+            guard let summary else { return "" }
             let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
             return isError ? "Error: \(body)" : body
         case .subagent(let subagentType, let description, let isCompletion):
