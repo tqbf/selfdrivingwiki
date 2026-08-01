@@ -25,6 +25,19 @@ jobs:
         # annotation on the PR diff instead of burying it in the log.
         run: swiftlint lint --strict --reporter github-actions-logging
 
+  skills:
+    # Validate skill metadata independently from the Swift and Python jobs.
+    # The script declares its PyYAML dependency with PEP 723 inline metadata.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Validate skill metadata
+        run: uv run tools/validate_skills.py
+
   swift:
     # Full `swift test` — no skip, no tier split. The in-memory SQLite
     # fixtures (#658) reduced the full suite from 30+ min to ~1.5 min, so the

@@ -118,6 +118,7 @@ agents, NOT Polytoken):
 - **swiftui-ui-patterns** — https://github.com/Dimillian/Skills
 - **swiftui-performance-audit** — https://github.com/Dimillian/Skills
 - **macos-spm-app-packaging** — https://github.com/Dimillian/Skills
+- **conventional-commits** — https://www.conventionalcommits.org/en/v1.0.0/
 
 > Same caveat: these target recent iOS/macOS toolchains. Filter
 > version-gated guidance to macOS 15 / Swift 6.0. The `macos-spm-app-packaging`
@@ -137,6 +138,11 @@ agents, NOT Polytoken):
   [`docs/skills/swift-testing-pro/SKILL.md`](docs/skills/swift-testing-pro/SKILL.md)
   (core-rules, async-tests, migrating-from-xctest). Prefer Swift Testing over
   XCTest for new tests.
+
+* When creating or reviewing Git commits, follow
+  [`docs/skills/conventional-commits/SKILL.md`](docs/skills/conventional-commits/SKILL.md)
+  for the commit type, scope, description, body, footer, and breaking-change
+  format.
 
 * When a SwiftUI view is slow, janky, or you suspect unnecessary diffing /
   re-rendering, run the audit in

@@ -138,7 +138,7 @@ help:
 	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
 	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
 	@echo "  lint-analyze      SwiftLint analyzer: unused decls/imports (advisory, slow, not in CI)"
-	@echo "  hooks             Install .githooks (pre-commit try? guard + git-lfs shims)"
+	@echo "  hooks             Install .githooks (commit-msg + pre-commit + git-lfs shims)"
 	@echo "  mutate            Run swift-mutation-testing (full — see .swift-mutation-testing.yml)"
 	@echo "  mutate-scope      Scoped mutation run: make mutate-scope SOURCES_PATH=Sources/Foo"
 	@echo "  prompts           Regenerate Sources/WikiFSCore/GeneratedPrompts.swift from prompts/*.md"
@@ -453,7 +453,7 @@ lint-analyze:
 hooks:
 	@git config core.hooksPath .githooks
 	@chmod +x .githooks/*
-	@echo "✓ core.hooksPath = .githooks (pre-commit try? guard active; git-lfs shims preserved)"
+	@echo "✓ core.hooksPath = .githooks (commit-msg + pre-commit guards active; git-lfs shims preserved)"
 
 # ---------------------------------------------------------------------------
 # Agent prompts (prompts/*.md → Sources/WikiFSCore/GeneratedPrompts.swift)

@@ -2,5 +2,10 @@
   "worktree": {
     "setup": "cp -R \"$PASEO_SOURCE_CHECKOUT_PATH/signing\" \"$PASEO_WORKTREE_PATH\"",
     "teardown": "scripts/paseo-archive-cleanup.sh"
+  },
+  "metadataGeneration": {
+    "commitMessage": {
+      "instructions": "Use a Conventional Commit header: <type>[optional scope][!]: <description>. Use one lowercase type from feat, fix, refactor, perf, docs, test, build, ci, or chore. Use a lowercase scope when useful. Use ! for breaking changes. Keep the message to one concise imperative line with no trailing period. Return only the commit message."
+    }
   }
 }

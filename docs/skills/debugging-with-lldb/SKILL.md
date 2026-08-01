@@ -1,4 +1,5 @@
 ---
+name: debugging-with-lldb
 description: When and how to use lldb to debug macOS app deaths that leave no crash report — silent exits, uncatchable C++/abort paths, LaunchServices-only failures. Use before log-grepping yourself into a hole.
 ---
 
