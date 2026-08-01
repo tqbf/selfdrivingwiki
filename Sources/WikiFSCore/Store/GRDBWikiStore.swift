@@ -1617,8 +1617,27 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             } catch {
                 throw SchemaV48MigrationError.foreignKeyCheckerFailed(underlying: error)
             }
-            guard violations.isEmpty else {
-                throw SchemaV48MigrationError.foreignKeyViolation(violations)
+            if !violations.isEmpty {
+                // Tolerate databases that accumulated orphaned rows while
+                // foreign-key enforcement was off (e.g. a source deleted
+                // through a path that bypassed cascades): complete the
+                // ON DELETE CASCADE cleanup that should have removed the
+                // children, then re-check. Non-cascade orphans (and NOT NULL /
+                // UNIQUE corruption) are left for the re-check to reject, so
+                // genuinely unrepairable damage still aborts the migration.
+                let removed = try Self.reconcileCascadingOrphans(in: db)
+                if removed > 0 {
+                    DebugLog.store("v48 reconcile removed \(removed) orphaned row(s) before foreign-key re-check")
+                }
+                let remaining: [ForeignKeyCheckViolation]
+                do {
+                    remaining = try schemaForeignKeyChecker.check(db)
+                } catch {
+                    throw SchemaV48MigrationError.foreignKeyCheckerFailed(underlying: error)
+                }
+                guard remaining.isEmpty else {
+                    throw SchemaV48MigrationError.foreignKeyViolation(remaining)
+                }
             }
         } catch let error as SchemaV48MigrationError {
             throw error
@@ -1990,6 +2009,85 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         CREATE INDEX IF NOT EXISTS workspace_ref_sources_source
             ON workspace_ref_sources(source_id, workspace_id, owner_id);
         """)
+    }
+
+    /// Best-effort repair of orphaned foreign-key children, restricted to
+    /// `ON DELETE CASCADE` constraints. Such rows are children the schema
+    /// promised to remove when their parent was deleted; deleting them now
+    /// just completes a cascade that never ran because foreign-key
+    /// enforcement was off at the time (e.g. a `sources` row deleted through
+    /// a path that bypassed cascades, leaving `source_chunks` /
+    /// `source_search` / `source_markdown_versions` / `source_versions`
+    /// behind). Those four tables are leaves — nothing references them — so
+    /// the delete is safe even with enforcement on.
+    ///
+    /// Driven entirely by `PRAGMA foreign_key_check` + `foreign_key_list`
+    /// introspection, so it handles composite keys and `WITHOUT ROWID`
+    /// tables without targeting rowids (which `foreign_key_check` reports as
+    /// NULL for `WITHOUT ROWID` children). Non-cascade orphans are
+    /// deliberately left in place for the caller's re-check to reject.
+    /// Returns the number of rows removed.
+    private static func reconcileCascadingOrphans(in db: Database) throws -> Int {
+        // foreign_key_check columns: table | rowid | parent | fkid. It is a
+        // real diagnostic that reports violations regardless of enforcement
+        // state. Only the distinct set of child tables matters here; the
+        // per-row detail comes from foreign_key_list below.
+        let checkRows = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
+        let violatedTables = Set(checkRows.compactMap { row -> String? in row["table"] as String? })
+
+        var removed = 0
+        for table in violatedTables {
+            // foreign_key_list columns: id | seq | table(parent) | from | to |
+            // on_update | on_delete | match. A composite key spans several
+            // rows sharing the same `id`; the parent table and on_delete
+            // action are constant across those rows.
+            let fkRows = try Row.fetchAll(
+                db, sql: "PRAGMA foreign_key_list(\(Self.quoteIdentifier(table)));")
+            struct FKGroup {
+                var parent: String
+                var onDelete: String
+                var columns: [(from: String, to: String)] = []
+            }
+            var groups: [Int: FKGroup] = [:]
+            for row in fkRows {
+                let id: Int = row["id"]
+                let parent: String = row["table"]
+                let fromColumn: String = row["from"]
+                let toColumn: String = row["to"]
+                let onDelete = (row["on_delete"] as String?).map { $0.uppercased() } ?? ""
+                if groups[id] != nil {
+                    groups[id]?.columns.append((fromColumn, toColumn))
+                } else {
+                    groups[id] = FKGroup(parent: parent, onDelete: onDelete, columns: [(fromColumn, toColumn)])
+                }
+            }
+
+            let child = Self.quoteIdentifier(table)
+            for group in groups.values where group.onDelete == "CASCADE" {
+                let parent = Self.quoteIdentifier(group.parent)
+                // match-simple semantics: a row violates the FK only when
+                // every FK column is non-null AND no parent row matches.
+                let notNull = group.columns
+                    .map { "\(Self.quoteIdentifier($0.from)) IS NOT NULL" }
+                    .joined(separator: " AND ")
+                let match = group.columns
+                    .map { "\(parent).\(Self.quoteIdentifier($0.to)) = \(child).\(Self.quoteIdentifier($0.from))" }
+                    .joined(separator: " AND ")
+                try db.execute(sql: """
+                DELETE FROM \(child)
+                WHERE \(notNull)
+                  AND NOT EXISTS (SELECT 1 FROM \(parent) WHERE \(match));
+                """)
+                removed += try Int.fetchOne(db, sql: "SELECT changes()") ?? 0
+            }
+        }
+        return removed
+    }
+
+    /// Quote a trusted SQL identifier (table/column name from our own schema
+    /// introspection) for safe interpolation into built SQL.
+    private static func quoteIdentifier(_ name: String) -> String {
+        "\"" + name.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
     private static func rebuildChatSubsystemV46(in db: Database) throws {
