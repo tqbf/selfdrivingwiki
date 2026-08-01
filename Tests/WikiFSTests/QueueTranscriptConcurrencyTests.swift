@@ -1,3 +1,4 @@
+#if canImport(WikiFSEngine)
 import Foundation
 import Testing
 @testable import WikiFSEngine
@@ -282,3 +283,4 @@ private final class AsyncSignal: @unchecked Sendable {
         }
     }
 }
+#endif
