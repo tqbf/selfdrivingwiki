@@ -18,6 +18,35 @@ struct RendererIdentifierTests {
         #expect(try RendererPackageVersion(validating: rawValue).rawValue == rawValue)
     }
 
+    @Test func ordersPrereleaseIdentifiersBySemanticVersionPrecedence() throws {
+        let beta2 = try RendererPackageVersion(validating: "1.0.0-beta.2")
+        let beta10 = try RendererPackageVersion(validating: "1.0.0-beta.10")
+        let alpha = try RendererPackageVersion(validating: "1.0.0-alpha")
+        let alpha1 = try RendererPackageVersion(validating: "1.0.0-alpha.1")
+        let alphaBeta = try RendererPackageVersion(validating: "1.0.0-alpha.beta")
+        let stable = try RendererPackageVersion(validating: "1.0.0")
+
+        #expect(beta2 < beta10)
+        #expect(alpha < alpha1)
+        #expect(alpha1 < alphaBeta)
+        #expect(alphaBeta < stable)
+    }
+
+    @Test func ordersBuildMetadataDeterministicallyWithoutChangingPrereleasePrecedence() throws {
+        let first = try RendererPackageVersion(validating: "1.0.0+build.1")
+        let second = try RendererPackageVersion(validating: "1.0.0+build.2")
+
+        #expect(first < second)
+        #expect(first != second)
+        #expect((first < second) || first == second || second < first)
+        #expect((first < second) == !(second < first))
+    }
+
+    @Test func rejectsLeadingZeroNumericPrereleaseButAcceptsBuildMetadata() {
+        #expect(RendererPackageVersion(rawValue: "1.0.0-01") == nil)
+        #expect(RendererPackageVersion(rawValue: "1.0.0+01") != nil)
+    }
+
     @Test func rejectsInvalidIdentifierWhenDecoding() throws {
         let data = Data("\"BAD\"".utf8)
         #expect(throws: Error.self) { _ = try JSONDecoder().decode(RendererRegistrationID.self, from: data) }

@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "issue": 1026,
   "pr": 1,
-  "baseCommit": "3e156ab4c1fc90107c9be6d1f5767a19e75786e6",
+  "baseCommit": "ea7532713c535db434772ac17d2d9842418003fe",
   "productionSymbols": [
     { "symbol": "RendererValidationError", "tests": ["RendererIdentifierTests.rejectsInvalidIdentifierWhenDecoding", "RendererMatcherTests.rejectsUnboundedSniffAndSignature", "RendererDescriptorValidationTests.rejectsInvalidPresentationCapabilitiesAndLimits", "RendererManifestValidationTests.rejectsDuplicatePathsRegistrationAndUnsupportedRevision"] },
     { "symbol": "RendererPackageID", "tests": ["RendererIdentifierTests.acceptsCanonicalPackageID", "RendererIdentifierTests.rejectsMalformedPackageID", "RendererIdentifierBoundaryTypecheckTests.packageVersionNamespacesCannotBeInterchanged"] },
-    { "symbol": "RendererPackageVersion", "tests": ["RendererIdentifierTests.ordersSemanticVersions", "RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference"] },
+    { "symbol": "RendererPackageVersion", "tests": ["RendererIdentifierTests.ordersSemanticVersions", "RendererIdentifierTests.ordersPrereleaseIdentifiersBySemanticVersionPrecedence", "RendererIdentifierTests.ordersBuildMetadataDeterministicallyWithoutChangingPrereleasePrecedence", "RendererIdentifierTests.rejectsLeadingZeroNumericPrereleaseButAcceptsBuildMetadata", "RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference"] },
     { "symbol": "RendererRegistrationID", "tests": ["RendererIdentifierTests.rejectsInvalidIdentifierWhenDecoding", "RendererReferenceShapeTests.exactAndLogicalReferencesShareOnlyPackageAndRegistrationIdentity"] },
     { "symbol": "BuiltInRendererID", "tests": ["RendererDescriptorValidationTests.rejectsInvalidPresentationCapabilitiesAndLimits"] },
     { "symbol": "RendererReference", "tests": ["RendererResolutionTests.sortsByPriorityThenStableReferenceWithoutInputOrder"] },
@@ -27,13 +27,14 @@
     { "symbol": "RendererResolution.preferred", "tests": ["RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference", "RendererResolutionTests.ignoresIncompatibleExactPreference", "RendererResolutionTests.fallsBackFromUnavailableExactToLogicalPreference"] },
     { "symbol": "RendererManifest", "tests": ["RendererPackageHashTests.testCanonicalEnvelopeGoldenDigestAndOrderIndependence", "RendererManifestValidationTests.rejectsDuplicatePathsRegistrationAndUnsupportedRevision"] },
     { "symbol": "portableSHA256", "tests": ["RendererSHA256Tests.testDigestBytes", "RendererPortableHashImportTests.testSupportedPlatformImports"] },
-    { "symbol": "DynamicRendererAuditError", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads"] },
-    { "symbol": "DynamicRendererGateRecord.validate", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads"] },
+    { "symbol": "DynamicRendererAuditError", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.rejectsMissingNamedChecksAndIncompleteBuildEvidence"] },
+    { "symbol": "DynamicRendererGateRecord.validate", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.rejectsMissingNamedChecksAndIncompleteBuildEvidence", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsAtomicallyReplacesSHARecord"] },
     { "symbol": "DynamicRendererAuditValidation.isSHA", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads"] },
     { "symbol": "DynamicRendererBuildAndSuiteGate.requiredCommands", "tests": ["DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] },
     { "symbol": "DynamicRendererPRSeriesAuditMain.run", "tests": ["DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] }
-    ,{ "symbol": "DynamicRendererPRSeriesAuditMain.verify", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsCheckRunAndReviewBindings"] }
-    ,{ "symbol": "FileGateRecords", "tests": ["DynamicRendererPRSeriesAuditModelTests.reviewStatesRoundTripUsingSchemaShape"] }
+    ,{ "symbol": "DynamicRendererPRSeriesAuditMain.verify", "tests": ["DynamicRendererPRSeriesAuditModelTests.verifierPromotesOnlyACompleteCurrentHeadRecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsNoExactHeadRecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsMissingWrongSHAAndIncompleteLiveChecks", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsMissingMalformedAndWrongBaseEvidence", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsSchemaAndStaleEvidence"] }
+    ,{ "symbol": "ProcessGitHubPullRequestQuery", "tests": ["DynamicRendererPRSeriesAuditModelTests.processGitHubQueryUsesSupportedPositionalBranchAndPropagatesCLIError"] }
+    ,{ "symbol": "FileGateRecords", "tests": ["DynamicRendererPRSeriesAuditModelTests.fileGateRecordsAtomicallyReplacesSHARecord", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsRejectsSchemaMismatchAndWrongSHAFilename"] }
     ,{ "symbol": "SystemAuditClock", "tests": ["DynamicRendererPRSeriesAuditModelTests.reviewStatesRoundTripUsingSchemaShape"] }
   ],
   "decisionBranches": [
@@ -46,8 +47,9 @@
     { "path": "invalid presentations, limits, and forbidden capabilities", "tests": ["RendererDescriptorValidationTests.rejectsInvalidPresentationCapabilitiesAndLimits"] },
     { "path": "manifest revision, duplicate registration, duplicate path, canonical asset order", "tests": ["RendererManifestValidationTests.rejectsDuplicatePathsRegistrationAndUnsupportedRevision", "RendererPackageHashTests.testCanonicalEnvelopeGoldenDigestAndOrderIndependence"] },
     { "path": "supported-platform portable import and typed namespace compile boundary", "tests": ["RendererPortableHashImportTests.testSupportedPlatformImports", "RendererIdentifierBoundaryTypecheckTests.packageVersionNamespacesCannotBeInterchanged"] },
-    { "path": "gate record schema, head mismatch, clean checkout, and fixed command order", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] },
-    { "path": "audit schema rejection, stale evidence, atomic write, foreign check SHA, old approval, dirty checkout, and metadata race", "tests": ["DynamicRendererPRSeriesAuditModelTests.verifierRejectsSchemaAndStaleEvidence", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsAtomicallyReplacesSHARecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsForeignChecksOldApprovalDirtyAndRaces"] }
+    { "path": "semantic version prerelease numeric, lexical, stable, build-metadata, and Comparable-total-order precedence", "tests": ["RendererIdentifierTests.ordersPrereleaseIdentifiersBySemanticVersionPrecedence", "RendererIdentifierTests.ordersBuildMetadataDeterministicallyWithoutChangingPrereleasePrecedence", "RendererIdentifierTests.rejectsLeadingZeroNumericPrereleaseButAcceptsBuildMetadata"] },
+    { "path": "gate record schema, required check names, head binding, build command order, and nonzero command rejection", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.rejectsMissingNamedChecksAndIncompleteBuildEvidence", "DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] },
+    { "path": "supported GitHub CLI query, exact-head record, current-head check and approval, current-base inventory, schema, mutation, and metadata race rejection", "tests": ["DynamicRendererPRSeriesAuditModelTests.processGitHubQueryUsesSupportedPositionalBranchAndPropagatesCLIError", "DynamicRendererPRSeriesAuditModelTests.verifierPromotesOnlyACompleteCurrentHeadRecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsNoExactHeadRecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsMissingWrongSHAAndIncompleteLiveChecks", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsMissingMalformedAndWrongBaseEvidence", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsSchemaAndStaleEvidence", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsForeignChecksOldApprovalDirtyAndRaces", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsAtomicallyReplacesSHARecord", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsRejectsSchemaMismatchAndWrongSHAFilename"] }
   ],
   "notApplicable": ["cancellation", "teardown", "network", "filesystem installation", "persistence", "UI"],
   "mutationScope": "Sources/WikiFSTypes/Renderer",
@@ -55,7 +57,7 @@
     "report": "tmp/dynamic-renderer-pr1-mutation-report.json",
     "generatedAt": "2026-08-01T09:55:28-07:00",
     "result": { "Crash": 128, "Survived": 63, "Unviable": 116 },
-    "survivorDisposition": "Survivors are retained review findings for validation predicates and ordering comparisons; no production mutation is accepted as evidence of behavior.",
+    "survivorDisposition": "This report predates the corrective head and retains 63 survivors. It is failure evidence only: no mutation pass is claimed, and a new scoped report is required before PR 1 can pass its mutation gate.",
     "unviableDisposition": "Unviable mutants are tool-generated compile exclusions. RendererResolution mutation swift-mutation-testing_277 removes compatibility.supports and is Unviable, not killed; RendererResolutionTests.ignoresIncompatibleExactPreference directly proves the installed-but-incompatible behavior."
   }
 }

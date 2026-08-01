@@ -32,6 +32,7 @@ public struct RendererPackageVersion: RawRepresentable, Codable, Hashable, Senda
     public let minor: UInt
     public let patch: UInt
     public let prerelease: String?
+    public let buildMetadata: String?
 
     public init?(rawValue: String) {
         let components = rawValue.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false)
@@ -42,7 +43,7 @@ public struct RendererPackageVersion: RawRepresentable, Codable, Hashable, Senda
               let minor = RendererIdentifierRules.strictUInt(numbers[1]),
               let patch = RendererIdentifierRules.strictUInt(numbers[2]),
               components.count <= 2,
-              (components.count == 1 || RendererIdentifierRules.isPrerelease(String(components[1]))),
+              (components.count == 1 || RendererIdentifierRules.isBuildMetadata(String(components[1]))),
               (versionAndPrerelease.count == 1 || RendererIdentifierRules.isPrerelease(String(versionAndPrerelease[1])))
         else { return nil }
         self.rawValue = rawValue
@@ -50,6 +51,7 @@ public struct RendererPackageVersion: RawRepresentable, Codable, Hashable, Senda
         self.minor = minor
         self.patch = patch
         self.prerelease = versionAndPrerelease.count == 2 ? String(versionAndPrerelease[1]) : nil
+        self.buildMetadata = components.count == 2 ? String(components[1]) : nil
     }
 
     public init(validating rawValue: String) throws {
@@ -65,10 +67,13 @@ public struct RendererPackageVersion: RawRepresentable, Codable, Hashable, Senda
         if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
         switch (lhs.prerelease, rhs.prerelease) {
-        case (nil, nil): return false
+        case (nil, nil): return lhs.rawValue < rhs.rawValue
         case (nil, .some): return false
         case (.some, nil): return true
-        case let (.some(left), .some(right)): return left < right
+        case let (.some(left), .some(right)):
+            let precedence = RendererIdentifierRules.comparePrerelease(left, right)
+            if precedence != .orderedSame { return precedence == .orderedAscending }
+            return lhs.rawValue < rhs.rawValue
         }
     }
 }
@@ -179,9 +184,43 @@ enum RendererIdentifierRules {
         return UInt(value)
     }
 
+    static func isBuildMetadata(_ value: String) -> Bool {
+        isVersionIdentifierList(value)
+    }
+
     static func isPrerelease(_ value: String) -> Bool {
+        isVersionIdentifierList(value) && value.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { part in
+            part.allSatisfy(\.isNumber) == false || part.count == 1 || part.first != "0"
+        }
+    }
+
+    static func comparePrerelease(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let left = lhs.split(separator: ".", omittingEmptySubsequences: false)
+        let right = rhs.split(separator: ".", omittingEmptySubsequences: false)
+        for (leftIdentifier, rightIdentifier) in zip(left, right) {
+            let identifierComparison = comparePrereleaseIdentifier(leftIdentifier, rightIdentifier)
+            if identifierComparison != .orderedSame { return identifierComparison }
+        }
+        if left.count != right.count { return left.count < right.count ? .orderedAscending : .orderedDescending }
+        return .orderedSame
+    }
+
+    private static func isVersionIdentifierList(_ value: String) -> Bool {
         value.isEmpty == false && value.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { part in
             part.isEmpty == false && part.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
+    }
+
+    private static func comparePrereleaseIdentifier(_ lhs: Substring, _ rhs: Substring) -> ComparisonResult {
+        let leftIsNumeric = lhs.allSatisfy(\.isNumber)
+        let rightIsNumeric = rhs.allSatisfy(\.isNumber)
+        switch (leftIsNumeric, rightIsNumeric) {
+        case (true, true):
+            if lhs.count != rhs.count { return lhs.count < rhs.count ? .orderedAscending : .orderedDescending }
+            return lhs == rhs ? .orderedSame : (lhs < rhs ? .orderedAscending : .orderedDescending)
+        case (true, false): return .orderedAscending
+        case (false, true): return .orderedDescending
+        case (false, false): return lhs == rhs ? .orderedSame : (lhs < rhs ? .orderedAscending : .orderedDescending)
         }
     }
 }

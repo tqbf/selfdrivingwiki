@@ -11,6 +11,8 @@ public enum DynamicRendererAuditError: Error, Equatable, Sendable, CustomStringC
     case invalidCommandExitCode(Int)
     case invalidCheckRun
     case invalidReview
+    case invalidCommandEvidence
+    case invalidMutationReport
     case invalidRecordedAt(String)
 
     public var description: String {
@@ -23,6 +25,8 @@ public enum DynamicRendererAuditError: Error, Equatable, Sendable, CustomStringC
         case let .invalidCommandExitCode(code): "invalid command exit code: \(code)"
         case .invalidCheckRun: "required check run is missing, mismatched, or incomplete"
         case .invalidReview: "review binding is missing or targets another commit"
+        case .invalidCommandEvidence: "build-suite command evidence is missing, out of order, or unsuccessful"
+        case .invalidMutationReport: "mutation report evidence is missing or invalid"
         case let .invalidRecordedAt(value): "record timestamp must carry an explicit UTC offset: \(value)"
         }
     }
@@ -111,15 +115,19 @@ public struct DynamicRendererGateRecord: Codable, Equatable, Sendable {
         }
         guard auditedSHA == headRefOID else { throw DynamicRendererAuditError.mismatchedHead }
         guard cleanCheckout else { throw DynamicRendererAuditError.dirtyCheckout }
-        guard requiredCheckRuns.isEmpty == false,
-              requiredCheckRuns.allSatisfy({ $0.name.isEmpty == false && $0.conclusion.isEmpty == false && $0.headSHA == auditedSHA && DynamicRendererAuditValidation.isSHA($0.headSHA) }) else { throw DynamicRendererAuditError.invalidCheckRun }
+        guard requiredCheckRuns.map(\.name) == DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames,
+              requiredCheckRuns.allSatisfy({ $0.conclusion.isEmpty == false && $0.headSHA == auditedSHA && DynamicRendererAuditValidation.isSHA($0.headSHA) }) else {
+            throw DynamicRendererAuditError.invalidCheckRun
+        }
         if case let .approved(author, commitSHA) = review, (author.isEmpty || commitSHA != auditedSHA || DynamicRendererAuditValidation.isSHA(commitSHA) == false) { throw DynamicRendererAuditError.invalidReview }
         guard testInventory.hasPrefix("plans/"), testInventory.hasSuffix(".json") else {
             throw DynamicRendererAuditError.invalidInventoryPath(testInventory)
         }
-        for command in commands where command.exitCode < 0 {
-            throw DynamicRendererAuditError.invalidCommandExitCode(command.exitCode)
+        guard let mutationReport, mutationReport.hasPrefix("tmp/"), mutationReport.hasSuffix(".json") else {
+            throw DynamicRendererAuditError.invalidMutationReport
         }
+        guard commands.map(\.command) == DynamicRendererBuildAndSuiteGate.requiredCommands.map({ $0.joined(separator: " ") }),
+              commands.allSatisfy({ $0.exitCode == 0 }) else { throw DynamicRendererAuditError.invalidCommandEvidence }
         guard DynamicRendererAuditValidation.hasExplicitOffset(recordedAt) else { throw DynamicRendererAuditError.invalidRecordedAt(recordedAt) }
     }
 }
@@ -142,4 +150,6 @@ public enum DynamicRendererBuildAndSuiteGate {
         ["swift", "build"],
         ["swift", "test"],
     ]
+
+    public static let requiredLiveCheckNames = ["lint", "skills", "swift", "swift-linux", "pdf2md"]
 }
