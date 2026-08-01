@@ -168,14 +168,15 @@ struct ChatDetailView: View {
         .task(id: chatID) {
             guard chatID != nil else { return }
             let normalized = InspectorTab.normalize(selection: inspectorTab, availableTabs: InspectorTab.persistedChatAvailableTabs)
-            guard normalized != inspectorTab else { return }
-            inspectorTab = normalized
+            if normalized != inspectorTab {
+                inspectorTab = normalized
+            }
             updateRightSidebarRegistration()
         }
         .onAppear {
             updateRightSidebarRegistration()
         }
-        .onChange(of: presentation.chatInspectorAvailable) { _, _ in
+        .onChange(of: presentation.outlineEntries) { _, _ in
             updateRightSidebarRegistration()
         }
         .onChange(of: remoteSession.runState) { _, _ in
@@ -767,6 +768,7 @@ struct ChatDetailView: View {
             cursor = nextCursor
         }
         persistedTranscriptItems = items
+        updateRightSidebarRegistration()
     }
 }
 
