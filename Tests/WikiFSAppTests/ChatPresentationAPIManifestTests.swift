@@ -124,7 +124,7 @@ struct ChatPresentationAPIManifestTests {
         #expect(activity.contains("ChatTranscriptView") == true)
         #expect(activity.contains("ChatDisplayProjection.project") == true)
         #expect(activity.contains("QueueTranscriptCanonicalMerge.merging") == true)
-        #expect(activity.contains("transcriptID: .queueItem") == true)
+        #expect(activity.contains("transcriptID: TranscriptID.queueItem") == true)
     }
 
     @Test func legacyQueueEventStoreMethodsAreAbsent() throws {
