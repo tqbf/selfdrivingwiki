@@ -87,6 +87,15 @@ import WikiFSCore
         #expect(rendered.contains("done") == true)
     }
 
+    @Test func skipsNilToolResultWithoutSynthesizingOutput() {
+        let rendered = ChatTranscriptRenderer.render(
+            summary: summary(),
+            messages: [message(.toolResult(isError: false, summary: nil))])
+        #expect(rendered.contains("## Tool Result") == false)
+        #expect(rendered.contains("(ok)") == false)
+        #expect(rendered.contains("(error)") == false)
+    }
+
     @Test func rendersResultSection() {
         let rendered = ChatTranscriptRenderer.render(
             summary: summary(),

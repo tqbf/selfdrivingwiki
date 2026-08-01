@@ -54,6 +54,35 @@ struct QueueStoreTypedTranscriptTests {
         #expect(try reopened.loadTranscriptItems(itemID: itemID) == expected)
     }
 
+    @Test func nilToolOutputSurvivesDatabaseReopen() throws {
+        let url = try temporaryDatabaseURL()
+        let itemID: QueueItem.ID
+        let expected = ChatTranscriptItem.toolCall(ChatTranscriptToolCallItem(
+            toolCallID: ToolCallID(rawValue: "nil-output-tool"),
+            turnID: ChatTurnID(rawValue: "nil-output-turn"),
+            toolName: "Bash",
+            status: .completed,
+            detail: "echo hello",
+            output: nil,
+            permissionRequestID: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+
+        do {
+            let store = try QueueStore(databaseURL: url)
+            let item = try enqueueItem(in: store)
+            itemID = item.id
+            try store.upsertTranscriptItems(
+                attemptID: QueueAttemptID(itemID: item.id, attempt: item.attempt),
+                items: [expected]
+            )
+            store.close()
+        }
+
+        let reopened = try QueueStore(databaseURL: url)
+        #expect(try reopened.loadTranscriptItems(itemID: itemID) == [expected])
+    }
+
     @Test func retryClearRemovesOnlyTheSelectedItemTranscript() throws {
         let store = try QueueStore(databaseURL: try temporaryDatabaseURL())
         let selectedItem = try enqueueItem(in: store)

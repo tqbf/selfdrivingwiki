@@ -114,8 +114,9 @@ public enum AgentEvent: Equatable, Sendable, Codable {
     case toolUse(name: String, inputSummary: String)
 
     /// A tool finished (`user` message → `tool_result` content block). `summary` is
-    /// the (possibly truncated) result text; `isError` flags a failed tool.
-    case toolResult(isError: Bool, summary: String)
+    /// the optional, possibly truncated result text; `isError` flags a failed tool.
+    /// A terminal provider update can intentionally have no renderable output.
+    case toolResult(isError: Bool, summary: String?)
 
     /// A subagent delegation lifecycle event (`{"type":"system",
     /// "subtype":"task_started" | "task_completed"}`), emitted when the Opus curator
@@ -176,6 +177,7 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         case .toolUse(let name, let inputSummary):
             return inputSummary.isEmpty ? name : "\(name)  \(inputSummary)"
         case .toolResult(let isError, let summary):
+            guard let summary else { return "" }
             let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
             return isError ? "Error: \(body)" : body
         case .subagent(let subagentType, let description, let isCompletion):
@@ -219,71 +221,16 @@ public enum AgentEvent: Equatable, Sendable, Codable {
         return false
     }
 
-    /// True for tool-use and tool-result events (issue #381). Used to filter
-    /// tool calls from the transcript when `hideToolCalls` is enabled.
-    public var isToolCall: Bool {
-        switch self {
-        case .toolUse, .toolResult: return true
-        default: return false
-        }
-    }
-
-    /// Tool-name set for read-only (no wiki mutation) tools. Their one-line
-    /// `.toolUse` summaries are hidden from the transcript by
-    /// `[AgentEvent].transcriptVisible` — only mutation-relevant calls
-    /// (Edit, Write, Agent/Task) remain visible in the feed. Error results
-    /// still surface (they're rare and signal problems); full raw detail
-    /// for every call lives under "Show internals".
-    public static let readOnlyToolNames: Set<String> = ["Bash", "Read", "Glob", "Grep"]
-
     /// Whether this event is internal-only (not worth showing in the transcript
     /// unless "Show internals" is on). System init lines, tool calls/results,
     /// subagent lifecycle events, deltas (merged upstream), `messageStop`, and
-    /// raw undecoded lines are all internal. Shared by the chat transcript and
-    /// the activity feed.
+    /// raw undecoded lines are all internal.
     public var isInternalTranscriptEvent: Bool {
         switch self {
         case .systemInit, .toolUse, .toolResult, .subagent, .raw, .messageStop,
              .assistantTextDelta, .thinkingDelta:
             return true
         case .userText, .assistantText, .result, .thinking, .turnFailed:
-            return false
-        }
-    }
-
-    /// Whether this event should appear in the chat transcript, given the
-    /// full event list (needed to deduplicate `.result` text that already
-    /// appeared as `.assistantText`). Pure + unit-testable.
-    public func isVisibleInTranscript(in events: [AgentEvent]) -> Bool {
-        switch self {
-        case .result(_, let text):
-            return !Self.hasAssistantText(matching: text, in: events)
-        case .toolUse(let name, _):
-            // Read-only tool calls (Bash, Read, Glob, Grep) are always
-            // hidden — their summaries are noise. Mutation-relevant calls
-            // (Edit, Write, Agent) stay visible.
-            return !Self.readOnlyToolNames.contains(name)
-        case .thinking:
-            // .thinking is surfaced as a collapsible box (issue #391).
-            return true
-        case .toolResult(let isError, _):
-            // Surface failed tool calls; successes are implied by the
-            // agent's next action or final answer.
-            return isError
-        default:
-            return !isInternalTranscriptEvent
-        }
-    }
-
-    /// True if any `.assistantText` in `events` carries the same text — used to
-    /// suppress a `.result` row that duplicates the streamed assistant prose.
-    private static func hasAssistantText(matching text: String, in events: [AgentEvent]) -> Bool {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return false }
-        return events.contains { event in
-            if case .assistantText(let assistantText) = event {
-                return assistantText.trimmingCharacters(in: .whitespacesAndNewlines) == normalized
-            }
             return false
         }
     }

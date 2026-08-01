@@ -79,6 +79,29 @@ struct AgentEventTranscriptTranslatorTests {
         #expect(toolCalls.map(\.status) == [.completed, .failed])
     }
 
+    @Test func nilToolResultsCloseMatchingFIFOCallsWithoutOutput() {
+        let turnID = ChatTurnID(rawValue: "turn-tool-fifo-nil-output")
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate([
+            .toolUse(name: "Read", inputSummary: "first.md"),
+            .toolUse(name: "Edit", inputSummary: "second.md"),
+            .toolResult(isError: false, summary: nil),
+            .toolResult(isError: true, summary: nil),
+        ], turnID: turnID)
+        let toolCalls = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+
+        #expect(toolCalls.map(\.toolCallID) == [
+            ToolCallID(rawValue: "\(turnID.rawValue)-tool-0"),
+            ToolCallID(rawValue: "\(turnID.rawValue)-tool-1"),
+        ])
+        #expect(toolCalls.map(\.detail) == ["first.md", "second.md"])
+        #expect(toolCalls.map(\.status) == [.completed, .failed])
+        #expect(toolCalls.allSatisfy { $0.output == nil })
+    }
+
     @Test func unmatchedToolResultPreservesTheLegacyFallbackIdentity() {
         let turnID = ChatTurnID(rawValue: "turn-tool-fallback")
         var translator = AgentEventTranscriptTranslator()

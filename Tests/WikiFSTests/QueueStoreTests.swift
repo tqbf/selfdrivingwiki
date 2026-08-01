@@ -821,7 +821,7 @@ struct QueueStoreTests {
         #expect(try store.loadItemActivity(itemID: item.id) != nil)
 
         // Prune ALL terminal items (maxPerQueue: 0) → item row deleted → FK
-        // cascade removes the activity row (mirrors queue_item_events).
+        // The foreign-key cascade removes the activity row with its queue item.
         try store.pruneHistory(maxPerQueue: 0)
         #expect(try store.getItem(item.id) == nil)
         #expect(try store.loadItemActivity(itemID: item.id) == nil)
