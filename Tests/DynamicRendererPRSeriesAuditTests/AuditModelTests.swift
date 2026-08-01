@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import DynamicRendererPRSeriesAudit
 
@@ -39,5 +40,16 @@ struct DynamicRendererPRSeriesAuditModelTests {
             ["swift", "build"],
             ["swift", "test"],
         ])
+    }
+
+    @Test func reviewStatesRoundTripUsingSchemaShape() throws {
+        let approved = DynamicRendererAuditReview.approved(author: "reviewer", commitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let approvedData = try JSONEncoder().encode(approved)
+        #expect(String(decoding: approvedData, as: UTF8.self).contains("\"approved\":true"))
+        #expect(try JSONDecoder().decode(DynamicRendererAuditReview.self, from: approvedData) == approved)
+        let noReview = DynamicRendererAuditReview.noReview
+        let noReviewData = try JSONEncoder().encode(noReview)
+        #expect(String(decoding: noReviewData, as: UTF8.self) == "{\"approved\":false}")
+        #expect(try JSONDecoder().decode(DynamicRendererAuditReview.self, from: noReviewData) == noReview)
     }
 }

@@ -38,6 +38,29 @@ public struct DynamicRendererAuditCheckRun: Codable, Equatable, Sendable {
 public enum DynamicRendererAuditReview: Codable, Equatable, Sendable {
     case approved(author: String, commitSHA: String)
     case noReview
+
+    private enum CodingKeys: String, CodingKey { case approved, author, commitSHA }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if try container.decode(Bool.self, forKey: .approved) {
+            self = .approved(author: try container.decode(String.self, forKey: .author), commitSHA: try container.decode(String.self, forKey: .commitSHA))
+        } else {
+            self = .noReview
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .approved(author, commitSHA):
+            try container.encode(true, forKey: .approved)
+            try container.encode(author, forKey: .author)
+            try container.encode(commitSHA, forKey: .commitSHA)
+        case .noReview:
+            try container.encode(false, forKey: .approved)
+        }
+    }
 }
 
 public struct DynamicRendererAuditCommandResult: Codable, Equatable, Sendable {
