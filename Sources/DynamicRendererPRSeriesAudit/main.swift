@@ -18,9 +18,43 @@ private enum AuditCLIError: Error, CustomStringConvertible {
     }
 }
 
-private protocol GitRepositoryQuerying {
+protocol GitRepositoryQuerying {
     func output(arguments: [String]) throws -> String
     func status(arguments: [String]) throws -> Int32
+}
+
+struct GitHubAuditPullRequest: Decodable, Equatable {
+    struct Check: Decodable, Equatable { let name: String; let headSHA: String; let conclusion: String }
+    struct Review: Decodable, Equatable { let author: String; let commitSHA: String; let state: String }
+    let headRefName: String
+    let headRefOID: String
+    let baseRefName: String
+    let baseRefOID: String
+    let title: String
+    let checks: [Check]
+    let reviews: [Review]
+}
+
+protocol GitHubPullRequestQuerying { func pullRequest(head: String) throws -> GitHubAuditPullRequest }
+protocol GateRecordReading { func records(at directory: URL) throws -> [DynamicRendererGateRecord] }
+protocol GateRecordWriting { func write(_ record: DynamicRendererGateRecord, to directory: URL) throws }
+protocol AuditClock { func recordedAt() -> String }
+
+struct ProcessGitHubPullRequestQuery: GitHubPullRequestQuerying {
+    func pullRequest(head: String) throws -> GitHubAuditPullRequest {
+        let result = try ProcessRunner.run(executable: "/usr/bin/env", arguments: ["gh", "pr", "view", "--head", head, "--json", "headRefName,headRefOid,baseRefName,baseRefOid,title,statusCheckRollup,reviews"])
+        guard result.status == 0 else { throw AuditCLIError.commandFailed("gh pr view", result.status, result.output) }
+        let object = try JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any] ?? [:]
+        let checks: [GitHubAuditPullRequest.Check] = (object["statusCheckRollup"] as? [[String: Any]] ?? []).map { value in
+            .init(name: value["name"] as? String ?? "", headSHA: value["headSha"] as? String ?? "", conclusion: value["conclusion"] as? String ?? "")
+        }
+        let reviews: [GitHubAuditPullRequest.Review] = (object["reviews"] as? [[String: Any]] ?? []).map { value in
+            let author = (value["author"] as? [String: Any])?["login"] as? String ?? ""
+            let commit = (value["commit"] as? [String: Any])?["oid"] as? String ?? ""
+            return .init(author: author, commitSHA: commit, state: value["state"] as? String ?? "")
+        }
+        return .init(headRefName: object["headRefName"] as? String ?? "", headRefOID: object["headRefOid"] as? String ?? "", baseRefName: object["baseRefName"] as? String ?? "", baseRefOID: object["baseRefOid"] as? String ?? "", title: object["title"] as? String ?? "", checks: checks, reviews: reviews)
+    }
 }
 
 private struct ProcessGitRepositoryQuery: GitRepositoryQuerying {
@@ -68,16 +102,28 @@ private enum DynamicRendererPRSeriesAuditMain {
     }
 
     private static func verify(seriesPath: String, evidenceDirectory: String) throws {
-        _ = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: seriesPath)))
+        let series = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: seriesPath))) as? [String: Any] ?? [:]
+        guard series["schemaVersion"] as? Int == 1 else { throw AuditCLIError.invalidRecord("invalid PR series") }
         let git = ProcessGitRepositoryQuery()
         guard try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
+        let github = ProcessGitHubPullRequestQuery()
+        let branch = try git.output(arguments: ["branch", "--show-current"])
+        let first = try github.pullRequest(head: branch)
+        guard first.headRefName == branch, first.baseRefName == "main", first.title.range(of: "^(feat|fix|test|chore|docs|refactor)(\\([^)]+\\))?: .+", options: .regularExpression) != nil else { throw AuditCLIError.invalidRecord("PR metadata does not bind this branch/base/title") }
+        guard try git.status(arguments: ["merge-base", "--is-ancestor", first.baseRefOID, first.headRefOID]) == 0 else { throw AuditCLIError.invalidRecord("PR base is not an ancestor") }
+        _ = try git.output(arguments: ["diff", "--name-only", "\(first.baseRefOID)...\(first.headRefOID)"])
+        guard first.checks.isEmpty == false, first.checks.allSatisfy({ $0.headSHA == first.headRefOID && $0.conclusion.lowercased() == "success" }) else { throw AuditCLIError.invalidRecord("checks are incomplete or bound to another SHA") }
+        guard let approval = first.reviews.last(where: { $0.state.uppercased() == "APPROVED" && $0.commitSHA == first.headRefOID }) else { throw AuditCLIError.invalidRecord("missing current-head approval") }
         let evidenceURL = URL(fileURLWithPath: evidenceDirectory)
         let records = try FileManager.default.contentsOfDirectory(at: evidenceURL, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }
         for url in records {
             let record = try JSONDecoder().decode(DynamicRendererGateRecord.self, from: Data(contentsOf: url))
             do { try record.validate() }
             catch { throw AuditCLIError.invalidRecord("\(url.lastPathComponent): \(error)") }
+            guard record.auditedSHA == first.headRefOID, record.baseRefOID == first.baseRefOID, record.review == .approved(author: approval.author, commitSHA: approval.commitSHA) else { throw AuditCLIError.invalidRecord("evidence does not bind live PR") }
         }
+        let second = try github.pullRequest(head: branch)
+        guard second == first else { throw AuditCLIError.invalidRecord("PR changed during audit") }
     }
 
     private static func buildSuite(head: String, evidenceDirectory: String) throws {
