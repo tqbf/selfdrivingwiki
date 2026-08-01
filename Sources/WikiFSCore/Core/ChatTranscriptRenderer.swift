@@ -49,6 +49,7 @@ public enum ChatTranscriptRenderer {
             let body = inputSummary.isEmpty ? name : "\(name) — \(inputSummary)"
             return ("Tool Use", body)
         case .toolResult(let isError, let summary):
+            guard let summary else { return ("", "") }
             let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
             return ("Tool Result", isError ? "⚠️ \(body)" : body)
         case .subagent(let subagentType, let description, let isCompletion):

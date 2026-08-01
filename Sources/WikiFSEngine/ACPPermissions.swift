@@ -108,7 +108,8 @@ enum ToolCallRendering {
 /// - `toolCall` / `toolCallUpdate` → `.toolUse` (start) / `.toolResult` (done).
 ///   ACP folds a tool's whole lifecycle into status updates (`pending` →
 ///   `in_progress` → `completed`/`failed`); we map the *call* to `.toolUse` and
-///   a `completed`/`failed` status (with output text) to `.toolResult`.
+///   every `completed`/`failed` status to `.toolResult`, carrying output only
+///   when ACP supplied renderable text.
 /// - everything else (`plan`, `usage_update`, `current_mode_update`, …) → `[]`
 ///   (not rendered, same as `AgentEventParser`'s unmodeled types).
 ///
@@ -152,14 +153,14 @@ struct ACPEventTranslator: Sendable {
             return [.toolUse(name: Self.toolName(for: call), inputSummary: Self.toolSummary(for: call))]
 
         case .toolCallUpdate(let details):
-            // A status patch for an existing tool call. Only a terminal status
-            // (completed/failed) with output text is rendered — as `.toolResult`.
-            if let status = details.status, status == .completed || status == .failed,
-               let output = Self.toolOutput(for: details), !output.isEmpty {
-                return [.toolResult(isError: status == .failed, summary: output)]
+            // A terminal status always closes its matching tool row. Renderable
+            // output is optional: absent or whitespace-only provider output
+            // remains nil instead of becoming synthesized transcript text.
+            if let status = details.status, status == .completed || status == .failed {
+                return [.toolResult(isError: status == .failed, summary: Self.toolOutput(for: details))]
             }
-            // Non-terminal / output-less updates: not rendered (a pending or
-            // in_progress status carries nothing new for the transcript).
+            // Non-terminal updates are not transcript rows, even if they carry
+            // output; only completed/failed updates close a tool lifecycle.
             return []
 
         case .plan, .planUpdate, .planRemoved,
@@ -195,13 +196,38 @@ struct ACPEventTranslator: Sendable {
     }
 
     /// Extract a tool's output text (the `.toolResult` body) from a
-    /// `tool_call_update`. ACP tool output lives in `content`
-    /// (`[ToolCallContent]`) — flatten text/diff blocks to a string.
+    /// `tool_call_update`. Prefer rendered ACP `content` (`[ToolCallContent]`),
+    /// then accept only a nonempty string `rawOutput` or approved structured
+    /// output fields from agents that omit it. The exact trimmed provider marker
+    /// `"(no output)"` means semantic absence, not user-visible transcript text.
     private static func toolOutput(for details: ToolCallUpdateDetails) -> String? {
-        guard let content = details.content else { return nil }
-        return content.compactMap { $0.displayText }
+        let renderedContent = details.content?.compactMap { $0.displayText }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let renderedContent, !renderedContent.isEmpty {
+            return Self.normalizedTerminalOutput(renderedContent)
+        }
+
+        let rawOutput: String?
+        if let value = details.rawOutput?.value as? String {
+            rawOutput = value
+        } else if let value = details.rawOutput?.value as? [String: any Sendable] {
+            rawOutput = (value["formatted_output"] as? String)
+                ?? (value["output"] as? String)
+                ?? ((value["metadata"] as? [String: any Sendable])?["output"] as? String)
+        } else {
+            rawOutput = nil
+        }
+        guard let rawOutput else { return nil }
+        return Self.normalizedTerminalOutput(rawOutput)
+    }
+
+    /// Normalizes only ACP's canonical no-output marker. Other provider text is
+    /// preserved byte-for-byte apart from the established edge trimming.
+    private static func normalizedTerminalOutput(_ output: String) -> String? {
+        let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOutput.isEmpty, trimmedOutput != "(no output)" else { return nil }
+        return trimmedOutput
     }
 }
 
