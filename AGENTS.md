@@ -23,7 +23,7 @@ Last verified: 2026-07-27
 * `PLAN.md` and `PROGRESS.md` document features and design-relevant refactorings only.
   Do not add bug-fix entries to either file.
 
-* When writing prose, use the ste-testing skill to ensure clarity.  This applies to pull requests, 
+* When writing prose, use the ste-writing skill to ensure clarity.  This applies to pull requests, 
   github issues, plans in the plans folder, and progress in PROGRESS.md.
 
 * Before and after deciding on code, use the swiftui-pro skill to ensure we're following
