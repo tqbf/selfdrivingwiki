@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic renderer PR gate record",
+  "type": "object",
+  "required": ["schemaVersion", "auditedSHA", "headRefOID", "baseRefName", "baseRefOID", "cleanCheckout", "commands", "testInventory", "findings", "recordedAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "auditedSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "headRefOID": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "baseRefName": { "type": "string", "minLength": 1 },
+    "baseRefOID": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "cleanCheckout": { "type": "boolean", "const": true },
+    "commands": { "type": "array", "items": { "type": "object", "required": ["command", "exitCode"], "properties": { "command": { "type": "string" }, "exitCode": { "type": "integer" } } } },
+    "testInventory": { "type": "string", "pattern": "^plans/.+\\.json$" },
+    "mutationReport": { "type": "string" },
+    "findings": { "type": "array" },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

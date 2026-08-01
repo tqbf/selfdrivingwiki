@@ -373,6 +373,31 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
+        // Exact-head audit support for the seven dynamic-renderer PRs. The
+        // executable owns process and GitHub calls; this target keeps record
+        // decoding and command planning testable without external state.
+        .executableTarget(
+            name: "DynamicRendererPRSeriesAudit",
+            dependencies: [],
+            path: "Sources/DynamicRendererPRSeriesAudit",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Renderer contract tests deliberately depend on the portable leaf target
+        // alone. This makes an accidental WikiFSTypes -> WikiFSCore dependency
+        // a package-graph failure on every supported platform.
+        .testTarget(
+            name: "WikiFSTypesRendererTests",
+            dependencies: ["WikiFSTypes"],
+            path: "Tests/WikiFSTypesRendererTests",
+            exclude: ["Fixtures"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "DynamicRendererPRSeriesAuditTests",
+            dependencies: ["DynamicRendererPRSeriesAudit"],
+            path: "Tests/DynamicRendererPRSeriesAuditTests",
+            swiftSettings: strictSwiftSettings
+        ),
         // macOS-only integration tests — AppKit/WebKit/FileProvider/SwiftUI-hosted
         // views, Tantivy integration, MLX embedder, PDF extraction, JS linter/
         // validator. Kept out of the default test graph because these suites can
