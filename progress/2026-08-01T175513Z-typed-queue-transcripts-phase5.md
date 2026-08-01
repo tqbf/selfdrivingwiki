@@ -1,5 +1,5 @@
 ---
-timestamp: 2026-08-01T10:14:36-07:00
+timestamp: 2026-08-01T10:55:13-07:00
 title: Typed Queue Transcripts Phase 5
 branch: feature/typed-queue-transcripts-phase5
 status: complete
@@ -27,6 +27,10 @@ output. Other objects and arrays are not serialized.
 - The real queue trace contains zero canonical `(no output)` markers. The
   exact marker-to-nil behavior is verified by decoded real-wire fixtures, not
   claimed as a live queue observation.
+- Exact-head audit correction: normalize each approved ACP candidate before
+  precedence selection so whitespace and the exact marker fall through to a
+  later valid string. Added direct nil-rendering tests for the quote resolver
+  and transcript renderer.
 
 ## Verification
 
@@ -41,6 +45,11 @@ output. Other objects and arrays are not serialized.
   list --json` after restart returned four existing conversations.
 - Full focused, build, test, lint, check, and diff verification is recorded in
   `plans/typed-queue-transcripts.md` and rerun at the final Phase 5 head.
+- Corrective verification passed: `make build`; ACP (67), translator (12),
+  typed store (9), migration (2), concurrency (8), app-enabled conformance
+  (4), envelope (11), daemon host (12), presentation manifest (10), quote
+  resolver (18), and transcript renderer (12); `make test` passed 3,019 tests
+  in 247 suites; `make lint`, `make check`, and `git diff --check` passed.
 
 ## Review
 

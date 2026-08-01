@@ -201,25 +201,20 @@ struct ACPEventTranslator: Sendable {
     /// output fields from agents that omit it. The exact trimmed provider marker
     /// `"(no output)"` means semantic absence, not user-visible transcript text.
     private static func toolOutput(for details: ToolCallUpdateDetails) -> String? {
-        let renderedContent = details.content?.compactMap { $0.displayText }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let renderedContent, !renderedContent.isEmpty {
-            return Self.normalizedTerminalOutput(renderedContent)
+        var candidates: [String?] = [
+            details.content?.compactMap { $0.displayText }.joined(separator: "\n"),
+        ]
+        if let value = details.rawOutput?.value as? String {
+            candidates.append(value)
+        } else if let value = details.rawOutput?.value as? [String: any Sendable] {
+            candidates.append(value["formatted_output"] as? String)
+            candidates.append(value["output"] as? String)
+            candidates.append((value["metadata"] as? [String: any Sendable])?["output"] as? String)
         }
 
-        let rawOutput: String?
-        if let value = details.rawOutput?.value as? String {
-            rawOutput = value
-        } else if let value = details.rawOutput?.value as? [String: any Sendable] {
-            rawOutput = (value["formatted_output"] as? String)
-                ?? (value["output"] as? String)
-                ?? ((value["metadata"] as? [String: any Sendable])?["output"] as? String)
-        } else {
-            rawOutput = nil
-        }
-        guard let rawOutput else { return nil }
-        return Self.normalizedTerminalOutput(rawOutput)
+        return candidates.lazy.compactMap { candidate in
+            candidate.flatMap(Self.normalizedTerminalOutput)
+        }.first
     }
 
     /// Normalizes only ACP's canonical no-output marker. Other provider text is

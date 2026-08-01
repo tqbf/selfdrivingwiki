@@ -595,6 +595,14 @@ rows; the hosted progress-fallback test covers their presentation path. The
 restarted signed helper listed four existing chats. This is sufficient live
 evidence for the typed queue Activity surface under the operator decision.
 
+**Exact-head audit correction (2026-08-01):** Normalize every ACP terminal
+output candidate before applying precedence. Whitespace-only text and the exact
+canonical `"(no output)"` marker now fall through to later valid candidates in
+this order: rendered content, string `rawOutput`, `formatted_output`, `output`,
+and `metadata.output`. Only string values participate. Focused Swift Testing
+covers whitespace and marker fall-through, existing valid precedence, and
+nil-output quote and transcript rendering without synthetic text.
+
 ## Acceptance Criteria
 
 ### TQT.AC1: Data reset safety

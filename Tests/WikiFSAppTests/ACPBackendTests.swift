@@ -248,16 +248,16 @@ import ACPModel
         #expect(translator.translate(update) == [.toolResult(isError: false, summary: "rendered output")])
     }
 
-    @Test func canonicalNoOutputRenderedContentEmitsNilWithoutRawFallback() {
+    @Test func canonicalNoOutputRenderedContentFallsBackToRawOutput() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
             toolCallId: "tc-content-no-output",
             status: .completed,
             content: [.content(.text(TextContent(text: " \n(no output)\t")))],
-            rawOutput: AnyCodable("must not replace preferred absence")
+            rawOutput: AnyCodable("raw fallback")
         ))
 
-        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "raw fallback")])
     }
 
     @Test func canonicalNoOutputStringRawOutputEmitsNilResult() {
@@ -379,6 +379,52 @@ import ACPModel
         ))
 
         #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func whitespaceFormattedRawOutputFallsBackToOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "formatted_output": " \n\t ",
+            "output": "fallback output",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-formatted-whitespace-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "fallback output")])
+    }
+
+    @Test func emptyStructuredOutputFallsBackToMetadataOutput() {
+        let translator = ACPEventTranslator()
+        let metadata: [String: any Sendable] = ["output": "metadata fallback"]
+        let rawOutput: [String: any Sendable] = [
+            "output": "",
+            "metadata": metadata,
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-output-empty-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "metadata fallback")])
+    }
+
+    @Test func canonicalNoOutputFormattedRawOutputFallsBackToOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "formatted_output": "(no output)",
+            "output": "fallback output",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-formatted-marker-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "fallback output")])
     }
 
     @Test func decodedCompletedToolCallUpdateWithoutOutputEmitsNilResult() throws {
