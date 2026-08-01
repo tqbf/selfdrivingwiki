@@ -582,6 +582,44 @@ append method with its compatibility writers.
 
 Add ordered tabs, injectable empty-tab assertion reporting plus pure fallback, shared metadata models, exhaustive conditional projections, every renderer case, action-router no-op/error/eligibility paths, detail-owned hydration, live/persisted chat merge, event refresh, hosted layout tests, and accessibility.
 
+##### Implemented Phase 5 decisions
+
+Phase 5 uses `InspectorTab.metadata`, `.outline`, and `.history` as ordered
+caller-supplied arrays. `InspectorTab.decodePersisted(_:)` accepts the legacy
+outline/history values and maps invalid persistence to metadata;
+`normalizedFallback(selection:availableTabs:)` stays pure, while
+`normalize(selection:availableTabs:reportProgrammerError:)` reports an empty
+tab list exactly once before returning that fallback. Detail owners normalize
+persisted state only from keyed task work, never during view construction.
+
+`MetadataPanelModel`, `MetadataSubject`, `MetadataSection`, `MetadataRow`,
+`MetadataValue`, typed link/action targets, and all three projections live in
+the app presentation layer. They are immutable value models with no callbacks,
+store, daemon, or database-handle references. `MetadataValueRenderer` is the
+single locale/calendar-aware renderer, and `MetadataActionRouter` is the sole
+main-actor side-effect seam for typed navigation, comparison, copy, and
+validated HTTP(S) URLs.
+
+`MetadataPanelView` is shared by page, source, and chat inspectors. It has a
+180...500-point inspector clamp and uses
+`MetadataMetrics.stackedRowThreshold == 300`: hosted `NSWindow` tests establish
+stacked rows below 300 and a two-column grid at 300 through 500. Identifiers
+are selectable, values wrap, controls use their native keyboard and VoiceOver
+semantics, and the picker is announced as “Inspector section.”
+
+Each detail view owns exactly one `MetadataHydrationState`; its
+`MetadataHydrationKey` includes the typed subject and `messageVersion` durable
+generation. File-backed tasks call `WikiReadPool.asyncRead` and return value
+models; the in-memory fallback stays on the model store. Cancellation is
+checked before every owner state publication. Durable event/Darwin reloads
+advance `messageVersion`; chat daemon updates re-project cached durable data
+without another store read. Live chat usage is overlaid by `ChatTurnID`: a
+matching turn replaces in place, while a distinct active turn remains separate
+from historical usage and is never counter-summed.
+
+Issue #219 still exclusively owns deletion warnings, cleanup, blocker
+presentation, and deletion navigation. This phase adds no deletion UI.
+
 Each phase must run all commands before review:
 
 ```text
@@ -690,6 +728,7 @@ This manifest is normative. It uses explicit test names; an AC-range or broad ca
 - `PageMetadataProjection.make(input:)`: `pageProjectionOmitsSourceRowsWhenAbsent()`, `pageProjectionIncludesSourceRowsWhenPresent()`, `pageProjectionOrdersSourceRowsByRoleNameAndID()`, `pageProjectionSourceRowsCarryTypedSourceTargets()`, `pageProjectionShowsTechnicalHashWhenPresent()`, and `pageProjectionOmitsTechnicalHashWhenAbsent()`.
 - `SourceMetadataProjection.make(input:)`: `sourceProjectionWithZeroAlternativesOmitsCompareAction()`, `sourceProjectionWithOneAlternativeOmitsCompareAction()`, `sourceProjectionWithTwoAlternativesIncludesCompareAction()`, `sourceProjectionIncludesModelWhenPresent()`, `sourceProjectionOmitsModelWhenAbsent()`, `sourceProjectionIncludesProviderWhenPresent()`, `sourceProjectionOmitsProviderWhenAbsent()`, `sourceProjectionIncludesToolVersionWhenPresent()`, `sourceProjectionOmitsToolVersionWhenAbsent()`, `sourceProjectionIncludesExtractionDateWhenPresent()`, `sourceProjectionOmitsExtractionDateWhenAbsent()`, `sourceProjectionIncludesSourceVersionWhenPresent()`, `sourceProjectionOmitsSourceVersionWhenAbsent()`, `sourceProjectionIncludesExtractionVersionWhenPresent()`, `sourceProjectionOmitsExtractionVersionWhenAbsent()`, `sourceProjectionIncludesHashWhenPresent()`, and `sourceProjectionOmitsHashWhenAbsent()`.
 - `ChatMetadataProjection.make(input:)`: `chatProjectionLegacyRowOmitsUnavailableUsageRows()`, `chatProjectionMissingStartOmitsDuration()`, `chatProjectionMissingFinishOmitsDuration()`, `chatProjectionCompleteTimesShowsDuration()`, `chatProjectionShowsInputTokensWhenPresent()`, `chatProjectionShowsOutputTokensWhenPresent()`, `chatProjectionShowsComputedTotalWhenInputAndOutputPresent()`, `chatProjectionOmitsTotalWhenInputMissing()`, `chatProjectionOmitsTotalWhenOutputMissing()`, `chatProjectionShowsCacheReadWhenPresent()`, `chatProjectionShowsCacheWriteWhenPresent()`, `chatProjectionShowsCostForMatchingCurrency()`, `chatProjectionOmitsCostForMixedCurrency()`, `chatProjectionShowsStatusWhenPresent()`, `chatProjectionOmitsStatusWhenUnavailable()`, and `metadataProjectionUsesStableEmptyStateWhenNoRows()`.
+- `ChatMetadataProjection.mergedUsage(persisted:live:)` and `mergedUsages(persisted:live:)`: `liveTurnReplacesSamePersistedTurn()`, `persistedCatchUpDoesNotDoubleCount()`, `differentTurnRemainsHistorical()`, and `terminalPersistedValueReplacesLiveOverlay()`.
 - `MetadataValueRenderer.presentation(for:locale:calendar:)`: `rendersText()`, `rendersDate()`, `rendersByteCount()`, `rendersInteger()`, `rendersTokenCount()`, `rendersDuration()`, `rendersIdentifier()`, `rendersLink()`, `rendersAction()`, and `usesTabularDigitsForCounts()`.
 - `MetadataActionRouter`: `opensTypedPageTarget()`, `opensTypedSourceTarget()`, `opensTypedChatTarget()`, `selectsExactActivityTarget()`, `opensValidatedURLTarget()`, `opensPageVersionComparison()`, `opensSourceExtractionComparison()`, `copiesExactIdentifier()`, `missingSubjectReturnsNoOp()`, `pageCompareUnavailableReturnsNoOp()`, `sourceCompareUnavailableReturnsNoOp()`, `unsafeURLIsRejectedWithoutOpen()`, `copyFailureReturnsTypedError()`, `targetOpenFailureReturnsTypedError()`, and `explicitNoOpPerformsNoSideEffect()`. Issue #219 owns deletion-impact navigation.
 - `chatTurnUsage(chatID:turnID:)`: `chatTurnUsageReturnsNilForMissingTurn()`, `chatTurnUsageDecodesEveryField()`, and `chatTurnUsageDecodesLegacyAllNilRow()`.
@@ -728,6 +767,9 @@ This manifest is normative. It uses explicit test names; an AC-range or broad ca
 - Injected `SchemaForeignKeyChecker.check(_:)` thrown-failure branch: `injectedForeignKeyCheckerThrowRollsBackAllV48ObjectsAndRetainsVersion47()` and `retryAfterReplacingThrowingCheckerWithProductionCheckerSucceeds()`.
 - V48 constraint and FK branches: `workspaceRefSourcesHasCompositeForeignKey()`, `deletingWorkspaceRefCascadesStagedSources()`, `deletingReferencedSourceIsRestricted()`, `chatCheckRejectsNegativeInputTokens()`, `chatCheckRejectsNegativeOutputTokens()`, `chatCheckRejectsNegativeThoughtTokens()`, `chatCheckRejectsNegativeCacheReadTokens()`, `chatCheckRejectsNegativeCacheWriteTokens()`, `chatCheckRejectsCostWithoutCurrency()`, `chatChecksRejectFinishBeforeStart()`, `roleCheckRejectsUnknownValue()`, `foreignKeysAreEnabled()`, and `pageVersionCascadeWorks()`.
 - Hydration callables: `subjectChangeCancelsPriorHydration()`, `cancelledHydrationCannotPublish()`, `failedHydrationPublishesTypedFailure()`, `inMemoryHydrationUsesStoreFallback()`, and `fileHydrationUsesReadPool()`.
+- `MetadataHydrator.hydrate(subject:operation:publish:)` and `MetadataHydrationReadPath.resolve(readPoolAvailable:)`: `subjectChangeCancelsPriorHydration()`, `cancelledHydrationCannotPublish()`, `failedHydrationPublishesTypedFailure()`, `inMemoryHydrationUsesStoreFallback()`, and `fileHydrationUsesReadPool()`.
+- `MetadataLayout.usesStackedRows(for:)` and `MetadataMetrics.stackedRowThreshold`: `hostedInspectorAt180UsesStackedRows()`, `hostedInspectorAt500UsesGridRows()`, and `hostedThresholdUsesStackedBelowAndGridAt300()`.
+- Renderer/action boundary and documentation audits: `renderingMetadataPerformsNoStoreRead()`, `inspectorTypesDoNotReferenceWikiStore()`, `planIndexLinksIssue1005Plan()`, `trackedPlanContainsFinalDecisions()`, and `progressEntryNamesCompletedPhases()`.
 - Event/read-pool/refresh compatibility: `pageVersionAndSourcesEmitOnceAfterCommit()`, `rolledBackPageProvenanceEmitsNothing()`, `extractionWriteEmitsAfterCommit()`, `readerSeesCommittedChatUsage()`, `readerSeesCommittedPageSources()`, `readerSeesCommittedExtractionPlan()`, `readerNeverSeesRolledBackMetadata()`, `darwinPageChangeRehydratesSelectedPage()`, `darwinSourceChangeRehydratesSelectedSource()`, `darwinChatChangeRehydratesSelectedChat()`, and `daemonSyncRefreshesLiveChatWithoutStoreRead()`.
 
 At exact-head review, enumerate every new or changed callable from the diff. Add every missing callable and branch to this manifest and the AC matrix before approval.

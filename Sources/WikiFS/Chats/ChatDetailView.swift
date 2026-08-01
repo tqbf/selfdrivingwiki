@@ -24,7 +24,7 @@ struct ChatDetailView: View {
     @State private var persistedTranscriptItems: [PersistedChatTranscriptItem] = []
     @State private var attachments: [ChatAttachment] = []
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .metadata
     @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
     @State private var isHeaderExpanded = false
     @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
@@ -32,6 +32,10 @@ struct ChatDetailView: View {
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     @State private var queuedMessages: [PendingQueuedMessage] = []
     @State private var diagnosticExportError: String?
+    @State private var metadataState: MetadataHydrationState = .idle
+    /// Durable data is refreshed by the keyed read task. Daemon snapshots only
+    /// re-project this cache; they never cause a SQLite read from the inspector.
+    @State private var durableChatMetadata: ChatMetadataInput?
     @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     private var isLiveChat: Bool {
@@ -154,6 +158,20 @@ struct ChatDetailView: View {
                 }
             }
         }
+        .task(id: chatID.map { MetadataHydrationKey.chat($0, store.messageVersion) }) {
+            guard let chatID else {
+                metadataState = .idle
+                return
+            }
+            await hydrateMetadata(chatID: chatID)
+        }
+        .task(id: chatID) {
+            guard chatID != nil else { return }
+            let normalized = InspectorTab.normalize(selection: inspectorTab, availableTabs: InspectorTab.persistedChatAvailableTabs)
+            guard normalized != inspectorTab else { return }
+            inspectorTab = normalized
+            updateRightSidebarRegistration()
+        }
         .onAppear {
             updateRightSidebarRegistration()
         }
@@ -165,6 +183,9 @@ struct ChatDetailView: View {
                 loadPersistedTranscript(chatID: chatID)
             }
             updateRightSidebarRegistration()
+        }
+        .onChange(of: liveMetadataSnapshot) { _, _ in
+            applyLiveMetadataOverlay()
         }
         .onChange(of: liveDebugKey, initial: true) { _, key in
             ChatDiagnostics.observe(
@@ -381,7 +402,7 @@ struct ChatDetailView: View {
     }
 
     private func updateRightSidebarRegistration() {
-        guard presentation.chatInspectorAvailable else {
+        guard chatID != nil else {
             rightInspector.updateRegistration(nil)
             return
         }
@@ -389,12 +410,21 @@ struct ChatDetailView: View {
             RightSidebarRegistration(
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
-                showsOutlineTab: true,
-                showsHistoryTab: false,
+                availableTabs: InspectorTab.persistedChatAvailableTabs,
+                metadataState: metadataState,
                 origin: nil,
                 history: [],
-                store: nil,
+                onOpenChat: { id in store.openTab(.chat(id)) },
                 onCompareVersions: nil,
+                metadataRouter: MetadataActionRouter(
+                    openPage: { id in store.openTab(.page(id)); return true },
+                    openSource: { id in store.openTab(.source(id)); return true },
+                    openChat: { id in store.openTab(.chat(id)); return true },
+                    selectActivity: { _ in false },
+                    comparePageVersions: { _ in false },
+                    compareSourceExtractions: { _ in false },
+                    copy: MetadataActionRouter.systemClipboardCopy,
+                    openURL: { NSWorkspace.shared.open($0) }),
                 outline: {
                     AnyView(
                         ChatInspectorOutlineView(entries: presentation.outlineEntries) { target in
@@ -408,6 +438,51 @@ struct ChatDetailView: View {
             )
         )
     }
+
+    private func hydrateMetadata(chatID: ChatID) async {
+        guard !Task.isCancelled else { return }
+        metadataState = .loading(subject: .chat(chatID))
+        do {
+            let durable: ChatMetadataInput
+            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
+               let readPool = store.readPool {
+                durable = try await readPool.asyncRead { database in
+                    try Self.chatMetadataInput(chatID: chatID, store: database)
+                }
+            } else {
+                durable = try Self.chatMetadataInput(chatID: chatID, store: store.internalStore)
+            }
+            guard !Task.isCancelled else { return }
+            durableChatMetadata = durable
+            metadataState = .loaded(ChatMetadataProjection.make(input: .init(
+                chat: durable.chat,
+                usage: durable.usage,
+                live: liveMetadataSnapshot)))
+            updateRightSidebarRegistration()
+        } catch {
+            guard !Task.isCancelled else { return }
+            metadataState = .failed(subject: .chat(chatID), message: error.localizedDescription)
+            updateRightSidebarRegistration()
+        }
+    }
+
+    private var liveMetadataSnapshot: ChatMetadataLiveSnapshot? {
+        ChatMetadataLiveSnapshot.from(remoteSession.syncState?.projection)
+    }
+
+    private func applyLiveMetadataOverlay() {
+        guard let durable = durableChatMetadata, !Task.isCancelled else { return }
+        metadataState = .loaded(ChatMetadataProjection.make(input: .init(
+            chat: durable.chat,
+            usage: durable.usage,
+            live: liveMetadataSnapshot)))
+        updateRightSidebarRegistration()
+    }
+
+    nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) throws -> ChatMetadataInput {
+        .init(chat: try store.getChat(id: chatID), usage: try store.latestChatTurnUsage(chatID: chatID))
+    }
+
 
     private var composerFont: NSFont {
         let base = ChatMetrics.composerFont

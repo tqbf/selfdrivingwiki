@@ -24,7 +24,7 @@ struct PageDetailView: View {
     @State private var lastKnownActiveTabID: UUID? = nil
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("pageInspectorTab") private var inspectorTab: InspectorTab = .metadata
     @AppStorage("pageOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
@@ -33,6 +33,7 @@ struct PageDetailView: View {
     /// keyed on `currentPageID` so it re-fires on page navigation.
     @State private var provenanceOrigin: PageOrigin?
     @State private var provenanceHistory: [PageOrigin] = []
+    @State private var metadataState: MetadataHydrationState = .idle
 
     // Find bar state. The model is shared (hoisted to `ContentView` and injected
     // via environment) so the address bar's "Find on Page…" menu item can drive
@@ -177,6 +178,20 @@ struct PageDetailView: View {
             }
             provenanceOrigin = store.pageOrigin(for: pageID)
             provenanceHistory = store.pageEditHistory(for: pageID)
+            updateRightSidebarRegistration()
+        }
+        .task(id: currentPageID.map { MetadataHydrationKey.page($0, store.messageVersion) }) {
+            guard let pageID = currentPageID else {
+                metadataState = .idle
+                return
+            }
+            await hydrateMetadata(pageID: pageID)
+        }
+        .task(id: currentPageID) {
+            guard currentPageID != nil else { return }
+            let normalized = InspectorTab.normalize(selection: inspectorTab, availableTabs: InspectorTab.pageAvailableTabs)
+            guard normalized != inspectorTab else { return }
+            inspectorTab = normalized
             updateRightSidebarRegistration()
         }
         .alert(
@@ -349,12 +364,21 @@ struct PageDetailView: View {
             RightSidebarRegistration(
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
-                showsOutlineTab: true,
-                showsHistoryTab: true,
+                availableTabs: InspectorTab.pageAvailableTabs,
+                metadataState: metadataState,
                 origin: provenanceOrigin?.provenanceEntry,
                 history: provenanceHistory.map(\.provenanceEntry),
-                store: store,
+                onOpenChat: { id in store.openTab(.chat(id)) },
                 onCompareVersions: openVersionsWindow,
+                metadataRouter: MetadataActionRouter(
+                    openPage: { id in store.openTab(.page(id)); return true },
+                    openSource: { id in store.openTab(.source(id)); return true },
+                    openChat: { id in store.openTab(.chat(id)); return true },
+                    selectActivity: { _ in false },
+                    comparePageVersions: { id in openVersionsWindow(for: id) },
+                    compareSourceExtractions: { _ in false },
+                    copy: MetadataActionRouter.systemClipboardCopy,
+                    openURL: { NSWorkspace.shared.open($0) }),
                 outline: {
                     AnyView(
                         PageOutlineView(markdown: store.draftBody,
@@ -372,6 +396,41 @@ struct PageDetailView: View {
             )
         )
     }
+
+    private func hydrateMetadata(pageID: PageID) async {
+        await MetadataHydrator.hydrate(subject: .page(pageID), operation: {
+            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
+               let readPool = store.readPool {
+                return try await readPool.asyncRead { database in
+                    try Self.pageMetadataModel(pageID: pageID, store: database)
+                }
+            } else {
+                return try Self.pageMetadataModel(pageID: pageID, store: store.internalStore)
+            }
+        }, publish: { state in
+            metadataState = state
+            updateRightSidebarRegistration()
+        })
+    }
+
+    nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) throws -> MetadataPanelModel {
+        let page = try store.getPage(id: pageID)
+        let sourceSummaries = try store.listSources()
+        let sources = try store.pageHeadSources(pageID: pageID).map { relation in
+            guard let source = sourceSummaries.first(where: { $0.id == relation.sourceID }) else {
+                throw MetadataProjectionError.missingSource(relation.sourceID)
+            }
+            return MetadataPageSource(sourceID: source.id, displayName: source.effectiveName, role: relation.role)
+        }
+        let history = try store.pageVersionHistory(pageID: pageID)
+        let headID = try store.pageHeadVersionID(pageID: pageID)
+        return PageMetadataProjection.make(input: .init(
+            page: page,
+            currentVersion: history.first { $0.id == headID },
+            origin: try store.pageOrigin(pageID: pageID),
+            sources: sources))
+    }
+
 
     private var editorContent: some View {
         ScrollableTextEditor(
@@ -474,11 +533,20 @@ struct PageDetailView: View {
     /// wikiID, so re-opening focuses the existing window.
     private func openVersionsWindow() {
         guard let pageID = currentPageID else { return }
+        _ = openVersionsWindow(for: pageID)
+    }
+
+    /// The router carries a typed page target. Rejecting any target other than
+    /// the currently hosted page prevents stale inspector actions from opening
+    /// a comparison window for the wrong subject.
+    private func openVersionsWindow(for pageID: PageID) -> Bool {
+        guard currentPageID == pageID else { return false }
         let title = store.summaries.first { $0.id == pageID }?.title ?? ""
         openWindow(value: PageVersionCompareContext(
             pageID: pageID,
             title: title,
             wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: "")))
+        return true
     }
 
     // MARK: - Subviews

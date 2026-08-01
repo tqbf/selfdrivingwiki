@@ -417,12 +417,20 @@ private struct RightSidebarHostView: View {
         DetailInspectorView(
             inspectorTab: registration.inspectorTab,
             outlineWidth: registration.outlineWidth,
-            showsOutlineTab: registration.showsOutlineTab,
-            showsHistoryTab: registration.showsHistoryTab,
+            availableTabs: registration.availableTabs,
+            metadataState: registration.metadataState,
             origin: registration.origin,
             history: registration.history,
-            store: registration.store,
-            onCompareVersions: registration.onCompareVersions
+            onOpenChat: registration.onOpenChat,
+            onCompareVersions: registration.onCompareVersions,
+            performMetadataAction: { target in
+                do { try registration.metadataRouter.route(action: target) }
+                catch { DebugLog.tabs("Metadata action failed: \(error.localizedDescription)") }
+            },
+            openMetadataLink: { target in
+                do { try registration.metadataRouter.route(link: target) }
+                catch { DebugLog.tabs("Metadata link failed: \(error.localizedDescription)") }
+            }
         ) {
             registration.outline()
         }

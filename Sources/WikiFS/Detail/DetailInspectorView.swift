@@ -6,22 +6,59 @@ import WikiFSCore
 /// The selected tab in the ``DetailInspectorView``. Persisted in `@AppStorage`
 /// (via a `@Binding` from the caller) so the user's last-used tab is restored
 /// on reopen.
-enum InspectorTab: String, CaseIterable {
+enum InspectorTab: String, CaseIterable, Codable {
+    case metadata
     case outline
     case history
+
+    static let pageAvailableTabs: [InspectorTab] = [.metadata, .outline, .history]
+    static let persistedChatAvailableTabs: [InspectorTab] = [.metadata, .outline]
+    static let metadataOnlyAvailableTabs: [InspectorTab] = [.metadata]
+
+    static func sourceAvailableTabs(hasOutline: Bool) -> [InspectorTab] {
+        hasOutline ? pageAvailableTabs : [.metadata, .history]
+    }
+
+    static func decodePersisted(_ rawValue: String?) -> InspectorTab {
+        guard let rawValue, !rawValue.isEmpty else { return .metadata }
+        return InspectorTab(rawValue: rawValue) ?? .metadata
+    }
+
+    static func normalizedFallback(selection: InspectorTab, availableTabs: [InspectorTab]) -> InspectorTab {
+        guard !availableTabs.isEmpty else { return .metadata }
+        if availableTabs.contains(selection) { return selection }
+        return availableTabs.contains(.metadata) ? .metadata : availableTabs[0]
+    }
+
+    static func normalize(
+        selection: InspectorTab,
+        availableTabs: [InspectorTab],
+        reportProgrammerError: () -> Void = { assertionFailure("Inspector requires at least one tab") }
+    ) -> InspectorTab {
+        if availableTabs.isEmpty { reportProgrammerError() }
+        return normalizedFallback(selection: selection, availableTabs: availableTabs)
+    }
+
+    var label: String {
+        switch self { case .metadata: "Metadata"; case .outline: "Outline"; case .history: "History" }
+    }
+
+    var symbol: String {
+        switch self { case .metadata: "info.circle"; case .outline: "list.bullet.indent"; case .history: "clock.arrow.circlepath" }
+    }
 }
 
 // MARK: - DetailInspectorView
 
-/// Xcode-style inspector panel for detail views. Shows a segmented tab bar
-/// at the top (Outline / History) and the selected tab's content below.
+/// Xcode-style inspector panel for detail views. Shows an ordered, caller-
+/// supplied set of Metadata, Outline, and History tabs when more than one is
+/// available.
 ///
 /// - **Outline tab**: renders the `@ViewBuilder` closure passed by the caller
 ///   (the page's `PageOutlineView` or the source's outline view).
 /// - **History tab**: renders ``ProvenancePanel`` (origin + edit history).
 ///
-/// Shared between `PageDetailView` and `SourceDetailView` so both have the
-/// same tabbed inspector. The resizable width divider lives at this level
+/// Shared between page, source, and chat details. The resizable width divider lives at this level
 /// so both tabs share the same column width. Provenance is passed in by the
 /// caller (already loaded via a `.task(id:)` — this view does no I/O).
 ///
@@ -31,16 +68,18 @@ enum InspectorTab: String, CaseIterable {
 struct DetailInspectorView<Outline: View>: View {
     @Binding var inspectorTab: InspectorTab
     @Binding var outlineWidth: Double
-    var showsOutlineTab = true
-    var showsHistoryTab = true
+    let availableTabs: [InspectorTab]
+    let metadataState: MetadataHydrationState
     let origin: ProvenanceEntry?
     let history: [ProvenanceEntry]
-    var store: WikiStoreModel?
+    var onOpenChat: (ChatID) -> Void = { _ in }
     /// Optional entry to the Versions window (#817). Passed through to
     /// `ProvenancePanel.onCompareVersions` — injected by `PageDetailView`
     /// (page-only); `SourceDetailView` leaves this `nil` so the button is
     /// hidden for sources. See `ProvenancePanel.onCompareVersions`.
     var onCompareVersions: (() -> Void)? = nil
+    var performMetadataAction: (MetadataActionTarget) -> Void = { _ in }
+    var openMetadataLink: (MetadataLinkTarget) -> Void = { _ in }
     @ViewBuilder let outline: () -> Outline
 
     @State private var dragStartWidth: Double? = nil
@@ -57,20 +96,7 @@ struct DetailInspectorView<Outline: View>: View {
 
     /// Clamp a proposed inspector width to the allowed range.
     private func clampedWidth(_ width: Double) -> Double {
-        max(180, min(500, width))
-    }
-
-    private var effectiveInspectorTab: InspectorTab {
-        switch (showsOutlineTab, showsHistoryTab, inspectorTab) {
-        case (true, true, _):
-            return inspectorTab
-        case (true, false, _):
-            return .outline
-        case (false, true, _):
-            return .history
-        case (false, false, _):
-            return .outline
-        }
+        max(MetadataMetrics.minimumWidth, min(MetadataMetrics.maximumWidth, width))
     }
 
     var body: some View {
@@ -110,21 +136,27 @@ struct DetailInspectorView<Outline: View>: View {
                 .zIndex(1)
 
             VStack(alignment: .leading, spacing: 0) {
-                if showsOutlineTab && showsHistoryTab {
-                    Picker("Inspector", selection: $inspectorTab) {
-                        Label("Outline", systemImage: "list.bullet.indent")
-                            .tag(InspectorTab.outline)
-                        Label("History", systemImage: "clock.arrow.circlepath")
-                            .tag(InspectorTab.history)
+                if availableTabs.count >= 2 {
+                    Picker("Inspector section", selection: $inspectorTab) {
+                        ForEach(availableTabs, id: \.self) { tab in
+                            Label(tab.label, systemImage: tab.symbol).tag(tab)
+                        }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .accessibilityLabel("Inspector section")
                     .padding(8)
 
                     Divider()
                 }
 
-                switch effectiveInspectorTab {
+                switch InspectorTab.normalizedFallback(selection: inspectorTab, availableTabs: availableTabs) {
+                case .metadata:
+                    MetadataPanelView(
+                        state: metadataState,
+                        width: effectiveWidth,
+                        performAction: performMetadataAction,
+                        openLink: openMetadataLink)
                 case .outline:
                     outline()
                 case .history:
@@ -132,7 +164,7 @@ struct DetailInspectorView<Outline: View>: View {
                         ProvenancePanel(
                             origin: origin,
                             history: history,
-                            store: store,
+                            onOpenChat: onOpenChat,
                             onCompareVersions: onCompareVersions)
                         .padding()
                     }

@@ -10,12 +10,13 @@ import WikiFSCore
 struct RightSidebarRegistration {
     let inspectorTab: Binding<InspectorTab>
     let outlineWidth: Binding<Double>
-    let showsOutlineTab: Bool
-    let showsHistoryTab: Bool
+    let availableTabs: [InspectorTab]
+    let metadataState: MetadataHydrationState
     let origin: ProvenanceEntry?
     let history: [ProvenanceEntry]
-    let store: WikiStoreModel?
+    let onOpenChat: (ChatID) -> Void
     let onCompareVersions: (() -> Void)?
+    let metadataRouter: MetadataActionRouter
     let outline: () -> AnyView
 }
 
