@@ -232,8 +232,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
-    /// Load persisted transcript events for a queue item.
-    public func loadTranscript(for itemID: QueueItem.ID) async throws -> [AgentEvent] {
+    /// Load persisted typed transcript items for a queue item.
+    public func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
                 self.proxy.loadTranscript(itemID: itemID.rawValue) { data in
@@ -241,7 +241,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                 }
             }
             do {
-                return try JSONDecoder().decode([AgentEvent].self, from: replyData)
+                return try JSONDecoder().decode([ChatTranscriptItem].self, from: replyData)
             } catch {
                 throw DaemonXPCError.unexpectedReply
             }

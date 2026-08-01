@@ -399,6 +399,13 @@ Do not ship or merge a state where the table is absent and old callers remain.
 **Gate:** A v4 queue database opens, discards only legacy transcript rows, and
 then stores and loads a new typed transcript through the daemon client.
 
+**Implementation record (2026-08-01):** The cutover uses an immutable
+`QueueAttemptID` captured by `QueueIngestionWorker`, a lock-backed per-attempt
+translator/reducer/drainer, and `QueueTranscriptUpdate` batches across the
+engine event and XPC boundary. v6 drops only `queue_item_events`; typed retry
+clearing preserves queue metadata and activity rows. The Activity window merges
+durable and live typed rows through one value-only presentation seam.
+
 ### Phase 4: Remove the legacy renderer
 
 After the typed Activity view passes live verification, remove:
@@ -407,7 +414,6 @@ After the typed Activity view passes live verification, remove:
 - event-based coordinator reload and apply methods
 - event-based pending and rendered state
 - legacy visibility helpers that have no remaining callers
-- legacy `QueueStore` event methods
 - stale comments about the Activity event adapter
 
 Keep the old migration registrations. Do not edit past migration bodies.

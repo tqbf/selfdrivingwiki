@@ -213,6 +213,7 @@ struct QueueIngestionWorkerTests {
         let provider = FakeIngestionProvider()
         let worker = QueueIngestionWorker(
             provider: provider,
+            attemptID: QueueAttemptID(itemID: QueueItemID(rawValue: "test2"), attempt: 0),
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
@@ -231,6 +232,7 @@ struct QueueIngestionWorkerTests {
         await provider.setShouldThrow(true)
         let worker = QueueIngestionWorker(
             provider: provider,
+            attemptID: QueueAttemptID(itemID: QueueItemID(rawValue: "test3"), attempt: 0),
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
@@ -250,6 +252,7 @@ struct QueueIngestionWorkerTests {
         await provider.setReadinessMessage(notReadyMsg)
         let worker = QueueIngestionWorker(
             provider: provider,
+            attemptID: QueueAttemptID(itemID: QueueItemID(rawValue: "test-ready"), attempt: 0),
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
@@ -282,6 +285,7 @@ struct QueueIngestionWorkerTests {
         // readinessMessage is nil by default → ready.
         let worker = QueueIngestionWorker(
             provider: provider,
+            attemptID: QueueAttemptID(itemID: QueueItemID(rawValue: "test-ready-ok"), attempt: 0),
             emitProgress: { _, _ in },
             emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in }, emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
 
@@ -731,11 +735,15 @@ struct QueueActivityTrackerTranscriptTests {
         #expect(tracker.lintingItemIDs.contains(itemID))
         #expect(tracker.isIngesting == true)
 
-        // Simulate transcript events.
-        let event1 = AgentEvent.assistantText("Linting page 1…")
-        let event2 = AgentEvent.assistantText("Found 3 issues.")
-        tracker.handleForTesting(.transcript(itemID, event1))
-        tracker.handleForTesting(.transcript(itemID, event2))
+        let attemptID = QueueAttemptID(itemID: itemID, attempt: item.attempt)
+        let event1 = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "one"), turnID: attemptID.chatTurnID,
+            role: .assistant, text: "Linting page 1…", createdAt: .now))
+        let event2 = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "two"), turnID: attemptID.chatTurnID,
+            role: .assistant, text: "Found 3 issues.", createdAt: .now))
+        tracker.handleForTesting(.transcript(.init(attemptID: attemptID, batchNumber: 0, changedItems: [event1])))
+        tracker.handleForTesting(.transcript(.init(attemptID: attemptID, batchNumber: 1, changedItems: [event2])))
 
         let transcript = tracker.transcript(for: itemID)
         #expect(transcript.count == 2)

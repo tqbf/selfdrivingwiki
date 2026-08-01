@@ -128,7 +128,7 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         }
     }
 
-    func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
+    func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] {
         do {
             return try await workloadClient.loadTranscript(for: itemID)
         } catch {

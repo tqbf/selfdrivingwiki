@@ -91,6 +91,51 @@ struct QueueEventEnvelopeTests {
         }
     }
 
+    @Test func typedTranscriptUpdateRoundTripsWithAttemptAndBatch() throws {
+        let item = makeItem()
+        let attemptID = QueueAttemptID(itemID: item.id, attempt: item.attempt)
+        let row = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: "message"), turnID: attemptID.chatTurnID,
+            role: .assistant, text: "typed", createdAt: .now))
+        let event = QueueEvent.transcript(.init(
+            attemptID: attemptID, batchNumber: 7, changedItems: [row]))
+        let envelope = try #require(QueueEventEnvelope(from: event))
+        let data = try JSONEncoder().encode(envelope)
+        let decoded = try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
+        guard case .transcript(let update) = try #require(decoded.toQueueEvent()) else {
+            Issue.record("Expected typed transcript update")
+            return
+        }
+        #expect(update.attemptID == attemptID)
+        #expect(update.batchNumber == 7)
+        #expect(update.changedItems == [row])
+    }
+
+    @Test func transcriptRejectsMissingAttemptIdentity() throws {
+        let envelope = QueueEventEnvelope(kind: .transcript, itemID: makeItem().id)
+        #expect(envelope.toQueueEvent() == nil)
+    }
+
+    @Test func transcriptRejectsMissingBatchNumber() throws {
+        let item = makeItem()
+        let payload = "{\"attemptID\":{\"itemID\":\"\(item.id.rawValue)\",\"attempt\":0},\"changedItems\":[]}"
+        let envelope = QueueEventEnvelope(
+            kind: .transcript, itemID: item.id,
+            transcriptUpdateData: Data(payload.utf8))
+        #expect(envelope.toQueueEvent() == nil)
+    }
+
+    @Test func transcriptEnvelopeContainsNoAgentEventPayload() throws {
+        let item = makeItem()
+        let update = QueueTranscriptUpdate(
+            attemptID: .init(itemID: item.id, attempt: item.attempt),
+            batchNumber: 0,
+            changedItems: [])
+        let envelope = try #require(QueueEventEnvelope(from: .transcript(update)))
+        #expect(envelope.agentEventData == nil)
+        #expect(envelope.transcriptUpdateData != nil)
+    }
+
     @Test func runStateChangedRoundTrip() throws {
         let event = QueueEvent.runStateChanged(queue: .extraction, state: .paused)
         let envelope = QueueEventEnvelope(from: event)

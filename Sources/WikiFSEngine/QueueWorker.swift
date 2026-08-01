@@ -76,10 +76,10 @@ public enum QueueEvent: Sendable {
     /// Progress line from a running worker (e.g. extraction log output).
     /// Carries the item ID + the progress text line.
     case progress(QueueItem.ID, line: String)
-    /// A typed agent event forwarded from a running ingestion/lint worker.
-    /// Carries the item ID + the event. Used by the Activity window to
-    /// build per-item transcripts (decoupled from the launcher instance).
-    case transcript(QueueItem.ID, AgentEvent)
+    /// An ordered typed transcript batch from a running worker. `AgentEvent`
+    /// ends at the worker-to-translator boundary and never crosses this event
+    /// or the XPC boundary.
+    case transcript(QueueTranscriptUpdate)
     /// Live (in-progress) token/cost usage for a running ingestion or lint
     /// run. Emitted on each `usage_update` notification during the run so the
     /// Activity window can show running token counts + model name before

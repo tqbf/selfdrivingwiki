@@ -500,7 +500,7 @@ final class WikiDaemon: @unchecked Sendable {
             })
 
         let progressBox = DaemonEmitBox<(@Sendable (QueueItem.ID, String) -> Void)>()
-        let transcriptBox = DaemonEmitBox<(@Sendable (QueueItem.ID, AgentEvent) -> Void)>()
+        let transcriptBox = DaemonEmitBox<(@Sendable (QueueAttemptID, AgentEvent) -> Void)>()
         let usageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
         let liveUsageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
         let logPathsBox = DaemonEmitBox<(@Sendable (QueueItem.ID, URL?, URL?) -> Void)>()

@@ -72,8 +72,8 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     /// Await the completion of a specific item.
     func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error>
 
-    /// Load persisted agent events (transcript) for a queue item.
-    func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent]
+    /// Load persisted typed transcript items for a queue item.
+    func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem]
 
     /// Load persisted activity metadata for all items with recorded activity.
     func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot]
