@@ -13,28 +13,38 @@ struct MetadataPanelHostedTests {
     }()
 
     @Test func hostedInspectorAt180UsesStackedRows() async throws {
-        let host = try await host(width: MetadataMetrics.minimumWidth)
-        #expect(host.view.frame.width == MetadataMetrics.minimumWidth)
-        #expect(MetadataLayout.usesStackedRows(for: host.view.frame.width))
+        let mounted = try await mount(panel(width: MetadataMetrics.minimumWidth), width: MetadataMetrics.minimumWidth)
+        defer { mounted.close() }
+        #expect(mounted.host.view.frame.width == MetadataMetrics.minimumWidth)
+        #expect(MetadataLayout.usesStackedRows(for: mounted.host.view.frame.width))
     }
 
     @Test func hostedInspectorAt500UsesGridRows() async throws {
-        let host = try await host(width: MetadataMetrics.maximumWidth)
-        #expect(host.view.frame.width == MetadataMetrics.maximumWidth)
-        #expect(!MetadataLayout.usesStackedRows(for: host.view.frame.width))
+        let mounted = try await mount(panel(width: MetadataMetrics.maximumWidth), width: MetadataMetrics.maximumWidth)
+        defer { mounted.close() }
+        #expect(mounted.host.view.frame.width == MetadataMetrics.maximumWidth)
+        #expect(!MetadataLayout.usesStackedRows(for: mounted.host.view.frame.width))
     }
 
-    @Test func hostedThresholdUsesStackedBelowAndGridAt300() async throws {
-        let below = try await host(width: MetadataMetrics.stackedRowThreshold - 1)
-        let at = try await host(width: MetadataMetrics.stackedRowThreshold)
-        #expect(MetadataLayout.usesStackedRows(for: below.view.frame.width))
-        #expect(!MetadataLayout.usesStackedRows(for: at.view.frame.width))
+    @Test func hostedThresholdUsesStackedAt299AndGridAt300() async throws {
+        #expect(MetadataMetrics.stackedRowThreshold == 300)
+        do {
+            let below = try await mount(panel(width: 299), width: 299)
+            defer { below.close() }
+            #expect(MetadataLayout.usesStackedRows(for: below.host.view.frame.width))
+        }
+        let at = try await mount(panel(width: 300), width: 300)
+        defer { at.close() }
+        #expect(!MetadataLayout.usesStackedRows(for: at.host.view.frame.width))
     }
 
     @Test func hostedInspectorSupportsWrappedValues() async throws {
-        let host = try await host(width: MetadataMetrics.minimumWidth, value: String(repeating: "Readable metadata value ", count: 12))
-        #expect(host.view.frame.height == 240)
-        #expect(host.view.fittingSize.height > 0)
+        let value = String(repeating: "Readable metadata value ", count: 12)
+        let mounted = try await mount(panel(width: MetadataMetrics.minimumWidth, value: value), width: MetadataMetrics.minimumWidth)
+        defer { mounted.close() }
+        let valueField = try #require(textFields(in: mounted.host.view).first { $0.stringValue == value })
+        #expect(valueField.frame.width <= MetadataMetrics.minimumWidth)
+        #expect(!valueField.usesSingleLineMode)
     }
 
     @Test func hostedInspectorExposesPickerLabel() async throws {
@@ -47,14 +57,26 @@ struct MetadataPanelHostedTests {
             origin: nil,
             history: [],
             outline: { EmptyView() })
-        let host = try await host(view: view, width: 220)
-        #expect(host.view.fittingSize.width > 0)
+        let mounted = try await mount(view, width: 220)
+        defer { mounted.close() }
+
+        let picker = try #require(allSubviews(of: mounted.host.view).compactMap { $0 as? NSSegmentedControl }.first)
+        #expect(picker.segmentCount == 2)
+        #expect(picker.label(forSegment: 0) == InspectorTab.metadata.label)
+        #expect(picker.label(forSegment: 1) == InspectorTab.outline.label)
+        #expect(try inspectorSource().contains(".accessibilityLabel(\"Inspector section\")"))
     }
 
     @Test func hostedRowsExposeLabelsValuesAndHints() async throws {
-        let host = try await host(width: 320)
-        #expect(!host.view.subviews.isEmpty)
-        #expect(host.view.accessibilityRole() != nil)
+        let panelModel = model()
+        let mounted = try await mount(panel(width: 320), width: 320)
+        defer { mounted.close() }
+        let fields = textFields(in: mounted.host.view)
+        #expect(panelModel.sections[0].rows[0].label == "Label")
+        #expect(fields.contains { $0.stringValue == "Value" })
+        #expect(panelModel.sections[0].rows[0].accessibilityHint == "Metadata value")
+        #expect(try panelSource().contains("Text(row.label)"))
+        #expect(try panelSource().contains(".accessibilityHint(hint ?? \"\")"))
     }
 
     @Test func hostedActionsAreKeyboardAndVoiceOverReachable() async throws {
@@ -62,47 +84,56 @@ struct MetadataPanelHostedTests {
         let panel = MetadataPanelView(
             state: .loaded(actionModel()), width: 320,
             performAction: { _ in invoked = true }, openLink: { _ in })
-        let host = try await host(view: panel, width: 320)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentViewController = host
-        window.makeKeyAndOrderFront(nil)
-        defer { window.close() }
-        host.view.layoutSubtreeIfNeeded()
-        let button = try #require(allSubviews(of: host.view).compactMap { $0 as? NSButton }.first)
+        let mounted = try await mount(panel, width: 320)
+        defer { mounted.close() }
+        let button = try #require(allSubviews(of: mounted.host.view).compactMap { $0 as? NSButton }.first)
         #expect(button.isEnabled)
+        #expect(try panelSource().contains("Button(label)"))
         button.performClick(nil)
         #expect(invoked)
     }
 
     @Test func hostedIdentifiersAreSelectable() async throws {
-        let panel = MetadataPanelView(state: .loaded(identifierModel()), width: 320, performAction: { _ in }, openLink: { _ in })
-        let host = try await host(view: panel, width: 320)
-        #expect(host.view.fittingSize.width > 0)
+        let mounted = try await mount(
+            MetadataPanelView(state: .loaded(identifierModel()), width: 320, performAction: { _ in }, openLink: { _ in }),
+            width: 320)
+        defer { mounted.close() }
+        let identifier = try #require(textFields(in: mounted.host.view).first { $0.stringValue == "page" })
+        #expect(identifier.isSelectable)
+        #expect(!identifier.isEditable)
+        #expect(identifier.font?.fontName.contains("Mono") == true)
     }
 
     @Test func renderingMetadataPerformsNoStoreRead() async throws {
-        let host = try await host(width: 320)
-        host.view.layoutSubtreeIfNeeded()
-        #expect(host.view.fittingSize.height > 0)
+        let mounted = try await mount(panel(width: 320), width: 320)
+        defer { mounted.close() }
+        #expect(textFields(in: mounted.host.view).contains { $0.stringValue == "Value" })
+        let source = try panelSource()
+        #expect(!source.contains("WikiStore"))
+        #expect(!source.contains("readPool"))
+        #expect(!source.contains("remoteSession"))
     }
 
-    private func host(width: CGFloat, value: String = "Value") async throws -> NSHostingController<MetadataPanelView> {
-        let panel = MetadataPanelView(
+    private func panel(width: CGFloat, value: String = "Value") -> MetadataPanelView {
+        MetadataPanelView(
             state: .loaded(model(value: value)),
             width: width,
             performAction: { _ in },
             openLink: { _ in })
-        return try await host(view: panel, width: width)
     }
 
-    private func host<V: View>(view: V, width: CGFloat) async throws -> NSHostingController<V> {
+    private func mount<V: View>(_ view: V, width: CGFloat) async throws -> Mounted<V> {
         let lease = await HostedAppKitTestGate.shared.acquire()
-        defer { lease.release() }
         _ = Self.app
         let host = NSHostingController(rootView: view)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = host
+        window.orderFront(nil)
         host.view.frame = NSRect(x: 0, y: 0, width: width, height: 240)
         host.view.layoutSubtreeIfNeeded()
-        return host
+        return .init(lease: lease, window: window, host: host)
     }
 
     private func model(value: String = "Value") -> MetadataPanelModel {
@@ -126,7 +157,38 @@ struct MetadataPanelHostedTests {
         ])], emptyState: .none)
     }
 
+    private func textFields(in view: NSView) -> [NSTextField] {
+        allSubviews(of: view).compactMap { $0 as? NSTextField }
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(allSubviews)
+    }
+
+    private func inspectorSource() throws -> String {
+        try sourceFile(named: "DetailInspectorView.swift")
+    }
+
+    private func panelSource() throws -> String {
+        try sourceFile(named: "MetadataPanelView.swift")
+    }
+
+    private func sourceFile(named name: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appending(path: "Sources/WikiFS/Detail/\(name)"), encoding: .utf8)
+    }
+
+    private struct Mounted<V: View> {
+        let lease: HostedAppKitTestGate.Lease
+        let window: NSWindow
+        let host: NSHostingController<V>
+
+        @MainActor func close() {
+            window.orderOut(nil)
+            lease.release()
+        }
     }
 }

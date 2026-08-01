@@ -456,7 +456,7 @@ struct ChatDetailView: View {
             durableChatMetadata = durable
             metadataState = .loaded(ChatMetadataProjection.make(input: .init(
                 chat: durable.chat,
-                usage: durable.usage,
+                usageSummary: durable.usageSummary,
                 live: liveMetadataSnapshot)))
             updateRightSidebarRegistration()
         } catch {
@@ -474,13 +474,13 @@ struct ChatDetailView: View {
         guard let durable = durableChatMetadata, !Task.isCancelled else { return }
         metadataState = .loaded(ChatMetadataProjection.make(input: .init(
             chat: durable.chat,
-            usage: durable.usage,
+            usageSummary: durable.usageSummary,
             live: liveMetadataSnapshot)))
         updateRightSidebarRegistration()
     }
 
     nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) throws -> ChatMetadataInput {
-        .init(chat: try store.getChat(id: chatID), usage: try store.latestChatTurnUsage(chatID: chatID))
+        .init(chat: try store.getChat(id: chatID), usageSummary: try store.chatUsageSummary(chatID: chatID))
     }
 
 

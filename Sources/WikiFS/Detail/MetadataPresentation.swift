@@ -27,6 +27,7 @@ enum MetadataSectionID: String, Hashable, Sendable, CaseIterable {
     case provenance
     case extraction
     case usage
+    case conversationTotals
     case technical
 }
 
@@ -41,7 +42,9 @@ enum MetadataFieldID: Hashable, Sendable {
     case source, sourceReference(SourceID), extractionType, producer, backend, provider, model, extractionDate
     case pageID, alternatives, sourceVersion, extractionVersion, hash, mimeType, byteCount
     case started, finished, duration, status, inputTokens, outputTokens, totalTokens
-    case thoughtTokens, cacheReadTokens, cacheWriteTokens, cost, compareVersions
+    case thoughtTokens, cacheReadTokens, cacheWriteTokens, cost, messageCount, compareVersions
+    case conversationInputTokens, conversationOutputTokens, conversationThoughtTokens
+    case conversationCacheReadTokens, conversationCacheWriteTokens, conversationCost
     case compareExtractions
 }
 
@@ -208,12 +211,12 @@ enum SourceMetadataProjection {
 
 struct ChatMetadataInput: Sendable {
     let chat: ChatSummary
-    let usage: ChatTurnUsage?
+    let usageSummary: ChatUsageSummary
     let live: ChatMetadataLiveSnapshot?
 
-    init(chat: ChatSummary, usage: ChatTurnUsage?, live: ChatMetadataLiveSnapshot? = nil) {
+    init(chat: ChatSummary, usageSummary: ChatUsageSummary, live: ChatMetadataLiveSnapshot? = nil) {
         self.chat = chat
-        self.usage = usage
+        self.usageSummary = usageSummary
         self.live = live
     }
 }
@@ -241,14 +244,16 @@ struct ChatMetadataLiveSnapshot: Equatable, Sendable {
 
 enum ChatMetadataProjection {
     static func make(input: ChatMetadataInput) -> MetadataPanelModel {
-        var summary = [
+        let summary = [
             MetadataRow(id: .title, label: "Title", value: .text(input.chat.title), accessibilityHint: nil),
-            MetadataRow(id: .created, label: "Created", value: .date(input.chat.createdAt), accessibilityHint: nil)
+            MetadataRow(id: .created, label: "Created", value: .date(input.chat.createdAt), accessibilityHint: nil),
+            MetadataRow(id: .updated, label: "Updated", value: .date(input.chat.updatedAt), accessibilityHint: nil),
+            MetadataRow(id: .messageCount, label: "Messages", value: .integer(input.chat.messageCount), accessibilityHint: nil)
         ]
         var usageRows: [MetadataRow] = []
-        if let usage = mergedUsage(persisted: input.usage, live: input.live) {
-            if let provider = usage.providerID { summary.append(.init(id: .provider, label: "Provider", value: .text(provider.rawValue), accessibilityHint: nil)) }
-            if let model = usage.modelID { summary.append(.init(id: .model, label: "Model", value: .text(model.rawValue), accessibilityHint: nil)) }
+        if let usage = mergedUsage(persisted: input.usageSummary.latestTurn, live: input.live) {
+            if let provider = usage.providerID { usageRows.append(.init(id: .provider, label: "Provider", value: .text(provider.rawValue), accessibilityHint: nil)) }
+            if let model = usage.modelID { usageRows.append(.init(id: .model, label: "Model", value: .text(model.rawValue), accessibilityHint: nil)) }
             if let startedAt = usage.startedAt { usageRows.append(.init(id: .started, label: "Started", value: .date(startedAt), accessibilityHint: nil)) }
             if let finishedAt = usage.finishedAt { usageRows.append(.init(id: .finished, label: "Finished", value: .date(finishedAt), accessibilityHint: nil)) }
             if let startedAt = usage.startedAt, let finishedAt = usage.finishedAt, finishedAt >= startedAt {
@@ -261,7 +266,11 @@ enum ChatMetadataProjection {
             }
         }
         var sections = [MetadataSection(id: .summary, title: "Summary", rows: summary)]
-        if !usageRows.isEmpty { sections.append(.init(id: .usage, title: "Usage", rows: usageRows)) }
+        if !usageRows.isEmpty { sections.append(.init(id: .usage, title: "Latest turn", rows: usageRows)) }
+        let conversationRows = aggregateRows(input.usageSummary)
+        if !conversationRows.isEmpty {
+            sections.append(.init(id: .conversationTotals, title: "Persisted conversation totals", rows: conversationRows))
+        }
         sections.append(.init(id: .technical, title: "Technical", rows: [.init(id: .source, label: "Chat ID", value: .identifier(input.chat.id.rawValue), accessibilityHint: "Copy chat identifier")]))
         return .init(subject: .chat(input.chat.id), sections: sections, emptyState: .none)
     }
@@ -330,5 +339,27 @@ enum ChatMetadataProjection {
         if let input = usage.inputTokens, let output = usage.outputTokens {
             rows.append(.init(id: .totalTokens, label: "Total", value: .tokenCount(input + output), accessibilityHint: nil))
         }
+    }
+
+    private static func aggregateRows(_ summary: ChatUsageSummary) -> [MetadataRow] {
+        let hasAggregateUsage = summary.inputTokens != 0
+            || summary.outputTokens != 0
+            || summary.thoughtTokens != 0
+            || summary.cacheReadTokens != 0
+            || summary.cacheWriteTokens != 0
+            || summary.cost != nil
+        guard hasAggregateUsage else { return [] }
+
+        var rows: [MetadataRow] = [
+            .init(id: .conversationInputTokens, label: "Input", value: .tokenCount(summary.inputTokens), accessibilityHint: "Persisted total across conversation turns"),
+            .init(id: .conversationOutputTokens, label: "Output", value: .tokenCount(summary.outputTokens), accessibilityHint: "Persisted total across conversation turns"),
+            .init(id: .conversationThoughtTokens, label: "Thought", value: .tokenCount(summary.thoughtTokens), accessibilityHint: "Persisted total across conversation turns"),
+            .init(id: .conversationCacheReadTokens, label: "Cache read", value: .tokenCount(summary.cacheReadTokens), accessibilityHint: "Persisted total across conversation turns"),
+            .init(id: .conversationCacheWriteTokens, label: "Cache write", value: .tokenCount(summary.cacheWriteTokens), accessibilityHint: "Persisted total across conversation turns")
+        ]
+        if let cost = summary.cost, let currency = summary.currency {
+            rows.append(.init(id: .conversationCost, label: "Cost", value: .text("\(currency) \(cost)"), accessibilityHint: "Persisted total across conversation turns"))
+        }
+        return rows
     }
 }

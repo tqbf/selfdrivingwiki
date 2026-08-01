@@ -32,7 +32,7 @@ struct MetadataPresentationTests {
     @Test func chatProjectionComputesTotalOnlyWhenBothCountersExist() {
         let chat = ChatSummary(id: .init(rawValue: "chat"), kind: .edit, title: "Chat", createdAt: .distantPast, updatedAt: .distantPast, messageCount: 0)
         let usage = ChatTurnUsage(turnID: .init(rawValue: "turn"), providerID: nil, modelID: nil, startedAt: nil, finishedAt: nil, state: .completed, inputTokens: 2, outputTokens: 3, thoughtTokens: nil, cacheReadTokens: nil, cacheWriteTokens: nil, cost: nil, currency: nil)
-        let model = ChatMetadataProjection.make(input: .init(chat: chat, usage: usage))
+        let model = ChatMetadataProjection.make(input: .init(chat: chat, usageSummary: .init(latestTurn: usage, inputTokens: 2, outputTokens: 3, thoughtTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: nil, currency: nil)))
         #expect(model.sections.flatMap(\.rows).contains { $0.id == .totalTokens })
     }
 
