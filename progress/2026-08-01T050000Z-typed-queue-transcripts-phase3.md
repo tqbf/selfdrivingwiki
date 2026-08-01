@@ -27,16 +27,21 @@ broadcasts only successful durable updates.
   typed copy, and progress fallback.
 - Deleted obsolete legacy queue event-store methods. The legacy `ChatWebView`
   event initializer/coordinator remains intentionally deferred to Phase 4.
+- Post-audit correction: qualified `TranscriptID.queueItem` at the renderer
+  seam, changed the tracker batch gate to a monotonic forward watermark, and
+  seeded active daemon snapshot attempts so reconnect batches are accepted
+  without fabricating running UI state. The daemon protocol comment now names
+  the typed transcript payload.
 
 ## Verification
 
-- `make build` passed and signed the development app.
-- Focused Swift Testing passed: translator (11), typed store (8), migration
-  (2), concurrency (8), envelope (11), client conformance (4), daemon XPC,
-  presentation manifest, tracker, canonical merge, and hosted Activity tests.
-- `make test` passed after the final concurrency-lock correction.
-- `make lint` passed with 0 violations; `make check` passed; `git diff --check`
-  passed.
+- Corrective verification reran and passed: `make build`; translator (11),
+  typed store (8), migration (2), concurrency (8), envelope (11), client
+  conformance (4), daemon XPC (12), presentation manifest (10), tracker (5,
+  including the dropped-batch and reconnect regressions), canonical merge, and
+  hosted Activity tests (7).
+- `make test` passed after the corrective changes. `make lint` passed with 0
+  violations; `make check` and `git diff --check` passed.
 
 ## Review
 

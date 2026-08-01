@@ -345,10 +345,16 @@ final class QueueActivityTracker {
     /// `isIngesting` would stay `true` forever. A periodic snapshot poll feeds
     /// this method so the spinner clears once the daemon reports the item gone.
     ///
-    /// Removal-only — it never adds running state, so a transient snapshot read
-    /// can't fabricate activity. Items still active on the daemon are left
-    /// untouched; their terminal event (or a later reconcile) clears them.
+    /// Reconciliation remains removal-only for running-state sets, so a
+    /// transient snapshot read can't fabricate activity. It does seed typed
+    /// transcript attempt identity for daemon-active items: a reconnect can
+    /// otherwise receive a live transcript batch before a repeated `.started`
+    /// event. Items still active on the daemon are left untouched; their
+    /// terminal event (or a later reconcile) clears them.
     func reconcile(with snapshot: QueueSnapshot) {
+        for item in snapshot.activeItems {
+            resetTranscriptAttempt(for: item)
+        }
         let activeIDs = Set(snapshot.activeItems.map { $0.id })
         let recentByID = Dictionary(
             snapshot.recentItems.map { ($0.id, $0) },
@@ -463,8 +469,8 @@ final class QueueActivityTracker {
     func applyTranscriptUpdate(_ update: QueueTranscriptUpdate) {
         let itemID = update.attemptID.itemID
         guard transcriptAttempts[itemID] == update.attemptID else { return }
-        let expectedBatch = (lastTranscriptBatch[update.attemptID] ?? -1) + 1
-        guard update.batchNumber == expectedBatch else { return }
+        let lastAcceptedBatch = lastTranscriptBatch[update.attemptID] ?? -1
+        guard update.batchNumber > lastAcceptedBatch else { return }
         transcripts[itemID] = QueueTranscriptCanonicalMerge.merging(
             persisted: transcripts[itemID, default: []],
             live: update.changedItems)

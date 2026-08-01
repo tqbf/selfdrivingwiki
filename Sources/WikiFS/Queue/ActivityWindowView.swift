@@ -883,7 +883,7 @@ struct ActivityWindowView: View {
             persisted: loadedTranscriptItems,
             live: activityTracker.transcript(for: item.id)),
             progressText: activityTracker.progressLog(for: item.id),
-            transcriptID: .queueItem(item.id),
+            transcriptID: TranscriptID.queueItem(item.id),
             isStreaming: item.state == .running,
             onIntent: { intent in
                 if case .openWikiLink(let url, let inNewTab) = intent {
