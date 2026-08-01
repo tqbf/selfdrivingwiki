@@ -31,39 +31,6 @@ extension ChatDisplayRowID {
     }
 }
 
-/// Compatibility filtering belongs to the legacy activity-feed renderer, not
-/// the typed chat transcript adapter. Retaining it here preserves the separate
-/// activity/history surface without letting chat presentation use event arrays.
-extension [AgentEvent] {
-    var transcriptVisibleIndices: [Int] {
-        indices.filter { self[$0].isVisibleInTranscript(in: self) }
-    }
-
-    var transcriptVisible: [AgentEvent] {
-        transcriptVisibleIndices.map { self[$0] }
-    }
-}
-
-/// Renders an entire `AgentEvent` transcript as **one** native text surface
-/// inside a single, internally-scrolling `WKWebView` — so mouse drag-selection
-/// (and Cmd+A / copy) spans every row in the feed, not just one message.
-///
-/// The prior design gave each assistant message its own `WKWebView`
-/// (`AgentMarkdownText`). WebKit's text-selection model is sandboxed to its
-/// own document, so selection could never cross from one web view into a
-/// sibling one — every message was an island. Folding the whole feed into one
-/// document removes that boundary entirely.
-///
-/// Activity-feed `events` are expected to only grow in length, or have their LAST element mutated
-/// in place (a streamed text delta merged into an in-progress `.assistantText`,
-/// issue #121), except for an explicit reset to `[]` (`AgentLauncher.events`'s
-/// contract): new events are inserted into the live DOM via `appendRows`, and an
-/// in-place growth of the last row is patched via `replaceLastRow`, rather than a
-/// full reload — so an in-progress text selection survives a streaming run. A
-/// count *decrease* (a reset), a `showsInternals` change (which changes which
-/// underlying activity events are visible), or a `transcriptID` change (the events now
-/// describe a different conversation entirely) forces a full rebuild.
-///
 /// A versioned request to scroll the chat transcript to a user turn. Mirrors the
 /// reader's anchor-version pattern: `version` bumps to signal a new request;
 /// `rowID` targets the durable prompt row without deriving identity from a
@@ -86,7 +53,7 @@ struct ChatHighlightRequest: Equatable {
 
 /// Identity of the transcript a `ChatWebView` renders — the key its
 /// incremental differ uses to decide whether the DOM it already built belongs
-/// to the same conversation as the incoming `events`.
+/// to the same conversation as the incoming typed rows.
 ///
 /// Namespaced by case rather than a bare `String`, so an id from one space can
 /// never compare equal to an id from another: chat rows and queue items are
@@ -97,50 +64,21 @@ enum TranscriptID: Hashable, Sendable {
     /// draft composer (`chatID == nil`) has no transcript to render, so there
     /// is deliberately no draft case.
     case chat(ChatID)
-    /// A queue item's activity feed (`ActivityWindowView`).
+    /// A queue item's typed Activity transcript (`ActivityWindowView`).
     case queueItem(QueueItem.ID)
 }
 
 struct ChatWebView: NSViewRepresentable {
-    /// The legacy activity-feed input. Chat transcripts use `chatRows` so the
-    /// presentation layer does not discard durable row identity.
-    let events: [AgentEvent]
-    let chatRows: [ChatDisplayRow]?
-    /// Identity of the transcript these `events` belong to (a chat ULID, a
-    /// queue item id, …). The coordinator renders **incrementally** — it
-    /// appends only `events[renderedCount...]` — which is only sound while
-    /// successive `events` arrays are successive states of the SAME transcript.
-    ///
-    /// SwiftUI reuses an `NSViewRepresentable`'s view + coordinator whenever
-    /// structural identity is unchanged, and switching between two chat tabs
-    /// (or two queue items) does not change structural identity — the branch of
-    /// the enclosing `switch` is the same, only the associated value differs.
-    /// Without this key the differ would splice transcript B's tail onto
-    /// transcript A's DOM (`count > renderedCount` → append) or patch only the
-    /// last row (`count == renderedCount`), leaving the previous chat's
-    /// messages on screen and freezing subsequent streaming appends.
-    ///
-    /// A change forces a full rebuild. `nil` (the default) opts out — for
-    /// call sites that render exactly one transcript for the view's lifetime.
+    let chatRows: [ChatDisplayRow]
+    /// A stable typed transcript identity prevents mutations for one chat or
+    /// queue item from applying to another transcript's DOM.
     var transcriptID: TranscriptID? = nil
-    /// A value that, when it changes, forces a full rebuild rather than an
-    /// append — for callers whose event→visible-row filtering can change
-    /// retroactively (e.g. an activity-feed filtering toggle).
-    /// Callers whose filtering never changes mid-stream can ignore this.
-    var showsInternals: Bool = false
-    /// Invoked when the user clicks a `wiki://` link inside the transcript
-    /// (rendered from an assistant/result row's `[[wiki-link]]`). The closure
-    /// is built where the store lives (two levels up) and routes to
-    /// `selectPage` / `selectSource`. `nil` → links still render but don't
-    /// navigate (a strict improvement over literal `[[brackets]]`).
-    var onWikiLink: ((URL, Bool) -> Void)? = nil
     /// Provider of the **current** `WikiRenderContext` (Phase A.2). A closure,
     /// not a value: rows render incrementally over the view's life and the
     /// resolution sets must stay current (a rename between two renders must
     /// heal). Built where the store lives and bound to `store.renderContext()`
     /// (the model's memo, `WikiEventBus`-invalidated). `nil` (or a nil return)
-    /// keeps the historical constant-`true` resolution — used by
-    /// `AgentQueueView`'s internals feed, where ghost styling is noise.
+    /// keeps the historical constant-`true` resolution.
     ///
     /// The coordinator resolves this to a `WikiRenderContext?` **value** once
     /// per render pass on the main actor (the provider reads the `@MainActor`
@@ -166,8 +104,6 @@ struct ChatWebView: NSViewRepresentable {
     /// load). The coordinator stashes it and applies once rows are rendered.
     var quoteAnchor: ChatHighlightRequest? = nil
 
-    /// Typed UI callback used only by the chat transcript. The activity-feed
-    /// API retains its existing raw navigation closure for compatibility.
     var onChatIntent: ((ChatTranscriptIntent) -> Void)? = nil
 
     /// Name of the `WKScriptMessage` channel the per-bubble "Copy" button posts
@@ -176,29 +112,6 @@ struct ChatWebView: NSViewRepresentable {
     /// writes `text` to `NSPasteboard`.
     static let copyMessageName = "copyText"
     static let followMessageName = "chatFollowState"
-
-    init(
-        events: [AgentEvent],
-        transcriptID: TranscriptID? = nil,
-        showsInternals: Bool = false,
-        onWikiLink: ((URL, Bool) -> Void)? = nil,
-        renderContext: (() -> WikiRenderContext?)? = nil,
-        blobStore: WikiStoreModel? = nil,
-        zoom: Double = Double(ZoomScale.defaultScale),
-        scrollRequest: ChatWebScrollRequest? = nil,
-        quoteAnchor: ChatHighlightRequest? = nil
-    ) {
-        self.events = events
-        self.chatRows = nil
-        self.transcriptID = transcriptID
-        self.showsInternals = showsInternals
-        self.onWikiLink = onWikiLink
-        self.renderContext = renderContext
-        self.blobStore = blobStore
-        self.zoom = zoom
-        self.scrollRequest = scrollRequest
-        self.quoteAnchor = quoteAnchor
-    }
 
     init(
         chatRows: [ChatDisplayRow],
@@ -210,10 +123,8 @@ struct ChatWebView: NSViewRepresentable {
         scrollRequest: ChatWebScrollRequest? = nil,
         quoteAnchor: ChatHighlightRequest? = nil
     ) {
-        self.events = []
         self.chatRows = chatRows
         self.transcriptID = transcriptID
-        self.onWikiLink = nil
         self.renderContext = renderContext
         self.blobStore = blobStore
         self.zoom = zoom
@@ -226,7 +137,7 @@ struct ChatWebView: NSViewRepresentable {
         // Register the blob scheme handler BEFORE the first load (same wiring
         // as `WikiReaderView`, reader lines ~326–348) so `wiki-blob://source/<id>`
         // images and media resolve inside chat transcripts. The handler weakly
-        // references the store; refreshed each update like `onWikiLink`.
+        // references the store; refreshed on every update.
         let config = WKWebViewConfiguration()
         // Message handler for the per-bubble "Copy" button (issue #285): the JS
         // click listener posts the raw markdown text; the coordinator writes it
@@ -246,33 +157,21 @@ struct ChatWebView: NSViewRepresentable {
         webView.pageZoom = zoom
         webView.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = webView
-        context.coordinator.onWikiLink = onWikiLink
         context.coordinator.onChatIntent = onChatIntent
         context.coordinator.renderContext = renderContext
-        if let chatRows {
-            context.coordinator.reload(chatRows: chatRows, transcriptID: transcriptID)
-        } else {
-            context.coordinator.reload(events: events, showsInternals: showsInternals,
-                                       transcriptID: transcriptID)
-        }
+        context.coordinator.reload(chatRows: chatRows, transcriptID: transcriptID)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         webView.pageZoom = zoom
-        context.coordinator.onWikiLink = onWikiLink
         context.coordinator.onChatIntent = onChatIntent
         context.coordinator.renderContext = renderContext
         // Keep the blob handler's store fresh (a wiki switch swaps the store).
         if let handler = webView.configuration.urlSchemeHandler(forURLScheme: BlobSchemeHandler.scheme) as? BlobSchemeHandler {
             handler.store = blobStore
         }
-        if let chatRows {
-            context.coordinator.apply(chatRows: chatRows, transcriptID: transcriptID)
-        } else {
-            context.coordinator.apply(events: events, showsInternals: showsInternals,
-                                      transcriptID: transcriptID)
-        }
+        context.coordinator.apply(chatRows: chatRows, transcriptID: transcriptID)
         // Outline click → scroll the i-th user bubble into view. Only fires when
         // the version advances, so unrelated re-renders (streaming) don't re-scroll.
         if let req = scrollRequest, req.version != context.coordinator.appliedScrollVersion {
@@ -297,9 +196,6 @@ struct ChatWebView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
-        /// Routes a clicked `wiki://` link out to the view's `onWikiLink`
-        /// closure (built where the store lives). Refreshed each update.
-        var onWikiLink: ((URL, Bool) -> Void)?
         var onChatIntent: ((ChatTranscriptIntent) -> Void)?
         /// Provider of the current `WikiRenderContext` (Phase A.2). Refreshed
         /// each update. Resolved to a value once per render pass (see
@@ -317,26 +213,7 @@ struct ChatWebView: NSViewRepresentable {
         /// The last `ChatHighlightRequest.version` applied, so an unchanged
         /// request doesn't re-highlight on every re-render.
         var appliedHighlightVersion: Int = -1
-        private var renderedCount = 0
-        private var renderedShowsInternals: Bool?
-        /// The `transcriptID` the currently-rendered DOM was built from. When
-        /// the incoming id differs, the incremental differ's anchors
-        /// (`renderedCount`/`renderedEvents`/`renderedLastEvent`) describe a
-        /// *different* transcript and must not be used — see
-        /// `ChatWebView.transcriptID`.
-        private var renderedTranscriptID: TranscriptID?
-        private var pendingTranscriptID: TranscriptID?
         private var isLoaded = false
-        private var pendingEvents: [AgentEvent] = []
-        /// The last event actually rendered, so `apply` can detect "no new row, but
-        /// `AgentLauncher` grew the last one in place" (a streamed `.assistantText`
-        /// delta merge, issue #121) and patch that row instead of no-op'ing.
-        private var renderedLastEvent: AgentEvent?
-        /// The full event list as last seen, used to compute `isFinal` (a row is
-        /// non-final only when it is the LAST row of a still-live event stream —
-        /// i.e. it may still grow via `replaceLastRow`). Captured in `apply`.
-        private var renderedEvents: [AgentEvent] = []
-        private var rendersTypedChatRows = false
         private var followState: ChatTranscriptFollowState = .following
         private var pendingChatReloadAcknowledgement: (@MainActor (ChatTranscriptRenderAcknowledgement) -> Void)?
         private lazy var chatRenderExecutor = ChatTranscriptRenderExecutor(
@@ -353,48 +230,7 @@ struct ChatWebView: NSViewRepresentable {
         /// the current `WikiRenderContext` (or nil → constant-true behavior).
         private func currentContext() -> WikiRenderContext? { renderContext?() }
 
-        /// Pure predicate for "this render pass cannot append/patch — rebuild
-        /// the whole document". Extracted so the three rebuild triggers are
-        /// testable without a WebKit view tree.
-        ///
-        /// - A `transcriptID` change means the DOM belongs to a different
-        ///   transcript entirely (chat tab switch, queue item switch).
-        /// - A `showsInternals` change retroactively changes which events are
-        ///   visible, so previously-rendered rows are wrong.
-        /// - A count *decrease* is the reset contract (`events = []`).
-        ///
-        /// `nonisolated`: a pure predicate over value types, so tests can call
-        /// it without hopping to the main actor (same discipline as
-        /// `ChatTranscriptRenderingInput`).
-        nonisolated static func needsFullReload(
-            transcriptID: TranscriptID?, renderedTranscriptID: TranscriptID?,
-            showsInternals: Bool, renderedShowsInternals: Bool?,
-            eventCount: Int, renderedCount: Int
-        ) -> Bool {
-            if transcriptID != renderedTranscriptID { return true }
-            if showsInternals != renderedShowsInternals { return true }
-            return eventCount < renderedCount
-        }
-
-        func reload(events: [AgentEvent], showsInternals: Bool,
-                    transcriptID: TranscriptID? = nil) {
-            rendersTypedChatRows = false
-            renderedCount = 0
-            renderedShowsInternals = showsInternals
-            renderedTranscriptID = transcriptID
-            renderedLastEvent = nil
-            renderedEvents = events
-            isLoaded = false
-            pendingEvents = events
-            pendingTranscriptID = transcriptID
-            webView?.loadHTMLString(Self.shellHTML, baseURL: URL(string: "about:blank"))
-        }
-
-        /// Chat-only presentation path. This stays intentionally direct: it
-        /// compares the current typed rows with the existing document and calls
-        /// the document's existing append/replace helpers directly.
         func reload(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
-            rendersTypedChatRows = true
             chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
                 context: ChatTranscriptRenderContext(transcriptID: transcriptID),
                 rows: chatRows
@@ -402,131 +238,17 @@ struct ChatWebView: NSViewRepresentable {
         }
 
         func apply(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
-            guard rendersTypedChatRows else {
-                reload(chatRows: chatRows, transcriptID: transcriptID)
-                return
-            }
             chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
                 context: ChatTranscriptRenderContext(transcriptID: transcriptID),
                 rows: chatRows
             ))
         }
 
-        func apply(events: [AgentEvent], showsInternals: Bool,
-                   transcriptID: TranscriptID? = nil) {
-            // Checked BEFORE the `isLoaded` guard, so a transcript switch that
-            // lands mid-load also replaces `pendingEvents` — otherwise
-            // `didFinish` would render the PREVIOUS transcript's rows and seed
-            // `renderedCount` from them, and the new chat would then be diffed
-            // against a DOM it never produced.
-            //
-            // This also hoists the count-decrease check above the guard, where
-            // it used to sit below. That is a no-op rather than a behavior
-            // change: `reload` sets `renderedCount = 0` and `isLoaded = false`
-            // together, and only `didFinish` sets either back — so while
-            // unloaded `renderedCount` is always 0 and `count < 0` is
-            // unreachable.
-            if Self.needsFullReload(
-                transcriptID: transcriptID, renderedTranscriptID: renderedTranscriptID,
-                showsInternals: showsInternals, renderedShowsInternals: renderedShowsInternals,
-                eventCount: events.count, renderedCount: renderedCount) {
-                ChatDiagnostics.observe(
-                    stage: .recoveryReload,
-                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
-                    detail: "reload; rows=\(events.count); rendered=\(renderedCount)"
-                )
-                reload(events: events, showsInternals: showsInternals,
-                       transcriptID: transcriptID)
-                return
-            }
-            guard isLoaded else {
-                ChatDiagnostics.observe(
-                    stage: .renderPlanning,
-                    outcome: .coalesced,
-                    correlation: .init(chat: diagnosticChat(transcriptID), eventKind: .init(rawValue: "legacy-web")),
-                    detail: "pending; rows=\(events.count)"
-                )
-                pendingEvents = events
-                return
-            }
-            guard events.count > renderedCount else {
-                // Same row count: `AgentLauncher` may have grown the last row in
-                // place (streamed text deltas merged into an in-progress
-                // `.assistantText`, issue #121) rather than appending a new one —
-                // patch that row's HTML instead of treating this as a no-op.
-                if let last = events.last, last != renderedLastEvent {
-                    // The last row of a live stream is still growing → render it
-                    // in the streaming (links-only) tier so a half-typed
-                    // `![[source:…` never instantiates a broken iframe/player.
-                    replaceLastRow(last, isStreaming: true)
-                    renderedLastEvent = last
-                }
-                renderedEvents = events
-                return
-            }
-            // New rows appended: any previously-streaming last row is now FINAL
-            // (a new event landed = turn boundary). Re-render it once with the
-            // full context (embeds included), then append the new rows.
-            let context = currentContext()
-            if let prevLast = renderedEvents.last, events.count > renderedEvents.count,
-               renderedEvents.count > 0 {
-                replaceLastRow(prevLast, isStreaming: false, context: context)
-            }
-            ChatDiagnostics.observe(
-                stage: .renderPlanning,
-                correlation: .init(
-                    chat: diagnosticChat(transcriptID),
-                    eventKind: .init(rawValue: "legacy-web"),
-                    content: events.last.flatMap(diagnosticContent)
-                ),
-                detail: "append; from=\(renderedCount); to=\(events.count)"
-            )
-            appendRows(Array(events[renderedCount...]), startingIndex: renderedCount, context: context)
-            renderedCount = events.count
-            renderedLastEvent = events.last
-            renderedEvents = events
-        }
-
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            ChatDiagnostics.observe(
-                stage: .domAcknowledgement,
-                correlation: .init(chat: diagnosticChat(pendingTranscriptID ?? renderedTranscriptID), eventKind: .init(rawValue: "legacy-web")),
-                detail: "shell-finished; pending=\(pendingEvents.count)"
-            )
-            if rendersTypedChatRows {
-                beginControlledChatReloadIfNeeded()
-                return
-            }
-            let toRender = pendingEvents
-            pendingEvents = []
-            // Initial load: every row is final (persisted chats load all-at-once;
-            // a freshly-opened live view's events are all complete at this point).
-            let context = currentContext()
-            if !toRender.isEmpty {
-                appendRows(toRender, startingIndex: 0, context: context)
-            }
-            renderedCount = toRender.count
-            renderedLastEvent = toRender.last
-            renderedEvents = toRender
-            // Apply a deferred quote-anchor highlight now that the transcript's
-            // rows are in the DOM (issue #281).
+            beginControlledChatReloadIfNeeded()
             if pendingHighlightQuote != nil {
                 applyHighlight()
-            }
-        }
-
-        private func diagnosticChat(_ transcriptID: TranscriptID?) -> ChatDiagnosticCorrelation.Value? {
-            guard case .chat(let chatID)? = transcriptID else { return nil }
-            return .init(rawValue: chatID.rawValue)
-        }
-
-        private func diagnosticContent(_ event: AgentEvent) -> ChatDiagnosticContentFingerprint? {
-            switch event {
-            case .userText(let text), .assistantText(let text), .thinking(let text), .thinkingDelta(let text), .assistantTextDelta(let text), .result(_, let text):
-                return ChatDiagnostics.fingerprint(text)
-            default:
-                return nil
             }
         }
 
@@ -545,10 +267,9 @@ struct ChatWebView: NSViewRepresentable {
         }
 
         /// Open external links in the default browser instead of navigating
-        /// the inline web view. `wiki://` links (rendered from `[[wiki-links]]`
-        /// in assistant/result rows) are routed to `onWikiLink` instead of being
-        /// loaded into the web view (which would produce a broken-navigation
-        /// error page) — mirroring the http(s) branch's `.cancel`.
+        /// the inline web view. `wiki://` links are routed through the typed
+        /// transcript intent instead of being loaded into the web view (which
+        /// would produce a broken-navigation error page).
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
@@ -559,11 +280,7 @@ struct ChatWebView: NSViewRepresentable {
                 if url.scheme == "wiki" {
                     // ⌘-click opens a new tab; plain click navigates in place.
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
-                    if let onChatIntent {
-                        onChatIntent(.openWikiLink(url, inNewTab: openInNewTab))
-                    } else {
-                        onWikiLink?(url, openInNewTab)
-                    }
+                    onChatIntent?(.openWikiLink(url, inNewTab: openInNewTab))
                     decisionHandler(.cancel)
                     return
                 }
@@ -574,39 +291,6 @@ struct ChatWebView: NSViewRepresentable {
                 }
             }
             decisionHandler(.allow)
-        }
-
-        private func appendRows(_ events: [AgentEvent], startingIndex: Int, context: WikiRenderContext?) {
-            // Appended rows are always final (they're complete events). Only the
-            // actively-streaming trailing row — patched via the same-count
-            // `replaceLastRow(..., isStreaming: true)` path — uses the
-            // links-only tier.
-            var html = ""
-            for event in events {
-                html += Self.feedRowHTML(for: event, context: context, isFinal: true)
-            }
-            guard !html.isEmpty,
-                  let data = DebugLog.trying("serialize chat rows", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
-                  let jsonString = String(data: data, encoding: .utf8)
-            else { return }
-            webView?.evaluateJavaScript("appendRows(\(jsonString))", completionHandler: nil)
-        }
-
-        /// Re-render the already-rendered last row in place (a streaming delta grew
-        /// its content without adding a new `AgentEvent`) instead of appending a
-        /// duplicate — the DOM equivalent of `apply`'s same-count branch.
-        ///
-        /// `isStreaming`: when true, the row is the actively-growing trailing row
-        /// of a live stream → render the **links-only** tier (nil `embedInfo`) so
-        /// a half-typed `![[source:…` never instantiates a broken iframe/player
-        /// that churns per token. When false, the row is being *re-finalized*
-        /// (a new event landed = turn boundary) → render the full context.
-        private func replaceLastRow(_ event: AgentEvent, isStreaming: Bool, context: WikiRenderContext? = nil) {
-            let html = Self.feedRowHTML(for: event, context: context, isFinal: !isStreaming)
-            guard let data = DebugLog.trying("serialize replaced row", operation: { try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed]) }),
-                  let jsonString = String(data: data, encoding: .utf8)
-            else { return }
-            webView?.evaluateJavaScript("replaceLastRow(\(jsonString))", completionHandler: nil)
         }
 
         private func performChatRenderMutation(
@@ -848,46 +532,6 @@ struct ChatWebView: NSViewRepresentable {
             return MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(presentationMarkdown) { _, _ in true })
         }
 
-        static func feedRowHTML(for event: AgentEvent, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
-            switch event {
-            case .userText(let text):
-                return """
-                <div class="row row-user"><div class="row-label">You</div>\
-                <div class="row-body">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div></div>
-                """
-            case .systemInit(let model):
-                return "<div class=\"row row-meta\">Started · \(escape(model))</div>"
-            case .assistantText(let text):
-                return "<div class=\"row row-assistant\">\(renderedMarkdown(text, context: context, isFinal: isFinal))</div>"
-            case .thinking(let text):
-                return thinkingRowHTML(text: text, context: context, isFinal: isFinal)
-            case .toolUse(let name, let summary):
-                return feedToolRowHTML(name: name, summary: summary, isError: false)
-            case .toolResult(let isError, let summary):
-                let body = summary.isEmpty ? (isError ? "(error)" : "(ok)") : summary
-                return feedToolRowHTML(name: nil, summary: body, isError: isError)
-            case .subagent(let subagentType, let description, let isCompletion):
-                let verb = isCompletion ? "digested" : "reading"
-                let descHTML = description.isEmpty ? "" : " — \(escape(description))"
-                return """
-                <div class="row row-subagent\(isCompletion ? " is-complete" : "")">\
-                <span class="row-subagent-type">\(escape(subagentType))</span> \(verb)\(descHTML)</div>
-                """
-            case .result(let isError, let text):
-                let label = isError ? "Failed" : "Result"
-                let bodyHTML = text.isEmpty ? "" : renderedMarkdown(text, context: context, isFinal: isFinal)
-                return """
-                <div class="row row-result\(isError ? " is-error" : "")"><div class="row-label">\(label)</div>\(bodyHTML)</div>
-                """
-            case .messageStop, .assistantTextDelta, .thinkingDelta:
-                return ""  // internal — not rendered (deltas are merged upstream)
-            case .turnFailed(let reason):
-                return turnFailedBannerHTML(reason: reason)
-            case .raw(let line):
-                return "<pre class=\"row row-raw\">\(escape(line))</pre>"
-            }
-        }
-
         /// Direct typed chat markup used by the Phase 4 transcript surface.
         /// Every durable row becomes one semantic DOM element with a stable
         /// attribute; that attribute is presentation metadata, not a rendering
@@ -1077,68 +721,6 @@ struct ChatWebView: NSViewRepresentable {
                 return "\(dateFmt.string(from: date)), \(timeStr)"
             }
             return timeStr
-        }
-
-        /// A styled amber banner for a turn failure (timeout, ceiling, agent
-        /// error). Distinct from `.row-raw` (plain `<pre>`) and `.row-result`
-        /// (final answer): this is a scannable inline banner with an icon and
-        /// plain-English reason. (#422)
-        private static func turnFailedBannerHTML(reason: TurnFailureReason) -> String {
-            """
-            <div class="row row-turn-failed">\
-            <span class="row-turn-failed-icon">⚠︎</span>\
-            <div class="row-turn-failed-body">\
-            <strong>\(escape(reason.label))</strong> \(escape(reason.description))</div></div>
-            """
-        }
-
-        /// An activity-feed tool row: a collapsible `<details>` box showing the
-        /// tool name + summary in the header (collapsed), and the full text in
-        /// an expandable body. Used by both `.toolUse` and `.toolResult` in
-        /// `feedRowHTML` (the inspector/internals view) - issue #391.
-        /// `name` is nil for tool results; `summary` carries the command/output text.
-        private static func feedToolRowHTML(name: String?, summary: String, isError: Bool) -> String {
-            let nameHTML = name.map { "<span class=\"row-tool-name\">\(escape($0))</span>" } ?? ""
-            if summary.isEmpty {
-                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)</div>"
-            }
-            // The collapsed header shows ONLY a truncated first line — putting
-            // the whole summary in <summary> renders the full multi-line text
-            // even while "collapsed", with the expandable body a duplicate.
-            let firstLine = String(summary.split(separator: "\n", maxSplits: 1,
-                                                 omittingEmptySubsequences: false).first ?? "")
-            let truncated = summary.contains("\n") || firstLine.count > 120
-            let preview = firstLine.count > 120
-                ? String(firstLine.prefix(120)) + "\u{2026}"
-                : firstLine + (summary.contains("\n") ? " \u{2026}" : "")
-            let previewHTML = "<span class=\"row-tool-summary\">\(escape(preview))</span>"
-            // Short single-line summaries have nothing to expand into — render
-            // a flat row instead of a pointless disclosure triangle.
-            guard truncated else {
-                return "<div class=\"row row-tool\(isError ? " is-error" : "")\">\(nameHTML)\(previewHTML)</div>"
-            }
-            return """
-            <details class="row row-tool collapsible\(isError ? " is-error" : "")">\
-            <summary>\(nameHTML)\(previewHTML)</summary>\
-            <pre class="collapsible-detail">\(escape(summary))</pre></details>
-            """
-        }
-
-        /// A collapsible, dimmed/italic "thinking" box - the agent's
-        /// chain-of-thought reasoning (issue #391). Uses a `<details>` element
-        /// so the reasoning text is hidden by default and expanded on click.
-        /// The summary shows a "Thinking" label + a truncated preview; the body
-        /// renders the full text (markdown, same as assistant prose).
-        private static func thinkingRowHTML(text: String, context: WikiRenderContext?, isFinal: Bool) -> String {
-            let preview = String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
-            let previewShort = preview.count > 80 ? String(preview.prefix(80)) + "\u{2026}" : preview
-            let bodyHTML = renderedMarkdown(text, context: context, isFinal: isFinal)
-            return """
-            <details class="row row-thinking collapsible">\
-            <summary><span class="row-thinking-label">Thinking</span> \
-            <span class="row-thinking-preview">\(escape(previewShort))</span></summary>\
-            <div class="row-thinking-body">\(bodyHTML)</div></details>
-            """
         }
 
         private static func escape(_ s: String) -> String {

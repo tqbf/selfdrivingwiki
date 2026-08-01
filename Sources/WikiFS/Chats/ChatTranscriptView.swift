@@ -3,9 +3,8 @@
 import SwiftUI
 import WikiFSCore
 
-/// The reusable, typed chat transcript renderer. The chat path carries only
-/// `ChatDisplayRow` values; the separate activity feed retains its legacy
-/// event adapter at its own boundary in `ChatWebView`.
+/// The reusable, typed chat transcript renderer. Both chat and Activity paths
+/// carry `ChatDisplayRow` values into `ChatWebView`.
 struct ChatTranscriptView: View {
     let rendering: ChatTranscriptRenderingInput
     var transcriptID: TranscriptID? = nil
