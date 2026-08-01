@@ -69,11 +69,11 @@ struct QueueStoreTypedTranscriptTests {
             attemptID: QueueAttemptID(itemID: preservedItem.id, attempt: preservedItem.attempt),
             items: preservedItems
         )
-        try store.appendItemEvent(itemID: selectedItem.id, event: .assistantText("legacy event"))
         try store.markRunning(id: selectedItem.id, providerID: ProviderID(rawValue: "test-provider"))
         try store.markFailed(id: selectedItem.id, error: "retry test")
         try store.retryItem(id: selectedItem.id)
         let retriedItem = try #require(try store.getItem(selectedItem.id))
+        #expect(try store.loadTranscriptItems(itemID: selectedItem.id).isEmpty)
         try store.upsertTranscriptItems(
             attemptID: QueueAttemptID(itemID: retriedItem.id, attempt: retriedItem.attempt),
             items: transcriptItems(rawID: "selected-retry", text: "selected retry")
@@ -83,7 +83,6 @@ struct QueueStoreTypedTranscriptTests {
 
         #expect(try store.loadTranscriptItems(itemID: selectedItem.id).isEmpty)
         #expect(try store.loadTranscriptItems(itemID: preservedItem.id) == preservedItems)
-        #expect(try store.loadItemEvents(itemID: selectedItem.id) == [.assistantText("legacy event")])
     }
 
     @Test func historyPruneCascadesTypedTranscriptRows() throws {
@@ -123,7 +122,7 @@ struct QueueStoreTypedTranscriptTests {
             #expect(currentAttempt == item.attempt + 1)
         }
 
-        #expect(try store.loadTranscriptItems(itemID: item.id) == persistedItems)
+        #expect(try store.loadTranscriptItems(itemID: item.id).isEmpty)
     }
 
     @Test func emptyTaggedIdentityIsRejectedBeforeWriting() throws {

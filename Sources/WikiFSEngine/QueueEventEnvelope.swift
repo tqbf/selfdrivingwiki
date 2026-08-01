@@ -27,6 +27,9 @@ public struct QueueEventEnvelope: Codable, Sendable {
     public let error: String?
     public let line: String?
     public let agentEventData: Data?
+    /// Queue transcript payload. This is distinct from `agentEventData`, which
+    /// remains solely for legacy chat transport compatibility.
+    public let transcriptUpdateData: Data?
     public let usageData: Data?
     public let logURL: URL?
     public let debugURL: URL?
@@ -42,7 +45,8 @@ public struct QueueEventEnvelope: Codable, Sendable {
 
     public init(kind: Kind, item: QueueItem? = nil, itemID: QueueItem.ID? = nil,
                 error: String? = nil, line: String? = nil,
-                agentEventData: Data? = nil, usageData: Data? = nil,
+                agentEventData: Data? = nil, transcriptUpdateData: Data? = nil,
+                usageData: Data? = nil,
                 logURL: URL? = nil, debugURL: URL? = nil,
                 queue: QueueKind? = nil, runState: QueueRunState? = nil,
                 pendingPermissionJSON: String? = nil,
@@ -54,6 +58,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
         self.error = error
         self.line = line
         self.agentEventData = agentEventData
+        self.transcriptUpdateData = transcriptUpdateData
         self.usageData = usageData
         self.logURL = logURL
         self.debugURL = debugURL
@@ -82,9 +87,9 @@ public struct QueueEventEnvelope: Codable, Sendable {
             self.init(kind: .reordered, item: item)
         case .progress(let id, let line):
             self.init(kind: .progress, itemID: id, line: line)
-        case .transcript(let id, let agentEvent):
-            let data = DebugLog.trying("encode agentEvent", operation: { try JSONEncoder().encode(agentEvent) })
-            self.init(kind: .transcript, itemID: id, agentEventData: data)
+        case .transcript(let update):
+            let data = DebugLog.trying("encode queue transcript update", operation: { try JSONEncoder().encode(update) })
+            self.init(kind: .transcript, itemID: update.attemptID.itemID, transcriptUpdateData: data)
         case .usage(let id, let usage):
             let data = DebugLog.trying("encode usage", operation: { try JSONEncoder().encode(usage) })
             self.init(kind: .usage, itemID: id, usageData: data)
@@ -136,9 +141,11 @@ public struct QueueEventEnvelope: Codable, Sendable {
             guard let itemID, let line else { return nil }
             return .progress(itemID, line: line)
         case .transcript:
-            guard let itemID, let agentEventData,
-                  let event = DebugLog.trying("decode AgentEvent", operation: { try JSONDecoder().decode(AgentEvent.self, from: agentEventData) }) else { return nil }
-            return .transcript(itemID, event)
+            guard let itemID, let transcriptUpdateData,
+                  let update = DebugLog.trying("decode QueueTranscriptUpdate", operation: { try JSONDecoder().decode(QueueTranscriptUpdate.self, from: transcriptUpdateData) }),
+                  update.attemptID.itemID == itemID
+            else { return nil }
+            return .transcript(update)
         case .usage:
             guard let itemID, let usageData,
                   let usage = DebugLog.trying("decode SessionUsage", operation: { try JSONDecoder().decode(SessionUsage.self, from: usageData) }) else { return nil }

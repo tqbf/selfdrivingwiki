@@ -116,7 +116,7 @@ final class QueueEngineHotSwap: QueueEngineClient, @unchecked Sendable {
         await current.waitForCompletion(of: id)
     }
 
-    func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] {
+    func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] {
         await current.loadTranscript(for: itemID)
     }
 

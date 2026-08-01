@@ -160,7 +160,7 @@ public enum QueueIngestionError: Error, LocalizedError {
 public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     private let provider: any QueueIngestionProvider
     private let emitProgress: @Sendable (QueueItem.ID, String) -> Void
-    private let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
+    private let emitTranscript: @Sendable (QueueAttemptID, AgentEvent) -> Void
     private let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     private let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     private let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
@@ -169,7 +169,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     public init(
         provider: any QueueIngestionProvider,
         emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void,
-        emitTranscript: @escaping @Sendable (QueueItem.ID, AgentEvent) -> Void,
+        emitTranscript: @escaping @Sendable (QueueAttemptID, AgentEvent) -> Void,
         emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
         emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
         emitLogPaths: @escaping @Sendable (QueueItem.ID, URL?, URL?) -> Void,
@@ -198,7 +198,7 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     }
 
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
-        QueueIngestionWorker(provider: provider, emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths, emitPendingPermission: emitPendingPermission)
+        QueueIngestionWorker(provider: provider, attemptID: QueueAttemptID(itemID: item.id, attempt: item.attempt), emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths, emitPendingPermission: emitPendingPermission)
     }
 }
 
@@ -214,8 +214,9 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
 /// the provider.
 struct QueueIngestionWorker: QueueWorker {
     let provider: any QueueIngestionProvider
+    let attemptID: QueueAttemptID
     let emitProgress: @Sendable (QueueItem.ID, String) -> Void
-    let emitTranscript: @Sendable (QueueItem.ID, AgentEvent) -> Void
+    let emitTranscript: @Sendable (QueueAttemptID, AgentEvent) -> Void
     let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
@@ -231,8 +232,8 @@ struct QueueIngestionWorker: QueueWorker {
             throw QueueIngestionError.notReady(message)
         }
 
-        let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [itemID = item.id] event in
-            emitTranscript(itemID, event)
+        let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [attemptID] event in
+            emitTranscript(attemptID, event)
         }
         let onUsage: (@Sendable (SessionUsage?) -> Void)? = { [itemID = item.id] usage in
             guard let usage else { return }

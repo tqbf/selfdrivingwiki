@@ -639,7 +639,7 @@ struct WikiFSApp: App {
         let ingestionFactory = QueueIngestionWorkerFactory(
             provider: ingestionProvider,
             emitProgress: { id, line in progressBox.emit?(id, line) },
-            emitTranscript: { id, event in transcriptBox.emit?(id, event) },
+            emitTranscript: { id, event in transcriptBox.emit(id, event) },
             emitUsage: { id, usage in usageBox.emit?(id, usage) },
             emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
             emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
@@ -650,7 +650,7 @@ struct WikiFSApp: App {
         ])
         let localEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
         Task { progressBox.emit = await localEngine.makeEmitProgress() }
-        Task { transcriptBox.emit = await localEngine.makeEmitTranscript() }
+        Task { transcriptBox.install(await localEngine.makeEmitTranscript()) }
         Task { usageBox.emit = await localEngine.makeEmitUsage() }
         Task { liveUsageBox.emit = await localEngine.makeEmitLiveUsage() }
         Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }

@@ -78,6 +78,12 @@ public struct QueueAttemptID: Hashable, Codable, Sendable {
         self.itemID = itemID
         self.attempt = attempt
     }
+
+    /// Stable transcript turn namespace for this immutable queue attempt.
+    /// Keep the compatibility encoding here so callers never interpolate it.
+    public var chatTurnID: ChatTurnID {
+        ChatTurnID(rawValue: "queue:\(itemID.rawValue):attempt:\(attempt)")
+    }
 }
 
 // MARK: - Payload

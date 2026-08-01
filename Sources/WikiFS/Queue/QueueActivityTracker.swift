@@ -10,13 +10,6 @@ final class ProgressEmitBox: @unchecked Sendable {
     var emit: (@Sendable (QueueItem.ID, String) -> Void)?
 }
 
-/// A mutable box for a `@Sendable` transcript-emit closure. Same pattern as
-/// `ProgressEmitBox` — breaks the circular dependency between the ingestion
-/// worker factory (needs the closure) and the engine (provides it).
-final class TranscriptEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, AgentEvent) -> Void)?
-}
-
 /// A mutable box for a `@Sendable` usage-emit closure. Same pattern as
 /// `ProgressEmitBox`/`TranscriptEmitBox` — breaks the circular dependency
 /// between the ingestion worker factory (needs the closure) and the engine
@@ -206,10 +199,12 @@ final class QueueActivityTracker {
     }
     /// Bounded — pruned only when items are pruned from history (not on
     /// terminal state, so users can view completed/failed/cancelled transcripts).
-    private(set) var transcripts: [QueueItem.ID: [AgentEvent]] = [:]
+    private(set) var transcripts: [QueueItem.ID: [ChatTranscriptItem]] = [:]
+    private var transcriptAttempts: [QueueItem.ID: QueueAttemptID] = [:]
+    private var lastTranscriptBatch: [QueueAttemptID: Int] = [:]
 
     /// Per-item accumulated progress text (for extraction items that produce
-    /// progress strings, not typed `AgentEvent`s). Keyed by item ID.
+    /// progress strings, not typed transcript rows). Keyed by item ID.
     private(set) var progressLogs: [QueueItem.ID: String] = [:]
 
     /// Per-item cumulative token/cost usage for completed runs (#528 spike).
@@ -272,10 +267,6 @@ final class QueueActivityTracker {
 
     // MARK: - Internal tracking
 
-    /// Maximum number of typed events to retain per item. Older events are
-    /// dropped beyond this bound to keep memory bounded.
-    private let maxTranscriptEvents = 1000
-
     /// Maximum number of items to retain transcripts for. When exceeded, the
     /// oldest item's transcript is pruned. This prevents unbounded growth when
     /// many items accumulate over a long session.
@@ -294,17 +285,6 @@ final class QueueActivityTracker {
     /// be tracked under both extraction and ingestion by different items, so
     /// the queue kind is needed to avoid subtracting from the wrong set.
     private var itemToQueue: [QueueItem.ID: QueueKind] = [:]
-
-    /// Items whose transcript's last row is an in-progress streamed assistant
-    /// reply — the next `.assistantTextDelta` grows that row in place instead
-    /// of appending a new one (mirrors `AgentLauncher.mergeOrAppend`; without
-    /// this, a streamed reply renders as one row per word-fragment).
-    private var streamingTranscriptItemIDs: Set<QueueItem.ID> = []
-
-    /// Items whose transcript's last row is an in-progress streamed thinking
-    /// block — the next `.thinkingDelta` grows that row in place instead of
-    /// appending a new one (mirrors `streamingTranscriptItemIDs` for assistant text).
-    private var streamingThinkingItemIDs: Set<QueueItem.ID> = []
 
     /// The currently running extraction item ID, for cancellation via
     /// `cancelExtraction()`.
@@ -450,8 +430,8 @@ final class QueueActivityTracker {
         itemLogURLs.removeAll()
         itemDebugURLs.removeAll()
         pendingPermissions.removeAll()
-        streamingTranscriptItemIDs.removeAll()
-        streamingThinkingItemIDs.removeAll()
+        transcriptAttempts.removeAll()
+        lastTranscriptBatch.removeAll()
     }
 
     // MARK: - Public API
@@ -477,74 +457,36 @@ final class QueueActivityTracker {
         !extractingSourceIDs.isEmpty && !extractingSourceIDs.contains(id)
     }
 
-    /// Append a typed event to the transcript for a queue item. Called from
-    /// the `.transcript` event handler. Streamed `.assistantTextDelta` chunks
-    /// grow the last row in place (mirroring `AgentLauncher.mergeOrAppend`) —
-    /// appending them raw renders one row per word-fragment. Bounded — drops
-    /// oldest events beyond `maxTranscriptEvents` per item, and prunes oldest
-    /// items beyond `maxTrackedItems`.
-    func appendTranscriptEvent(itemID: QueueItem.ID, event: AgentEvent) {
-        var arr = transcripts[itemID, default: []]
-        switch event {
-        case .assistantTextDelta(let delta):
-            if streamingTranscriptItemIDs.contains(itemID),
-               case .assistantText(let existing) = arr.last {
-                arr[arr.count - 1] = .assistantText(existing + delta)
-            } else {
-                arr.append(.assistantText(delta))
-                streamingTranscriptItemIDs.insert(itemID)
-            }
-            streamingThinkingItemIDs.remove(itemID)
-        case .assistantText:
-            // Authoritative full text for a block already being streamed —
-            // replace the accumulated row rather than duplicating it.
-            if streamingTranscriptItemIDs.contains(itemID),
-               case .assistantText = arr.last {
-                arr[arr.count - 1] = event
-            } else {
-                arr.append(event)
-            }
-            streamingTranscriptItemIDs.remove(itemID)
-            streamingThinkingItemIDs.remove(itemID)
-        case .thinkingDelta(let delta):
-            if streamingThinkingItemIDs.contains(itemID),
-               case .thinking(let existing) = arr.last {
-                arr[arr.count - 1] = .thinking(existing + delta)
-            } else {
-                arr.append(.thinking(delta))
-                streamingThinkingItemIDs.insert(itemID)
-            }
-            streamingTranscriptItemIDs.remove(itemID)
-        case .thinking:
-            // Authoritative full text for a thinking block already being
-            // streamed — replace the accumulated row rather than duplicating it.
-            if streamingThinkingItemIDs.contains(itemID),
-               case .thinking = arr.last {
-                arr[arr.count - 1] = event
-            } else {
-                arr.append(event)
-            }
-            streamingThinkingItemIDs.remove(itemID)
-            streamingTranscriptItemIDs.remove(itemID)
-        default:
-            arr.append(event)
-            streamingTranscriptItemIDs.remove(itemID)
-            streamingThinkingItemIDs.remove(itemID)
-        }
-        if arr.count > maxTranscriptEvents {
-            arr.removeFirst(arr.count - maxTranscriptEvents)
-        }
-        transcripts[itemID] = arr
+    /// Apply a typed, ordered queue update. The engine owns translation and
+    /// reduction. The tracker only rejects stale/out-of-order delivery and
+    /// reduces the changed typed rows into its main-actor presentation state.
+    func applyTranscriptUpdate(_ update: QueueTranscriptUpdate) {
+        let itemID = update.attemptID.itemID
+        guard transcriptAttempts[itemID] == update.attemptID else { return }
+        let expectedBatch = (lastTranscriptBatch[update.attemptID] ?? -1) + 1
+        guard update.batchNumber == expectedBatch else { return }
+        transcripts[itemID] = QueueTranscriptCanonicalMerge.merging(
+            persisted: transcripts[itemID, default: []],
+            live: update.changedItems)
+        lastTranscriptBatch[update.attemptID] = update.batchNumber
 
-        // Bound the number of tracked items — prune oldest (first inserted).
         if transcripts.count > maxTrackedItems {
-            let toRemove = transcripts.count - maxTrackedItems
-            let oldestIDs = Array(transcripts.keys.prefix(toRemove))
-            for id in oldestIDs {
+            let excess = transcripts.count - maxTrackedItems
+            for id in transcripts.keys.prefix(excess) {
                 transcripts.removeValue(forKey: id)
                 progressLogs.removeValue(forKey: id)
             }
         }
+    }
+
+    private func resetTranscriptAttempt(for item: QueueItem) {
+        let attemptID = QueueAttemptID(itemID: item.id, attempt: item.attempt)
+        guard transcriptAttempts[item.id] != attemptID else { return }
+        if let previous = transcriptAttempts[item.id] {
+            lastTranscriptBatch.removeValue(forKey: previous)
+        }
+        transcriptAttempts[item.id] = attemptID
+        transcripts.removeValue(forKey: item.id)
     }
 
     /// Prune the transcript + progress log for an item. Called when items are
@@ -560,12 +502,13 @@ final class QueueActivityTracker {
         itemDebugURLs.removeValue(forKey: itemID)
         pendingPermissions.removeValue(forKey: itemID)
         itemToQueue.removeValue(forKey: itemID)
-        streamingTranscriptItemIDs.remove(itemID)
-        streamingThinkingItemIDs.remove(itemID)
+        if let attempt = transcriptAttempts.removeValue(forKey: itemID) {
+            lastTranscriptBatch.removeValue(forKey: attempt)
+        }
     }
 
     /// The transcript for a given item ID (may be empty / nil).
-    func transcript(for itemID: QueueItem.ID) -> [AgentEvent] {
+    func transcript(for itemID: QueueItem.ID) -> [ChatTranscriptItem] {
         transcripts[itemID] ?? []
     }
 
@@ -623,6 +566,7 @@ final class QueueActivityTracker {
     func handle(_ event: QueueEvent) {
         switch event {
         case .enqueued(let item):
+            resetTranscriptAttempt(for: item)
             // Track the mapping so we can clean up on completion.
             let sourceIDs = Set(item.payload.sourceIDs)
             itemToSourceIDs[item.id] = sourceIDs
@@ -642,6 +586,7 @@ final class QueueActivityTracker {
             }
 
         case .started(let item):
+            resetTranscriptAttempt(for: item)
             let sourceIDs = Set(item.payload.sourceIDs)
             itemToSourceIDs[item.id] = sourceIDs
             itemToQueue[item.id] = item.queue
@@ -674,8 +619,8 @@ final class QueueActivityTracker {
                 }
             }
 
-        case .transcript(let id, let agentEvent):
-            appendTranscriptEvent(itemID: id, event: agentEvent)
+        case .transcript(let update):
+            applyTranscriptUpdate(update)
 
         case .usage(let id, let usage):
             // #528 spike: store per-item usage for the Activity window, and
