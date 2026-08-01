@@ -113,7 +113,7 @@ private enum DynamicRendererPRSeriesAuditMain {
             try verify(seriesPath: series, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), github: ProcessGitHubPullRequestQuery(), records: FileGateRecords())
         case "build-suite":
             guard let head = options["--head"], let evidence = options["--evidence"], DynamicRendererAuditValidation.isSHA(head) else { throw AuditCLIError.usage }
-            try buildSuite(head: head, evidenceDirectory: evidence)
+            try buildSuite(head: head, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), records: FileGateRecords(), clock: SystemAuditClock())
         default: throw AuditCLIError.usage
         }
     }
@@ -139,8 +139,7 @@ private enum DynamicRendererPRSeriesAuditMain {
         guard second == first else { throw AuditCLIError.invalidRecord("PR changed during audit") }
     }
 
-    private static func buildSuite(head: String, evidenceDirectory: String) throws {
-        let git = ProcessGitRepositoryQuery()
+    static func buildSuite(head: String, evidenceDirectory: String, git: GitRepositoryQuerying, records: GateRecordWriting, clock: AuditClock) throws {
         guard try git.output(arguments: ["rev-parse", "HEAD"]) == head else { throw AuditCLIError.invalidHead(head) }
         guard try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
         var results: [DynamicRendererAuditCommandResult] = []
@@ -152,12 +151,10 @@ private enum DynamicRendererPRSeriesAuditMain {
             guard result.status == 0 else { throw AuditCLIError.commandFailed(command.joined(separator: " "), result.status, result.output) }
         }
         let baseOID = try git.output(arguments: ["rev-parse", "origin/main"])
-        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: [.init(name: "local-build-suite", headSHA: head, conclusion: "success")], review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: nil, findings: [], recordedAt: ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: "Z", with: "+00:00"))
+        guard try git.output(arguments: ["rev-parse", "HEAD"]) == head else { throw AuditCLIError.invalidHead(head) }
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: [.init(name: "local-build-suite", headSHA: head, conclusion: "success")], review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: "tmp/dynamic-renderer-pr1-mutation-report.json", findings: [], recordedAt: clock.recordedAt())
         try record.validate()
-        let directory = URL(fileURLWithPath: evidenceDirectory, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appendingPathComponent("\(head).json")
-        try JSONEncoder.gateEncoder.encode(record).write(to: destination, options: .atomic)
+        try records.write(record, to: URL(fileURLWithPath: evidenceDirectory, isDirectory: true))
     }
 }
 
