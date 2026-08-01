@@ -609,6 +609,7 @@ struct ACPIngestCollapsedRoutingTests {
 
         let profiles = await fake.startedProfiles
         #expect(profiles.count == 4)
+        #expect(profiles.allSatisfy { $0.executionAccess == .fullAccess })
         let firstExecutor = try #require(ACPBackend.resolveSpawnConfig(from: profiles[1]))
         let secondExecutor = try #require(ACPBackend.resolveSpawnConfig(from: profiles[2]))
         #expect(firstExecutor.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")

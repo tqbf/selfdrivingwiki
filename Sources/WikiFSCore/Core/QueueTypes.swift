@@ -67,6 +67,25 @@ public enum QueueRunState: String, Codable, Sendable {
     case paused
 }
 
+/// Immutable identity for one claimed queue-item attempt. A queue retry creates
+/// a new attempt, so callbacks from an earlier worker cannot target current
+/// transcript rows by item ID alone.
+public struct QueueAttemptID: Hashable, Codable, Sendable {
+    public let itemID: QueueItem.ID
+    public let attempt: Int
+
+    public init(itemID: QueueItem.ID, attempt: Int) {
+        self.itemID = itemID
+        self.attempt = attempt
+    }
+
+    /// Stable transcript turn namespace for this immutable queue attempt.
+    /// Keep the compatibility encoding here so callers never interpolate it.
+    public var chatTurnID: ChatTurnID {
+        ChatTurnID(rawValue: "queue:\(itemID.rawValue):attempt:\(attempt)")
+    }
+}
+
 // MARK: - Payload
 
 /// The work description for a queue item — what the worker should process.

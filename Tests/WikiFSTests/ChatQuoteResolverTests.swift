@@ -128,4 +128,8 @@ struct ChatQuoteResolverTests {
         #expect(ChatQuoteResolver.searchableText(.assistantTextDelta("x")).isEmpty)
         #expect(ChatQuoteResolver.searchableText(.messageStop).isEmpty)
     }
+
+    @Test func searchableTextForNilToolResultIsEmpty() {
+        #expect(ChatQuoteResolver.searchableText(.toolResult(isError: false, summary: nil)).isEmpty)
+    }
 }

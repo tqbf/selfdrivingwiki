@@ -362,14 +362,19 @@ transcripts.
 
 ### Transcript architecture
 
-`AgentLauncher` now has an `onAgentEvent` callback that fires per-event from
-`mergeOrAppend`. The ingestion provider sets this before calling `launcher.run`
-and clears it after. Events flow: launcher → `onAgentEvent` →
-`QueueEngine.makeEmitTranscript()` → `QueueEvent.transcript(id, event)` →
-`QueueActivityTracker.transcripts[itemID]`. The Activity window reads
-transcripts from the tracker, decoupled from the launcher instance (works
-across all wikis). Transcripts are pruned only on history pruning, not on
-terminal state, so users can view completed/failed/cancelled transcripts.
+`AgentLauncher` emits provider events at the launcher/provider boundary. Each
+`QueueIngestionWorker` captures an immutable `QueueAttemptID`, and the engine's
+per-attempt state store translates and reduces those events into typed
+`ChatTranscriptItem` rows. It assigns an ordered `QueueTranscriptUpdate` batch,
+persists the batch, then broadcasts it. A late callback from an old attempt is
+rejected before translation; SQLite and broadcasting run after the state lock
+is released. Events flow: launcher → provider callback → typed engine batch →
+`QueueActivityTracker` → Activity window. The tracker keeps typed accumulated
+rows on the main actor and rejects stale attempts or duplicate/out-of-order
+batches. The window merges durable and live rows by tagged identity, uses
+`ChatDisplayProjection` and `ChatTranscriptView`, and uses that same canonical
+sequence for Copy. Typed rows and queue metadata are pruned only with history,
+not on terminal state, so completed/failed/cancelled runs remain inspectable.
 
 ### LintView removal
 

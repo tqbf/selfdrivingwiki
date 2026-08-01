@@ -12,8 +12,8 @@ import Testing
 /// the markdown renderer so attachment references from drag-to-chat (#385)
 /// render as clickable links.
 ///
-/// Phase A.2 adds a `WikiRenderContext`-aware renderer (`renderedMarkdown(_:context:)`,
-/// `feedRowHTML(for:context:isFinal:)`, `chatDisplayRowHTML(_:context:)`) so
+/// Phase A.2 adds a `WikiRenderContext`-aware renderer (`renderedMarkdown(_:context:)`
+/// and `chatDisplayRowHTML(_:context:)`) so
 /// chat transcript rows render source references exactly as the reader does — healed
 /// display names, `&pin=` quote links, `![[source:…]]` embeds via `wiki-blob://`,
 /// and ghost styling for broken links. See the "Phase A.2" section below.
@@ -42,26 +42,6 @@ struct ChatWebViewLinkifyTests {
         #expect(html.contains("<a "))
         #expect(html.contains("wiki://"))
         #expect(html.contains("Page%20Name"))
-    }
-
-    @Test func feedAssistantRowLinkifies() {
-        let html = Transcript.feedRowHTML(for: .assistantText("See [[Page]] here."))
-        #expect(html.contains("wiki://"))
-        #expect(html.contains("<a "))
-    }
-
-    @Test func feedUserRowLinkifiesWikiLinks() {
-        // User text is now rendered through the markdown renderer so that
-        // attachment references ([[source:Name]]) render as clickable links
-        // (issue #385).
-        let html = Transcript.feedRowHTML(for: .userText("See [[Page]] here."))
-        #expect(html.contains("<a "))
-        #expect(html.contains("wiki://"))
-    }
-
-    @Test func feedResultRowLinkifies() {
-        let html = Transcript.feedRowHTML(for: .result(isError: false, text: "See [[Page]] here."))
-        #expect(html.contains("wiki://"))
     }
 
     @Test func typedAssistantRowLinkifies() {
@@ -122,13 +102,6 @@ struct ChatWebViewLinkifyTests {
         #expect(!html.contains("wiki://missing"))
     }
 
-    @Test func feedRowHTMLNilContextDefaultsUnchanged() {
-        // Zero-arg convenience (defaults) must match the pre-A.2 output exactly.
-        let zeroArg = Transcript.feedRowHTML(for: .assistantText("See [[Ghost]] here."))
-        let explicitNil = Transcript.feedRowHTML(for: .assistantText("See [[Ghost]] here."), context: nil, isFinal: true)
-        #expect(zeroArg == explicitNil)
-        #expect(!zeroArg.contains("wiki://missing"))
-    }
 }
 
 /// Phase A.2 — the `WikiRenderContext`-aware transcript render. A persisted

@@ -1,11 +1,14 @@
 {
   "worktree": {
-    "setup": "cp -R \"$PASEO_SOURCE_CHECKOUT_PATH/signing\" \"$PASEO_WORKTREE_PATH\"",
+    "setup": "cp -R \"$PASEO_SOURCE_CHECKOUT_PATH/signing\" \"$PASEO_WORKTREE_PATH\"\nmake version keychain prompts",
     "teardown": "scripts/paseo-archive-cleanup.sh"
   },
   "metadataGeneration": {
     "commitMessage": {
       "instructions": "Use a Conventional Commit header: <type>[optional scope][!]: <description>. Use one lowercase type from feat, fix, refactor, perf, docs, test, build, ci, or chore. Use a lowercase scope when useful. Use ! for breaking changes. Keep the message to one concise imperative line with no trailing period. Return only the commit message."
+    },
+    "branchName": {
+      "instructions": "Use Conventional Branch naming. Return a lowercase branch name in the form <type>/<description>, using feature/ (or feat/), bugfix/ (or fix/), hotfix/, release/, or chore/. Use a concise kebab-case description with alphanumerics and hyphens; use dots only in release versions. Never use uppercase letters, underscores, spaces, consecutive separators, or leading/trailing separators. Keep main, master, and develop as trunk branches."
     }
   }
 }

@@ -43,7 +43,7 @@ struct QueueEngineHotSwapTests {
         }
         func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
         func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
-        func loadTranscript(for itemID: QueueItem.ID) async -> [AgentEvent] { [] }
+        func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { [] }
         func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
     }
 

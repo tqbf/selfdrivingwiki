@@ -56,6 +56,26 @@ struct ChatTranscriptPresentationTests {
         #expect(toolHTML.contains("◌"))
     }
 
+    @Test func completedToolWithoutOutputShowsNoSyntheticResultText() {
+        let tool = ChatDisplayRow.toolCall(
+            id: ToolCallID(rawValue: "tool-no-output"),
+            turnID: turnID,
+            toolName: "Bash",
+            status: .completed,
+            detail: nil,
+            output: nil,
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        )
+
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(tool)
+
+        #expect(html.contains("Tool Bash, Completed"))
+        #expect(!html.contains("(ok)"))
+        #expect(!html.contains("(error)"))
+        #expect(!html.contains("chat-tool-detail"))
+    }
+
     @Test(arguments: [
         ("```console\nfile changed\n```", "file changed"),
         ("```json\n{\"ok\":true}\n```", "{\"ok\":true}"),

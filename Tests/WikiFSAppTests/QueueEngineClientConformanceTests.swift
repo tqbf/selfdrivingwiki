@@ -98,6 +98,12 @@ struct QueueEngineClientConformanceTests {
         #expect(snapshots.isEmpty)
     }
 
+    @Test func loadTypedTranscriptIsCallable() async {
+        let client: any QueueEngineClient = makeEngine()
+        let items = await client.loadTranscript(for: QueueItem.ID(rawValue: "typed-item"))
+        #expect(items.isEmpty)
+    }
+
     /// The protocol is `AnyObject`-bound so `weak` references work
     /// (`QueueActivityTracker`, `QueueViewModel`). Verified at compile time:
     /// the `weak var` assignment below would not compile if the protocol

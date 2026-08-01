@@ -42,10 +42,14 @@ struct ChatPresentationAPIManifestTests {
         #expect(remoteSession.contains("ChatTranscriptProjection") == false)
     }
 
-    @Test func chatWebViewKeepsEventCompatibilityAtTheActivityFeedBoundary() throws {
+    @Test func chatWebViewHasNoLegacyEventInitializer() throws {
         let renderer = try source(named: "ChatWebView.swift")
 
-        #expect(renderer.contains("feedRowHTML") == true)
+        #expect(renderer.contains("AgentEvent") == false)
+        #expect(renderer.contains("init(\n        events:") == false)
+        #expect(renderer.contains("reload(events:") == false)
+        #expect(renderer.contains("apply(events:") == false)
+        #expect(renderer.contains("feedRowHTML") == false)
         #expect(renderer.contains("chatDisplayRowHTML") == true)
         #expect(renderer.contains("VisualStyle") == false)
         #expect(renderer.contains("chatRowHTML") == false)
@@ -98,16 +102,37 @@ struct ChatPresentationAPIManifestTests {
             .filter { $0.contents.contains("AgentEvent") }
             .map(\.path)
         let allowedActivityFeedSources: Set<String> = [
-            "Chats/ChatWebView.swift",
-            "Queue/ActivityWindowView.swift",
             "Queue/AppQueueIngestionProvider.swift",
-            "Queue/QueueActivityTracker.swift",
-            "Queue/QueueEngineHotSwap.swift",
-            "Queue/XPCQueueEngineProxy.swift",
+            "Queue/QueueTranscriptEmitBox.swift",
         ]
 
         #expect(Set(legacyEventSources) == allowedActivityFeedSources)
         #expect(legacyEventSources.contains("Chats/RemoteChatSession.swift") == false)
+    }
+
+    @Test func activityPresentationDoesNotImportAgentEvent() throws {
+        let activity = try source(named: "ActivityWindowView.swift", directory: "Sources/WikiFS/Queue")
+        let tracker = try source(named: "QueueActivityTracker.swift", directory: "Sources/WikiFS/Queue")
+
+        #expect(activity.contains("AgentEvent") == false)
+        #expect(tracker.contains("AgentEvent") == false)
+    }
+
+    @Test func activityPresentationUsesTypedTranscriptView() throws {
+        let activity = try source(named: "ActivityWindowView.swift", directory: "Sources/WikiFS/Queue")
+
+        #expect(activity.contains("ChatTranscriptView") == true)
+        #expect(activity.contains("ChatDisplayProjection.project") == true)
+        #expect(activity.contains("QueueTranscriptCanonicalMerge.merging") == true)
+        #expect(activity.contains("transcriptID: TranscriptID.queueItem") == true)
+    }
+
+    @Test func legacyQueueEventStoreMethodsAreAbsent() throws {
+        let store = try source(named: "QueueStore.swift", directory: "Sources/WikiFSCore/Core")
+
+        #expect(store.contains("appendItemEvent") == false)
+        #expect(store.contains("loadItemEvents") == false)
+        #expect(store.contains("deleteItemEvents") == false)
     }
 
     @Test func projectionAndPermissionBoundaryUseTypedIDsAndIntent() throws {

@@ -22,6 +22,69 @@ import ACPModel
 /// `session/prompt` completion — ACP has no turn-end *notification*).
 @Suite struct ACPBackendTests {
 
+    // MARK: - Execution access
+
+    /// Queued mutation workflows must request the ACP agent's advertised
+    /// full-access mode before their first tool call. This is separate from
+    /// the app's ACP permission policy, which keeps its own audit trail.
+    @Test func fullAccessSelectsAdvertisedBypassPermissionsMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("default"), name: "Default"),
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("bypassPermissions"), name: "Full access"),
+                    ]))))
+        ]
+
+        #expect(
+            ACPExecutionAccessResolver.configuration(
+                for: .fullAccess,
+                options: options
+            ) == ACPConfigOptionApplication(
+                configID: "mode",
+                value: "bypassPermissions"
+            )
+        )
+    }
+
+    @Test func standardAccessDoesNotChangeAgentMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("bypassPermissions"), name: "Full access"),
+                    ]))))
+        ]
+
+        #expect(ACPExecutionAccessResolver.configuration(for: .standard, options: options) == nil)
+    }
+
+    @Test func fullAccessDoesNotGuessAnUnsupportedAgentMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("default"), name: "Default"),
+                    ]))))
+        ]
+
+        #expect(ACPExecutionAccessResolver.configuration(for: .fullAccess, options: options) == nil)
+    }
+
     // MARK: - Event translator
 
     /// A streamed agent prose chunk maps to `.assistantTextDelta` (the launcher
@@ -150,15 +213,324 @@ import ACPModel
         #expect(events == [.toolResult(isError: true, summary: "permission denied")])
     }
 
-    /// Non-terminal tool statuses (pending/in_progress) carry nothing new for
-    /// the transcript — they produce no event.
-    @Test func pendingToolCallUpdateEmitsNothing() {
+    @Test func completedToolCallUpdateFallsBackToStringRawOutput() {
         let translator = ACPEventTranslator()
         let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
-            toolCallId: "tc1",
-            status: .inProgress
+            toolCallId: "tc-raw-completed",
+            status: .completed,
+            rawOutput: AnyCodable("1 file changed")
         ))
-        #expect(translator.translate(update) == [])
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "1 file changed")])
+    }
+
+    @Test func failedToolCallUpdateFallsBackToStringRawOutput() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-raw-failed",
+            status: .failed,
+            rawOutput: AnyCodable("permission denied")
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: true, summary: "permission denied")])
+    }
+
+    @Test func completedToolCallUpdateFallsBackToFormattedStructuredRawOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "exit_code": 0,
+            "formatted_output": "1 file changed",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-structured-completed",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "1 file changed")])
+    }
+
+    @Test func completedToolCallUpdateFallsBackToStructuredOutputField() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = ["output": "1 file changed"]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-structured-output",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "1 file changed")])
+    }
+
+    @Test func failedToolCallUpdateFallsBackToFormattedStructuredRawOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "exit_code": 1,
+            "formatted_output": "permission denied",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-structured-failed",
+            status: .failed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: true, summary: "permission denied")])
+    }
+
+    @Test func decodedStructuredRawOutputFallsBackToFormattedOutput() throws {
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "tc-decoded-structured-completed",
+          "status": "completed",
+          "rawOutput": {
+            "exit_code": 0,
+            "formatted_output": "decoded output"
+          }
+        }
+        """.utf8))
+
+        #expect(ACPEventTranslator().translate(update) == [
+            .toolResult(isError: false, summary: "decoded output")
+        ])
+    }
+
+    @Test func toolCallUpdatePrefersRenderedContentOverRawOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "exit_code": 0,
+            "formatted_output": "raw output",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-content-precedence",
+            status: .completed,
+            content: [.content(.text(TextContent(text: "rendered output")))],
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "rendered output")])
+    }
+
+    @Test func canonicalNoOutputRenderedContentFallsBackToRawOutput() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-content-no-output",
+            status: .completed,
+            content: [.content(.text(TextContent(text: " \n(no output)\t")))],
+            rawOutput: AnyCodable("raw fallback")
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "raw fallback")])
+    }
+
+    @Test func canonicalNoOutputStringRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-string-no-output",
+            status: .failed,
+            rawOutput: AnyCodable(" (no output) \n")
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: true, summary: nil)])
+    }
+
+    @Test func canonicalNoOutputFormattedStructuredRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = ["formatted_output": "(no output)"]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-formatted-no-output",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func decodedTrueRunWireShapeNormalizesCanonicalNoOutput() throws {
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_J1COgO0IV74GkKvxlETvUl5J",
+          "status": "completed",
+          "title": "true",
+          "content": [{
+            "type": "content",
+            "content": { "type": "text", "text": "(no output)" }
+          }],
+          "rawOutput": {
+            "metadata": { "exit": 0, "output": "(no output)", "truncated": false },
+            "output": "(no output)"
+          }
+        }
+        """.utf8))
+
+        #expect(ACPEventTranslator().translate(update) == [
+            .toolResult(isError: false, summary: nil)
+        ])
+    }
+
+    @Test func canonicalNoOutputMetadataRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let metadata: [String: any Sendable] = ["output": "(no output)"]
+        let rawOutput: [String: any Sendable] = ["metadata": metadata]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-metadata-no-output",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func whitespaceOnlyRenderedContentFallsBackToFormattedRawOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = ["formatted_output": "raw fallback"]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-content-whitespace-fallback",
+            status: .completed,
+            content: [.content(.text(TextContent(text: " \n\t ")))],
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "raw fallback")])
+    }
+
+    @Test func terminalArbitraryRawOutputArrayEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-raw-array",
+            status: .completed,
+            rawOutput: AnyCodable(["not", "rendered"])
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func completedToolCallUpdateWithWhitespaceOnlyRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-raw-whitespace",
+            status: .completed,
+            rawOutput: AnyCodable(" \n\t ")
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func completedToolCallUpdateWithMissingFormattedRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = ["exit_code": 0]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-structured-missing-output",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func completedToolCallUpdateWithWhitespaceOnlyFormattedRawOutputEmitsNilResult() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "exit_code": 0,
+            "formatted_output": " \n\t ",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-structured-whitespace-output",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func whitespaceFormattedRawOutputFallsBackToOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "formatted_output": " \n\t ",
+            "output": "fallback output",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-formatted-whitespace-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "fallback output")])
+    }
+
+    @Test func emptyStructuredOutputFallsBackToMetadataOutput() {
+        let translator = ACPEventTranslator()
+        let metadata: [String: any Sendable] = ["output": "metadata fallback"]
+        let rawOutput: [String: any Sendable] = [
+            "output": "",
+            "metadata": metadata,
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-output-empty-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "metadata fallback")])
+    }
+
+    @Test func canonicalNoOutputFormattedRawOutputFallsBackToOutput() {
+        let translator = ACPEventTranslator()
+        let rawOutput: [String: any Sendable] = [
+            "formatted_output": "(no output)",
+            "output": "fallback output",
+        ]
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-formatted-marker-fallback",
+            status: .completed,
+            rawOutput: AnyCodable(rawOutput)
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: false, summary: "fallback output")])
+    }
+
+    @Test func decodedCompletedToolCallUpdateWithoutOutputEmitsNilResult() throws {
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "tc-decoded-nil-completed",
+          "status": "completed"
+        }
+        """.utf8))
+
+        #expect(ACPEventTranslator().translate(update) == [.toolResult(isError: false, summary: nil)])
+    }
+
+    @Test func decodedFailedToolCallUpdateWithoutOutputEmitsNilResult() throws {
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "tc-decoded-nil-failed",
+          "status": "failed"
+        }
+        """.utf8))
+
+        #expect(ACPEventTranslator().translate(update) == [.toolResult(isError: true, summary: nil)])
+    }
+
+    /// Non-terminal tool statuses (pending/in_progress) carry nothing new for
+    /// the transcript — they produce no event.
+    @Test func pendingAndInProgressToolCallUpdatesEmitNothing() {
+        let translator = ACPEventTranslator()
+        let pending = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-pending",
+            status: .pending,
+            rawOutput: AnyCodable("must not terminate a tool")
+        ))
+        let inProgress = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-in-progress",
+            status: .inProgress,
+            rawOutput: AnyCodable("must not terminate a tool")
+        ))
+
+        #expect(translator.translate(pending) == [])
+        #expect(translator.translate(inProgress) == [])
     }
 
     /// Unmodeled update types (plan, usage, mode, …) produce no event — same

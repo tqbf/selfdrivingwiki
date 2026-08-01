@@ -23,6 +23,10 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
     case invalidStateTransition(from: QueueItemState, to: QueueItemState)
     /// The request was malformed (e.g. empty wikiID — AC4.2).
     case invalidRequest(String)
+    /// A typed transcript item did not provide a usable case-specific identity.
+    case invalidTranscriptIdentity(String)
+    /// A transcript batch was produced by a queue worker from an earlier retry.
+    case staleAttempt(QueueAttemptID, currentAttempt: Int)
 
     public var description: String {
         switch self {
@@ -32,6 +36,10 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
         case .invalidStateTransition(let from, let to):
             return "Invalid queue state transition: \(from.rawValue) → \(to.rawValue)"
         case .invalidRequest(let m): return "Invalid request: \(m)"
+        case .invalidTranscriptIdentity(let kind):
+            return "Invalid transcript identity for \(kind)"
+        case .staleAttempt(let rejected, let currentAttempt):
+            return "Stale queue attempt \(rejected.attempt) for \(rejected.itemID.rawValue); current attempt is \(currentAttempt)"
         }
     }
 
@@ -177,6 +185,10 @@ public final class QueueStore: @unchecked Sendable {
     ///   `"queue-running"` to disambiguate from `QueueItemState.running` (#508).
     /// - v4: `queue_item_activity` table — per-item usage JSON, log/debug URLs,
     ///   and progress-log text (persisted Activity-window metadata).
+    /// - v5: `queue_item_transcript_items` table — additive typed transcript
+    ///   storage.
+    /// - v6: final typed transcript cutover. Drops only the approved legacy
+    ///   `queue_item_events` table.
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -285,6 +297,33 @@ public final class QueueStore: @unchecked Sendable {
             """)
         }
 
+        // v5: additive typed queue transcript storage. The v6 cutover below
+        // drops the approved legacy table after all runtime callers use these
+        // typed APIs.
+        m.registerMigration("v5_add_typed_transcript_items") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_item_transcript_items (
+                item_id        TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                attempt        INTEGER NOT NULL,
+                seq            INTEGER NOT NULL,
+                item_kind      TEXT NOT NULL,
+                identity       TEXT NOT NULL,
+                item_json      TEXT NOT NULL,
+                projected_text TEXT NOT NULL DEFAULT '',
+                created_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                PRIMARY KEY (item_id, attempt, seq),
+                UNIQUE (item_id, attempt, item_kind, identity)
+            ) WITHOUT ROWID;
+            """)
+        }
+
+        // v6 is intentionally only the approved legacy transcript reset. Do
+        // not alter queue metadata, activity rows, or any wiki/chat database.
+        m.registerMigration("v6_drop_legacy_item_events") { db in
+            try db.execute(sql: "DROP TABLE IF EXISTS queue_item_events;")
+        }
+
         return m
     }()
 
@@ -311,6 +350,63 @@ public final class QueueStore: @unchecked Sendable {
             throw QueueStoreError.sqlite(code: -1, message: "payload is not valid UTF-8")
         }
         return try JSONDecoder().decode(QueueItemPayload.self, from: data)
+    }
+
+    // MARK: - Typed transcript storage helpers
+
+    /// The case tag is part of the durable identity. A provider can reuse one
+    /// raw ID in multiple transcript namespaces, so the raw value alone is not
+    /// safe for lookups or uniqueness.
+    private enum TypedTranscriptItemKind: String {
+        case message
+        case toolCall
+        case systemNotice
+        case turnFailure
+    }
+
+    private struct TypedTranscriptIdentity {
+        let kind: TypedTranscriptItemKind
+        let rawValue: String
+
+        init(item: ChatTranscriptItem) throws {
+            switch item {
+            case .message(let message):
+                self.kind = .message
+                self.rawValue = message.messageID.rawValue
+            case .toolCall(let toolCall):
+                self.kind = .toolCall
+                self.rawValue = toolCall.toolCallID.rawValue
+            case .systemNotice(let notice):
+                self.kind = .systemNotice
+                self.rawValue = notice.noticeID.rawValue
+            case .turnFailure(let failure):
+                self.kind = .turnFailure
+                self.rawValue = failure.failureID.rawValue
+            }
+
+            guard rawValue.isEmpty == false else {
+                throw QueueStoreError.invalidTranscriptIdentity(kind.rawValue)
+            }
+        }
+    }
+
+    private struct EncodedTypedTranscriptItem {
+        let identity: TypedTranscriptIdentity
+        let itemJSON: String
+        let projectedText: String
+    }
+
+    private static func encodeTypedTranscriptItem(_ item: ChatTranscriptItem) throws -> EncodedTypedTranscriptItem {
+        let identity = try TypedTranscriptIdentity(item: item)
+        let data = try JSONEncoder().encode(item)
+        guard let itemJSON = String(data: data, encoding: .utf8) else {
+            throw QueueStoreError.invalidRequest("Transcript item JSON is not UTF-8")
+        }
+        return EncodedTypedTranscriptItem(
+            identity: identity,
+            itemJSON: itemJSON,
+            projectedText: LegacyChatTranscriptPersistenceProjection.project(item).plainText
+        )
     }
 
     // MARK: - GRDB error wrapping
@@ -678,6 +774,9 @@ public final class QueueStore: @unchecked Sendable {
                     WHERE id = ?;
                     """,
                     arguments: [newOrderingKey, id.rawValue])
+                try db.execute(
+                    sql: "DELETE FROM queue_item_transcript_items WHERE item_id = ?;",
+                    arguments: [id.rawValue])
             }
         }
     }
@@ -813,60 +912,119 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
-    // MARK: - Public API: Item events (transcripts)
+    // MARK: - Public API: Typed transcript items
 
-    /// Append a typed agent event to the persisted transcript for a queue item.
-    /// Events are stored in insertion order (seq is auto-incremented by SQLite).
-    /// Safe to call from a background thread — the store serializes via GRDB.
-    public func appendItemEvent(itemID: QueueItem.ID, event: AgentEvent) throws {
-        let data = try JSONEncoder().encode(event)
-        let json = String(data: data, encoding: .utf8) ?? "{}"
+    /// Atomically persist changed typed transcript items for one immutable queue
+    /// attempt. The store validates the attempt inside the same write
+    /// transaction that allocates sequence numbers and upserts the batch.
+    ///
+    /// A matching tagged identity updates content in place. Its original
+    /// sequence and creation time remain stable, so streamed replacements do
+    /// not move a row in the transcript.
+    public func upsertTranscriptItems(
+        attemptID: QueueAttemptID,
+        items: [ChatTranscriptItem]
+    ) throws {
+        let encodedItems = try items.map(Self.encodeTypedTranscriptItem)
         let now = Self.nowMillis()
 
         try Self.wrap {
             let queue = try self.queue()
             try queue.write { db in
-                try db.execute(
-                    sql: """
-                    INSERT INTO queue_item_events (item_id, seq, event_json, created_at)
-                    VALUES (?, COALESCE((SELECT MAX(seq) FROM queue_item_events WHERE item_id = ?), -1) + 1, ?, ?);
-                    """,
-                    arguments: [itemID.rawValue, itemID.rawValue, json, now])
-            }
-        }
-    }
-
-    /// Load all persisted agent events for a queue item, ordered by seq.
-    public func loadItemEvents(itemID: QueueItem.ID) throws -> [AgentEvent] {
-        try Self.wrap {
-            let queue = try self.queue()
-            return try queue.read { db in
-                let rows = try Row.fetchAll(
+                let currentAttempt = try Int.fetchOne(
                     db,
-                    sql: "SELECT event_json FROM queue_item_events WHERE item_id = ? ORDER BY seq;",
-                    arguments: [itemID.rawValue])
-                return rows.compactMap { row -> AgentEvent? in
-                    let json: String = row["event_json"]
-                    guard let data = json.data(using: .utf8) else { return nil }
-                    do {
-                        return try JSONDecoder().decode(AgentEvent.self, from: data)
-                    } catch {
-                        DebugLog.store("QueueStore.loadItemEvents: decode failed for event row — \(error.localizedDescription)")
-                        return nil
-                    }
+                    sql: "SELECT attempt FROM queue_items WHERE id = ?;",
+                    arguments: [attemptID.itemID.rawValue]
+                )
+                guard let currentAttempt else {
+                    throw QueueStoreError.notFound(attemptID.itemID)
+                }
+                guard currentAttempt == attemptID.attempt else {
+                    throw QueueStoreError.staleAttempt(attemptID, currentAttempt: currentAttempt)
+                }
+
+                for item in encodedItems {
+                    try db.execute(sql: """
+                    INSERT INTO queue_item_transcript_items (
+                        item_id, attempt, seq, item_kind, identity, item_json,
+                        projected_text, created_at, updated_at
+                    ) VALUES (
+                        ?, ?,
+                        COALESCE((
+                            SELECT MAX(seq) + 1
+                            FROM queue_item_transcript_items
+                            WHERE item_id = ? AND attempt = ?
+                        ), 0),
+                        ?, ?, ?, ?, ?, ?
+                    )
+                    ON CONFLICT(item_id, attempt, item_kind, identity) DO UPDATE SET
+                        item_json = excluded.item_json,
+                        projected_text = excluded.projected_text,
+                        updated_at = excluded.updated_at;
+                    """, arguments: [
+                        attemptID.itemID.rawValue,
+                        attemptID.attempt,
+                        attemptID.itemID.rawValue,
+                        attemptID.attempt,
+                        item.identity.kind.rawValue,
+                        item.identity.rawValue,
+                        item.itemJSON,
+                        item.projectedText,
+                        now,
+                        now,
+                    ])
                 }
             }
         }
     }
 
-    /// Delete all persisted events for an item (e.g. on retry — clears the old transcript).
-    public func deleteItemEvents(itemID: QueueItem.ID) throws {
+    /// Load all typed transcript items for an item in durable sequence order.
+    /// Invalid rows are logged and skipped so one corrupt row does not hide the
+    /// rest of the item transcript.
+    public func loadTranscriptItems(itemID: QueueItem.ID) throws -> [ChatTranscriptItem] {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT item_json
+                    FROM queue_item_transcript_items
+                    WHERE item_id = ?
+                    ORDER BY seq ASC;
+                    """,
+                    arguments: [itemID.rawValue]
+                )
+                var items: [ChatTranscriptItem] = []
+                items.reserveCapacity(rows.count)
+                for row in rows {
+                    let itemJSON: String = row["item_json"]
+                    guard let data = itemJSON.data(using: .utf8) else {
+                        DebugLog.store("QueueStore.loadTranscriptItems: item JSON is not UTF-8 for \(itemID.rawValue)")
+                        continue
+                    }
+                    do {
+                        items.append(try JSONDecoder().decode(ChatTranscriptItem.self, from: data))
+                    } catch {
+                        DebugLog.store("QueueStore.loadTranscriptItems: decode failed for \(itemID.rawValue): \(error)")
+                    }
+                }
+                return items
+            }
+        }
+    }
+
+    /// Delete typed transcript rows for one selected queue item. Phase 2 keeps
+    /// legacy event-store callers unchanged, so this method is intentionally not
+    /// wired into the existing retry path until the typed cutover.
+    public func deleteTranscriptItems(itemID: QueueItem.ID) throws {
         try Self.wrap {
             let queue = try self.queue()
             try queue.write { db in
                 try db.execute(
-                    sql: "DELETE FROM queue_item_events WHERE item_id = ?;",
-                    arguments: [itemID.rawValue])
+                    sql: "DELETE FROM queue_item_transcript_items WHERE item_id = ?;",
+                    arguments: [itemID.rawValue]
+                )
             }
         }
     }

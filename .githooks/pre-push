@@ -1,3 +1,55 @@
 #!/bin/sh
+
+valid_branch_name() {
+  branch_name=$1
+
+  case "$branch_name" in
+    main|master|develop)
+      return 0
+      ;;
+    feature/*|feat/*|bugfix/*|fix/*|hotfix/*|chore/*)
+      printf '%s\n' "$branch_name" | grep -Eq '^(feature|feat|bugfix|fix|hotfix|chore)/[a-z0-9]+(-[a-z0-9]+)*$'
+      ;;
+    release/*)
+      printf '%s\n' "$branch_name" | grep -Eq '^release/[a-z0-9]+([.-][a-z0-9]+)*$'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ref_input=$(mktemp "tmp/pre-push-refs.XXXXXX") || exit 1
+trap 'rm -f "$ref_input"' EXIT HUP INT TERM
+cat > "$ref_input"
+
+invalid_branch=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in
+    refs/heads/*)
+      branch_name=${local_ref#refs/heads/}
+      if ! valid_branch_name "$branch_name"; then
+        printf >&2 '✗ invalid branch name: %s\n' "$branch_name"
+        invalid_branch=1
+      fi
+      ;;
+  esac
+done < "$ref_input"
+
+if [ "$invalid_branch" -ne 0 ]; then
+  cat >&2 <<'EOF'
+
+Use a Conventional Branch name:
+  feature/<kebab-case-description>
+  bugfix/<kebab-case-description>
+  hotfix/<kebab-case-description>
+  release/v1.2.0
+  chore/<kebab-case-description>
+
+Trunk branches main, master, and develop are also valid.
+EOF
+  exit 1
+fi
+
 command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'pre-push' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks')."; exit 2; }
-git lfs pre-push "$@"
+git lfs pre-push "$@" < "$ref_input"

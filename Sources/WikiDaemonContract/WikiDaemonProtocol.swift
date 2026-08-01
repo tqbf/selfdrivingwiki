@@ -96,7 +96,7 @@ import Foundation
     /// `{"success": false, "error": "..."}`.
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void)
 
-    /// Load transcript events for an item. Reply is JSON-encoded `[AgentEvent]`.
+    /// Load transcript items for an item. Reply is JSON-encoded `[ChatTranscriptItem]`.
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void)
 
     /// Load all activity snapshots. Reply is JSON-encoded

@@ -399,6 +399,13 @@ Do not ship or merge a state where the table is absent and old callers remain.
 **Gate:** A v4 queue database opens, discards only legacy transcript rows, and
 then stores and loads a new typed transcript through the daemon client.
 
+**Implementation record (2026-08-01):** The cutover uses an immutable
+`QueueAttemptID` captured by `QueueIngestionWorker`, a lock-backed per-attempt
+translator/reducer/drainer, and `QueueTranscriptUpdate` batches across the
+engine event and XPC boundary. v6 drops only `queue_item_events`; typed retry
+clearing preserves queue metadata and activity rows. The Activity window merges
+durable and live typed rows through one value-only presentation seam.
+
 ### Phase 4: Remove the legacy renderer
 
 After the typed Activity view passes live verification, remove:
@@ -407,7 +414,6 @@ After the typed Activity view passes live verification, remove:
 - event-based coordinator reload and apply methods
 - event-based pending and rendered state
 - legacy visibility helpers that have no remaining callers
-- legacy `QueueStore` event methods
 - stale comments about the Activity event adapter
 
 Keep the old migration registrations. Do not edit past migration bodies.
@@ -421,6 +427,181 @@ live agent run and one restored transcript in the signed or development app.
 
 Update this plan with implementation evidence. Add a progress entry after the
 feature passes all gates.
+
+**Verification record (2026-08-01T06:30:17-07:00):** `make build`, all named
+focused suites, and `make test` passed on the Phase 4 parent
+`df9d165d501726941b8b0e773f295ab038e8706f`; the full suite reported 3,013
+tests in 247 suites. `make lint`, `make check`, and `git diff --check` also
+passed. The signed application and its bundled `wikid` service were started
+through `make run`. With the authorized Luna-backed lint-stage model
+(`codex-auto-review[high]`), the Page Detail "Lint" action created and
+completed item `01KYYR9BJ4MP4SWA5X0D2FQ04J`. The Activity window rendered the
+live typed reasoning, assistant, and Bash tool rows; durable typed storage has
+eleven ordered rows with stable tagged identities. Existing chat history
+remained available through `wikictl` (two conversations).
+
+The live transcript scenario is **not yet passed**. The real ACP debug stream
+contains three `tool_call` and four terminal `tool_call_update` events, but its
+terminal updates use `rawOutput` with no `content`. `ACPEventTranslator` only
+maps terminal updates that have nonempty `content`, so every durable tool row
+remains `running` after completion. This prevents an honest pass for tool
+call/result coalescing, restored transcript fidelity, Copy parity, and the
+progress-only fallback. The Activity window close was exercised, but do not add
+a progress entry or claim the remaining live checks pass until the ACP
+translation path handles this valid terminal output shape.
+
+**Follow-up record (2026-08-01T08:02:00-07:00):** The authorized narrow ACP
+correction now prefers nonempty rendered `content`, then accepts only a trimmed
+string `rawOutput` or a trimmed string `rawOutput.formatted_output` from a
+decoded object. It neither stringifies arbitrary objects or arrays nor changes
+terminal status handling. `ACPBackendTests` covers completed and failed
+structured outputs, content precedence, and missing or whitespace-only
+`formatted_output`; the focused and full automated gates passed after the
+change.
+
+The signed app and daemon were restarted from the corrected build. The earlier
+Luna item `01KYYX05PD5PZTEHD81SFB66NE` is `completed` and has 19 durable
+`queue_item_transcript_items` rows, but it predates the correction and contains
+only message and tool-call rows. It therefore cannot demonstrate formatted
+tool-result rendering. With the signed app focused, the documented `Command-I`
+control was sent once. It returned successfully, but exposed only the two main
+app windows; the accessibility provider denied the Activity-window tree with
+`accessibility_permission_denied`. No other user-facing Activity control is
+enumerable in this environment. This prevents starting and inspecting the fresh
+corrected Luna run, reopening Activity after close, copy parity, visible
+restoration, and the progress-only fallback. These live gates remain **not
+passed**. Preserve the workspace; do not add a progress entry, commit, push, or
+open a PR until an operator can provide access to that existing Activity
+control or another supported verification path.
+
+**Follow-up record (2026-08-01T09:24:28-07:00):** The approved terminal-output
+contract is implemented on parent `df9d165d501726941b8b0e773f295ab038e8706f`.
+`AgentEvent.toolResult.summary` is optional and retains synthesized Codable
+compatibility for existing nonempty summaries. Every ACP `completed` or
+`failed` tool update now emits one terminal result. Its summary is, in order,
+nonempty rendered `content`, a nonempty string `rawOutput`, a nonempty string
+`rawOutput.formatted_output`, or `nil`. Pending and in-progress updates remain
+absent. FIFO translation passes `nil` to typed `output` without changing row
+identity, detail, status, ordering, storage, or XPC contracts; nil output has
+no synthetic plain-text or legacy-transcript rendering. Focused Swift Testing
+covers decoded nil completed/failed updates, whitespace, precedence, arbitrary
+array rejection, FIFO identity/detail/status, Codable compatibility,
+persistence/reopen, and presentation. `make build`, all named focused commands
+(the unprefixed `QueueEngineClientConformanceTests` command selected zero tests;
+its required app-enabled equivalent passed four), `make test` (3,017 tests in
+247 suites), `make lint`, `make check`, and `git diff --check` passed.
+
+The signed app and bundled daemon ran fresh Luna lint item
+`01KYZ1S2HC0EVT5ZKG37111WY4`. Activity showed streamed reasoning and assistant
+rows, five stable tool identities, completed tool cards, and the real readonly
+SQLite failure as a failed output. The elevated retry completed and persisted
+the lint record; [issue #1033](https://github.com/tqbf/selfdrivingwiki/issues/1033)
+tracks granting that authorized lint write access on the first attempt. Durable
+storage contains 15 typed rows and five tool rows for this attempt, with one
+row per identity. This run did not emit a terminal ACP update without output,
+so it cannot live-demonstrate the new nil-output transition; the prior
+output-less Luna item remains persisted as `running` because it predates the
+translation correction. Activity close was exercised, but Command-I did not
+reopen it through Accessibility, and the supported restart attempt was
+interrupted before completion. Copy parity and the progress-only fallback were
+not run; existing chat history was previously verified through `wikictl`.
+These live gates remain **not passed**. Do not add a progress entry, commit,
+push, or open a PR until they have concrete evidence.
+
+**Follow-up record (2026-08-01T09:35:00-07:00):** A fresh signed-app chat was
+started after selecting the existing OpenCode Luna operation profile. Its user
+request was: “Run the shell command `true` exactly once. Do not describe the
+command result; complete after it succeeds.” The live Chat view showed one
+existing Bash tool card in `Running` for queue item
+`01KYZ2SAK3RKFJ2TEB0PKXHS6C` and tool-call identity
+`call_J1COgO0IV74GkKvxlETvUl5J`. Its authoritative ACP debug trace then emitted
+one terminal `completed` update, but it was not output-less: `content` was the
+nonempty rendered text `"(no output)"`, and `rawOutput` was an object whose
+`output` and `metadata.output` carried the same text (with exit `0`). This is
+therefore an output-bearing provider response, not the `content`-absent and
+`rawOutput`-null/empty terminal shape required to prove the nil-output path.
+Do not treat it as that evidence. The requested no-output live gate, including
+its typed-row transition, Activity restoration, and copy check, remains **not
+passed**; preserve the workspace and do not publish a partial PR.
+
+**Follow-up record (2026-08-01T09:58:13-07:00):** The operator approved
+normalizing ACP's exact trimmed `"(no output)"` marker as semantic absence. The
+translator now returns `nil` for that marker when it is the preferred rendered
+content, a string `rawOutput`, `rawOutput.formatted_output`,
+`rawOutput.output`, or `rawOutput.metadata.output`; it preserves every other
+nonempty string, does not stringify arbitrary values, and leaves terminal
+status and FIFO identity unchanged. `ACPBackendTests` includes the exact
+decoded `true` wire payload and the approved fallback shapes; 64 tests passed.
+
+After rebuilding and restarting the signed app, fresh Luna chat item
+`01KYZ42XDESR4NRNAR5NXMW3QT` again ran `true`. Its trace emitted terminal
+`completed` update `call_UUpQxIrUWDaMsugSznUU4rsx` with the canonical marker in
+rendered content and both observed structured raw-output fields. The same
+visible Bash card had first appeared as `Running`, but remained `Running` after
+the terminal event and a bounded 30-second observation. This interactive chat
+also has no `queue_item_transcript_items` rows, so it cannot establish the
+queue Activity typed-storage/restoration/copy gates. These live gates remain
+**not passed**; do not add a progress entry, commit, push, or open a PR.
+
+**Automated follow-up (2026-08-01T10:01:25-07:00):** The marker-normalization
+change passed `make build`; `ACPBackendTests` (64),
+`AgentEventTranscriptTranslatorTests` (12), `QueueStoreTypedTranscriptTests`
+(9), `QueueStoreTypedTranscriptMigrationTests` (2),
+`QueueTranscriptConcurrencyTests` (8), `QueueEventEnvelopeTests` (11),
+`WikiDaemonWorkloadHostTests` (12, app-enabled), and
+`ChatPresentationAPIManifestTests` (10, app-enabled). The plan's unprefixed
+`QueueEngineClientConformanceTests` invocation completed successfully but
+selected zero app tests; its app-enabled equivalent passed all four tests.
+`make test` passed 3,017 tests in 247 suites. `make lint` found zero
+violations and zero serious findings in 436 files, `make check` compiled the
+debug target, and `git diff --check` passed. These automated results do not
+replace the unresolved live Activity gate above.
+
+**Queue-path follow-up (2026-08-01T10:08:44-07:00):** The supported Page
+Detail **Lint** control started fresh Luna queue item
+`01KYZ4GJK9MXEJ5M54X1TVJJ06` for `Interface Tour`, and its real Activity
+window showed streamed reasoning and typed Read file, Bash, Editing files, and
+search cards with completed and failed terminal states. Its authoritative ACP
+trace contains 16 terminal `tool_call_update` events, but no occurrence of the
+canonical `"(no output)"` marker in `content` or `rawOutput`; the normal lint
+agent did not invoke a no-output tool. This is not evidence for the marker to
+nil transition, one-row nil persistence, restoration, or copy parity. Per the
+bounded live-verification rule, do not substitute this output-bearing run for
+that evidence, retry another queue item, add a progress entry, commit, push,
+or open a partial Phase 5 PR.
+
+**Final verification decision (2026-08-01T10:14:36-07:00):** The operator
+accepted the real queued lint run as the live Activity evidence and does not
+require Luna to reproduce its rare canonical `"(no output)"` marker on demand.
+The marker-to-`nil` contract remains covered by the captured, decoded real-wire
+fixtures in `ACPBackendTests` and by translation, persistence, and presentation
+tests; this plan does not claim a live nil-output row. The completed queue item
+has 33 durable typed rows: 17 messages and 16 tool rows, with 14 completed and
+two failed terminal states. The Activity view showed those terminal cards, and
+its Copy assistant response command placed 213 bytes on the clipboard,
+including the same visible `Corrected sidebar search guidance to include
+Chats.` and `Added the Chats search-bar detail.` bullets. It did not copy the
+marker.
+
+`make run` rebuilt, signed, copied, and restarted the app and bundled daemon;
+the same 33 durable rows were then read from `queue.sqlite`. Closing Activity
+succeeded. A bounded documented `Command-I` reopening attempt after the close
+and restart did not surface an Activity window through Accessibility, so this
+is recorded as a control-automation limitation rather than a claimed visual
+reopen. The current queue database retains progress-only items
+`01KY6DQGVGGBTEV5P97M2DB0SD` (753-byte progress log) and
+`01KY6D55V3Z56WMHB1A80MWYXN` (84-byte progress log) without typed transcript
+rows; the hosted progress-fallback test covers their presentation path. The
+restarted signed helper listed four existing chats. This is sufficient live
+evidence for the typed queue Activity surface under the operator decision.
+
+**Exact-head audit correction (2026-08-01):** Normalize every ACP terminal
+output candidate before applying precedence. Whitespace-only text and the exact
+canonical `"(no output)"` marker now fall through to later valid candidates in
+this order: rendered content, string `rawOutput`, `formatted_output`, `output`,
+and `metadata.output`. Only string values participate. Focused Swift Testing
+covers whitespace and marker fall-through, existing valid precedence, and
+nil-output quote and transcript rendering without synthetic text.
 
 ## Acceptance Criteria
 
