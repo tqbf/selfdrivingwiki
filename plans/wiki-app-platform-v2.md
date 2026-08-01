@@ -35,6 +35,73 @@ host-managed credentials of any kind (authentication is out of band — see
 §6), schedules/webhooks/auto sync, editable renderers, third-party package
 distribution and signing, and app-owned schema migrations (see §8).
 
+### 1.1 Component overview
+
+```mermaid
+flowchart TB
+    subgraph Untrusted["Untrusted (agent-authored)"]
+        UI["App UI<br/>(HTML/CSS/JS)"]
+        Backend["App backend<br/>(Python via uv / TS via bun)"]
+    end
+
+    subgraph Host["Native host (trusted)"]
+        Bridge["WikiAppWebView<br/>typed RPC bridge"]
+        WorkerHost["Worker host<br/>(default-deny sandbox,<br/>process-group owner)"]
+        Broker["Network broker<br/>(allowedHosts, redirect<br/>revalidation, attested fetches)"]
+        SRS["SourceRegistrationService<br/>(atomic commit +<br/>idempotency row)"]
+        Registries["ExtractionRegistry /<br/>RendererRegistry"]
+        Policy["Capability policy,<br/>grants, run FSM"]
+    end
+
+    subgraph Storage["Machine / wiki state"]
+        AppData["App-data dir<br/>(per-app, machine-scoped,<br/>holds credentials)"]
+        Store["WikiStore (SQLite)<br/>sources, versions,<br/>PROV: agents/activities/refs"]
+        FP["File Provider projection<br/>(OKF v0.2 frontmatter)"]
+    end
+
+    CLI["wikictl source add (#390)"]
+
+    UI -- "capability calls" --> Bridge
+    Bridge --> Policy
+    WorkerHost -- "spawns, confines" --> Backend
+    Backend -- "only network path" --> Broker
+    Backend -- "reads/writes own dir only" --> AppData
+    Policy --> SRS
+    Registries --> WorkerHost
+    SRS -- "one transaction:<br/>content + PROV + idempotency" --> Store
+    CLI --> SRS
+    Store -- "projection (one-way)" --> FP
+    Broker -- "internet" --> Ext["External services"]
+```
+
+Everything agent-authored sits behind two chokepoints: the bridge (for UI)
+and the worker host (for backends), and all durable effects funnel through
+`SourceRegistrationService` into one transaction.
+
+### 1.2 Phase and gate map
+
+```mermaid
+flowchart LR
+    P593["#593 Excalidraw<br/>ships now<br/>(hard-coded WikiAppWebView)"]
+    P0["Phase 0<br/>Worker isolation spike<br/>+ runtime versioning"]
+    G1{"Gate 1<br/>default-deny proven<br/>on dev-signed build?"}
+    P1["Phase 1<br/>Typed contracts,<br/>SourceRegistrationService,<br/>PROV extension, registries"]
+    P2["Phase 2<br/>WebView + bridge,<br/>renderer registration"]
+    P3["Phase 3<br/>Extractor apps<br/>(LiteParse), queue integration"]
+    P4["Phase 4<br/>Slack: networked +<br/>credentialed + multi-artifact"]
+    G2{"Gate 2<br/>hard case survives<br/>real use?"}
+    P5["Phase 5<br/>Product UI"]
+    Dep["Only now: remove<br/>closed routing"]
+    Rescope["Re-scope: read-only<br/>renderers + built-in<br/>adapters only"]
+
+    P593 -.-> P2
+    P0 --> G1
+    G1 -- pass --> P1 --> P2 --> P3 --> P4 --> G2
+    G1 -- fail --> Rescope
+    G2 -- pass --> P5 --> Dep
+    G2 -- fail --> Revise["Revise credential posture /<br/>commit contract while<br/>built-ins still exist"]
+```
+
 ## 2. Relationship to #261, #390, #593 (resolved, not "generalized")
 
 v1 "generalized without closing" these issues; the review correctly called
@@ -202,6 +269,29 @@ Roughly v1 Slices A + F(core) + B, committed as near-term PRs:
    retry is safe." Run *intent* is persisted before execution in a separate
    pre-commit record; a cancellation racing `committing` reads the key row
    to learn the truth. No cross-database 2PC is needed.
+
+   ```mermaid
+   sequenceDiagram
+       participant App as App run (untrusted)
+       participant SRS as SourceRegistrationService
+       participant Store as WikiStore (SQLite)
+
+       App->>SRS: propose(artifacts, claims, idempotency key)
+       SRS->>Store: read idempotency row (app ver, run, key)
+       alt row exists
+           Store-->>SRS: recorded result
+           SRS-->>App: prior result (no duplicate commit)
+       else no row
+           SRS->>SRS: validate complete staged set<br/>(filename, MIME, size, provenance)
+           SRS->>Store: BEGIN one transaction
+           Store->>Store: write content versions (Entities)
+           Store->>Store: write PROV rows<br/>(Activity, used, wasGeneratedBy, claims)
+           Store->>Store: write idempotency row + result
+           SRS->>Store: COMMIT (atomic: all or nothing)
+           SRS-->>App: committed / awaitingReview / rejected
+       end
+       Note over Store: Crash before COMMIT → no row, retry safe.<br/>Crash after → row exists, retry returns result.
+   ```
 4. **Built-in registry adapters** (`ExtractionRegistry`, `RendererRegistry`)
    wrapping current implementations with zero behavior change, golden
    characterization tests first, exactly as v1 Slice B. Deterministic matcher
@@ -232,6 +322,35 @@ inventing a parallel one:
   ingestion → extraction → source → run → origin traverses `used` and
   `wasGeneratedBy` edges with no gaps — and it is required for
   multi-input/multi-artifact runs. It fits within the ≤2-migration budget.
+
+```mermaid
+flowchart LR
+    subgraph PROV["PROV-DM rows (truth)"]
+        Agent["Agent<br/>agents row<br/>kind: wikiapp<br/>name: local.slack-importer<br/>version: 1.0.0<br/>external_ref: manifest hash"]
+        Act["Activity (run)<br/>hadPlan: operation + options hash<br/>external_ref: run ID<br/>started_at / ended_at"]
+        InV["Input Entity<br/>source_version (pinned)"]
+        OutV["Output Entity<br/>source/markdown version"]
+        Claims["App-supplied claims<br/>(per-source stable IDs,<br/>permalinks, remote authorship)"]
+
+        Act -- "wasAssociatedWith" --> Agent
+        Act -- "used (new activity_inputs)" --> InV
+        OutV -- "wasGeneratedBy" --> Act
+        OutV -- "wasDerivedFrom" --> InV
+        Claims -- "asserted by agent,<br/>attached to" --> OutV
+    end
+
+    subgraph OKF["OKF v0.2 frontmatter (derived at projection)"]
+        Gen["generated:<br/>by: local.slack-importer/1.0.0<br/>at: ended_at"]
+        Src["sources:<br/>- id, resource, author,<br/>last_modified"]
+        Ver["verified:<br/>by: process:wikiapp-host-commit<br/>(machine-confirmed tier)"]
+        Ext2["extension keys:<br/>run ID, manifest hash"]
+    end
+
+    Agent -- "name/version → actor" --> Gen
+    Claims -- "project" --> Src
+    Act -- "commit validation" --> Ver
+    Act -- "identifiers" --> Ext2
+```
 
 Within that model, the contract distinguishes two kinds of record:
 
@@ -408,6 +527,41 @@ As v1 §9/§23/Slice G, with sequencing intact because it was sound:
 - each extraction appends an alternative Markdown version, never overwrites;
   #799 behavior preserved (nothing runs without explicit action or policy);
   stage independence and partial-success UX as v1 §23.
+
+```mermaid
+flowchart LR
+    Ext1["External origin<br/>(Slack, PDF, URL)"]
+
+    subgraph S1["Stage 1: Source registration"]
+        R1["App run A<br/>(own grants, own credentials)"]
+        SV["Source content version<br/>+ attested provenance"]
+        R1 --> SV
+    end
+
+    subgraph S2["Stage 2: Extraction"]
+        R2["App run B<br/>(pinned ExtractorReference,<br/>pinned input version,<br/>no inherited credentials)"]
+        MD["Appended Markdown version<br/>(never overwrites)"]
+        R2 --> MD
+    end
+
+    subgraph S3["Stage 3: Agent ingestion"]
+        R3["Agent run<br/>(pins source + artifact versions)"]
+        PG["Wiki page versions"]
+        R3 --> PG
+    end
+
+    Ext1 --> R1
+    SV -- "explicit action or policy,<br/>never automatic" --> R2
+    MD -- "explicit action or policy" --> R3
+
+    SV -.-> D1["durable + retryable<br/>even if Stage 2 fails"]
+    MD -.-> D2["durable + retryable<br/>even if Stage 3 fails"]
+```
+
+Each hop is a separate run with its own grant context — capabilities and
+credentials never flow across stages, and every arrow between stages is a
+`used`/`wasGeneratedBy` PROV edge pair, which is what makes the
+origin-to-page trace gapless.
 
 **Concurrency, reconciled with what exists:** Wiki App extraction runs
 consume the existing `GenerationGate` `ingest` lane; renderer sessions are
