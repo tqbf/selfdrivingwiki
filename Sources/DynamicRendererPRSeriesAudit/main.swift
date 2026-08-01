@@ -103,7 +103,7 @@ private struct ProcessRunner {
     }
 }
 
-private enum DynamicRendererPRSeriesAuditMain {
+enum DynamicRendererPRSeriesAuditMain {
     static func run(arguments: [String]) throws {
         guard let subcommand = arguments.first else { throw AuditCLIError.usage }
         let options = Dictionary(uniqueKeysWithValues: stride(from: 1, to: arguments.count - 1, by: 2).map { (arguments[$0], arguments[$0 + 1]) })
