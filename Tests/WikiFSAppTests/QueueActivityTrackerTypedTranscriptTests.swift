@@ -69,6 +69,53 @@ struct QueueActivityTrackerTypedTranscriptTests {
         #expect(messageTexts(tracker.transcript(for: item.id)) == ["current"])
     }
 
+    @Test func forwardBatchAfterDroppedDeliveryIsRenderedAndOlderBatchesAreRejected() {
+        let tracker = QueueActivityTracker()
+        let item = queueItem(attempt: 0)
+        let attempt = QueueAttemptID(itemID: item.id, attempt: item.attempt)
+        tracker.handleForTesting(.started(item))
+
+        tracker.handleForTesting(.transcript(.init(
+            attemptID: attempt,
+            batchNumber: 0,
+            changedItems: [message(id: "first", text: "first")]
+        )))
+        // Batch 1 was dropped by the transport. Batch 2 must still advance
+        // the monotonic watermark rather than freezing live rendering.
+        tracker.handleForTesting(.transcript(.init(
+            attemptID: attempt,
+            batchNumber: 2,
+            changedItems: [message(id: "third", text: "third")]
+        )))
+        tracker.handleForTesting(.transcript(.init(
+            attemptID: attempt,
+            batchNumber: 1,
+            changedItems: [message(id: "late", text: "late")]
+        )))
+        tracker.handleForTesting(.transcript(.init(
+            attemptID: attempt,
+            batchNumber: 2,
+            changedItems: [message(id: "duplicate", text: "duplicate")]
+        )))
+
+        #expect(messageTexts(tracker.transcript(for: item.id)) == ["first", "third"])
+    }
+
+    @Test func activeSnapshotSeedsTranscriptAttemptForReconnect() {
+        let tracker = QueueActivityTracker()
+        let item = queueItem(attempt: 2)
+        let attempt = QueueAttemptID(itemID: item.id, attempt: item.attempt)
+
+        tracker.reconcile(with: QueueSnapshot(activeItems: [item], recentItems: []))
+        tracker.handleForTesting(.transcript(.init(
+            attemptID: attempt,
+            batchNumber: 0,
+            changedItems: [message(id: "reconnected", text: "reconnected")]
+        )))
+
+        #expect(messageTexts(tracker.transcript(for: item.id)) == ["reconnected"])
+    }
+
     private func queueItem(attempt: Int) -> QueueItem {
         QueueItem(
             id: QueueItemID(rawValue: "activity-typed-item"),
