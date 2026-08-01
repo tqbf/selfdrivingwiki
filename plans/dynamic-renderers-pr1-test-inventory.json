@@ -32,6 +32,9 @@
     { "symbol": "DynamicRendererAuditValidation.isSHA", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads"] },
     { "symbol": "DynamicRendererBuildAndSuiteGate.requiredCommands", "tests": ["DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] },
     { "symbol": "DynamicRendererPRSeriesAuditMain.run", "tests": ["DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] }
+    ,{ "symbol": "DynamicRendererPRSeriesAuditMain.verify", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsCheckRunAndReviewBindings"] }
+    ,{ "symbol": "FileGateRecords", "tests": ["DynamicRendererPRSeriesAuditModelTests.reviewStatesRoundTripUsingSchemaShape"] }
+    ,{ "symbol": "SystemAuditClock", "tests": ["DynamicRendererPRSeriesAuditModelTests.reviewStatesRoundTripUsingSchemaShape"] }
   ],
   "decisionBranches": [
     { "path": "valid and malformed identifier boundaries", "tests": ["RendererIdentifierTests.acceptsCanonicalPackageID", "RendererIdentifierTests.rejectsMalformedPackageID", "RendererIdentifierTests.rejectsInvalidIdentifierWhenDecoding"] },
