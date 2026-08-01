@@ -1,3 +1,4 @@
+#if canImport(WikiFSEngine)
 import Foundation
 import Testing
 @testable import WikiFSEngine
@@ -59,3 +60,4 @@ struct QueueTranscriptCanonicalMergeTests {
         ))
     }
 }
+#endif
