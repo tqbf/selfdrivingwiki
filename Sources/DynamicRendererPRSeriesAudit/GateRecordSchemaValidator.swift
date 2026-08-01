@@ -12,7 +12,7 @@ enum GateRecordSchemaValidator {
     }
 
     private static func isSupportedGateRecordSchema(_ schema: [String: Any]) -> Bool {
-        let required: Set<String> = ["schemaVersion", "auditedSHA", "headRefOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "mutationReport", "findings", "recordedAt"]
+        let required: Set<String> = ["schemaVersion", "auditedSHA", "headRefOID", "localHeadOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "mutationReport", "findings", "recordedAt"]
         guard schema["$schema"] as? String == "https://json-schema.org/draft/2020-12/schema",
               schema["type"] as? String == "object",
               schema["additionalProperties"] as? Bool == false,

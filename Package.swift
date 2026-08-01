@@ -378,7 +378,10 @@ let package = Package(
         // decoding and command planning testable without external state.
         .executableTarget(
             name: "DynamicRendererPRSeriesAudit",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto",
+                         condition: .when(platforms: [.linux])),
+            ],
             path: "Sources/DynamicRendererPRSeriesAudit",
             swiftSettings: strictSwiftSettings
         ),

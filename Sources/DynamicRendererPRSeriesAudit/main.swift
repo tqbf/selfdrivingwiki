@@ -1,5 +1,13 @@
 import Foundation
 
+#if os(Linux)
+import Glibc
+import Crypto
+#else
+import Darwin
+import CryptoKit
+#endif
+
 // pattern: Imperative Shell
 
 private enum AuditCLIError: Error, CustomStringConvertible {
@@ -24,7 +32,25 @@ protocol GitRepositoryQuerying {
 }
 
 struct GitHubAuditPullRequest: Decodable, Equatable {
-    struct Check: Decodable, Equatable { let name: String; let headSHA: String; let conclusion: String }
+    struct Check: Decodable, Equatable {
+        let name: String
+        let headSHA: String
+        let status: String
+        let conclusion: String
+        let startedAt: String
+        let completedAt: String?
+        let id: Int
+
+        init(name: String, headSHA: String, status: String = "COMPLETED", conclusion: String = "success", startedAt: String = "2026-08-01T00:00:00+00:00", completedAt: String? = "2026-08-01T00:00:01+00:00", id: Int = 1) {
+            self.name = name
+            self.headSHA = headSHA
+            self.status = status
+            self.conclusion = conclusion
+            self.startedAt = startedAt
+            self.completedAt = completedAt
+            self.id = id
+        }
+    }
     struct Review: Decodable, Equatable { let author: String; let commitSHA: String; let state: String; let submittedAt: String }
     let headRefName: String
     let headRefOID: String
@@ -97,8 +123,12 @@ struct ProcessGitHubPullRequestQuery: GitHubPullRequestQuerying {
         let checksResult = try commandRunner.run(arguments: ["gh", "api", "repos/{owner}/{repo}/commits/\(headOID)/check-runs?per_page=100"])
         guard checksResult.status == 0 else { throw AuditCLIError.commandFailed("gh api check-runs", checksResult.status, checksResult.output) }
         let checksObject = try JSONSerialization.jsonObject(with: Data(checksResult.output.utf8)) as? [String: Any] ?? [:]
-        let checks: [GitHubAuditPullRequest.Check] = (checksObject["check_runs"] as? [[String: Any]] ?? []).map { value in
-            .init(name: value["name"] as? String ?? "", headSHA: value["head_sha"] as? String ?? "", conclusion: value["conclusion"] as? String ?? "")
+        let rawChecks = checksObject["check_runs"] as? [[String: Any]] ?? []
+        guard (checksObject["total_count"] as? Int ?? rawChecks.count) <= rawChecks.count else {
+            throw AuditCLIError.invalidRecord("check run query is paginated; refusing an incomplete ordering")
+        }
+        let checks: [GitHubAuditPullRequest.Check] = rawChecks.map { value in
+            .init(name: value["name"] as? String ?? "", headSHA: value["head_sha"] as? String ?? "", status: value["status"] as? String ?? "", conclusion: value["conclusion"] as? String ?? "", startedAt: value["started_at"] as? String ?? "", completedAt: value["completed_at"] as? String, id: value["id"] as? Int ?? 0)
         }
         let reviews: [GitHubAuditPullRequest.Review] = (object["reviews"] as? [[String: Any]] ?? []).map { value in
             let author = (value["author"] as? [String: Any])?["login"] as? String ?? ""
@@ -130,20 +160,81 @@ private struct ProcessGitRepositoryQuery: GitRepositoryQuerying {
     }
 }
 
-private struct ProcessRunner {
+enum ProcessRunnerError: Error, Equatable {
+    case timedOut
+    case cancelled
+}
+
+struct ProcessRunner {
     struct Result { let status: Int32; let output: String }
 
-    static func run(executable: String, arguments: [String], environment: [String: String]? = nil) throws -> Result {
+    struct Policy: Sendable {
+        let timeout: TimeInterval
+        let terminationGrace: TimeInterval
+        let isCancelled: @Sendable () -> Bool
+
+        init(timeout: TimeInterval = 300, terminationGrace: TimeInterval = 2, isCancelled: @escaping @Sendable () -> Bool = { false }) {
+            self.timeout = timeout
+            self.terminationGrace = terminationGrace
+            self.isCancelled = isCancelled
+        }
+    }
+
+    // The NSLock serializes the dispatch-drainer writes and caller read.
+    // swiftlint:disable:next unchecked_sendable
+    private final class DataBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = Data()
+        func set(_ data: Data) { lock.lock(); defer { lock.unlock() }; stored = data }
+        func value() -> Data { lock.lock(); defer { lock.unlock() }; return stored }
+    }
+
+    static func run(executable: String, arguments: [String], environment: [String: String]? = nil, policy: Policy = .init()) throws -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let environment { process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, replacement in replacement } }
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        let drains = DispatchGroup()
+        let stdoutData = DataBox()
+        let stderrData = DataBox()
+        let terminated = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in terminated.signal() }
         try process.run()
-        process.waitUntilExit()
-        return .init(status: process.terminationStatus, output: String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        drains.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stdoutData.set(stdout.fileHandleForReading.readDataToEndOfFile())
+            drains.leave()
+        }
+        drains.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stderrData.set(stderr.fileHandleForReading.readDataToEndOfFile())
+            drains.leave()
+        }
+
+        let deadline = Date().addingTimeInterval(policy.timeout)
+        var failure: ProcessRunnerError?
+        while terminated.wait(timeout: .now() + .milliseconds(20)) == .timedOut {
+            if policy.isCancelled() { failure = .cancelled; break }
+            if Date() >= deadline { failure = .timedOut; break }
+        }
+        if let failure {
+            terminate(process, grace: policy.terminationGrace, completion: terminated)
+            _ = drains.wait(timeout: .now() + policy.terminationGrace)
+            throw failure
+        }
+        _ = drains.wait(timeout: .now() + policy.terminationGrace)
+        return .init(status: process.terminationStatus, output: String(decoding: stdoutData.value() + stderrData.value(), as: UTF8.self))
+    }
+
+    private static func terminate(_ process: Process, grace: TimeInterval, completion: DispatchSemaphore) {
+        process.terminate()
+        guard completion.wait(timeout: .now() + grace) == .timedOut else { return }
+        _ = kill(process.processIdentifier, SIGKILL)
+        _ = completion.wait(timeout: .now() + grace)
     }
 }
 
@@ -172,8 +263,10 @@ enum DynamicRendererPRSeriesAuditMain {
         let series = try decodeSeries(at: seriesURL)
         guard try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
         let branch = try git.output(arguments: ["branch", "--show-current"])
+        let localHead = try git.output(arguments: ["rev-parse", "HEAD"])
         guard let phase = series.phases.first(where: { $0.branch == branch }) else { throw AuditCLIError.invalidRecord("branch is not in the PR series") }
         let first = try github.pullRequest(head: branch)
+        guard first.headRefOID == localHead else { throw AuditCLIError.invalidHead(first.headRefOID) }
         guard first.headRefName == branch, first.baseRefName == phase.base, first.title.range(of: "^(feat|fix|test|chore|docs|refactor)(\\([^)]+\\))?: .+", options: .regularExpression) != nil else { throw AuditCLIError.invalidRecord("PR metadata does not bind this branch/base/title") }
         if phase.base == "main" {
             let currentBase = try git.output(arguments: ["rev-parse", "origin/main"])
@@ -195,30 +288,39 @@ enum DynamicRendererPRSeriesAuditMain {
         try validateEvidence(record: record, phase: phase, baseOID: first.baseRefOID, repositoryRoot: seriesURL.deletingLastPathComponent().deletingLastPathComponent())
         let second = try github.pullRequest(head: branch)
         guard second == first else { throw AuditCLIError.invalidRecord("PR changed during audit") }
-        let retainedRecord = DynamicRendererGateRecord(schemaVersion: record.schemaVersion, auditedSHA: record.auditedSHA, headRefOID: record.headRefOID, baseRefName: record.baseRefName, baseRefOID: record.baseRefOID, cleanCheckout: record.cleanCheckout, requiredCheckRuns: liveChecks, review: .approved(author: approval.author, commitSHA: approval.commitSHA), commands: record.commands, testInventory: record.testInventory, mutationReport: record.mutationReport, findings: record.findings, recordedAt: record.recordedAt)
+        guard try git.output(arguments: ["rev-parse", "HEAD"]) == localHead,
+              try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
+        let retainedRecord = DynamicRendererGateRecord(schemaVersion: record.schemaVersion, auditedSHA: record.auditedSHA, headRefOID: record.headRefOID, localHeadOID: localHead, baseRefName: record.baseRefName, baseRefOID: record.baseRefOID, cleanCheckout: record.cleanCheckout, requiredCheckRuns: liveChecks, review: .approved(author: approval.author, commitSHA: approval.commitSHA), commands: record.commands, testInventory: record.testInventory, mutationReport: record.mutationReport, findings: record.findings, recordedAt: record.recordedAt)
         try retainedRecord.validate()
         try writer.write(retainedRecord, to: evidenceURL)
     }
 
     static func buildSuite(head: String, evidenceDirectory: String, git: GitRepositoryQuerying, records: GateRecordWriting, clock: AuditClock) throws {
-        guard try git.output(arguments: ["rev-parse", "HEAD"]) == head else { throw AuditCLIError.invalidHead(head) }
-        guard try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
+        try requireStableCheckout(expectedHead: head, git: git)
         var results: [DynamicRendererAuditCommandResult] = []
         for command in DynamicRendererBuildAndSuiteGate.requiredCommands {
+            try requireStableCheckout(expectedHead: head, git: git)
             let environment = command.first?.hasPrefix("WIKIFS_APP_TESTS=") == true ? ["WIKIFS_APP_TESTS": "1"] : nil
             let executableArguments = environment == nil ? command : Array(command.dropFirst())
             let result = try ProcessRunner.run(executable: "/usr/bin/env", arguments: executableArguments, environment: environment)
             results.append(.init(command: command.joined(separator: " "), exitCode: Int(result.status)))
+            try requireStableCheckout(expectedHead: head, git: git)
             guard result.status == 0 else { throw AuditCLIError.commandFailed(command.joined(separator: " "), result.status, result.output) }
         }
         let baseOID = try git.output(arguments: ["rev-parse", "origin/main"])
-        guard try git.output(arguments: ["rev-parse", "HEAD"]) == head else { throw AuditCLIError.invalidHead(head) }
-        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: "tmp/dynamic-renderer-pr1-mutation-report.json", findings: [], recordedAt: clock.recordedAt())
+        try requireStableCheckout(expectedHead: head, git: git)
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, localHeadOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: "tmp/dynamic-renderer-pr1-mutation-evidence.json", findings: [], recordedAt: clock.recordedAt())
         try record.validate()
         let phase = DynamicRendererAuditSeries.Phase(number: 1, branch: "feature/dynamic-renderers-01-model", base: "main", inventory: record.testInventory)
         try validateEvidence(record: record, phase: phase, baseOID: baseOID, repositoryRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+        try requireStableCheckout(expectedHead: head, git: git)
         try records.write(record, to: URL(fileURLWithPath: evidenceDirectory, isDirectory: true))
     }
+}
+
+private func requireStableCheckout(expectedHead: String, git: GitRepositoryQuerying) throws {
+    guard try git.output(arguments: ["rev-parse", "HEAD"]) == expectedHead else { throw AuditCLIError.invalidHead(expectedHead) }
+    guard try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
 }
 
 private struct DiscardingGateRecordWriter: GateRecordWriting {
@@ -270,10 +372,10 @@ private struct DynamicRendererMutationReport: Decodable {
         let unviable: Int
     }
 
-    struct Disposition: Decodable {
+    struct Mutant: Decodable {
+        let id: String
         let outcome: String
         let severity: String
-        let count: Int
         let disposition: String
         let rationale: String
     }
@@ -282,11 +384,15 @@ private struct DynamicRendererMutationReport: Decodable {
     let auditedSHA: String
     let baseOID: String
     let generatedAt: String
+    let command: String
+    let toolVersion: String
+    let nativeReport: String
+    let nativeReportSHA256: String
     let scope: String
     let coveredSymbols: [String]
     let result: Result
     let threshold: DynamicRendererAuditInventory.MutationEvidence.Threshold
-    let dispositions: [Disposition]
+    let mutants: [Mutant]
     let passed: Bool
 }
 
@@ -298,11 +404,28 @@ private func decodeSeries(at url: URL) throws -> DynamicRendererAuditSeries {
 
 private func requiredLiveChecks(from pullRequest: GitHubAuditPullRequest) throws -> [DynamicRendererAuditCheckRun] {
     try DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { name in
-        guard let check = pullRequest.checks.last(where: { $0.name == name && $0.headSHA == pullRequest.headRefOID && $0.conclusion.lowercased() == "success" }) else {
-            throw AuditCLIError.invalidRecord("required check \(name) is missing, unsuccessful, or bound to another SHA")
+        let candidates = pullRequest.checks.filter { $0.name == name && $0.headSHA == pullRequest.headRefOID }
+        guard let check = try latestCheckRun(candidates) else { throw AuditCLIError.invalidRecord("required check \(name) is missing or bound to another SHA") }
+        guard check.status.uppercased() == "COMPLETED", check.conclusion.lowercased() == "success" else {
+            throw AuditCLIError.invalidRecord("latest required check \(name) is incomplete or unsuccessful")
         }
         return .init(name: check.name, headSHA: check.headSHA, conclusion: check.conclusion)
     }
+}
+
+private func latestCheckRun(_ checks: [GitHubAuditPullRequest.Check]) throws -> GitHubAuditPullRequest.Check? {
+    guard checks.isEmpty == false else { return nil }
+    let formatter = ISO8601DateFormatter()
+    let ordered: [(check: GitHubAuditPullRequest.Check, date: Date)] = try checks.map { check in
+        guard check.id > 0, let date = formatter.date(from: check.completedAt ?? check.startedAt) else {
+            throw AuditCLIError.invalidRecord("required check run lacks immutable ordering metadata")
+        }
+        return (check, date)
+    }
+    return ordered.max { lhs, rhs in
+        if lhs.date != rhs.date { return lhs.date < rhs.date }
+        return lhs.check.id < rhs.check.id
+    }?.check
 }
 
 private func effectiveCurrentHeadApproval(from pullRequest: GitHubAuditPullRequest) -> GitHubAuditPullRequest.Review? {
@@ -335,16 +458,17 @@ private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicR
     }
     let mutationURL = repositoryRoot.appendingPathComponent(inventory.mutationEvidence.report)
     let mutationReport = try JSONDecoder().decode(DynamicRendererMutationReport.self, from: Data(contentsOf: mutationURL))
-    try validateMutationReport(mutationReport, inventory: inventory.mutationEvidence, record: record, baseOID: baseOID)
+    try validateMutationReport(mutationReport, inventory: inventory.mutationEvidence, record: record, baseOID: baseOID, repositoryRoot: repositoryRoot)
 }
 
 private func validateMutationReport(
     _ report: DynamicRendererMutationReport,
     inventory: DynamicRendererAuditInventory.MutationEvidence,
     record: DynamicRendererGateRecord,
-    baseOID: String
+    baseOID: String,
+    repositoryRoot: URL
 ) throws {
-    guard report.schemaVersion == 1,
+    guard report.schemaVersion == 2,
           report.auditedSHA == record.auditedSHA,
           report.baseOID == baseOID,
           DynamicRendererAuditValidation.isSHA(report.auditedSHA),
@@ -354,6 +478,10 @@ private func validateMutationReport(
           report.coveredSymbols.count == Set(report.coveredSymbols).count,
           report.threshold == inventory.threshold,
           report.passed,
+          report.command.hasPrefix("make mutate-scope SOURCES_PATH="),
+          report.toolVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+          isRetainedTemporaryPath(report.nativeReport),
+          DynamicRendererAuditValidation.isSHA256(report.nativeReportSHA256),
           report.result.killed >= 0,
           report.result.survived >= 0,
           report.result.unviable >= 0,
@@ -366,19 +494,67 @@ private func validateMutationReport(
           generatedAt <= recordedAt
     else { throw DynamicRendererAuditError.invalidMutationReport }
 
-    let unviableCount = report.dispositions.filter { $0.outcome == "unviable" }.reduce(0) { $0 + $1.count }
-    let survivorCount = report.dispositions.filter { $0.outcome == "survived" }.reduce(0) { $0 + $1.count }
-    guard unviableCount == report.result.unviable,
-          survivorCount == report.result.survived,
-          report.dispositions.allSatisfy({ disposition in
-              disposition.count > 0 && disposition.rationale.isEmpty == false &&
-              ["survived", "unviable"].contains(disposition.outcome) &&
-              ["critical", "high", "medium", "low"].contains(disposition.severity) &&
-              disposition.disposition == "accepted"
+    let nativeURL = repositoryRoot.appendingPathComponent(report.nativeReport)
+    let nativeData = try Data(contentsOf: nativeURL)
+    let nativeMutants = try nativeMutationOutcomes(from: nativeData, expectedScope: report.scope)
+    guard sha256Hex(nativeData) == report.nativeReportSHA256,
+          Set(report.mutants.map(\.id)).count == report.mutants.count,
+          Set(report.mutants.map(\.id)) == Set(nativeMutants.keys),
+          report.mutants.allSatisfy({ mutant in
+              nativeMutants[mutant.id] == mutant.outcome &&
+              ["killed", "survived", "unviable"].contains(mutant.outcome) &&
+              ["critical", "high", "medium", "low"].contains(mutant.severity) &&
+              ["fixed", "rebutted"].contains(mutant.disposition) &&
+              mutant.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
           }),
-          report.dispositions.contains(where: { ["critical", "high"].contains($0.severity) }) == false,
-          report.dispositions.filter({ $0.outcome == "unviable" }).allSatisfy({ inventory.phasePolicy.allowedUnviableSeverities.contains($0.severity) })
-    else { throw DynamicRendererAuditError.invalidMutationReport }
+          report.mutants.filter({ $0.outcome == "killed" }).count == report.result.killed,
+          report.mutants.filter({ $0.outcome == "survived" }).count == report.result.survived,
+          report.mutants.filter({ $0.outcome == "unviable" }).count == report.result.unviable,
+          report.mutants.filter({ $0.outcome == "unviable" }).allSatisfy({ inventory.phasePolicy.allowedUnviableSeverities.contains($0.severity) })
+    else { throw AuditCLIError.invalidRecord("native mutation report digest or complete mutant ledger does not match") }
+}
+
+private func isRetainedTemporaryPath(_ path: String) -> Bool {
+    path.hasPrefix("tmp/") && path.hasSuffix(".json") && path.contains("..") == false
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    #if os(Linux)
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    #else
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    #endif
+}
+
+private func nativeMutationOutcomes(from data: Data, expectedScope: String) throws -> [String: String] {
+    let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    let files = root["files"] as? [String: Any] ?? [:]
+    guard files.isEmpty == false else { throw DynamicRendererAuditError.invalidMutationReport }
+    var outcomes: [String: String] = [:]
+    for (path, value) in files {
+        let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard normalized.hasPrefix(expectedScope),
+              let file = value as? [String: Any],
+              let mutants = file["mutants"] as? [[String: Any]] else { throw DynamicRendererAuditError.invalidMutationReport }
+        for mutant in mutants {
+            guard let id = mutant["id"] as? String,
+                  id.isEmpty == false,
+                  let status = mutant["status"] as? String,
+                  let outcome = nativeOutcome(status),
+                  outcomes.updateValue(outcome, forKey: id) == nil else { throw DynamicRendererAuditError.invalidMutationReport }
+        }
+    }
+    guard outcomes.isEmpty == false else { throw DynamicRendererAuditError.invalidMutationReport }
+    return outcomes
+}
+
+private func nativeOutcome(_ status: String) -> String? {
+    switch status.lowercased() {
+    case "crash", "killed": "killed"
+    case "survived": "survived"
+    case "unviable": "unviable"
+    default: nil
+    }
 }
 
 do {

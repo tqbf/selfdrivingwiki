@@ -95,6 +95,17 @@ struct RendererMatcherTests {
             _ = try RendererSignature(offset: RendererMatchingLimits.maximumSniffByteCount, bytes: [0])
         }
     }
+
+    @Test func distinguishesSignatureOffsetFallbackAndNoMatchTiers() throws {
+        let signature = try RendererFixtures.nativeDescriptor(matchers: [.boundedSignature(try .init(offset: 1, bytes: [0x50]))])
+        let fallback = try RendererFixtures.nativeDescriptor(registrationID: try .init(validating: "fallback-tier"), matchers: [.extensionFallback(try .init(validating: "pdf"))])
+        let signedInput = try RendererMatchInput(mimeType: nil, fileExtension: nil, sniffedBytes: Data([0x00, 0x50]), artifactKind: nil)
+        let fallbackInput = try RendererMatchInput(mimeType: nil, fileExtension: try .init(validating: "pdf"), sniffedBytes: Data(), artifactKind: nil)
+        let noMatchInput = try RendererMatchInput(mimeType: nil, fileExtension: nil, sniffedBytes: Data(), artifactKind: nil)
+        #expect(signature.matchTier(for: signedInput) == .strong)
+        #expect(fallback.matchTier(for: fallbackInput) == .extensionFallback)
+        #expect(signature.matchTier(for: noMatchInput) == nil)
+    }
 }
 
 struct RendererResolutionTests {
@@ -199,6 +210,21 @@ struct RendererDescriptorValidationTests {
             _ = try RendererDescriptor(reference: reference, displayName: "Network", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .network], sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1), linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
         }
     }
+
+    @Test func preservesWebImplementationAssetsAccessibilityAndConstraintEnums() throws {
+        let index = RendererAsset(path: try .init(validating: "assets/index.html"), digest: try .init(hex: String(repeating: "3", count: 64)))
+        let script = RendererAsset(path: try .init(validating: "assets/viewer.js"), digest: try .init(hex: String(repeating: "4", count: 64)))
+        let implementation = RendererImplementation.webPackage(.init(path: index.path))
+        let accessibility = RendererAccessibility(supportsVoiceOver: true, supportsKeyboardNavigation: false)
+        let decoded = try JSONDecoder().decode(RendererImplementation.self, from: JSONEncoder().encode(implementation))
+        #expect(decoded == implementation)
+        #expect(index < script)
+        #expect(try JSONDecoder().decode(RendererAccessibility.self, from: JSONEncoder().encode(accessibility)) == accessibility)
+        #expect(RendererArtifactKind.allCases == [.source, .markdown, .image, .binary])
+        #expect(RendererPresentation.allCases == [.native, .web])
+        #expect(RendererCapability.allCases.contains(.externalLink))
+        #expect(RendererLinkPolicy.userActivatedExternal != .none)
+    }
 }
 
 struct RendererPackageHashTests {
@@ -249,5 +275,14 @@ struct RendererManifestValidationTests {
         #expect(throws: RendererValidationError.self) {
             _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: try .init(validating: "2.0.0"), descriptors: [descriptor], assets: [])
         }
+    }
+}
+
+struct RendererStableOrderingTests {
+    @Test func ordersPriorityBeforeCanonicalStableTieBreakKey() throws {
+        let high = try RendererFixtures.nativeDescriptor(registrationID: try .init(validating: "high"), priority: 10)
+        let low = try RendererFixtures.nativeDescriptor(registrationID: try .init(validating: "low"), priority: 1)
+        #expect(high.stableTieBreakKey < low.stableTieBreakKey)
+        #expect(RendererMatchTier.extensionFallback < .strong)
     }
 }
