@@ -643,6 +643,10 @@ public actor ACPBackend: AgentBackend {
             baselineCurrentModelId: modelsInfo?.currentModelId,
             advertisedModelIds: modelsInfo?.availableModels.map(\.modelId) ?? [],
             configOptions: configOptions)
+        try await applyExecutionAccessIfNeeded(
+            session: SessionHandle(id: sessionID),
+            access: profile.executionAccess,
+            configOptions: configOptions)
 
         // Rebind onExit so the latest caller's callback fires on process exit.
         // With a warm subprocess, multiple sessions share one permission delegate;
@@ -1249,11 +1253,12 @@ public actor ACPBackend: AgentBackend {
                     cwd: cwd
                 )
                 DebugLog.agent("ACPBackend.resume: resumeSession succeeded models=\(response.models?.availableModels.count ?? 0)")
-                return registerResumedSession(
+                return try await registerResumedSession(
                     acpSessionId: acpSessionId,
                     warm: newWarm,
                     modelsInfo: response.models,
-                    configOptions: response.configOptions
+                    configOptions: response.configOptions,
+                    executionAccess: profile.executionAccess
                 )
             } catch {
                 // Resume failed (session GC'd, protocol error). Fall through to
@@ -1273,11 +1278,12 @@ public actor ACPBackend: AgentBackend {
                 DebugLog.agent("ACPBackend.resume: loadSession succeeded models=\(response.models?.availableModels.count ?? 0)")
                 // loadSession may return a new sessionId (some agents), or nil.
                 let resumedId = response.sessionId ?? acpSessionId
-                return registerResumedSession(
+                return try await registerResumedSession(
                     acpSessionId: resumedId,
                     warm: newWarm,
                     modelsInfo: response.models,
-                    configOptions: response.configOptions
+                    configOptions: response.configOptions,
+                    executionAccess: profile.executionAccess
                 )
             } catch {
                 DebugLog.agent("ACPBackend.resume: loadSession failed: \(error.localizedDescription) — giving up")
@@ -1300,8 +1306,9 @@ public actor ACPBackend: AgentBackend {
         acpSessionId: SessionId,
         warm: WarmProcess,
         modelsInfo: ModelsInfo?,
-        configOptions: [SessionConfigOption]? = nil
-    ) -> SessionHandle {
+        configOptions: [SessionConfigOption]? = nil,
+        executionAccess: AgentExecutionAccess
+    ) async throws -> SessionHandle {
         let sessionID = UUID().uuidString
         sessions[sessionID] = ACPSession(
             client: warm.client,
@@ -1316,9 +1323,34 @@ public actor ACPBackend: AgentBackend {
         )
         // Phase 4: create a usage tracker for this resumed session.
         usageStates[sessionID] = SessionUsageState()
+        try await applyExecutionAccessIfNeeded(
+            session: SessionHandle(id: sessionID),
+            access: executionAccess,
+            configOptions: configOptions)
         resumableSessionId = acpSessionId
         DebugLog.agent("ACPBackend.resume: resumed session \(acpSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
+    }
+
+    /// Apply a provider-advertised full-access mode before the session receives
+    /// its first tool call. A provider without this mode keeps its default.
+    private func applyExecutionAccessIfNeeded(
+        session: SessionHandle,
+        access: AgentExecutionAccess,
+        configOptions: [SessionConfigOption]?
+    ) async throws {
+        guard let configuration = ACPExecutionAccessResolver.configuration(
+            for: access,
+            options: configOptions ?? []
+        ) else {
+            return
+        }
+
+        try await setConfigOption(
+            sessionHandle: session,
+            configId: configuration.configID,
+            value: configuration.value)
+        DebugLog.agent("ACPBackend: applied full-access session mode before first tool call")
     }
 
     /// Phase 2: Check if the subprocess is alive. Used by the orchestrator to

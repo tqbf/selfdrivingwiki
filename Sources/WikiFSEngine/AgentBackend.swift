@@ -60,6 +60,18 @@ public protocol AgentBackend: Sendable {
 /// path, log layout) and passes them in here; `ACPBackend` reads `model`/
 /// `providerHints` for routing and `cli` for the env vars it needs to spawn
 /// (`WIKI_DB`/`WIKICTL`/`PATH`) — see `CLIProfile`.
+/// The execution access the application authorizes for an ACP session.
+///
+/// This is distinct from `PermissionPolicy`: it controls an agent's own
+/// advertised session mode, while `PermissionPolicy` records and resolves ACP
+/// tool permission requests.
+public enum AgentExecutionAccess: Sendable, Equatable {
+    /// Keep the ACP agent's default session mode.
+    case standard
+    /// Request the agent's advertised full-access mode before the first tool call.
+    case fullAccess
+}
+
 public struct BackendProfile: Sendable {
     /// The model alias/name to pass to the agent (backend-interpreted).
     public var model: String?
@@ -69,6 +81,8 @@ public struct BackendProfile: Sendable {
     public var scratchDirectory: URL?
     /// Gates Write/Edit tools — read-only interactive sessions pass `false`.
     public var isReadOnly: Bool
+    /// The agent-session access level the application authorizes for this run.
+    public var executionAccess: AgentExecutionAccess
     /// The env-var context `ACPBackend.start` reads to spawn the agent with
     /// `WIKI_DB`/`WIKICTL` visible. nil for sessions that don't
     /// need them (none today — every launcher call site sets it).
@@ -85,6 +99,7 @@ public struct BackendProfile: Sendable {
         providerHints: [String: String] = [:],
         scratchDirectory: URL? = nil,
         isReadOnly: Bool = false,
+        executionAccess: AgentExecutionAccess = .standard,
         cli: CLIProfile? = nil,
         debugLogURL: URL? = nil
     ) {
@@ -92,6 +107,7 @@ public struct BackendProfile: Sendable {
         self.providerHints = providerHints
         self.scratchDirectory = scratchDirectory
         self.isReadOnly = isReadOnly
+        self.executionAccess = executionAccess
         self.cli = cli
         self.debugLogURL = debugLogURL
     }

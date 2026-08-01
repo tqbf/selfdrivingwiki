@@ -1178,6 +1178,10 @@ public final class AgentLauncher {
         // own per-phase resolution in `runACPIngestPlannerExecutors`.
         let stageKey = Self.stageKey(for: request)
         let policy: PermissionPolicy = resolvePermissionMode(permissionKind)
+        let executionAccess: AgentExecutionAccess = switch permissionKind {
+        case .ingest, .lint: .fullAccess
+        case .chat: .standard
+        }
         // #606: chat is interactive (unbounded — the UI chip is the release
         // valve); ingest/lint are unattended and MUST auto-reject so a stuck
         // permission can't burn the 1800s ceiling.
@@ -1274,6 +1278,7 @@ public final class AgentLauncher {
                     providerHints: [:],
                     scratchDirectory: scratch,
                     isReadOnly: false,
+                    executionAccess: executionAccess,
                     cli: CLIProfile(
                         operation: operation,
                         wikiRoot: wikiRoot,
@@ -1394,6 +1399,7 @@ public final class AgentLauncher {
             providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
+            executionAccess: executionAccess,
             cli: cli,
             debugLogURL: debugFolderURL)
 
@@ -1789,6 +1795,7 @@ public final class AgentLauncher {
             providerHints: executorHints,
             scratchDirectory: scratch,
             isReadOnly: false,
+            executionAccess: .fullAccess,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
         let maxConcurrent = await (backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
 
@@ -2283,6 +2290,7 @@ public final class AgentLauncher {
                 providerHints: hints,
                 scratchDirectory: phaseScratch,
                 isReadOnly: false,
+                executionAccess: .fullAccess,
                 cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
 
             let prompt = buildPrompt(provider)
@@ -2517,6 +2525,7 @@ public final class AgentLauncher {
             providerHints: providerHints,
             scratchDirectory: scratch,
             isReadOnly: false,
+            executionAccess: .fullAccess,
             cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
         var promptText = operation.prompt(wikiRoot: wikiRoot)
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."

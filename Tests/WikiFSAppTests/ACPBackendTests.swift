@@ -22,6 +22,69 @@ import ACPModel
 /// `session/prompt` completion — ACP has no turn-end *notification*).
 @Suite struct ACPBackendTests {
 
+    // MARK: - Execution access
+
+    /// Queued mutation workflows must request the ACP agent's advertised
+    /// full-access mode before their first tool call. This is separate from
+    /// the app's ACP permission policy, which keeps its own audit trail.
+    @Test func fullAccessSelectsAdvertisedBypassPermissionsMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("default"), name: "Default"),
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("bypassPermissions"), name: "Full access"),
+                    ]))))
+        ]
+
+        #expect(
+            ACPExecutionAccessResolver.configuration(
+                for: .fullAccess,
+                options: options
+            ) == ACPConfigOptionApplication(
+                configID: "mode",
+                value: "bypassPermissions"
+            )
+        )
+    }
+
+    @Test func standardAccessDoesNotChangeAgentMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("bypassPermissions"), name: "Full access"),
+                    ]))))
+        ]
+
+        #expect(ACPExecutionAccessResolver.configuration(for: .standard, options: options) == nil)
+    }
+
+    @Test func fullAccessDoesNotGuessAnUnsupportedAgentMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("default"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("default"), name: "Default"),
+                    ]))))
+        ]
+
+        #expect(ACPExecutionAccessResolver.configuration(for: .fullAccess, options: options) == nil)
+    }
+
     // MARK: - Event translator
 
     /// A streamed agent prose chunk maps to `.assistantTextDelta` (the launcher
