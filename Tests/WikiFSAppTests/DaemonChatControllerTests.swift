@@ -665,20 +665,19 @@ struct DaemonChatControllerTests {
         let submission = harness.makeSubmission(commandID: "command-runtime-deltas", turnID: "turn-runtime-deltas")
 
         _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
-        let deltas = LauncherChatAgentRuntime.transcriptDeltasForTesting(
-            from: [
-                .assistantTextDelta("Hello"),
-                .assistantTextDelta(" world"),
-                .thinkingDelta("Need"),
-                .thinking("Need context"),
-                .toolUse(name: "Edit", inputSummary: "/tmp/file.md"),
-                .toolResult(isError: false, summary: "updated file"),
-            ],
-            turnID: submission.turnID
-        )
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate([
+            .assistantTextDelta("Hello"),
+            .assistantTextDelta(" world"),
+            .thinkingDelta("Need"),
+            .thinking("Need context"),
+            .toolUse(name: "Edit", inputSummary: "/tmp/file.md"),
+            .toolResult(isError: false, summary: "updated file"),
+        ], turnID: submission.turnID)
 
         await harness.runtime.emit(.transcript(deltas))
         await harness.runtime.emit(.turnCompleted(submission.turnID))
+        try await harness.waitUntilPersistedTurnState(submission.turnID, equals: .completed)
 
         let messages = try harness.store.chatMessages(chatID: harness.chat.id)
         let assistantRows = messages.filter { $0.event == .assistantText("Hello world") }
@@ -768,15 +767,11 @@ struct DaemonChatControllerTests {
         let submission = harness.makeSubmission(commandID: "command-overlay", turnID: "turn-overlay")
 
         _ = try await controller.submit(harness.makeSubmitRequest(submission: submission))
-        await harness.runtime.emit(.transcript(
-            LauncherChatAgentRuntime.transcriptDeltasForTesting(
-                from: [
-                    .assistantTextDelta("Hello"),
-                    .assistantText("Hello"),
-                ],
-                turnID: submission.turnID
-            )
-        ))
+        var translator = AgentEventTranscriptTranslator()
+        await harness.runtime.emit(.transcript(translator.translate([
+            .assistantTextDelta("Hello"),
+            .assistantText("Hello"),
+        ], turnID: submission.turnID)))
         try await harness.waitUntilOverlay(
             controller,
             matches: { $0.isEmpty == false },

@@ -38,33 +38,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         var activeTurnID: ChatTurnID?
         var latestProviderSessionID: AcpSessionID?
         var lastFingerprint: StateFingerprint?
-        var translationStateByTurn: [ChatTurnID: TranscriptTranslationState] = [:]
-    }
-
-    private struct TranscriptTranslationState: Sendable {
-        struct OpenContentBlock: Sendable {
-            let messageID: ChatMessageID
-            let turnID: ChatTurnID
-            let role: ChatTranscriptMessageRole
-            let createdAt: Date
-            var text: String
-        }
-
-        struct RunningToolCallState: Sendable {
-            let toolCallID: ToolCallID
-            let toolName: String
-            let inputSummary: String
-        }
-
-        enum ContentBlockState: Sendable {
-            case none
-            case open(OpenContentBlock)
-        }
-
-        var contentBlock: ContentBlockState = .none
-        var nextContentBlockOrdinal = 0
-        var nextToolCallOrdinal = 0
-        var runningToolCalls: [RunningToolCallState] = []
+        var translationStateByTurn: [ChatTurnID: AgentEventTranscriptTranslator] = [:]
     }
 
     private struct StateFingerprint: Equatable, Sendable {
@@ -423,24 +397,20 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         guard var state = runtimeState,
               let turnID = state.activeTurnID else { return }
         await onLiveEvents([event])
-        var translationState = state.translationStateByTurn[turnID] ?? TranscriptTranslationState()
-        let deltas = Self.transcriptDeltas(
-            from: [event],
-            turnID: turnID,
-            translationState: &translationState
-        )
-        state.translationStateByTurn[turnID] = translationState
+        var translator = state.translationStateByTurn[turnID] ?? AgentEventTranscriptTranslator()
+        let deltas = translator.translate([event], turnID: turnID)
+        state.translationStateByTurn[turnID] = translator
         runtimeState = state
         if deltas.isEmpty == false {
             await emit(
                 .transcript(deltas),
-                activeContentBlock: Self.activeContentBlock(in: translationState)
+                activeContentBlock: translator.activeContentBlock
             )
         }
 
         switch event {
         case .turnFailed(let reason):
-            let category = Self.failureCategory(for: reason)
+            let category = AgentEventTranscriptTranslator.failureCategory(for: reason)
             await emit(.turnFailed(turnID: turnID, category: category, message: reason.description))
         default:
             if AgentEvent.endsGeneration(event) {
@@ -511,198 +481,6 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         ))
     }
 
-    private static func transcriptDeltas(
-        from events: [AgentEvent],
-        turnID: ChatTurnID,
-        translationState: inout TranscriptTranslationState
-    ) -> [ChatTranscriptDelta] {
-        events.compactMap { event in
-            switch event {
-            case .userText(let text):
-                closeContentBlock(in: &translationState)
-                return .append(.message(ChatTranscriptMessageItem(
-                    messageID: ChatMessageID(rawValue: ULID.generate()),
-                    turnID: turnID,
-                    role: .user,
-                    text: text,
-                    createdAt: Date()
-                )))
-            case .assistantText(let text):
-                let delta = replacement(
-                    text,
-                    role: .assistant,
-                    turnID: turnID,
-                    translationState: &translationState
-                )
-                closeContentBlock(in: &translationState)
-                return delta
-            case .thinking(let text):
-                let delta = replacement(
-                    text,
-                    role: .reasoning,
-                    turnID: turnID,
-                    translationState: &translationState
-                )
-                closeContentBlock(in: &translationState)
-                return delta
-            case .assistantTextDelta(let delta):
-                return appending(
-                    delta,
-                    role: .assistant,
-                    turnID: turnID,
-                    translationState: &translationState
-                )
-            case .thinkingDelta(let delta):
-                return appending(
-                    delta,
-                    role: .reasoning,
-                    turnID: turnID,
-                    translationState: &translationState
-                )
-            case .toolUse(let name, let inputSummary):
-                closeContentBlock(in: &translationState)
-                let toolCallID = ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)")
-                translationState.nextToolCallOrdinal += 1
-                translationState.runningToolCalls.append(.init(
-                    toolCallID: toolCallID,
-                    toolName: name,
-                    inputSummary: inputSummary
-                ))
-                return .toolCallUpsert(ChatTranscriptToolCallItem(
-                    toolCallID: toolCallID,
-                    turnID: turnID,
-                    toolName: name,
-                    status: .running,
-                    detail: inputSummary,
-                    permissionRequestID: nil,
-                    updatedAt: Date()
-                ))
-            case .toolResult(let isError, let summary):
-                closeContentBlock(in: &translationState)
-                // Compatibility fallback: provider events do not expose the
-                // result-to-use call ID, so pair unmatched results FIFO.
-                let toolCall = translationState.runningToolCalls.isEmpty
-                    ? TranscriptTranslationState.RunningToolCallState(
-                        toolCallID: ToolCallID(rawValue: "\(turnID.rawValue)-tool-\(translationState.nextToolCallOrdinal)"),
-                        toolName: "Tool",
-                        inputSummary: ""
-                    )
-                    : translationState.runningToolCalls.removeFirst()
-                return .toolCallUpsert(ChatTranscriptToolCallItem(
-                    toolCallID: toolCall.toolCallID,
-                    turnID: turnID,
-                    toolName: toolCall.toolName,
-                    status: isError ? .failed : .completed,
-                    detail: toolCall.inputSummary,
-                    output: summary,
-                    permissionRequestID: nil,
-                    updatedAt: Date()
-                ))
-            case .turnFailed(let reason):
-                closeContentBlock(in: &translationState)
-                return .append(.turnFailure(ChatTranscriptTurnFailureItem(
-                    failureID: ChatTranscriptFailureID(rawValue: ULID.generate()),
-                    turnID: turnID,
-                    category: failureCategory(for: reason),
-                    message: reason.description,
-                    createdAt: Date()
-                )))
-            case .systemInit, .subagent, .result, .messageStop, .raw:
-                closeContentBlock(in: &translationState)
-                return nil
-            }
-        }
-    }
-
-    private static func appending(
-        _ delta: String,
-        role: ChatTranscriptMessageRole,
-        turnID: ChatTurnID,
-        translationState: inout TranscriptTranslationState
-    ) -> ChatTranscriptDelta {
-        var block = compatibleOpenBlock(
-            role: role,
-            turnID: turnID,
-            translationState: &translationState
-        )
-        block.text += delta
-        translationState.contentBlock = .open(block)
-        return .messageReplacement(
-            messageID: block.messageID,
-            turnID: turnID,
-            role: role,
-            text: block.text,
-            createdAt: block.createdAt
-        )
-    }
-
-    private static func replacement(
-        _ text: String,
-        role: ChatTranscriptMessageRole,
-        turnID: ChatTurnID,
-        translationState: inout TranscriptTranslationState
-    ) -> ChatTranscriptDelta {
-        var block = compatibleOpenBlock(
-            role: role,
-            turnID: turnID,
-            translationState: &translationState
-        )
-        block.text = text
-        translationState.contentBlock = .open(block)
-        return .messageReplacement(
-            messageID: block.messageID,
-            turnID: turnID,
-            role: role,
-            text: text,
-            createdAt: block.createdAt
-        )
-    }
-
-    private static func compatibleOpenBlock(
-        role: ChatTranscriptMessageRole,
-        turnID: ChatTurnID,
-        translationState: inout TranscriptTranslationState
-    ) -> TranscriptTranslationState.OpenContentBlock {
-        if case .open(let block) = translationState.contentBlock, block.role == role {
-            return block
-        }
-        closeContentBlock(in: &translationState)
-        // Compatibility fallback: provider events do not expose a durable
-        // content-block identity, so derive one from role, turn, and ordinal.
-        let block = TranscriptTranslationState.OpenContentBlock(
-            messageID: ChatMessageID(
-                rawValue: "\(role.rawValue)-\(turnID.rawValue)-block-\(translationState.nextContentBlockOrdinal)"
-            ),
-            turnID: turnID,
-            role: role,
-            createdAt: Date(),
-            text: ""
-        )
-        translationState.nextContentBlockOrdinal += 1
-        translationState.contentBlock = .open(block)
-        return block
-    }
-
-    private static func closeContentBlock(in translationState: inout TranscriptTranslationState) {
-        translationState.contentBlock = .none
-    }
-
-    private static func activeContentBlock(
-        in translationState: TranscriptTranslationState
-    ) -> ChatActiveContentBlock? {
-        guard case .open(let block) = translationState.contentBlock else { return nil }
-        return ChatActiveContentBlock(
-            messageID: block.messageID,
-            turnID: block.turnID,
-            role: block.role
-        )
-    }
-
-    static func transcriptDeltasForTesting(from events: [AgentEvent], turnID: ChatTurnID) -> [ChatTranscriptDelta] {
-        var translationState = TranscriptTranslationState()
-        return transcriptDeltas(from: events, turnID: turnID, translationState: &translationState)
-    }
-
     static func permissionRequest(from permission: PendingPermission, turnID: ChatTurnID) -> ChatPendingPermissionRequest {
         ChatPendingPermissionRequest(
             requestID: PermissionRequestID(rawValue: "permission-\(permission.toolCallId.rawValue)"),
@@ -720,17 +498,6 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 )
             }
         )
-    }
-
-    private static func failureCategory(for reason: TurnFailureReason) -> ChatTurnFailureCategory {
-        switch reason {
-        case .stalled, .ceilingExceeded:
-            return .interrupted
-        case .agentError:
-            return .runtimeError
-        case .quotaExhausted:
-            return .transportError
-        }
     }
 
     private static func permissionBehavior(for rawKind: String) -> ChatPermissionOptionBehavior {
