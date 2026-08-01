@@ -317,10 +317,10 @@ final class QueueActivityTracker {
     /// launch after ``attach(engine:)``.
     ///
     /// Only the activity metadata dictionaries are bulk-loaded here. Typed
-    /// agent-event **transcripts** are NOT bulk-loaded — the detail view
-    /// already lazy-loads each item's transcript via
-    /// `engine.loadTranscript(for:)` when opened, which avoids pulling up to
-    /// `recentLimit` × `maxTranscriptEvents` events into memory at launch.
+    /// transcript items are NOT bulk-loaded — the detail view already
+    /// lazy-loads each item's transcript via
+    /// `engine.loadTranscript(for:)` when opened, which avoids loading all
+    /// recent transcript rows into memory at launch.
     /// Transient running-state sets (`extractingSourceIDs`, `ingestingSourceIDs`,
     /// `lintingItemIDs`, …) are deliberately NOT rehydrated — on restart,
     /// `.running` items are reset to `.queued` by `resetRunningToQueued()`, so

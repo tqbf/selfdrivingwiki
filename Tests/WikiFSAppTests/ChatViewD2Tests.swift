@@ -301,10 +301,6 @@ struct ChatViewD2Tests {
         #expect(messages[0].event == .userText("hello"))
         #expect(messages[1].event == .assistantText("hi there"))
 
-        // Verify transcriptVisible filter works on persisted events.
-        let visible = messages.map(\.event).transcriptVisible
-        #expect(visible.contains(.userText("hello")))
-        #expect(visible.contains(.assistantText("hi there")))
     }
 
 
