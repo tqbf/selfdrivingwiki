@@ -1,6 +1,6 @@
 {
   "worktree": {
-    "setup": "cp -R \"$PASEO_SOURCE_CHECKOUT_PATH/signing\" \"$PASEO_WORKTREE_PATH\"",
+    "setup": "cp -R \"$PASEO_SOURCE_CHECKOUT_PATH/signing\" \"$PASEO_WORKTREE_PATH\"\nmake version keychain prompts",
     "teardown": "scripts/paseo-archive-cleanup.sh"
   },
   "metadataGeneration": {
