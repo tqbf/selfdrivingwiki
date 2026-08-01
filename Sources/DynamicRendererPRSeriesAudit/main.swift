@@ -93,7 +93,7 @@ private enum DynamicRendererPRSeriesAuditMain {
             guard result.status == 0 else { throw AuditCLIError.commandFailed(command.joined(separator: " "), result.status, result.output) }
         }
         let baseOID = try git.output(arguments: ["rev-parse", "origin/main"])
-        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: nil, findings: [], recordedAt: ISO8601DateFormatter().string(from: Date()))
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: [.init(name: "local-build-suite", headSHA: head, conclusion: "success")], review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: nil, findings: [], recordedAt: ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: "Z", with: "+00:00"))
         try record.validate()
         let directory = URL(fileURLWithPath: evidenceDirectory, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

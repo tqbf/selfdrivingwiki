@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Dynamic renderer PR gate record",
   "type": "object",
-  "required": ["schemaVersion", "auditedSHA", "headRefOID", "baseRefName", "baseRefOID", "cleanCheckout", "commands", "testInventory", "findings", "recordedAt"],
+  "required": ["schemaVersion", "auditedSHA", "headRefOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "findings", "recordedAt"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "auditedSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
@@ -10,11 +10,13 @@
     "baseRefName": { "type": "string", "minLength": 1 },
     "baseRefOID": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "cleanCheckout": { "type": "boolean", "const": true },
+    "requiredCheckRuns": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["name", "headSHA", "conclusion"], "properties": { "name": { "type": "string", "minLength": 1 }, "headSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "conclusion": { "type": "string", "minLength": 1 } }, "additionalProperties": false } },
+    "review": { "oneOf": [{ "type": "object", "required": ["approved", "author", "commitSHA"], "properties": { "approved": { "const": true }, "author": { "type": "string", "minLength": 1 }, "commitSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" } }, "additionalProperties": false }, { "type": "object", "required": ["approved"], "properties": { "approved": { "const": false } }, "additionalProperties": false }] },
     "commands": { "type": "array", "items": { "type": "object", "required": ["command", "exitCode"], "properties": { "command": { "type": "string" }, "exitCode": { "type": "integer" } } } },
     "testInventory": { "type": "string", "pattern": "^plans/.+\\.json$" },
     "mutationReport": { "type": "string" },
     "findings": { "type": "array" },
-    "recordedAt": { "type": "string", "format": "date-time" }
+    "recordedAt": { "type": "string", "pattern": "[+-][0-9]{2}:[0-9]{2}$" }
   },
   "additionalProperties": false
 }
