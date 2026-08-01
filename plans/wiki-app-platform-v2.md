@@ -1,14 +1,51 @@
 # Wiki App platform, revision 2
 
-This plan supersedes `wiki-app-platform.md`. It keeps that document's
-contracts — typed identifiers, the capability model, staged
-registration/extraction/ingestion, deterministic resolution, immutable
-versions — and restructures everything the adversarial review
-(`wiki-app-platform-adversarial-review.md`) showed to be load-bearing but
-unproven. The two structural changes: the worker sandbox becomes a
-**go/no-go gate before any production routing changes**, and the three open
-issues (#261, #390, #593) **land on their own simple paths first**, designed
-to be forward-compatible with the platform rather than blocked behind it.
+This plan supersedes `wiki-app-platform.md`. It keeps typed identifiers, the
+capability model, staged registration, extraction, ingestion, deterministic
+resolution, and immutable versions.
+
+The adversarial review (`wiki-app-platform-adversarial-review.md`) identified
+load-bearing but unproven parts. This revision restructures those parts.
+
+The revision makes two structural changes. First, the worker sandbox becomes a
+**go/no-go gate before any worker-based production routing changes**. Second,
+issues #261, #390, and #593 **land on their own simple paths first**. Those paths
+remain compatible with the platform and do not wait for it.
+
+## Document map and authority
+
+This document remains the umbrella design for worker isolation, registration,
+extraction, source workflows, provenance, and staged agent ingestion. The
+detailed work in those sections remains part of the plan.
+
+Dynamic rendering now has a focused design:
+
+- [`dynamic-renderers.md`](dynamic-renderers.md) and
+  [issue #1026](https://github.com/tqbf/selfdrivingwiki/issues/1026) define the
+  renderer registry, static renderer packages, renderer sessions, and
+  Source/Rendered/Split presentation.
+- Excalidraw issue #593 and JSON Canvas issue #594 remain the first renderer
+  validation cases.
+
+The focused renderer plan has authority when renderer details conflict with
+this umbrella document. In particular, dynamic renderers do not depend on the
+worker isolation gate. Renderer references in this document remain useful for
+package context, provenance, and the original sequence.
+
+Future focused plans can extract the worker, extraction, source-workflow, and
+agent-capability sections. Do not remove those sections from this document
+until each focused plan preserves their decisions and this index links to it.
+
+The current document set is:
+
+| Feature set | Design of record | Status |
+| --- | --- | --- |
+| Dynamic renderers | [`dynamic-renderers.md`](dynamic-renderers.md) | Proposed in #1026 |
+| Worker isolation and runtime versioning | This document, Phase 0 | Gate required before worker execution |
+| Shared registration and provenance | This document, Phase 1 | Near-term foundation |
+| Extraction extensions | This document, Phase 3 | Depends on the worker gate |
+| Source workflow applications | This document, Phase 4 | Depends on extraction and the worker gate |
+| Agent ingestion capability discovery | Future focused plan. This document keeps the staged-ingestion and provenance contracts. | Not designed |
 
 ## 1. Binding status and scope
 
