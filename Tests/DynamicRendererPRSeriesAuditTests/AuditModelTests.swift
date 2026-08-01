@@ -67,6 +67,29 @@ struct DynamicRendererPRSeriesAuditModelTests {
         #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.verify(seriesPath: directory.appendingPathComponent("series.json").path, evidenceDirectory: directory.path, git: AuditFakeGit(head: "feature", dirty: true), github: AuditFakeGitHub([good]), records: AuditFakeRecords([record])) }
         #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.verify(seriesPath: directory.appendingPathComponent("series.json").path, evidenceDirectory: directory.path, git: git, github: AuditFakeGitHub([good, good.copy(head: base)]), records: AuditFakeRecords([record])) }
     }
+
+    @Test func verifierRejectsSchemaAndStaleEvidence() throws {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let directory = try temporarySeriesDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metadata = GitHubAuditPullRequest(headRefName: "feature", headRefOID: sha, baseRefName: "main", baseRefOID: base, title: "feat(audit): verify", checks: [.init(name: "swift", headSHA: sha, conclusion: "success")], reviews: [.init(author: "reviewer", commitSHA: sha, state: "APPROVED")])
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("bad.json"))
+        #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.verify(seriesPath: directory.appendingPathComponent("bad.json").path, evidenceDirectory: directory.path, git: AuditFakeGit(head: "feature"), github: AuditFakeGitHub([metadata]), records: AuditFakeRecords([])) }
+        try Data("{\"schemaVersion\":1}".utf8).write(to: directory.appendingPathComponent("series.json"))
+        let stale = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: base, headRefOID: base, baseRefName: "main", baseRefOID: base, cleanCheckout: true, requiredCheckRuns: [.init(name: "swift", headSHA: base, conclusion: "success")], review: .approved(author: "reviewer", commitSHA: base), commands: [], testInventory: "plans/x.json", mutationReport: nil, findings: [], recordedAt: "2026-08-01T00:00:00+00:00")
+        #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.verify(seriesPath: directory.appendingPathComponent("series.json").path, evidenceDirectory: directory.path, git: AuditFakeGit(head: "feature"), github: AuditFakeGitHub([metadata]), records: AuditFakeRecords([stale])) }
+    }
+
+    @Test func fileGateRecordsAtomicallyReplacesSHARecord() throws {
+        let directory = try temporarySeriesDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: sha, headRefOID: sha, baseRefName: "main", baseRefOID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", cleanCheckout: true, requiredCheckRuns: [.init(name: "swift", headSHA: sha, conclusion: "success")], review: .noReview, commands: [], testInventory: "plans/x.json", mutationReport: nil, findings: [], recordedAt: "2026-08-01T00:00:00+00:00")
+        let records = FileGateRecords()
+        try records.write(record, to: directory)
+        #expect(try records.records(at: directory) == [record])
+    }
 }
 
 private final class AuditFakeGit: GitRepositoryQuerying {

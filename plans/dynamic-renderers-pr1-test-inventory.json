@@ -46,7 +46,8 @@
     { "path": "invalid presentations, limits, and forbidden capabilities", "tests": ["RendererDescriptorValidationTests.rejectsInvalidPresentationCapabilitiesAndLimits"] },
     { "path": "manifest revision, duplicate registration, duplicate path, canonical asset order", "tests": ["RendererManifestValidationTests.rejectsDuplicatePathsRegistrationAndUnsupportedRevision", "RendererPackageHashTests.testCanonicalEnvelopeGoldenDigestAndOrderIndependence"] },
     { "path": "supported-platform portable import and typed namespace compile boundary", "tests": ["RendererPortableHashImportTests.testSupportedPlatformImports", "RendererIdentifierBoundaryTypecheckTests.packageVersionNamespacesCannotBeInterchanged"] },
-    { "path": "gate record schema, head mismatch, clean checkout, and fixed command order", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] }
+    { "path": "gate record schema, head mismatch, clean checkout, and fixed command order", "tests": ["DynamicRendererPRSeriesAuditModelTests.rejectsRecordWithMismatchedHeads", "DynamicRendererPRSeriesAuditModelTests.buildSuiteUsesRequiredCommandOrder"] },
+    { "path": "audit schema rejection, stale evidence, atomic write, foreign check SHA, old approval, dirty checkout, and metadata race", "tests": ["DynamicRendererPRSeriesAuditModelTests.verifierRejectsSchemaAndStaleEvidence", "DynamicRendererPRSeriesAuditModelTests.fileGateRecordsAtomicallyReplacesSHARecord", "DynamicRendererPRSeriesAuditModelTests.verifierRejectsForeignChecksOldApprovalDirtyAndRaces"] }
   ],
   "notApplicable": ["cancellation", "teardown", "network", "filesystem installation", "persistence", "UI"],
   "mutationScope": "Sources/WikiFSTypes/Renderer",
