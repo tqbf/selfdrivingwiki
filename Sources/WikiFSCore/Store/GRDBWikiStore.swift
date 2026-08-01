@@ -88,6 +88,15 @@ struct SchemaV48MigrationHooks: Sendable {
     )
 }
 
+/// Test checkpoint for the derived-markdown atomic write. Production leaves it
+/// empty. The hook runs after the markdown row and activity plan exist, before
+/// source-version, blob, search, and active-head updates.
+struct AppendDerivedMarkdownHooks: Sendable {
+    let afterInitialWrites: @Sendable () throws -> Void
+
+    static let productionDefault = Self(afterInitialWrites: {})
+}
+
 /// A GRDB-backed implementation of the ``WikiStore`` protocol.
 ///
 /// This is a **parallel implementation** — it does NOT replace
@@ -184,6 +193,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// fresh production checker so injected behavior cannot leak between stores.
     private let schemaV48MigrationHooks: SchemaV48MigrationHooks
     private let schemaForeignKeyChecker: SchemaForeignKeyChecker
+    private let appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -208,7 +218,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try self.init(
             databaseURL: databaseURL,
             schemaV48MigrationHooks: .productionDefault,
-            schemaForeignKeyChecker: .productionDefault()
+            schemaForeignKeyChecker: .productionDefault(),
+            appendDerivedMarkdownHooks: .productionDefault
         )
     }
 
@@ -218,10 +229,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         databaseURL: URL,
         schemaV48MigrationHooks: SchemaV48MigrationHooks,
         schemaForeignKeyChecker: SchemaForeignKeyChecker,
+        appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks = .productionDefault,
         foreignKeysEnabled: Bool = true
     ) throws {
         self.schemaV48MigrationHooks = schemaV48MigrationHooks
         self.schemaForeignKeyChecker = schemaForeignKeyChecker
+        self.appendDerivedMarkdownHooks = appendDerivedMarkdownHooks
         var config = Configuration()
         config.foreignKeysEnabled = foreignKeysEnabled
         config.busyMode = .timeout(5)
@@ -294,6 +307,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public init(readOnlyURL: URL) throws {
         schemaV48MigrationHooks = .productionDefault
         schemaForeignKeyChecker = .productionDefault()
+        appendDerivedMarkdownHooks = .productionDefault
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -346,6 +360,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public init() throws {
         schemaV48MigrationHooks = .productionDefault
         schemaForeignKeyChecker = .productionDefault()
+        appendDerivedMarkdownHooks = .productionDefault
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -4641,6 +4656,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         origin: SourceMarkdownOrigin, note: String?,
         technique: String? = nil
     ) throws -> SourceMarkdownVersion {
+        if origin == .extraction || origin == .transcript {
+            return try appendDerivedMarkdown(
+                sourceID: sourceID, content: content, origin: origin,
+                producer: Self.legacyProducer(technique: technique), providerID: nil,
+                modelID: nil, toolVersion: nil, sourceVersionID: nil, note: note)
+        }
         let version: SourceMarkdownVersion = try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
@@ -4658,6 +4679,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             """, arguments: [id.rawValue, sourceID.rawValue, parentID?.rawValue,
                             origin.rawValue, note, now.timeIntervalSince1970,
                             blobHash, technique])
+            try self.upsertMarkdownDerivedRef(
+                sourceID: sourceID, versionID: id, now: now.timeIntervalSince1970, on: db)
 
             // FTS refresh inline (pure SQL) so keyword search finds the new content.
             self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
@@ -4669,6 +4692,90 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             )
         }
         // Post-commit: re-embed from the just-written content + name.
+        reembedSource(sourceID: sourceID, body: content)
+        return version
+    }
+
+    /// Canonical append-only persistence for extraction and transcript output.
+    /// All rows that describe one derived artifact commit together, followed by
+    /// one source update event outside the transaction.
+    public func appendDerivedMarkdown(
+        sourceID: SourceID, content: String, origin: SourceMarkdownOrigin,
+        producer: ExtractionProducer?, providerID: ProviderID? = nil, modelID: ModelID? = nil,
+        toolVersion: String? = nil, sourceVersionID: SourceVersionID? = nil, note: String? = nil
+    ) throws -> SourceMarkdownVersion {
+        try Self.validateDerivedMarkdownRequest(
+            origin: origin, producer: producer, providerID: providerID, modelID: modelID,
+            toolVersion: toolVersion)
+        let plan = ExtractionActivityPlan(
+            producer: producer, origin: origin, providerID: providerID, modelID: modelID,
+            toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note)
+        let planJSON = try producer.map { _ in try ExtractionActivityPlanCodec.encode(plan) }
+
+        let version: SourceMarkdownVersion = try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            guard (try Int.fetchOne(
+                db, sql: "SELECT 1 FROM sources WHERE id = ?;", arguments: [sourceID.rawValue]
+            ) ?? 0) == 1 else {
+                throw AppendDerivedMarkdownError.missingSource(sourceID)
+            }
+            if let sourceVersionID {
+                let owningSourceID = try String.fetchOne(
+                    db, sql: "SELECT source_id FROM source_versions WHERE id = ?;",
+                    arguments: [sourceVersionID.rawValue])
+                guard owningSourceID == sourceID.rawValue else {
+                    throw AppendDerivedMarkdownError.foreignSourceVersion(sourceVersionID)
+                }
+            }
+
+            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
+            let parentID = try self.processedMarkdownHead(sourceID: sourceID, on: db)?.id
+            let now = Date()
+            let nowTS = now.timeIntervalSince1970
+            let activityID: String?
+            if let producer, let planJSON {
+                let agentID = try self.ensureExtractionAgent(
+                    producer: producer, providerID: providerID, modelID: modelID,
+                    toolVersion: toolVersion, on: db)
+                let generatedActivityID = ULID.generate()
+                try db.execute(sql: """
+                INSERT INTO activities (id, kind, agent_id, plan, started_at, ended_at)
+                VALUES (?, 'extract', ?, ?, ?, ?);
+                """, arguments: [generatedActivityID, agentID, planJSON, nowTS, nowTS])
+                activityID = generatedActivityID
+            } else {
+                activityID = nil
+            }
+
+            // Leave later effects unset until after the checkpoint. A thrown
+            // hook therefore proves the savepoint restores all initial writes.
+            try db.execute(sql: """
+            INSERT INTO source_markdown_versions
+              (id, file_id, parent_id, origin, note, created_at, activity_id, mime_type, technique)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'text/markdown', ?);
+            """, arguments: [
+                id.rawValue, sourceID.rawValue, parentID?.rawValue, origin.rawValue, note,
+                nowTS, activityID, Self.technique(for: producer),
+            ])
+
+            try self.appendDerivedMarkdownHooks.afterInitialWrites()
+
+            let blobHash = try self.storeMarkdownBlob(content, on: db)
+            try db.execute(sql: """
+            UPDATE source_markdown_versions
+            SET source_version_id = ?, blob_hash = ?
+            WHERE id = ?;
+            """, arguments: [sourceVersionID?.rawValue, blobHash, id.rawValue])
+            try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id, now: nowTS, on: db)
+            self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
+
+            return SourceMarkdownVersion(
+                id: id, sourceID: sourceID, parentID: parentID, content: content,
+                origin: origin, note: note, createdAt: now, activityID: activityID,
+                sourceVersionID: sourceVersionID, blobHash: blobHash,
+                mimeType: MimeType.markdown, technique: Self.technique(for: producer))
+        }
         reembedSource(sourceID: sourceID, body: content)
         return version
     }
@@ -4752,63 +4859,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         sourceID: SourceID, content: String, backend: ExtractionBackend,
         sourceVersionID: SourceVersionID? = nil, note: String? = nil, modelVersion: String? = nil
     ) throws -> SourceMarkdownVersion {
-        let (version, reembed): (SourceMarkdownVersion, Bool) = try mutate(event: { _ in
-            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
-        }) { db in
-            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
-            let parentID = try self.processedMarkdownHead(sourceID: sourceID, on: db)?.id
-            let now = Date()
-            let nowTS = now.timeIntervalSince1970
-            // Resolve the source's active content version when the caller didn't
-            // supply one.
-            let resolvedSourceVersionID = sourceVersionID
-                ?? DebugLog.trying("recordExtraction", operation: { try self.activeContentVersion(sourceID: sourceID, on: db) })?.id
-
-            // Agent (idempotent by name) + a single extract activity.
-            let agentID = try self.ensureAgent(
-                name: backend.agentName, version: modelVersion, on: db)
-            let activityID = ULID.generate()
-            let plan = "{\"backend\":\"\(backend.rawValue)\""
-                + (modelVersion.map { ",\"model\":\"\($0)\"" } ?? "")
-                + "}"
-            try db.execute(sql: """
-            INSERT INTO activities (id, kind, agent_id, plan, started_at, ended_at)
-            VALUES (?, 'extract', ?, ?, ?, ?);
-            """, arguments: [activityID, agentID, plan, nowTS, nowTS])
-
-            // CAS the body, then append the smv row.
-            let blobHash = try self.storeMarkdownBlob(content, on: db)
-            try db.execute(sql: """
-            INSERT INTO source_markdown_versions
-              (id, file_id, parent_id, origin, note, created_at,
-               activity_id, source_version_id, blob_hash, mime_type, technique)
-            VALUES (?, ?, ?, 'extraction', ?, ?, ?, ?, ?, 'text/markdown', ?);
-            """, arguments: [id.rawValue, sourceID.rawValue, parentID?.rawValue,
-                            note, nowTS, activityID, resolvedSourceVersionID?.rawValue,
-                            blobHash, backend.rawValue])
-
-            // Re-embed/index only when this row is now the active head (default-
-            // active rule: it is MAX(id); if a ref nominates a different row, this
-            // is just a coexisting alternative and must not disturb the active index).
-            let refExists = DebugLog.trying("recordExtraction", operation: { try self.markdownDerivedRef(sourceID: sourceID, on: db) }) != nil
-            if !refExists {
-                self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
-            }
-
-            let version = SourceMarkdownVersion(
-                id: id, sourceID: sourceID, parentID: parentID,
-                content: content, origin: .extraction, note: note, createdAt: now,
-                activityID: activityID, sourceVersionID: resolvedSourceVersionID,
-                blobHash: blobHash, mimeType: MimeType.markdown,
-                technique: backend.rawValue
-            )
-            return (version, !refExists)
+        let producer = Self.producer(for: backend)
+        let modelID: ModelID?
+        let toolVersion: String?
+        switch producer {
+        case .backend:
+            modelID = modelVersion.map(ModelID.init(rawValue:))
+            toolVersion = nil
+        case .tool, .legacy:
+            modelID = nil
+            toolVersion = modelVersion
         }
-        // Post-commit: re-embed only when this row became the active head.
-        if reembed {
-            reembedSource(sourceID: sourceID, body: version.content)
+        let providerID = Self.defaultProviderID(for: backend)
+        let resolvedSourceVersionID: SourceVersionID?
+        if let sourceVersionID {
+            resolvedSourceVersionID = sourceVersionID
+        } else {
+            resolvedSourceVersionID = try activeContentVersion(sourceID: sourceID)?.id
         }
-        return version
+        return try appendDerivedMarkdown(
+            sourceID: sourceID, content: content, origin: .extraction, producer: producer,
+            providerID: providerID, modelID: modelID, toolVersion: toolVersion,
+            sourceVersionID: resolvedSourceVersionID, note: note)
     }
 
 
@@ -8797,6 +8869,106 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return id
     }
 
+    /// Persists stable normalized agent columns alongside the versioned plan.
+    /// Unlike the old name-only lookup, this keeps provider/model snapshots from
+    /// one extraction from being reused by another extraction with a new model.
+    private func ensureExtractionAgent(
+        producer: ExtractionProducer, providerID: ProviderID?, modelID: ModelID?,
+        toolVersion: String?, on db: Database
+    ) throws -> String {
+        let name: String
+        let version: String?
+        let externalRef: String?
+        switch producer {
+        case .backend(let backend):
+            name = backend.agentName
+            version = modelID?.rawValue
+            externalRef = providerID?.rawValue
+        case .tool(let tool):
+            name = tool.rawValue
+            version = toolVersion
+            externalRef = nil
+        case .legacy(let rawTechnique):
+            name = rawTechnique ?? ExtractionBackend.legacyAgentName
+            version = nil
+            externalRef = nil
+        }
+        if let id = try String.fetchOne(
+            db,
+            sql: """
+            SELECT id FROM agents
+            WHERE name = ? AND kind = 'software' AND version IS ? AND external_ref IS ?
+            LIMIT 1;
+            """,
+            arguments: [name, version, externalRef]
+        ) {
+            return id
+        }
+        let id = ULID.generate()
+        try db.execute(sql: """
+        INSERT INTO agents (id, kind, name, version, external_ref)
+        VALUES (?, 'software', ?, ?, ?);
+        """, arguments: [id, name, version, externalRef])
+        return id
+    }
+
+    private static func validateDerivedMarkdownRequest(
+        origin: SourceMarkdownOrigin, producer: ExtractionProducer?, providerID: ProviderID?,
+        modelID: ModelID?, toolVersion: String?
+    ) throws {
+        switch origin {
+        case .user, .source, .revert:
+            throw AppendDerivedMarkdownError.nonDerivedOrigin(origin)
+        case .extraction, .transcript:
+            break
+        }
+        guard let producer else {
+            if modelID != nil { throw AppendDerivedMarkdownError.modelRequiresProviderBackedProducer }
+            if providerID != nil { throw AppendDerivedMarkdownError.providerFieldsUnsupportedForLocalTool }
+            return
+        }
+        switch producer {
+        case .backend:
+            if toolVersion != nil { throw AppendDerivedMarkdownError.toolVersionUnsupportedForBackend }
+        case .tool, .legacy:
+            if providerID != nil || modelID != nil {
+                throw AppendDerivedMarkdownError.providerFieldsUnsupportedForLocalTool
+            }
+        }
+    }
+
+    private static func technique(for producer: ExtractionProducer?) -> String? {
+        guard let producer else { return nil }
+        switch producer {
+        case .backend(let backend): return backend.rawValue
+        case .tool(let tool): return tool.rawValue
+        case .legacy(let rawTechnique): return rawTechnique
+        }
+    }
+
+    private static func legacyProducer(technique: String?) -> ExtractionProducer? {
+        guard let technique else { return nil }
+        if let backend = ExtractionBackend(rawValue: technique) { return .backend(backend) }
+        if let tool = ExtractionTool(rawValue: technique) { return .tool(tool) }
+        return .legacy(rawTechnique: technique)
+    }
+
+    private static func producer(for backend: ExtractionBackend) -> ExtractionProducer {
+        switch backend {
+        case .localPdf2md: return .tool(.pdf2md)
+        case .doclingServe: return .tool(.docling)
+        case .acp, .anthropic, .gemini: return .backend(backend)
+        }
+    }
+
+    private static func defaultProviderID(for backend: ExtractionBackend) -> ProviderID? {
+        switch backend {
+        case .anthropic: return ProviderID(rawValue: "anthropic")
+        case .gemini: return ProviderID(rawValue: "gemini")
+        case .acp, .localPdf2md, .doclingServe: return nil
+        }
+    }
+
     /// CAS-store a markdown body: SHA-256 (UTF-8) → `INSERT OR IGNORE` blob →
     /// return the hex hash. Mirrors `SQLiteWikiStore.storeMarkdownBlob`.
 
@@ -10150,8 +10322,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             db,
             sql: """
             SELECT smv.id, smv.file_id, smv.origin, smv.technique, smv.created_at,
-                   smv.source_version_id, a.external_ref AS provider_id,
-                   a.version AS agent_version
+                   smv.source_version_id, smv.activity_id, act.plan AS activity_plan,
+                   a.external_ref AS provider_id, a.version AS agent_version
             FROM source_markdown_versions smv
             LEFT JOIN activities act ON act.id = smv.activity_id
             LEFT JOIN agents a ON a.id = act.agent_id
@@ -10163,15 +10335,31 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         guard let origin = SourceMarkdownOrigin(rawValue: originRaw) else {
             throw WikiStoreError.unexpected("unknown source markdown origin: \(originRaw)")
         }
+        // User and source seed rows have no extraction semantics. Revert rows
+        // retain their origin so a future inspector can follow existing lineage.
+        if origin == .user || origin == .source { return nil }
         let technique: String? = row["technique"]
-        let producer: ExtractionProducer
-        if let raw = technique, let backend = ExtractionBackend(rawValue: raw) {
-            producer = .backend(backend)
-        } else if let raw = technique, let tool = ExtractionTool(rawValue: raw) {
-            producer = .tool(tool)
+        let activityID: String? = row["activity_id"]
+        let normalizedProducer: ExtractionProducer? = {
+            guard activityID != nil, let technique else { return nil }
+            if let backend = ExtractionBackend(rawValue: technique) { return .backend(backend) }
+            if let tool = ExtractionTool(rawValue: technique) { return .tool(tool) }
+            return .legacy(rawTechnique: technique)
+        }()
+        let plan: ExtractionActivityPlan?
+        if let json: String = row["activity_plan"] {
+            // A malformed or unsupported plan does not hide normalized legacy
+            // columns. The codec still exposes typed failures to direct callers.
+            do {
+                plan = try ExtractionActivityPlanCodec.decode(json)
+            } catch {
+                DebugLog.store("extraction provenance plan decode failed for \(markdownVersionID.rawValue): \(error)")
+                plan = nil
+            }
         } else {
-            producer = .legacy(rawTechnique: technique)
+            plan = nil
         }
+        let producer = origin == .revert ? nil : (plan?.producer ?? normalizedProducer)
         let providerRaw: String? = row["provider_id"]
         let agentVersion: String? = row["agent_version"]
         let isBackend: Bool
@@ -10189,11 +10377,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // A local tool or an unknown legacy technique may still have an
             // historical activity join, but presenting those values as a
             // provider/model would make unsupported provenance claims.
-            providerID: isBackend ? providerRaw.map(ProviderID.init(rawValue:)) : nil,
-            modelID: isBackend ? agentVersion.map(ModelID.init(rawValue:)) : nil,
-            toolVersion: isTool ? agentVersion : nil,
+            providerID: isBackend ? (plan?.providerID ?? providerRaw.map(ProviderID.init(rawValue:))) : nil,
+            modelID: isBackend && origin == .extraction
+                ? (plan?.modelID ?? agentVersion.map(ModelID.init(rawValue:))) : nil,
+            toolVersion: isTool ? (plan?.toolVersion ?? agentVersion) : nil,
             createdAt: Date(timeIntervalSince1970: createdAt),
-            sourceVersionID: sourceVersion.map(SourceVersionID.init(rawValue:))
+            sourceVersionID: plan?.sourceVersionID ?? sourceVersion.map(SourceVersionID.init(rawValue:))
         )
     }
 

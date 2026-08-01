@@ -396,6 +396,16 @@ public protocol WikiStore: Sendable {
                                  origin: SourceMarkdownOrigin, note: String?,
                                  technique: String?) throws -> SourceMarkdownVersion
 
+    /// Append typed, non-user derived markdown and make it the active source
+    /// markdown head. This is the canonical persistence seam for extraction and
+    /// transcript writers.
+    @discardableResult
+    func appendDerivedMarkdown(
+        sourceID: SourceID, content: String, origin: SourceMarkdownOrigin,
+        producer: ExtractionProducer?, providerID: ProviderID?, modelID: ModelID?,
+        toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?
+    ) throws -> SourceMarkdownVersion
+
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult

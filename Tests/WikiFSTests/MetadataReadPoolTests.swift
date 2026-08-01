@@ -56,12 +56,10 @@ struct MetadataReadPoolTests {
         let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-pool-extraction")
         let writer = try GRDBWikiStore(databaseURL: url)
         let source = try writer.addSource(filename: "source.pdf", data: Data("pdf".utf8))
-        writer.close()
-        let markdownID = SourceMarkdownVersionID(rawValue: "markdown")
-        try MetadataSQLiteFixtureSupport.execute("""
-        INSERT INTO source_markdown_versions (id, file_id, origin, created_at, technique)
-        VALUES ('\(markdownID.rawValue)', '\(source.id.rawValue)', 'extraction', 1, 'pdf2md');
-        """, at: url)
+        let markdownID = try writer.appendDerivedMarkdown(
+            sourceID: source.id, content: "# markdown", origin: .extraction,
+            producer: .tool(.pdf2md), providerID: nil, modelID: nil, toolVersion: nil,
+            sourceVersionID: nil, note: nil).id
 
         let pool = WikiReadPool(databaseURL: url)
         let provenance = try #require(try pool.read {

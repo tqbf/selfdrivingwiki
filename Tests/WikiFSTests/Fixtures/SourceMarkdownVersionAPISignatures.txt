@@ -14,6 +14,7 @@ wiki-store.source-derived-chains	typed	Sources/WikiFSCore/Store/WikiStore.swift	
 wiki-store.processed-markdown-agent-names	typed	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
 wiki-store.processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
 wiki-store.append-processed-markdown	surface	Sources/WikiFSCore/Store/WikiStore.swift	func appendProcessedMarkdown(sourceID: SourceID, content: String,
+wiki-store.append-derived-markdown	surface	Sources/WikiFSCore/Store/WikiStore.swift	func appendDerivedMarkdown(
 wiki-store.revert-processed-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
 wiki-store.record-markdown-extraction	surface	Sources/WikiFSCore/Store/WikiStore.swift	func recordMarkdownExtraction(
 wiki-store.set-active-markdown	typed	Sources/WikiFSCore/Store/WikiStore.swift	func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
@@ -29,6 +30,7 @@ grdb.public-processed-markdown-alternatives.active-head	typed	Sources/WikiFSCore
 grdb.public-replace-links	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws {
 grdb.private-resolve-version-pin	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	) throws -> SourceMarkdownVersionID? {
 grdb.public-append-processed-markdown	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func appendProcessedMarkdown(
+grdb.public-append-derived-markdown	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func appendDerivedMarkdown(
 grdb.public-append-processed-markdown.writer	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let id = SourceMarkdownVersionID(rawValue: ULID.generate())
 grdb.public-revert-processed-markdown	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion {
 grdb.public-record-markdown-extraction	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func recordMarkdownExtraction(

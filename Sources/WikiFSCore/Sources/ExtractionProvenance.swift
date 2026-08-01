@@ -5,11 +5,13 @@ import Foundation
 public enum ExtractionTool: String, Codable, CaseIterable, Sendable {
     case docling
     case pdf2md
-    case html
-    case appleTTML
-    case youtubeCaptions
-    case rssPodcastTranscript
-    case materializerSidecar
+    case html = "html-to-markdown"
+    case appleTTML = "apple-ttml"
+    case youtubeCaptions = "youtube-captions"
+    case rssPodcastTranscript = "rss-podcast-transcript"
+    case vimeoTranscript = "vimeo-transcript"
+    case materializerSidecar = "materializer-sidecar"
+    case bytelessOEmbedSynthetic = "byteless-oembed-synthetic"
     case transcript
 }
 
@@ -26,7 +28,10 @@ public struct ExtractionProvenance: Equatable, Sendable {
     public let markdownVersionID: SourceMarkdownVersionID
     public let sourceID: SourceID
     public let origin: SourceMarkdownOrigin
-    public let producer: ExtractionProducer
+    /// `nil` means legacy data supplied neither an activity nor a technique.
+    /// It is distinct from `.legacy(rawTechnique: nil)`, which carries a joined
+    /// legacy activity whose producer could not be classified.
+    public let producer: ExtractionProducer?
     public let providerID: ProviderID?
     public let modelID: ModelID?
     public let toolVersion: String?
@@ -37,7 +42,7 @@ public struct ExtractionProvenance: Equatable, Sendable {
         markdownVersionID: SourceMarkdownVersionID,
         sourceID: SourceID,
         origin: SourceMarkdownOrigin,
-        producer: ExtractionProducer,
+        producer: ExtractionProducer?,
         providerID: ProviderID?,
         modelID: ModelID?,
         toolVersion: String?,
@@ -54,4 +59,16 @@ public struct ExtractionProvenance: Equatable, Sendable {
         self.createdAt = createdAt
         self.sourceVersionID = sourceVersionID
     }
+}
+
+/// Validation failures for a typed derived-markdown append. These errors are
+/// raised before the store writes any row, so callers can safely retry after
+/// correcting the request.
+public enum AppendDerivedMarkdownError: Error, Equatable, Sendable {
+    case nonDerivedOrigin(SourceMarkdownOrigin)
+    case modelRequiresProviderBackedProducer
+    case providerFieldsUnsupportedForLocalTool
+    case toolVersionUnsupportedForBackend
+    case foreignSourceVersion(SourceVersionID)
+    case missingSource(SourceID)
 }

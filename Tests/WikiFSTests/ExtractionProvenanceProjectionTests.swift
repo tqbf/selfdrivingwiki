@@ -53,7 +53,7 @@ struct ExtractionProvenanceProjectionTests {
         """, at: fixture.url)
     }
 
-    @Test func backendProvenanceProjectsProviderModelAndSourceVersion() throws {
+    @Test func projectsAnthropicBackendProviderAndModel() throws {
         let fixture = try makeFixture()
         let markdownID = SourceMarkdownVersionID(rawValue: "backend-markdown")
         try insertAgentActivity(fixture)
@@ -75,7 +75,33 @@ struct ExtractionProvenanceProjectionTests {
         #expect(value.sourceVersionID == fixture.sourceVersionID)
     }
 
-    @Test func localToolProvenanceProjectsToolVersionWithoutProviderOrModel() throws {
+    @Test func projectsACPBackendProviderAndModel() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "acp-markdown")
+        try insertAgentActivity(fixture, provider: "codex", version: "gpt-5.6")
+        try insertMarkdownVersion(
+            fixture, id: markdownID, technique: ExtractionBackend.acp.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .backend(.acp))
+        #expect(value.providerID == ProviderID(rawValue: "codex"))
+        #expect(value.modelID == ModelID(rawValue: "gpt-5.6"))
+    }
+
+    @Test func projectsGeminiBackendProviderAndModel() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "gemini-markdown")
+        try insertAgentActivity(fixture, provider: "gemini", version: "gemini-2.5-pro")
+        try insertMarkdownVersion(
+            fixture, id: markdownID, technique: ExtractionBackend.gemini.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .backend(.gemini))
+        #expect(value.providerID == ProviderID(rawValue: "gemini"))
+        #expect(value.modelID == ModelID(rawValue: "gemini-2.5-pro"))
+    }
+
+    @Test func projectsPdf2mdToolVersion() throws {
         let fixture = try makeFixture()
         let markdownID = SourceMarkdownVersionID(rawValue: "tool-markdown")
         try insertAgentActivity(fixture, provider: "not-a-provider", version: "1.2.3")
@@ -89,7 +115,7 @@ struct ExtractionProvenanceProjectionTests {
         #expect(value.toolVersion == "1.2.3")
     }
 
-    @Test func unknownLegacyTechniqueDoesNotClaimProviderModelOrTool() throws {
+    @Test func legacyUnknownTechniqueStaysTechnical() throws {
         let fixture = try makeFixture()
         let markdownID = SourceMarkdownVersionID(rawValue: "legacy-markdown")
         try insertAgentActivity(fixture)
@@ -116,7 +142,7 @@ struct ExtractionProvenanceProjectionTests {
         }
     }
 
-    @Test func activeExtractionProvenanceResolvesActiveMarkdownHead() throws {
+    @Test func activeProjectionUsesActiveMarkdownRef() throws {
         let fixture = try makeFixture()
         let activeID = SourceMarkdownVersionID(rawValue: "active-markdown")
         let newerButInactiveID = SourceMarkdownVersionID(rawValue: "newer-markdown")
@@ -134,18 +160,127 @@ struct ExtractionProvenanceProjectionTests {
         #expect(value.producer == .backend(.gemini))
     }
 
-    @Test func nilActivityAndTechniqueRemainCompatibilityOmission() throws {
+    @Test func sourceSeedHasNoExtractionProjection() throws {
         let fixture = try makeFixture()
         let markdownID = SourceMarkdownVersionID(rawValue: "legacy-nil-markdown")
         try insertMarkdownVersion(fixture, id: markdownID, origin: "source", technique: nil)
 
+        #expect(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID) == nil)
+    }
+
+    @Test func projectsDoclingToolVersion() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "docling-markdown")
+        try insertAgentActivity(fixture, version: "2.1")
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionTool.docling.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .tool(.docling))
+        #expect(value.toolVersion == "2.1")
+    }
+
+    @Test func projectsHTMLToolAndBackend() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "html-markdown")
+        try insertAgentActivity(fixture, version: "tag-based")
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionTool.html.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .tool(.html))
+        #expect(value.toolVersion == "tag-based")
+    }
+
+    @Test func projectsTranscriptTool() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "transcript-markdown")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(fixture, id: markdownID, origin: "transcript", technique: ExtractionTool.youtubeCaptions.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .tool(.youtubeCaptions))
+    }
+
+    @Test func projectsBytelessOEmbedSyntheticTool() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "synthetic-markdown")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(
+            fixture, id: markdownID, origin: "transcript",
+            technique: ExtractionTool.bytelessOEmbedSynthetic.rawValue, activityID: "activity")
         let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
             .extractionProvenance(markdownVersionID: markdownID))
-        #expect(value.origin == .source)
-        #expect(value.producer == .legacy(rawTechnique: nil))
-        #expect(value.providerID == nil)
-        #expect(value.modelID == nil)
-        #expect(value.toolVersion == nil)
-        #expect(value.sourceVersionID == nil)
+        #expect(value.producer == .tool(.bytelessOEmbedSynthetic))
+    }
+
+    @Test func projectsSourceVersionIdentity() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "source-version-markdown")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionBackend.acp.rawValue, activityID: "activity", sourceVersionID: fixture.sourceVersionID)
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.sourceVersionID == fixture.sourceVersionID)
+    }
+
+    @Test func nilActivityOmitsProducer() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "no-activity")
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionBackend.gemini.rawValue)
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == nil)
+    }
+
+    @Test func nilTechniqueOmitsProducer() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "no-technique")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(fixture, id: markdownID, technique: nil, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == nil)
+    }
+
+    @Test func legacyBackendTechniqueDecodes() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "legacy-backend")
+        try insertAgentActivity(fixture)
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionBackend.acp.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .backend(.acp))
+    }
+
+    @Test func legacyAgentVersionIsModelOnlyForExtraction() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "legacy-model")
+        try insertAgentActivity(fixture, provider: "anthropic", version: "claude")
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionBackend.anthropic.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.modelID == ModelID(rawValue: "claude"))
+    }
+
+    @Test func corruptPlanFallsBackToColumns() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "corrupt-plan")
+        try insertAgentActivity(fixture, provider: "anthropic", version: "claude")
+        try MetadataSQLiteFixtureSupport.execute(
+            "UPDATE activities SET plan = '{not-json' WHERE id = 'activity';", at: fixture.url)
+        try insertMarkdownVersion(fixture, id: markdownID, technique: ExtractionBackend.anthropic.rawValue, activityID: "activity")
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url)
+            .extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.producer == .backend(.anthropic))
+        #expect(value.providerID == ProviderID(rawValue: "anthropic"))
+        #expect(value.modelID == ModelID(rawValue: "claude"))
+    }
+
+    @Test func userEditHasNoExtractionProjection() throws {
+        let fixture = try makeFixture()
+        try insertMarkdownVersion(fixture, id: SourceMarkdownVersionID(rawValue: "user-edit"), origin: "user", technique: nil)
+        #expect(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: SourceMarkdownVersionID(rawValue: "user-edit")) == nil)
+    }
+
+    @Test func revertProjectsRevertOrigin() throws {
+        let fixture = try makeFixture()
+        let markdownID = SourceMarkdownVersionID(rawValue: "revert-markdown")
+        try insertMarkdownVersion(fixture, id: markdownID, origin: "revert", technique: nil)
+        let value = try #require(try GRDBWikiStore(databaseURL: fixture.url).extractionProvenance(markdownVersionID: markdownID))
+        #expect(value.origin == .revert)
+        #expect(value.producer == nil)
     }
 }

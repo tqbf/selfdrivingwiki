@@ -418,6 +418,16 @@ public final class WikiStoreModel {
     /// producer. The generic path fetches the `<podcast:transcript>` tag via
     /// the `podcast-transcript` `uv` script (no FairPlay helper).
     private static let rssPodcastTranscriptTechnique = "rss-podcast-transcript"
+
+    private static func transcriptTool(for technique: String) -> ExtractionTool {
+        switch technique {
+        case youtubeCaptionsTechnique: return .youtubeCaptions
+        case rssPodcastTranscriptTechnique: return .rssPodcastTranscript
+        case podcastTtmlTechnique: return .appleTTML
+        case ExtractionTool.vimeoTranscript.rawValue: return .vimeoTranscript
+        default: return .transcript
+        }
+    }
     /// The synthetic MIME for a byteless Apple Podcasts embed source (issue
     /// #799 PR4). `ExternalEmbed.target(for:)` dispatches on the provider's
     /// `agentName == "apple-podcast"` (NOT the MIME — see the dispatch table
@@ -1971,7 +1981,7 @@ public final class WikiStoreModel {
     /// source blob; the markdown is the derived artifact. Best-effort: a write
     /// failure is logged, never thrown (the source itself already landed).
     @discardableResult
-    private func storeMaterialized(
+    func storeMaterialized(
         _ m: MaterializedSource,
         resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
@@ -1987,7 +1997,7 @@ public final class WikiStoreModel {
 
     /// Writes a materializer's `extractedMarkdown` sidecar (if present and
     /// non-empty) as a `.extraction`-origin processed-markdown version. Mirrors
-    /// `seedPdfMarkdown`'s use of `appendProcessedMarkdown` so an HTML source's
+    /// `seedPdfMarkdown`'s typed derived-markdown path so an HTML source's
     /// derived markdown lands on the same chain as a PDF's extracted markdown
     /// (issue #599 — HTML sources are treated like PDF sources). Best-effort:
     /// the source itself already committed; an extraction-write failure is
@@ -1997,17 +2007,17 @@ public final class WikiStoreModel {
               !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
         do {
-            try store.appendProcessedMarkdown(
-                sourceID: summary.id, content: markdown,
-                origin: .extraction, note: nil,
-                technique: m.extractionTechnique ?? Self.htmlToMarkdownTechnique)
+            try store.appendDerivedMarkdown(
+                sourceID: summary.id, content: markdown, origin: .extraction,
+                producer: .tool(.materializerSidecar), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: m.extractionTechnique)
         } catch {
             DebugLog.store("WikiStoreModel.appendExtractedMarkdown failed (source=\(summary.id.rawValue)): \(error)")
         }
     }
 
     /// Technique tag stamped on an HTML source's extracted-markdown version
-    /// (`appendProcessedMarkdown(technique:)`). Mirrors the PDF extraction
+    /// (`appendDerivedMarkdown(producer:)`). Mirrors the PDF extraction
     /// technique tags (e.g. `"pdf2md"`) so the "Converted" provenance row
     /// surfaces the producer in the alternatives UI.
     private static let htmlToMarkdownTechnique = "html-to-markdown"
@@ -2400,7 +2410,7 @@ public final class WikiStoreModel {
             technique: Self.bytelessMetadataTechnique)
         // No manual reload — the bus fires reloadFromStore() async after each
         // store write (addBytelessSource + setSourceDisplayName +
-        // appendProcessedMarkdown). The tab title is passed explicitly (the
+        // appendDerivedMarkdown). The tab title is passed explicitly (the
         // resolved title when available) so it needs no synchronous freshness.
         openTab(.source(summary.id), title: metadata?.title ?? summary.effectiveName)
         return URLFetchService.FetchOutcome(
@@ -2426,7 +2436,7 @@ public final class WikiStoreModel {
     }
 
     /// Best-effort synthetic markdown write for a byteless source. Renders via
-    /// `MediaMarkdownSynthesizer` and stores through `appendProcessedMarkdown`
+    /// `MediaMarkdownSynthesizer` and stores through `appendDerivedMarkdown`
     /// so the reader + File Provider `.md` sibling + Tantivy all see it. Never
     /// throws — the embed has already landed; a markdown failure is a partial-
     /// failure log, not a throw (#475 discipline). Issue #646.
@@ -2442,13 +2452,21 @@ public final class WikiStoreModel {
             url: url, metadata: metadata,
             fallbackTitle: fallbackTitle, transcript: transcript)
         do {
-            try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: markdown,
-                origin: .transcript, note: nil, technique: technique)
+            try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .transcript,
+                producer: .tool(Self.syntheticMarkdownTool(for: technique)), providerID: nil,
+                modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
         } catch {
             // #475: never silently swallow — log to Console.app so a partial
             // failure is traceable. The source itself was already saved.
             DebugLog.store("synthetic byteless markdown write failed (source=\(sourceID.rawValue), technique=\(technique)): \(error)")
+        }
+    }
+
+    private static func syntheticMarkdownTool(for technique: String) -> ExtractionTool {
+        switch technique {
+        case bytelessMetadataTechnique: return .bytelessOEmbedSynthetic
+        default: return transcriptTool(for: technique)
         }
     }
 
@@ -2610,8 +2628,10 @@ public final class WikiStoreModel {
             _ = try store.appendContentVersion(
                 sourceID: id, data: data, mimeType: nil, provenance: prov)
         case .derivedMarkdown(let content):
-            try store.appendProcessedMarkdown(
-                sourceID: id, content: content, origin: .transcript, note: nil, technique: nil)
+            try store.appendDerivedMarkdown(
+                sourceID: id, content: content, origin: .transcript,
+                producer: .tool(.transcript), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
         }
         // No manual reload — the bus fires reloadFromStore() async after the
         // version append.
@@ -3101,7 +3121,7 @@ public final class WikiStoreModel {
     /// Append a transcript markdown version (origin `.transcript`) to the
     /// processed-markdown chain for `sourceID`. Used by the queued transcription
     /// worker's `persistTranscription` path (#842). Thin pass-through to
-    /// `store.appendProcessedMarkdown` — the store-level `mutate()` emission +
+    /// `store.appendDerivedMarkdown` — the store-level `mutate()` emission +
     /// `ResourceChangeEvent` fire inside the store, so no model-level work is
     /// needed. Mirrors `seedPdfMarkdown`'s shape for extraction.
     @discardableResult
@@ -3109,9 +3129,10 @@ public final class WikiStoreModel {
         for sourceID: SourceID, content: String, technique: String
     ) -> SourceMarkdownVersion? {
         do {
-            return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: content,
-                origin: .transcript, note: nil, technique: technique)
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: content, origin: .transcript,
+                producer: .tool(Self.transcriptTool(for: technique)), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
         } catch {
             DebugLog.store("WikiStoreModel.appendTranscriptMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
@@ -3154,13 +3175,13 @@ public final class WikiStoreModel {
     /// sub-project per the parent plan's "Out of scope" section). The write
     /// path mirrors what `enrichWithDefuddle` → `appendExtractedMarkdown`
     /// USED to do at ingest time pre-PR3: reads source bytes, runs the chosen
-    /// extractor, writes the result through `appendProcessedMarkdown` with
+    /// extractor, writes the result through `appendDerivedMarkdown` with
     /// the matching technique tag. Post-PR3 this is the CANONICAL way to
     /// extract HTML — non-snapshot HTML sources no longer auto-extract at
     /// ingest, so a fresh HTML source has zero `source_markdown_versions`
     /// rows until the user clicks Extract (which routes here).
     ///
-    /// `appendProcessedMarkdown` always appends a new version — the FIRST
+    /// `appendDerivedMarkdown` always appends a new version — the FIRST
     /// version becomes HEAD by the default-active rule; subsequent calls
     /// append coexisting alternatives (no clobber). So the initial Extract
     /// and a later Re-extract with a different backend both flow through
@@ -3202,15 +3223,15 @@ public final class WikiStoreModel {
             return nil
         }
         do {
-            return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: markdown,
-                origin: .extraction, note: "extract via \(backend.displayName)",
-                technique: technique)
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .extraction,
+                producer: .tool(.html), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: "extract via \(backend.displayName): \(technique)")
         } catch {
             // #475/#492: never silently swallow — extraction output is
             // user-triggered (a button tap or Re-extract menu click), so a
             // swallowed throw would silently lose the result with no trace.
-            DebugLog.store("WikiStoreModel.extractHtml appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            DebugLog.store("WikiStoreModel.extractHtml appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
@@ -3225,14 +3246,14 @@ public final class WikiStoreModel {
     /// - `.applePodcast` → `transcribePodcast(sourceID:origin:fetcher:)` (PR4):
     ///   reconstructs the episode URL from `origin.plan`, calls
     ///   `ApplePodcastMaterializer.materialize()` (signed bearer → AMP → TTML →
-    ///   parse → markdown), writes via `appendProcessedMarkdown(origin:
-    ///   .transcript, technique: "apple-ttml")`. Behind `#if PODCAST_TRANSCRIPTS`.
+    ///   parse → markdown), writes via `appendDerivedMarkdown` using the
+    ///   `.appleTTML` transcript tool. Behind `#if PODCAST_TRANSCRIPTS`.
     /// - `.youtube` → `transcribeYouTube(sourceID:origin:fetcher:)` (PR5, NEW):
     ///   reads `origin.externalIdentity` (the 11-char video ID), calls
     ///   `YouTubeTranscriptService.transcript(forVideoID:)` (pure-Swift watch-
     ///   page → caption-track scrape → markdown), writes via
-    ///   `appendProcessedMarkdown(origin: .transcript, technique:
-    ///   "youtube-captions")`. Always compiled (no signing helper).
+    ///   `appendDerivedMarkdown` using the `.youtubeCaptions` transcript tool.
+    ///   Always compiled (no signing helper).
     /// - every other provider → throws `.notRefreshable` (no transcript pipeline
     ///   today; Vimeo is a future extension that needs OAuth — #564 Phase 4).
     ///
@@ -3250,7 +3271,7 @@ public final class WikiStoreModel {
     /// (`PodcastTranscriptError.signatureUnavailable`,
     /// `SourceRefreshService.RefreshError.missingPlan`, `YouTubeTranscriptError.*`).
     ///
-    /// `appendProcessedMarkdown` always appends — the FIRST call creates the
+    /// `appendDerivedMarkdown` always appends — the FIRST call creates the
     /// HEAD; subsequent calls (re-transcribe) append coexisting alternatives
     /// (no clobber). So the initial Transcribe and a later Re-transcribe both
     /// flow through this method — provenance is differentiated by the version id
@@ -3272,7 +3293,7 @@ public final class WikiStoreModel {
     ///     URLSessionFetcher())` (pure-Swift scrape). Tests inject a fake. NOT
     ///     consulted for the podcast arm. Always compiled (no signing helper).
     /// - Returns: the new `SourceMarkdownVersion`, or nil on a store write
-    ///   failure (the `appendProcessedMarkdown` throw is logged via `DebugLog`,
+    ///   failure (the `appendDerivedMarkdown` throw is logged via `DebugLog`,
     ///   mirroring `extractHtml`'s discipline).
     #if PODCAST_TRANSCRIPTS
     @discardableResult
@@ -3350,8 +3371,8 @@ public final class WikiStoreModel {
     /// point — mirrors `refreshSource`'s injection point), calls
     /// `ApplePodcastMaterializer.materialize()` (which runs the full token →
     /// AMP → TTML → parse → markdown pipeline off-main in a detached `Task`),
-    /// and writes the transcript markdown via `appendProcessedMarkdown(origin:
-    /// .transcript, technique: "apple-ttml")`.
+    /// and writes the transcript markdown via `appendDerivedMarkdown` with
+    /// the `.appleTTML` tool.
     ///
     /// Throws `PodcastTranscriptError.signatureUnavailable` when the helper
     /// binary isn't present (mirroring the same throw at ingest pre-PR4 and
@@ -3384,13 +3405,14 @@ public final class WikiStoreModel {
         let transcript = try await provider.materialize()
         let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
         do {
-            return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: markdown,
-                origin: .transcript, note: nil, technique: Self.podcastTtmlTechnique)
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .transcript,
+                producer: .tool(.appleTTML), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
         } catch {
             // #475/#492: never silently swallow — a transcription failure
             // (after network round-trips) must leave a Console.app trace.
-            DebugLog.store("WikiStoreModel.transcribe (applePodcast) appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            DebugLog.store("WikiStoreModel.transcribe (applePodcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
@@ -3417,7 +3439,7 @@ public final class WikiStoreModel {
     /// stores it directly at ingest), calls
     /// `YouTubeTranscriptService.transcript(forVideoID:)` (pure-Swift watch-page
     /// → caption-track scrape → markdown), and writes via
-    /// `appendProcessedMarkdown(origin: .transcript, technique: "youtube-captions")`.
+    /// `appendDerivedMarkdown` using the `.youtubeCaptions` tool.
     ///
     /// Unlike the podcast arm, YouTube needs no signing helper — the fetch is
     /// always runnable when a fetcher is present and the video ID is valid. The
@@ -3461,13 +3483,14 @@ public final class WikiStoreModel {
             try await fetcherCopy.transcript(forVideoID: videoIDCopy)
         }.value
         do {
-            return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: transcript.markdown,
-                origin: .transcript, note: nil, technique: Self.youtubeCaptionsTechnique)
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: transcript.markdown, origin: .transcript,
+                producer: .tool(.youtubeCaptions), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
         } catch {
             // #475/#492: never silently swallow — a transcription failure
             // (after network round-trips) must leave a Console.app trace.
-            DebugLog.store("WikiStoreModel.transcribe (youtube) appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            DebugLog.store("WikiStoreModel.transcribe (youtube) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
@@ -3476,8 +3499,8 @@ public final class WikiStoreModel {
     /// Reads `origin.plan` (the feed URL recorded at ingest by
     /// `addPodcastFeedURL`), calls `RSSPodcastTranscriptService.transcript(forFeedURL:)`
     /// (spawns the `podcast-transcript` `uv` script → fetches the feed → parses
-    /// `<podcast:transcript>`), and writes via `appendProcessedMarkdown(origin:
-    /// .transcript, technique: "rss-podcast-transcript")`.
+    /// `<podcast:transcript>`), and writes via `appendDerivedMarkdown` with
+    /// the `.rssPodcastTranscript` tool.
     ///
     /// **Always compiled** (outside `#if PODCAST_TRANSCRIPTS`) — the generic
     /// `.podcast` path needs no FairPlay signing helper, only `uv`. So it works
@@ -3517,13 +3540,14 @@ public final class WikiStoreModel {
             try await fetcherCopy.transcript(forFeedURL: urlCopy)
         }.value
         do {
-            return try store.appendProcessedMarkdown(
-                sourceID: sourceID, content: transcript.markdown,
-                origin: .transcript, note: nil, technique: Self.rssPodcastTranscriptTechnique)
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: transcript.markdown, origin: .transcript,
+                producer: .tool(.rssPodcastTranscript), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
         } catch {
             // #475/#492: never silently swallow — a transcription failure
             // (after a network round-trip) must leave a Console.app trace.
-            DebugLog.store("WikiStoreModel.transcribe (podcast) appendProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            DebugLog.store("WikiStoreModel.transcribe (podcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
