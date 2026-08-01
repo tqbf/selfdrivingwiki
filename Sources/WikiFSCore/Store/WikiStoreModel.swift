@@ -1878,6 +1878,47 @@ public final class WikiStoreModel {
         }
     }
 
+    /// What references `id` right now — pages that link to it and bookmarks that
+    /// point at it (issue #219). The UI shows this before deleting so the user
+    /// can decide whether to convert the incoming links to plain text.
+    public func deletionImpact(forPage id: PageID) -> DeletionImpact {
+        let linkingIDs = (DebugLog.trying("pageLinkingPages", operation: {
+            try store.pageLinkingPages(to: id)
+        }) ?? []).filter { $0 != id }
+        return DeletionImpact(
+            linkingPageIDs: linkingIDs,
+            bookmarkLabels: bookmarkLabelsReferencing { content in
+                if case .page(let pid) = content { return pid == id }
+                return false
+            })
+    }
+
+    /// Delete a page, optionally converting every incoming `[[link]]` in other
+    /// pages to plain text first. Bookmarks pointing at the page are ALWAYS
+    /// removed — a bookmark to a missing page is invalid (issue #219). Use this
+    /// path when `deletionImpact(forPage:)` reported references; use
+    /// ``delete(_:)`` for the no-ceremony immediate delete.
+    public func delete(_ id: PageID, unlinkIncomingLinks: Bool) {
+        do {
+            if unlinkIncomingLinks {
+                try unlinkIncomingLinksTo(pageIDs: [id], sourceIDs: [])
+            }
+            removeBookmarksReferencingPage(id)
+            try store.deletePage(id: id)
+            removeFromHistory(.page(id))
+            if let tab = tabs.first(where: { $0.selection == .page(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete + bookmark removals + (optional) linking-page rewrites.
+        } catch {
+            DebugLog.store("WikiStoreModel.delete(unlink:) failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Page",
+                message: "Could not delete the page: \(error.localizedDescription)")
+        }
+    }
+
     /// Dismiss the current store error (called when the user taps OK on the alert).
     public func dismissStoreError() {
         storeError = nil
@@ -2775,6 +2816,74 @@ public final class WikiStoreModel {
             // delete. History and tab cleanup happen explicitly above.
         } catch {
             DebugLog.store("WikiStoreModel.deleteSource failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Source",
+                message: "Could not delete the source: \(error.localizedDescription)")
+        }
+    }
+
+    /// What references `id` right now — pages that cite it and bookmarks that
+    /// point at it (issue #219). The UI shows this before deleting so the user
+    /// can decide whether to convert the incoming citations to plain text.
+    public func deletionImpact(forSource id: SourceID) -> DeletionImpact {
+        let linkingIDs = (DebugLog.trying("sourceLinkingPages", operation: {
+            try store.sourceLinkingPages(to: id)
+        }) ?? [])
+        let blockers = DebugLog.trying("sourceProvenanceBlockers", operation: {
+            try store.sourceProvenanceBlockers(sourceID: id)
+        }) ?? []
+        return DeletionImpact(
+            linkingPageIDs: linkingIDs,
+            bookmarkLabels: bookmarkLabelsReferencing { content in
+                if case .source(let sid) = content { return sid == id }
+                return false
+            },
+            provenanceBlockers: blockers)
+    }
+
+    /// Delete a source, optionally converting every incoming `[[source:…]]`
+    /// citation in other pages to plain text first. Bookmarks pointing at the
+    /// source are ALWAYS removed — a bookmark to a missing source is invalid
+    /// (issue #219). Use this path when `deletionImpact(forSource:)` reported
+    /// references; use ``deleteSource(_:)`` for the no-ceremony immediate
+    /// delete.
+    public func deleteSource(_ id: SourceID, unlinkIncomingLinks: Bool) {
+        // A provenance blocker makes deletion impossible (the store throws).
+        // Bail BEFORE any destructive cleanup so we don't unlink citations or
+        // remove bookmarks for a source that stays in place (issue #219).
+        let blockers = DebugLog.trying("sourceProvenanceBlockers", operation: {
+            try store.sourceProvenanceBlockers(sourceID: id)
+        }) ?? []
+        if !blockers.isEmpty {
+            let titles = Set(blockers.map(\.pageID)).compactMap { pid in
+                summaries.first { $0.id == pid }?.title
+            }.sorted()
+            let noun = blockers.count == 1 ? "page version" : "page versions"
+            var message = "This source is referenced as evidence by \(blockers.count) \(noun)"
+            if !titles.isEmpty {
+                message += " (\(titles.joined(separator: ", ")))"
+            }
+            message += ". Remove those references first."
+            storeError = StoreError(title: "Can't Delete Source", message: message)
+            return
+        }
+        do {
+            if unlinkIncomingLinks {
+                try unlinkIncomingLinksTo(pageIDs: [], sourceIDs: [id])
+            }
+            removeBookmarksReferencingSource(id)
+            try store.deleteSource(id: id)
+            removeFromHistory(.source(id))
+            if let tab = tabs.first(where: { $0.selection == .source(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete + bookmark removals + (optional) linking-page rewrites.
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteSource(unlink:) failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Source",
+                message: "Could not delete the source: \(error.localizedDescription)")
         }
     }
 
@@ -4089,6 +4198,78 @@ public final class WikiStoreModel {
             DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
             return false
         }
+    }
+
+    // MARK: - Deletion-impact helpers (issue #219)
+
+    /// Folder display paths for bookmarks whose content satisfies `matches`.
+    /// A root-level node is reported as `"Bookmarks"`.
+    private func bookmarkLabelsReferencing(
+        matches: (BookmarkNode.Content) -> Bool
+    ) -> [String] {
+        bookmarkNodes
+            .filter { matches($0.content) }
+            .map { bookmarkDisplayPath(for: $0) }
+    }
+
+    private func bookmarkDisplayPath(for node: BookmarkNode) -> String {
+        guard let parentID = node.parentID else { return "Bookmarks" }
+        let path = BookmarkNode.displayPath(id: parentID, in: bookmarkNodes)
+        return path.isEmpty ? "Bookmarks" : path
+    }
+
+    /// Remove every bookmark leaf pointing at `id`. Called on every page delete
+    /// that goes through the confirmation path — a bookmark to a missing page is
+    /// invalid (issue #219).
+    private func removeBookmarksReferencingPage(_ id: PageID) {
+        let nodes = bookmarkNodes.filter { node in
+            if case .page(let pid) = node.content { return pid == id }
+            return false
+        }
+        for node in nodes { deleteBookmarkNode(id: node.id) }
+    }
+
+    /// Remove every bookmark leaf pointing at `id` (the source-side mirror).
+    private func removeBookmarksReferencingSource(_ id: SourceID) {
+        let nodes = bookmarkNodes.filter { node in
+            if case .source(let sid) = node.content { return sid == id }
+            return false
+        }
+        for node in nodes { deleteBookmarkNode(id: node.id) }
+    }
+
+    /// Rewrite the bodies of every page that links to one of `pageIDs` /
+    /// `sourceIDs`, converting the matching `[[…]]` spans to plain text. Runs
+    /// BEFORE the target rows are deleted so name-based links still resolve to
+    /// the about-to-be-deleted id. Each rewrite routes through `PageUpsert` so
+    /// the link graph (`page_links` / `source_links`) drops the now-removed
+    /// edge in the same write the app and `wikictl` share.
+    private func unlinkIncomingLinksTo(pageIDs: Set<PageID>, sourceIDs: Set<SourceID>) throws {
+        guard !pageIDs.isEmpty || !sourceIDs.isEmpty else { return }
+        var linkingPageIDs = Set<PageID>()
+        for id in pageIDs { linkingPageIDs.formUnion(try store.pageLinkingPages(to: id)) }
+        for id in sourceIDs { linkingPageIDs.formUnion(try store.sourceLinkingPages(to: id)) }
+        // Never rewrite a page that is itself being deleted.
+        linkingPageIDs.subtract(pageIDs)
+        for linkingID in linkingPageIDs {
+            try rewritePageBodyUnlinkingTargets(
+                pageID: linkingID, pageIDs: pageIDs, sourceIDs: sourceIDs)
+        }
+    }
+
+    private func rewritePageBodyUnlinkingTargets(
+        pageID: PageID, pageIDs: Set<PageID>, sourceIDs: Set<SourceID>
+    ) throws {
+        let page = try store.getPage(id: pageID)
+        guard let rewritten = try LinkUnlinker.unlink(
+            in: page.bodyMarkdown,
+            unlinkPageIDs: pageIDs,
+            unlinkSourceIDs: sourceIDs,
+            resolvePageName: { name in try self.store.resolveTitleToID(name) },
+            resolveSourceName: { name in try self.store.resolveSourceByName(name) }
+        ) else { return }
+        try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: rewritten,
+                              author: PageAuthor.agent("unlink").rawValue)
     }
 
     private func pruneHistoryToCurrentStore() {

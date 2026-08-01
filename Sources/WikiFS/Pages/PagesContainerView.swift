@@ -20,6 +20,10 @@ struct PagesContainerView: View {
     @State private var renameText = ""
     /// Non-nil while the bookmark-target picker is open for a page selection.
     @State private var addToBookmarksContext: BookmarkTargetPickerContext?
+    /// Non-nil while the incoming-reference delete confirmation is open. Set
+    /// when the user deletes a page that other pages link to or bookmarks point
+    /// at (issue #219).
+    @State private var pendingDeletion: PendingPageDeletion?
 
     private var visible: [WikiPageSummary] {
         store.searchQuery.isEmpty ? store.summaries : store.searchResults
@@ -69,6 +73,16 @@ struct PagesContainerView: View {
                     }
                 }
             )
+        }
+        .confirmationDialog(
+            pendingDeletion.map { deletionDialogTitle(ids: $0.ids) } ?? "",
+            isPresented: deletionDialogPresented,
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { pending in
+            deletionDialogActions(for: pending)
+        } message: { pending in
+            Text(deletionDialogMessage(for: pending))
         }
     }
 
@@ -176,16 +190,7 @@ struct PagesContainerView: View {
             },
             onRename: { summary in beginRename(summary) },
             onDelete: { ids in
-                for id in ids { store.delete(id) }
-                // If a deleted page was the home page, clear the stale
-                // homePageID so the Home button doesn't linger as dead UI.
-                if let homeID = session.descriptor.homePageID,
-                   ids.contains(homeID) {
-                    registry.setHomePage(id: session.wikiID, pageID: nil)
-                    var d = session.descriptor
-                    d.homePageID = nil
-                    session.updateDescriptor(d)
-                }
+                requestPageDeletion(ids)
             },
             onSetHomePage: { pageID in
                 registry.setHomePage(id: session.wikiID, pageID: pageID)
@@ -219,4 +224,107 @@ struct PagesContainerView: View {
             set: { if !$0 { renameTarget = nil } }
         )
     }
+
+    // MARK: - Delete with incoming-reference warning (issue #219)
+
+    /// Aggregate the incoming links + bookmarks for the selected pages, then
+    /// either delete immediately (nothing references them) or open the
+    /// confirmation dialog so the user can see and choose how to handle them.
+    private func requestPageDeletion(_ ids: [PageID]) {
+        let deletedIDs = Set(ids)
+        var linkingIDs: [PageID] = []
+        var bookmarkFolders: Set<String> = []
+        var bookmarkCount = 0
+        for id in ids {
+            let impact = store.deletionImpact(forPage: id)
+            linkingIDs.append(contentsOf: impact.linkingPageIDs)
+            bookmarkCount += impact.bookmarkLabels.count
+            bookmarkFolders.formUnion(impact.bookmarkLabels)
+        }
+        // Drop pages that are themselves being deleted (they vanish with the
+        // batch), then dedupe for display.
+        let displayTitles = Array(Set(linkingIDs))
+            .filter { !deletedIDs.contains($0) }
+            .compactMap { id in store.summaries.first { $0.id == id }?.title }
+            .sorted()
+
+        if displayTitles.isEmpty && bookmarkCount == 0 {
+            confirmPageDeletion(ids: ids, unlink: false)
+        } else {
+            pendingDeletion = PendingPageDeletion(
+                ids: ids,
+                linkingPageTitles: displayTitles,
+                bookmarkCount: bookmarkCount,
+                bookmarkFolders: bookmarkFolders.sorted())
+        }
+    }
+
+    private func confirmPageDeletion(ids: [PageID], unlink: Bool) {
+        for id in ids { store.delete(id, unlinkIncomingLinks: unlink) }
+        // If a deleted page was the home page, clear the stale homePageID so the
+        // Home button doesn't linger as dead UI.
+        if let homeID = session.descriptor.homePageID, ids.contains(homeID) {
+            registry.setHomePage(id: session.wikiID, pageID: nil)
+            var d = session.descriptor
+            d.homePageID = nil
+            session.updateDescriptor(d)
+        }
+        pendingDeletion = nil
+    }
+
+    private var deletionDialogPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { if !$0 { pendingDeletion = nil } }
+        )
+    }
+
+    private func deletionDialogTitle(ids: [PageID]) -> String {
+        ids.count == 1 ? "Delete Page?" : "Delete \(ids.count) Pages?"
+    }
+
+    private func deletionDialogMessage(for pending: PendingPageDeletion) -> String {
+        var lines: [String] = []
+        if !pending.linkingPageTitles.isEmpty {
+            let names = pending.linkingPageTitles.joined(separator: ", ")
+            let noun = pending.linkingPageTitles.count == 1 ? "page" : "pages"
+            lines.append("Linked from \(pending.linkingPageTitles.count) \(noun): \(names).")
+        }
+        if pending.bookmarkCount > 0 {
+            let noun = pending.bookmarkCount == 1 ? "bookmark" : "bookmarks"
+            let where_ = pending.bookmarkFolders.joined(separator: ", ")
+            lines.append("\(pending.bookmarkCount) \(noun) point to this and will be removed (\(where_)).")
+        }
+        if !pending.linkingPageTitles.isEmpty {
+            lines.append("Unlink and Delete converts the links to plain text.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @ViewBuilder
+    private func deletionDialogActions(for pending: PendingPageDeletion) -> some View {
+        if !pending.linkingPageTitles.isEmpty {
+            Button("Unlink and Delete", role: .destructive) {
+                confirmPageDeletion(ids: pending.ids, unlink: true)
+            }
+            Button("Delete", role: .destructive) {
+                confirmPageDeletion(ids: pending.ids, unlink: false)
+            }
+        } else {
+            Button("Delete", role: .destructive) {
+                confirmPageDeletion(ids: pending.ids, unlink: false)
+            }
+        }
+        Button("Cancel", role: .cancel) { pendingDeletion = nil }
+    }
+}
+
+/// State carried by the incoming-reference delete-confirmation dialog
+/// (issue #219).
+private struct PendingPageDeletion: Identifiable {
+    let id = UUID()
+    let ids: [PageID]
+    let linkingPageTitles: [String]
+    let bookmarkCount: Int
+    let bookmarkFolders: [String]
 }

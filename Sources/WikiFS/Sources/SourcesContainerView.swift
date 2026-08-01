@@ -32,6 +32,8 @@ struct SourcesContainerView: View {
     @State private var pendingReingestNames: [String] = []
     /// Non-nil while the bookmark-target picker is open for a source selection.
     @State private var addToBookmarksContext: BookmarkTargetPickerContext?
+    /// Non-nil while the incoming-reference delete confirmation is open (issue #219).
+    @State private var pendingDeletion: PendingSourceDeletion?
 
     enum SourceFilter: String, CaseIterable {
         case all = "All"
@@ -110,6 +112,16 @@ struct SourcesContainerView: View {
                     }
                 }
             )
+        }
+        .confirmationDialog(
+            pendingDeletion.map { deletionDialogTitle(for: $0) } ?? "",
+            isPresented: deletionDialogPresented,
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { pending in
+            deletionDialogActions(for: pending)
+        } message: { pending in
+            Text(deletionDialogMessage(for: pending))
         }
     }
 
@@ -248,7 +260,7 @@ struct SourcesContainerView: View {
             },
             onRename: { source in beginRename(source) },
             onDelete: { ids in
-                for id in ids { store.deleteSource(id) }
+                requestSourceDeletion(ids)
             },
             onAddToBookmarks: { ids in
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .sources(ids))
@@ -274,4 +286,108 @@ struct SourcesContainerView: View {
             set: { if !$0 { renameTarget = nil } }
         )
     }
+
+    // MARK: - Delete with incoming-reference warning (issue #219)
+
+    private func requestSourceDeletion(_ ids: [SourceID]) {
+        var linkingIDs: [PageID] = []
+        var bookmarkFolders: Set<String> = []
+        var bookmarkCount = 0
+        var blockedPageIDs = Set<PageID>()
+        for id in ids {
+            let impact = store.deletionImpact(forSource: id)
+            linkingIDs.append(contentsOf: impact.linkingPageIDs)
+            bookmarkCount += impact.bookmarkLabels.count
+            bookmarkFolders.formUnion(impact.bookmarkLabels)
+            blockedPageIDs.formUnion(impact.provenanceBlockers.map(\.pageID))
+        }
+        let displayTitles = Array(Set(linkingIDs))
+            .compactMap { id in store.summaries.first { $0.id == id }?.title }
+            .sorted()
+        let blockedTitles = blockedPageIDs
+            .compactMap { id in store.summaries.first { $0.id == id }?.title }
+            .sorted()
+
+        if blockedTitles.isEmpty && displayTitles.isEmpty && bookmarkCount == 0 {
+            confirmSourceDeletion(ids: ids, unlink: false)
+        } else {
+            pendingDeletion = PendingSourceDeletion(
+                ids: ids,
+                linkingPageTitles: displayTitles,
+                bookmarkCount: bookmarkCount,
+                bookmarkFolders: bookmarkFolders.sorted(),
+                blockedPageTitles: blockedTitles)
+        }
+    }
+
+    private func confirmSourceDeletion(ids: [SourceID], unlink: Bool) {
+        for id in ids { store.deleteSource(id, unlinkIncomingLinks: unlink) }
+        pendingDeletion = nil
+    }
+
+    private var deletionDialogPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { if !$0 { pendingDeletion = nil } }
+        )
+    }
+
+    private func deletionDialogTitle(for pending: PendingSourceDeletion) -> String {
+        if !pending.blockedPageTitles.isEmpty { return "Can't Delete Source" }
+        return pending.ids.count == 1 ? "Delete Source?" : "Delete \(pending.ids.count) Sources?"
+    }
+
+    private func deletionDialogMessage(for pending: PendingSourceDeletion) -> String {
+        if !pending.blockedPageTitles.isEmpty {
+            let names = pending.blockedPageTitles.joined(separator: ", ")
+            return "This source is referenced as evidence by page versions (\(names)). Remove those references before deleting."
+        }
+        var lines: [String] = []
+        if !pending.linkingPageTitles.isEmpty {
+            let names = pending.linkingPageTitles.joined(separator: ", ")
+            let noun = pending.linkingPageTitles.count == 1 ? "page" : "pages"
+            lines.append("Cited by \(pending.linkingPageTitles.count) \(noun): \(names).")
+        }
+        if pending.bookmarkCount > 0 {
+            let noun = pending.bookmarkCount == 1 ? "bookmark" : "bookmarks"
+            let where_ = pending.bookmarkFolders.joined(separator: ", ")
+            lines.append("\(pending.bookmarkCount) \(noun) point to this and will be removed (\(where_)).")
+        }
+        if !pending.linkingPageTitles.isEmpty {
+            lines.append("Unlink and Delete converts the citations to plain text.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @ViewBuilder
+    private func deletionDialogActions(for pending: PendingSourceDeletion) -> some View {
+        if !pending.blockedPageTitles.isEmpty {
+            Button("OK", role: .cancel) { pendingDeletion = nil }
+        } else if !pending.linkingPageTitles.isEmpty {
+            Button("Unlink and Delete", role: .destructive) {
+                confirmSourceDeletion(ids: pending.ids, unlink: true)
+            }
+            Button("Delete", role: .destructive) {
+                confirmSourceDeletion(ids: pending.ids, unlink: false)
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } else {
+            Button("Delete", role: .destructive) {
+                confirmSourceDeletion(ids: pending.ids, unlink: false)
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        }
+    }
+}
+
+/// State carried by the incoming-reference delete-confirmation dialog
+/// (issue #219). When `blockedPageTitles` is non-empty, the source can't be
+/// deleted at all (provenance-restricted) and only an OK button is shown.
+private struct PendingSourceDeletion: Identifiable {
+    let id = UUID()
+    let ids: [SourceID]
+    let linkingPageTitles: [String]
+    let bookmarkCount: Int
+    let bookmarkFolders: [String]
+    let blockedPageTitles: [String]
 }

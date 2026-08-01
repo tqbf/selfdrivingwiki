@@ -190,6 +190,16 @@ public protocol WikiStore: Sendable {
     /// are omitted (the schema forbids a NULL `to_page_id`). Self-links allowed.
     func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws
 
+    /// Pages whose bodies link TO `pageID` via `[[wiki-link]]` — the incoming
+    /// edge set (issue #219). Used to warn before deleting a page that other
+    /// pages still reference, and to rewrite those links to plain text.
+    func pageLinkingPages(to pageID: PageID) throws -> [PageID]
+
+    /// Pages whose bodies link TO `sourceID` via `[[source:…]]` — the incoming
+    /// source-link edge set (issue #219). Used to warn before deleting a source
+    /// that pages still cite, and to rewrite those citations to plain text.
+    func sourceLinkingPages(to sourceID: SourceID) throws -> [PageID]
+
     // MARK: - Ingested files (Phase 5)
     //
     // Only the three methods `WikiStoreModel` actually calls live on the
@@ -266,6 +276,12 @@ public protocol WikiStore: Sendable {
 
     /// Remove a source by id.
     func deleteSource(id: SourceID) throws
+
+    /// The page versions whose provenance cites `sourceID`, making the source
+    /// undeletable (issue #219). Empty when the source is free to delete. The
+    /// delete-confirmation dialog surfaces these so the user sees WHY a source
+    /// can't be removed instead of a silent failure.
+    func sourceProvenanceBlockers(sourceID: SourceID) throws -> [ProvenanceDeletionBlocker]
 
     /// The origin provenance of a source: the provider agent + the activity that
     /// fetched/imported it, joined from the active content version to its activity
