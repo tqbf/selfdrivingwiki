@@ -48,7 +48,7 @@ struct SourceDetailView: View {
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
-    @AppStorage("sourceInspectorTab") private var inspectorTab: InspectorTab = .outline
+    @AppStorage("sourceInspectorTab") private var inspectorTab: InspectorTab = .metadata
     @AppStorage("sourceOutlineWidth") private var outlineWidth: Double = 260
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
@@ -58,6 +58,7 @@ struct SourceDetailView: View {
     /// Provenance edit history for the inspector's History tab. Loaded via
     /// `.task(id:)` keyed on `file.id`.
     @State private var editHistory: [SourceOrigin] = []
+    @State private var metadataState: MetadataHydrationState = .idle
     @State private var isEditing = false
     @State private var editBuffer = ""
     /// Pending scroll-to-heading for the editor (outline click while editing).
@@ -187,8 +188,8 @@ struct SourceDetailView: View {
         isOutlineApplicable && currentMarkdownContent != nil
     }
 
-    private var sourceInspectorAvailable: Bool {
-        showsSourceOutlineTab || !editHistory.isEmpty || origin != nil
+    private var sourceInspectorTabs: [InspectorTab] {
+        InspectorTab.sourceAvailableTabs(hasOutline: showsSourceOutlineTab)
     }
 
     /// `true` for byteless Apple Podcasts embed sources (issue #799 PR4).
@@ -548,7 +549,6 @@ struct SourceDetailView: View {
             isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
             consumePinnedExtraction()
-            normalizeSourceInspectorTab()
             updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
@@ -580,7 +580,15 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
-            normalizeSourceInspectorTab()
+            updateRightSidebarRegistration()
+        }
+        .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
+            await hydrateMetadata(sourceID: file.id)
+        }
+        .task(id: "\(file.id.rawValue)-\(showsSourceOutlineTab)") {
+            let normalized = InspectorTab.normalize(selection: inspectorTab, availableTabs: sourceInspectorTabs)
+            guard normalized != inspectorTab else { return }
+            inspectorTab = normalized
             updateRightSidebarRegistration()
         }
         .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
@@ -608,13 +616,10 @@ struct SourceDetailView: View {
             isEditing = false
             updateRightSidebarRegistration()
         }
-        .onChange(of: sourceInspectorAvailable) { _, _ in
+        .onChange(of: sourceInspectorTabs) { _, _ in
             updateRightSidebarRegistration()
         }
-        .onChange(of: showsSourceOutlineTab) { _, showsOutline in
-            if !showsOutline, inspectorTab == .outline { inspectorTab = .history }
-            updateRightSidebarRegistration()
-        }
+        .onChange(of: showsSourceOutlineTab) { _, _ in updateRightSidebarRegistration() }
         // #842 PR2 C6: refresh the transcript head when the store's source list
         // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
         // a `ResourceChangeEvent(.source, .updated)` → the model's bus
@@ -1131,33 +1136,68 @@ struct SourceDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func normalizeSourceInspectorTab() {
-        if !showsSourceOutlineTab, inspectorTab == .outline {
-            inspectorTab = .history
-        }
-    }
-
     private func updateRightSidebarRegistration() {
-        guard sourceInspectorAvailable else {
-            rightInspector.updateRegistration(nil)
-            return
-        }
         rightInspector.updateRegistration(
             RightSidebarRegistration(
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
-                showsOutlineTab: showsSourceOutlineTab,
-                showsHistoryTab: true,
+                availableTabs: sourceInspectorTabs,
+                metadataState: metadataState,
                 origin: origin?.provenanceEntry,
                 history: editHistory.map(\.provenanceEntry),
-                store: store,
+                onOpenChat: { id in store.openTab(.chat(id)) },
                 onCompareVersions: nil,
+                metadataRouter: MetadataActionRouter(
+                    openPage: { id in store.openTab(.page(id)); return true },
+                    openSource: { id in store.openTab(.source(id)); return true },
+                    openChat: { id in store.openTab(.chat(id)); return true },
+                    selectActivity: { _ in false },
+                    comparePageVersions: { _ in false },
+                    compareSourceExtractions: { id in
+                        guard id == file.id else { return false }
+                        openWindow(value: ExtractionCompareContext(
+                            sourceID: id,
+                            filename: file.filename,
+                            wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: "")))
+                        return true
+                    },
+                    copy: MetadataActionRouter.systemClipboardCopy,
+                    openURL: { NSWorkspace.shared.open($0) }),
                 outline: {
                     AnyView(sourceSidebarOutlineView())
                 }
             )
         )
     }
+
+    private func hydrateMetadata(sourceID: SourceID) async {
+        await MetadataHydrator.hydrate(subject: .source(sourceID), operation: {
+            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
+               let readPool = store.readPool {
+                return try await readPool.asyncRead { database in
+                    try Self.sourceMetadataModel(sourceID: sourceID, store: database)
+                }
+            } else {
+                return try Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
+            }
+        }, publish: { state in
+            metadataState = state
+            updateRightSidebarRegistration()
+        })
+    }
+
+    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {
+        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
+            throw MetadataProjectionError.missingSource(sourceID)
+        }
+        let history = try store.processedMarkdownHistory(sourceID: sourceID)
+        return SourceMetadataProjection.make(input: .init(
+            source: source,
+            markdown: try store.processedMarkdownHead(sourceID: sourceID),
+            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
+            alternativeCount: history.count))
+    }
+
 
     @ViewBuilder
     private func sourceSidebarOutlineView() -> some View {

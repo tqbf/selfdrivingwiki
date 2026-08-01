@@ -20,10 +20,9 @@ import WikiFSCore
 struct ProvenancePanel: View {
     let origin: ProvenanceEntry?
     let history: [ProvenanceEntry]
-    /// The wiki store — used to navigate to chat tabs on row click (#745).
-    /// Weak-ish: the parent detail view owns a `@Bindable` reference,
-    /// so this never outlives the view.
-    var store: WikiStoreModel?
+    /// Navigation is injected at the owner boundary; this renderer never reads
+    /// or mutates a store directly.
+    var onOpenChat: (ChatID) -> Void = { _ in }
     /// Optional entry to the Versions window (#817). Injected by
     /// `PageDetailView` (page-only — sources keep their own
     /// `ExtractionCompareSheet`). When non-nil, a "Compare Versions…" button
@@ -227,7 +226,7 @@ struct ProvenancePanel: View {
             guard !chatID.isEmpty else { return }
             let id = ChatID(rawValue: chatID)
             DebugLog.tabs("ProvenancePanel: navigating to chat \(id.rawValue.prefix(8))")
-            store?.openTab(.chat(id))
+            onOpenChat(id)
         case .agent:
             DebugLog.tabs("ProvenancePanel: opening Activity window for \(entry.agentName)")
             openActivityWindow?(.ingestion)
