@@ -732,24 +732,27 @@ struct ActivityWindowView: View {
     }
 
     /// A single linted page: title (resolved from the wiki's store) with an
-    /// "Open" button. Pages deleted since the lint ran resolve to a placeholder.
+    /// "Open" button. Pages deleted since the lint ran resolve to a placeholder
+    /// and show no "Open" button (there is nothing to navigate to).
     @ViewBuilder
     private func lintPageRow(pageID: PageID, wikiID: WikiID) -> some View {
-        let title = pageTitle(pageID, wikiID: wikiID) ?? "Deleted page"
+        let title = pageTitle(pageID, wikiID: wikiID)
         HStack(spacing: 6) {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)
-            Text(title)
+            Text(title ?? "Deleted page")
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(title)
+                .help(title ?? "Deleted page")
             Spacer(minLength: 4)
-            Button("Open", systemImage: "arrow.up.forward.app") {
-                openPage(pageID, in: wikiID)
+            if title != nil {
+                Button("Open", systemImage: "arrow.up.forward.app") {
+                    openPage(pageID, in: wikiID)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Open this page in the wiki window")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Open this page in the wiki window")
         }
     }
 
