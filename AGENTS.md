@@ -119,6 +119,7 @@ agents, NOT Polytoken):
 - **swiftui-performance-audit** — https://github.com/Dimillian/Skills
 - **macos-spm-app-packaging** — https://github.com/Dimillian/Skills
 - **conventional-commits** — https://www.conventionalcommits.org/en/v1.0.0/
+- **conventional-branch** — https://github.com/github/awesome-copilot/blob/main/skills/conventional-branch/SKILL.md
 
 > Same caveat: these target recent iOS/macOS toolchains. Filter
 > version-gated guidance to macOS 15 / Swift 6.0. The `macos-spm-app-packaging`
@@ -271,6 +272,12 @@ agents, NOT Polytoken):
 * Never commit or push directly to `main`. Always work on a feature branch, push
   the branch, and open a PR. You may push PR branches but MUST NOT merge them to
   main yourself.
+
+* When creating or naming a branch, follow
+  [`docs/skills/conventional-branch/SKILL.md`](docs/skills/conventional-branch/SKILL.md).
+  Use `feature/` (or `feat/`), `bugfix/` (or `fix/`), `hotfix/`, `release/`, or
+  `chore/`, followed by a lowercase kebab-case description. The installed
+  `pre-push` hook enforces the machine-checkable naming rules for pushed refs.
 
 * Never pipe literal markdown or multi-line content into `gh pr edit --body` —
   the shell mangles the formatting. Use plain text for the inline body, or write
