@@ -1,3 +1,7 @@
+// pattern: Mixed (unavoidable)
+// Reason: this SwiftUI detail surface combines view state, user actions, and
+// store-backed presentation data at the app boundary.
+
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
@@ -542,6 +546,10 @@ struct SourceDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
+        // Keep the reader column from collapsing when the window-owned trailing
+        // inspector claims its persisted width. Matches PageDetailView and
+        // ChatDetailView's minimum detail-column contract.
+        .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)

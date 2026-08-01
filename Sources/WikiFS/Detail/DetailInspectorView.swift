@@ -1,3 +1,7 @@
+// pattern: Mixed (unavoidable)
+// Reason: a SwiftUI view necessarily combines declarative rendering with local
+// gesture state for the inspector-width divider.
+
 import SwiftUI
 import WikiFSCore
 
@@ -171,6 +175,11 @@ struct DetailInspectorView<Outline: View>: View {
                 }
             }
             .frame(width: effectiveWidth)
+            // The divider claims the full offered height. Claim it here as well
+            // so a compact selected tab (notably a short source outline) stays
+            // pinned to the inspector's top edge instead of being centered next
+            // to that full-height sibling.
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
