@@ -13,6 +13,7 @@ public enum DynamicRendererAuditError: Error, Equatable, Sendable, CustomStringC
     case invalidReview
     case invalidCommandEvidence
     case invalidMutationReport
+    case invalidSchema
     case invalidRecordedAt(String)
 
     public var description: String {
@@ -27,6 +28,7 @@ public enum DynamicRendererAuditError: Error, Equatable, Sendable, CustomStringC
         case .invalidReview: "review binding is missing or targets another commit"
         case .invalidCommandEvidence: "build-suite command evidence is missing, out of order, or unsuccessful"
         case .invalidMutationReport: "mutation report evidence is missing or invalid"
+        case .invalidSchema: "gate record does not match the tracked schema"
         case let .invalidRecordedAt(value): "record timestamp must carry an explicit UTC offset: \(value)"
         }
     }
@@ -116,7 +118,8 @@ public struct DynamicRendererGateRecord: Codable, Equatable, Sendable {
         guard auditedSHA == headRefOID else { throw DynamicRendererAuditError.mismatchedHead }
         guard cleanCheckout else { throw DynamicRendererAuditError.dirtyCheckout }
         guard requiredCheckRuns.map(\.name) == DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames,
-              requiredCheckRuns.allSatisfy({ $0.conclusion.isEmpty == false && $0.headSHA == auditedSHA && DynamicRendererAuditValidation.isSHA($0.headSHA) }) else {
+              requiredCheckRuns.allSatisfy({ $0.conclusion == "pending" || $0.conclusion == "success" }) &&
+              requiredCheckRuns.allSatisfy({ $0.headSHA == auditedSHA && DynamicRendererAuditValidation.isSHA($0.headSHA) }) else {
             throw DynamicRendererAuditError.invalidCheckRun
         }
         if case let .approved(author, commitSHA) = review, (author.isEmpty || commitSHA != auditedSHA || DynamicRendererAuditValidation.isSHA(commitSHA) == false) { throw DynamicRendererAuditError.invalidReview }
@@ -151,5 +154,5 @@ public enum DynamicRendererBuildAndSuiteGate {
         ["swift", "test"],
     ]
 
-    public static let requiredLiveCheckNames = ["lint", "skills", "swift", "swift-linux", "pdf2md"]
+    public static let requiredLiveCheckNames = ["lint", "skills", "swift", "linux-swift", "python"]
 }

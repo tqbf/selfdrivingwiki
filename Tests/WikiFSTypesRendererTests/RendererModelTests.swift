@@ -32,14 +32,12 @@ struct RendererIdentifierTests {
         #expect(alphaBeta < stable)
     }
 
-    @Test func ordersBuildMetadataDeterministicallyWithoutChangingPrereleasePrecedence() throws {
+    @Test func buildMetadataDoesNotChangeSemanticPrecedence() throws {
         let first = try RendererPackageVersion(validating: "1.0.0+build.1")
         let second = try RendererPackageVersion(validating: "1.0.0+build.2")
 
-        #expect(first < second)
+        #expect(first.semanticPrecedence(comparedTo: second) == .orderedSame)
         #expect(first != second)
-        #expect((first < second) || first == second || second < first)
-        #expect((first < second) == !(second < first))
     }
 
     @Test func rejectsLeadingZeroNumericPrereleaseButAcceptsBuildMetadata() {
@@ -54,6 +52,21 @@ struct RendererIdentifierTests {
 }
 
 struct RendererMatcherTests {
+    @Test(arguments: ["/absolute", "assets/../viewer.js", "assets//viewer.js", "assets\\viewer.js", "./viewer.js"])
+    func rejectsInvalidRelativePaths(_ rawValue: String) {
+        #expect(RendererRelativePath(rawValue: rawValue) == nil)
+    }
+
+    @Test(arguments: ["Application/PDF", "application", "application/", "application/pdf; charset=utf-8"])
+    func rejectsMalformedMIMETypes(_ rawValue: String) {
+        #expect(RendererMIMEType(rawValue: rawValue) == nil)
+    }
+
+    @Test(arguments: [".pdf", "PDF", "pdf-x", ""])
+    func rejectsMalformedFileExtensions(_ rawValue: String) {
+        #expect(RendererFileExtension(rawValue: rawValue) == nil)
+    }
+
     @Test func matchesMIMEAndSignatureWithinNamedBound() throws {
         let descriptor = try RendererFixtures.nativeDescriptor(matchers: [
             .normalizedMIME(try .init(validating: "application/pdf")),
@@ -85,6 +98,12 @@ struct RendererMatcherTests {
 }
 
 struct RendererResolutionTests {
+    @Test func rejectsEmptyPreference() {
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererPreference(exact: nil, logical: nil)
+        }
+    }
+
     @Test func sortsByPriorityThenStableReferenceWithoutInputOrder() throws {
         let first = try RendererFixtures.nativeDescriptor(priority: 10)
         let second = try RendererFixtures.nativeDescriptor(registrationID: try .init(validating: "second"), priority: 10)
@@ -103,6 +122,20 @@ struct RendererResolutionTests {
         let logical = RendererResolution.preferred(descriptors: [old, new], preference: .logical(new.logicalReference), input: input, hostProtocolRevision: 1)
         #expect(exact == old)
         #expect(logical == new)
+    }
+
+    @Test func resolvesEqualSemanticVersionsWithStableDescriptorTieBreak() throws {
+        let first = try RendererFixtures.nativeDescriptor(version: try .init(validating: "1.0.0+build.1"))
+        let second = try RendererFixtures.nativeDescriptor(version: try .init(validating: "1.0.0+build.2"))
+        let input = try RendererFixtures.input()
+        let preference = RendererPreferenceReference.logical(first.logicalReference)
+
+        let forward = RendererResolution.preferred(descriptors: [second, first], preference: preference, input: input, hostProtocolRevision: 1)
+        let reverse = RendererResolution.preferred(descriptors: [first, second], preference: preference, input: input, hostProtocolRevision: 1)
+
+        #expect(first.reference.version.semanticPrecedence(comparedTo: second.reference.version) == .orderedSame)
+        #expect(forward == first)
+        #expect(reverse == first)
     }
 
     @Test func ignoresIncompatibleExactPreference() throws {
@@ -124,6 +157,39 @@ struct RendererResolutionTests {
 }
 
 struct RendererDescriptorValidationTests {
+    @Test func rejectsInvalidSizeAndCompatibilityBounds() throws {
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererSizeLimits(maximumInputByteCount: 0, maximumDecodedByteCount: 1)
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererSizeLimits(maximumInputByteCount: 2, maximumDecodedByteCount: 1)
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererCompatibility(minimumProtocolRevision: 0, maximumProtocolRevision: 1)
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererCompatibility(minimumProtocolRevision: 2, maximumProtocolRevision: 1)
+        }
+        let compatibility = try RendererCompatibility(minimumProtocolRevision: 2, maximumProtocolRevision: 4)
+        #expect(compatibility.supports(hostProtocolRevision: 2))
+        #expect(compatibility.supports(hostProtocolRevision: 4))
+        #expect(compatibility.supports(hostProtocolRevision: 1) == false)
+        #expect(compatibility.supports(hostProtocolRevision: 5) == false)
+    }
+
+    @Test func enforcesLinkPolicyCapabilityPairs() throws {
+        let reference = RendererReference(packageID: RendererFixtures.packageID, version: RendererFixtures.version, registrationID: RendererFixtures.registrationID)
+        let limits = try RendererSizeLimits(maximumInputByteCount: 1, maximumDecodedByteCount: 1)
+        let compatibility = try RendererCompatibility(minimumProtocolRevision: 1, maximumProtocolRevision: 1)
+
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererDescriptor(reference: reference, displayName: "Links", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead], sizeLimits: limits, linkPolicy: .userActivatedExternal, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererDescriptor(reference: reference, displayName: "No links", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .externalLink], sizeLimits: limits, linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
+        }
+    }
+
     @Test func rejectsInvalidPresentationCapabilitiesAndLimits() throws {
         let reference = RendererReference(packageID: RendererFixtures.packageID, version: RendererFixtures.version, registrationID: RendererFixtures.registrationID)
         #expect(throws: RendererValidationError.self) {
@@ -172,13 +238,16 @@ struct RendererPackageHashTests {
 }
 
 struct RendererManifestValidationTests {
-    @Test func rejectsDuplicatePathsRegistrationAndUnsupportedRevision() throws {
+    @Test func rejectsDuplicatePathsRegistrationUnsupportedRevisionAndIdentityMismatch() throws {
         let descriptor = try RendererFixtures.nativeDescriptor()
         #expect(throws: RendererValidationError.self) {
             _ = try RendererManifest(revision: 2, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [descriptor], assets: [])
         }
         #expect(throws: RendererValidationError.self) {
             _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [descriptor, descriptor], assets: [])
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: try .init(validating: "2.0.0"), descriptors: [descriptor], assets: [])
         }
     }
 }

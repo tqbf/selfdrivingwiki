@@ -77,7 +77,8 @@ public enum RendererResolution {
     }
 
     private static func logicalOrdering(_ lhs: RendererDescriptor, _ rhs: RendererDescriptor) -> Bool {
-        if lhs.reference.version != rhs.reference.version { return lhs.reference.version > rhs.reference.version }
+        let precedence = lhs.reference.version.semanticPrecedence(comparedTo: rhs.reference.version)
+        if precedence != .orderedSame { return precedence == .orderedDescending }
         return lhs.stableTieBreakKey < rhs.stableTieBreakKey
     }
 }

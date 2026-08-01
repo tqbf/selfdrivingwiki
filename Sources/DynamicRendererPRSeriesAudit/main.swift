@@ -25,12 +25,13 @@ protocol GitRepositoryQuerying {
 
 struct GitHubAuditPullRequest: Decodable, Equatable {
     struct Check: Decodable, Equatable { let name: String; let headSHA: String; let conclusion: String }
-    struct Review: Decodable, Equatable { let author: String; let commitSHA: String; let state: String }
+    struct Review: Decodable, Equatable { let author: String; let commitSHA: String; let state: String; let submittedAt: String }
     let headRefName: String
     let headRefOID: String
     let baseRefName: String
     let baseRefOID: String
     let title: String
+    let reviewDecision: String
     let checks: [Check]
     let reviews: [Review]
 }
@@ -45,12 +46,19 @@ protocol GitHubCommandRunning {
 }
 
 struct FileGateRecords: GateRecordReading, GateRecordWriting {
+    private let schemaURL: URL
+
+    init(schemaURL: URL? = nil) {
+        self.schemaURL = schemaURL ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("plans/dynamic-renderer-gate-record.schema.json")
+    }
+
     func records(at directory: URL) throws -> [DynamicRendererGateRecord] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
             .map { url in
                 let data = try Data(contentsOf: url)
-                try validateGateRecordJSONShape(data)
+                try GateRecordSchemaValidator.validate(instanceData: data, schemaData: Data(contentsOf: schemaURL))
                 let record = try JSONDecoder().decode(DynamicRendererGateRecord.self, from: data)
                 try record.validate()
                 guard url.deletingPathExtension().lastPathComponent == record.auditedSHA else {
@@ -61,22 +69,12 @@ struct FileGateRecords: GateRecordReading, GateRecordWriting {
     }
     func write(_ record: DynamicRendererGateRecord, to directory: URL) throws {
         try record.validate()
+        let data = try JSONEncoder.gateEncoder.encode(record)
+        try GateRecordSchemaValidator.validate(instanceData: data, schemaData: Data(contentsOf: schemaURL))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent("\(record.auditedSHA).json")
-        try JSONEncoder.gateEncoder.encode(record).write(to: destination, options: .atomic)
+        try data.write(to: destination, options: .atomic)
     }
-}
-
-private func validateGateRecordJSONShape(_ data: Data) throws {
-    let requiredKeys: Set<String> = ["schemaVersion", "auditedSHA", "headRefOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "mutationReport", "findings", "recordedAt"]
-    guard let record = try JSONSerialization.jsonObject(with: data) as? [String: Any], Set(record.keys) == requiredKeys,
-          let checks = record["requiredCheckRuns"] as? [[String: Any]],
-          checks.allSatisfy({ Set($0.keys) == ["name", "headSHA", "conclusion"] }),
-          let commands = record["commands"] as? [[String: Any]],
-          commands.allSatisfy({ Set($0.keys) == ["command", "exitCode"] }),
-          let review = record["review"] as? [String: Any],
-          (Set(review.keys) == ["approved"] || Set(review.keys) == ["approved", "author", "commitSHA"])
-    else { throw AuditCLIError.invalidRecord("gate record does not match the tracked schema") }
 }
 
 struct SystemAuditClock: AuditClock {
@@ -91,18 +89,25 @@ struct ProcessGitHubPullRequestQuery: GitHubPullRequestQuerying {
     }
 
     func pullRequest(head: String) throws -> GitHubAuditPullRequest {
-        let result = try commandRunner.run(arguments: ["gh", "pr", "view", head, "--json", "headRefName,headRefOid,baseRefName,baseRefOid,title,statusCheckRollup,reviews"])
+        let result = try commandRunner.run(arguments: ["gh", "pr", "view", head, "--json", "headRefName,headRefOid,baseRefName,baseRefOid,title,reviewDecision,reviews"])
         guard result.status == 0 else { throw AuditCLIError.commandFailed("gh pr view", result.status, result.output) }
         let object = try JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any] ?? [:]
-        let checks: [GitHubAuditPullRequest.Check] = (object["statusCheckRollup"] as? [[String: Any]] ?? []).map { value in
-            .init(name: value["name"] as? String ?? "", headSHA: value["headSha"] as? String ?? "", conclusion: value["conclusion"] as? String ?? "")
+        let headOID = object["headRefOid"] as? String ?? ""
+        guard DynamicRendererAuditValidation.isSHA(headOID) else { throw AuditCLIError.invalidRecord("PR head SHA is missing or invalid") }
+        let checksResult = try commandRunner.run(arguments: ["gh", "api", "repos/{owner}/{repo}/commits/\(headOID)/check-runs?per_page=100"])
+        guard checksResult.status == 0 else { throw AuditCLIError.commandFailed("gh api check-runs", checksResult.status, checksResult.output) }
+        let checksObject = try JSONSerialization.jsonObject(with: Data(checksResult.output.utf8)) as? [String: Any] ?? [:]
+        let checks: [GitHubAuditPullRequest.Check] = (checksObject["check_runs"] as? [[String: Any]] ?? []).map { value in
+            .init(name: value["name"] as? String ?? "", headSHA: value["head_sha"] as? String ?? "", conclusion: value["conclusion"] as? String ?? "")
         }
         let reviews: [GitHubAuditPullRequest.Review] = (object["reviews"] as? [[String: Any]] ?? []).map { value in
             let author = (value["author"] as? [String: Any])?["login"] as? String ?? ""
             let commit = (value["commit"] as? [String: Any])?["oid"] as? String ?? ""
-            return .init(author: author, commitSHA: commit, state: value["state"] as? String ?? "")
+            return .init(author: author, commitSHA: commit, state: value["state"] as? String ?? "", submittedAt: value["submittedAt"] as? String ?? "")
         }
-        return .init(headRefName: object["headRefName"] as? String ?? "", headRefOID: object["headRefOid"] as? String ?? "", baseRefName: object["baseRefName"] as? String ?? "", baseRefOID: object["baseRefOid"] as? String ?? "", title: object["title"] as? String ?? "", checks: checks, reviews: reviews)
+        let pullRequest = GitHubAuditPullRequest(headRefName: object["headRefName"] as? String ?? "", headRefOID: headOID, baseRefName: object["baseRefName"] as? String ?? "", baseRefOID: object["baseRefOid"] as? String ?? "", title: object["title"] as? String ?? "", reviewDecision: object["reviewDecision"] as? String ?? "", checks: checks, reviews: reviews)
+        _ = try requiredLiveChecks(from: pullRequest)
+        return pullRequest
     }
 }
 
@@ -177,7 +182,10 @@ enum DynamicRendererPRSeriesAuditMain {
         guard try git.status(arguments: ["merge-base", "--is-ancestor", first.baseRefOID, first.headRefOID]) == 0 else { throw AuditCLIError.invalidRecord("PR base is not an ancestor") }
         _ = try git.output(arguments: ["diff", "--name-only", "\(first.baseRefOID)...\(first.headRefOID)"])
         let liveChecks = try requiredLiveChecks(from: first)
-        guard let approval = first.reviews.last(where: { $0.state.uppercased() == "APPROVED" && $0.commitSHA == first.headRefOID }) else { throw AuditCLIError.invalidRecord("missing current-head approval") }
+        guard first.reviewDecision.uppercased() == "APPROVED",
+              let approval = effectiveCurrentHeadApproval(from: first) else {
+            throw AuditCLIError.invalidRecord("missing current effective head approval")
+        }
         let evidenceURL = URL(fileURLWithPath: evidenceDirectory)
         let matchingRecords = try records.records(at: evidenceURL).filter { $0.auditedSHA == first.headRefOID }
         guard matchingRecords.count == 1, let record = matchingRecords.first else { throw AuditCLIError.invalidRecord("missing exact-head gate record") }
@@ -231,13 +239,55 @@ private struct DynamicRendererAuditSeries: Decodable {
 }
 
 private struct DynamicRendererAuditInventory: Decodable {
-    struct MutationEvidence: Decodable { let report: String }
+    struct MutationEvidence: Decodable {
+        struct Threshold: Decodable, Equatable {
+            let maximumSurvivors: Int
+            let maximumUnviable: Int
+        }
+
+        struct PhasePolicy: Decodable {
+            let allowedUnviableSeverities: [String]
+        }
+
+        let report: String
+        let scope: String
+        let coveredSymbols: [String]
+        let threshold: Threshold
+        let phasePolicy: PhasePolicy
+    }
 
     let schemaVersion: Int
     let issue: Int
     let pr: Int
     let baseCommit: String
     let mutationEvidence: MutationEvidence
+}
+
+private struct DynamicRendererMutationReport: Decodable {
+    struct Result: Decodable {
+        let killed: Int
+        let survived: Int
+        let unviable: Int
+    }
+
+    struct Disposition: Decodable {
+        let outcome: String
+        let severity: String
+        let count: Int
+        let disposition: String
+        let rationale: String
+    }
+
+    let schemaVersion: Int
+    let auditedSHA: String
+    let baseOID: String
+    let generatedAt: String
+    let scope: String
+    let coveredSymbols: [String]
+    let result: Result
+    let threshold: DynamicRendererAuditInventory.MutationEvidence.Threshold
+    let dispositions: [Disposition]
+    let passed: Bool
 }
 
 private func decodeSeries(at url: URL) throws -> DynamicRendererAuditSeries {
@@ -255,14 +305,24 @@ private func requiredLiveChecks(from pullRequest: GitHubAuditPullRequest) throws
     }
 }
 
+private func effectiveCurrentHeadApproval(from pullRequest: GitHubAuditPullRequest) -> GitHubAuditPullRequest.Review? {
+    let latestByAuthor = Dictionary(grouping: pullRequest.reviews.filter { $0.author.isEmpty == false }, by: \.author)
+        .compactMapValues { $0.max(by: { $0.submittedAt < $1.submittedAt }) }
+    guard latestByAuthor.values.contains(where: { $0.state.uppercased() == "CHANGES_REQUESTED" }) == false else {
+        return nil
+    }
+    return latestByAuthor.values
+        .filter { $0.state.uppercased() == "APPROVED" && $0.commitSHA == pullRequest.headRefOID && DynamicRendererAuditValidation.isSHA($0.commitSHA) }
+        .max(by: { $0.submittedAt < $1.submittedAt })
+}
+
 private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicRendererAuditSeries.Phase, baseOID: String, repositoryRoot: URL) throws {
     guard let expectedInventory = phase.inventory else { throw AuditCLIError.invalidRecord("PR phase has no test inventory") }
     let schemaURL = repositoryRoot.appendingPathComponent("plans/dynamic-renderer-gate-record.schema.json")
-    let schema = try JSONSerialization.jsonObject(with: Data(contentsOf: schemaURL)) as? [String: Any]
-    guard schema?["additionalProperties"] as? Bool == false,
-          (schema?["properties"] as? [String: Any])?["schemaVersion"] as? [String: Any] != nil else {
-        throw AuditCLIError.invalidRecord("gate record schema is missing or malformed")
-    }
+    let schemaData = try Data(contentsOf: schemaURL)
+    let recordData = try JSONEncoder.gateEncoder.encode(record)
+    do { try GateRecordSchemaValidator.validate(instanceData: recordData, schemaData: schemaData) }
+    catch { throw AuditCLIError.invalidRecord("gate record does not match the tracked schema") }
 
     let inventoryURL = repositoryRoot.appendingPathComponent(expectedInventory)
     let inventory = try JSONDecoder().decode(DynamicRendererAuditInventory.self, from: Data(contentsOf: inventoryURL))
@@ -274,10 +334,51 @@ private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicR
         throw AuditCLIError.invalidRecord("record does not bind the tracked inventory and mutation report")
     }
     let mutationURL = repositoryRoot.appendingPathComponent(inventory.mutationEvidence.report)
-    let mutationReport = try JSONSerialization.jsonObject(with: Data(contentsOf: mutationURL)) as? [String: Any]
-    guard mutationReport?["files"] as? [String: Any] != nil else {
-        throw AuditCLIError.invalidRecord("mutation report is missing or malformed")
-    }
+    let mutationReport = try JSONDecoder().decode(DynamicRendererMutationReport.self, from: Data(contentsOf: mutationURL))
+    try validateMutationReport(mutationReport, inventory: inventory.mutationEvidence, record: record, baseOID: baseOID)
+}
+
+private func validateMutationReport(
+    _ report: DynamicRendererMutationReport,
+    inventory: DynamicRendererAuditInventory.MutationEvidence,
+    record: DynamicRendererGateRecord,
+    baseOID: String
+) throws {
+    guard report.schemaVersion == 1,
+          report.auditedSHA == record.auditedSHA,
+          report.baseOID == baseOID,
+          DynamicRendererAuditValidation.isSHA(report.auditedSHA),
+          DynamicRendererAuditValidation.isSHA(report.baseOID),
+          report.scope == inventory.scope,
+          Set(report.coveredSymbols) == Set(inventory.coveredSymbols),
+          report.coveredSymbols.count == Set(report.coveredSymbols).count,
+          report.threshold == inventory.threshold,
+          report.passed,
+          report.result.killed >= 0,
+          report.result.survived >= 0,
+          report.result.unviable >= 0,
+          report.result.survived <= inventory.threshold.maximumSurvivors,
+          report.result.unviable <= inventory.threshold.maximumUnviable,
+          DynamicRendererAuditValidation.hasExplicitOffset(report.generatedAt),
+          DynamicRendererAuditValidation.hasExplicitOffset(record.recordedAt),
+          let generatedAt = ISO8601DateFormatter().date(from: report.generatedAt),
+          let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt),
+          generatedAt <= recordedAt
+    else { throw DynamicRendererAuditError.invalidMutationReport }
+
+    let unviableCount = report.dispositions.filter { $0.outcome == "unviable" }.reduce(0) { $0 + $1.count }
+    let survivorCount = report.dispositions.filter { $0.outcome == "survived" }.reduce(0) { $0 + $1.count }
+    guard unviableCount == report.result.unviable,
+          survivorCount == report.result.survived,
+          report.dispositions.allSatisfy({ disposition in
+              disposition.count > 0 && disposition.rationale.isEmpty == false &&
+              ["survived", "unviable"].contains(disposition.outcome) &&
+              ["critical", "high", "medium", "low"].contains(disposition.severity) &&
+              disposition.disposition == "accepted"
+          }),
+          report.dispositions.contains(where: { ["critical", "high"].contains($0.severity) }) == false,
+          report.dispositions.filter({ $0.outcome == "unviable" }).allSatisfy({ inventory.phasePolicy.allowedUnviableSeverities.contains($0.severity) })
+    else { throw DynamicRendererAuditError.invalidMutationReport }
 }
 
 do {

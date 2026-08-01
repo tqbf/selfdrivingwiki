@@ -62,19 +62,25 @@ public struct RendererPackageVersion: RawRepresentable, Codable, Hashable, Senda
     public init(from decoder: any Decoder) throws { try self.init(validating: String(from: decoder)) }
     public func encode(to encoder: any Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
 
-    public static func < (lhs: Self, rhs: Self) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
-        switch (lhs.prerelease, rhs.prerelease) {
-        case (nil, nil): return lhs.rawValue < rhs.rawValue
-        case (nil, .some): return false
-        case (.some, nil): return true
+    /// Compares SemVer precedence. Build metadata deliberately has no effect.
+    public func semanticPrecedence(comparedTo other: Self) -> ComparisonResult {
+        if major != other.major { return major < other.major ? .orderedAscending : .orderedDescending }
+        if minor != other.minor { return minor < other.minor ? .orderedAscending : .orderedDescending }
+        if patch != other.patch { return patch < other.patch ? .orderedAscending : .orderedDescending }
+        switch (prerelease, other.prerelease) {
+        case (nil, nil): return .orderedSame
+        case (nil, .some): return .orderedDescending
+        case (.some, nil): return .orderedAscending
         case let (.some(left), .some(right)):
-            let precedence = RendererIdentifierRules.comparePrerelease(left, right)
-            if precedence != .orderedSame { return precedence == .orderedAscending }
-            return lhs.rawValue < rhs.rawValue
+            return RendererIdentifierRules.comparePrerelease(left, right)
         }
+    }
+
+    /// A total ordering for stable collection keys. Call
+    /// ``semanticPrecedence(comparedTo:)`` when SemVer precedence is required.
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        let precedence = lhs.semanticPrecedence(comparedTo: rhs)
+        return precedence == .orderedSame ? lhs.rawValue < rhs.rawValue : precedence == .orderedAscending
     }
 }
 
