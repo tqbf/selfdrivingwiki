@@ -187,6 +187,7 @@ struct ChatTranscriptPresentationTests {
         #expect(shell.contains("selectionOffsets"))
         #expect(shell.contains("isNearBottom"))
         #expect(shell.contains(".chat-tool {\n    display: block"))
+        #expect(shell.contains(".chat-row.row-thinking {\n    display: block"))
         #expect(shell.contains(".chat-tool > summary {\n    display: flex"))
     }
 }
