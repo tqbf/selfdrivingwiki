@@ -62,6 +62,46 @@ struct GitCommandPlanTests {
     #expect(GitCommandPlan.changedFiles(at: "/tmp/c", from: "a", to: "b").contains("--name-only"))
   }
 
+  // MARK: - GitHub credentials
+
+  @Test func githubCredentialsRouteThroughTheGitHubCLI() {
+    let args = GitCommandPlan.githubCredentialArguments(ghPath: "/opt/homebrew/bin/gh")
+    #expect(args == [
+      "-c", "credential.https://github.com.helper=",
+      "-c", "credential.https://github.com.helper=!'/opt/homebrew/bin/gh' auth git-credential",
+    ])
+  }
+
+  @Test func theEmptyHelperComesFirstToResetTheChain() {
+    // Not redundant: it clears any inherited helper for this host, so a stale
+    // osxkeychain entry can't answer first with a dead token.
+    let args = GitCommandPlan.githubCredentialArguments(ghPath: "/usr/bin/gh")
+    #expect(args[1] == "credential.https://github.com.helper=")
+    #expect(args[3].hasPrefix("credential.https://github.com.helper=!"))
+  }
+
+  @Test func credentialConfigIsScopedToGitHubOnly() {
+    // Scoping is what lets this be applied unconditionally: for any other host
+    // the config simply doesn't match, so the user's own helpers still run.
+    let args = GitCommandPlan.githubCredentialArguments(ghPath: "/usr/bin/gh")
+    #expect(args.allSatisfy { !$0.hasPrefix("credential.helper") })
+    for value in args where value.hasPrefix("credential.") {
+      #expect(value.hasPrefix("credential.https://github.com."))
+    }
+  }
+
+  @Test func aQuotedPathSurvivesSpaces() {
+    let args = GitCommandPlan.githubCredentialArguments(ghPath: "/Apps/My Tools/gh")
+    #expect(args.last == "credential.https://github.com.helper=!'/Apps/My Tools/gh' auth git-credential")
+  }
+
+  @Test func noGitHubCLIMeansNoCredentialConfigAtAll() {
+    // Public repos must keep working, and we must not disturb the user's own
+    // helpers, when `gh` isn't installed.
+    #expect(GitCommandPlan.githubCredentialArguments(ghPath: nil).isEmpty)
+    #expect(GitCommandPlan.githubCredentialArguments(ghPath: "").isEmpty)
+  }
+
   @Test func fetchPrunesAndNeverTouchesTheWorkingTree() {
     let args = GitCommandPlan.fetch(at: "/tmp/c")
     #expect(args.contains("--prune"))

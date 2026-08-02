@@ -92,4 +92,33 @@ public enum GitCommandPlan {
   public static func commitDate(at path: String, ref: String) -> [String] {
     ["-C", path, "show", "--no-patch", "--format=%cI", ref]
   }
+
+  /// Leading `-c` config that routes github.com credentials through the GitHub
+  /// CLI, prepended to EVERY invocation.
+  ///
+  /// **Why this exists.** A GUI-spawned `git` has no terminal and no useful
+  /// credential state, so a private repo fails at clone with "could not read
+  /// Username". The user is already authenticated — `gh` holds a token — and the
+  /// supported way to lend it to git is `gh auth git-credential`, which is
+  /// exactly what `gh auth setup-git` installs. We pass the same two lines as
+  /// `-c` flags instead of writing them, so the app **never edits the user's
+  /// gitconfig**: our auth arrangement lives and dies with our own processes.
+  ///
+  /// The empty first `helper=` is not redundant — it resets any inherited helper
+  /// chain for this host, so a stale osxkeychain entry can't answer first with a
+  /// dead token. (`gh auth setup-git` writes the same pair for the same reason.)
+  ///
+  /// Scoped to `credential.https://github.com.helper`, so it is inert for every
+  /// other host — which is why it can be applied unconditionally rather than
+  /// threading each command's remote down to here. Returns `[]` when `gh` isn't
+  /// installed, leaving the user's own helpers untouched.
+  public static func githubCredentialArguments(ghPath: String?) -> [String] {
+    guard let ghPath, !ghPath.isEmpty else { return [] }
+    return [
+      "-c", "credential.https://github.com.helper=",
+      // `!cmd` is git's shell-command helper form. Quoted so a path with spaces
+      // (a `gh` inside an .app bundle, say) doesn't split into two words.
+      "-c", "credential.https://github.com.helper=!'\(ghPath)' auth git-credential",
+    ]
+  }
 }

@@ -64,11 +64,37 @@ the LLM doing all synthesis.
   up-to-date / initial / incremental decision plus the model tier), and
   `RepoStateSnapshot` (the staged `REPO_STATE.md`).
 - **`GitRunner`** (app target) executes `GitCommandPlan` argv — the same
-  what/how split `AgentLauncher` uses for `claude`. It runs git with
-  `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/usr/bin/false` so a repo needing
-  credentials fails fast and visibly instead of hanging a GUI-spawned process on
-  an invisible prompt, and it reads both pipes before waiting so a large file list
-  can't deadlock against a full pipe buffer.
+  what/how split `AgentLauncher` uses for `claude`. It reads both pipes before
+  waiting, so a large file list can't deadlock against a full pipe buffer.
+
+### Private repositories go through `gh`
+
+A GUI-spawned `git` has no terminal and no useful credential state, so a private
+repo dies at clone with `could not read Username`. The user is already
+authenticated — `gh` holds a token — so every git invocation is prefixed with
+
+```text
+-c credential.https://github.com.helper=
+-c credential.https://github.com.helper=!'<path to gh>' auth git-credential
+```
+
+which is exactly the pair `gh auth setup-git` would install. Passing it as `-c`
+flags rather than writing it means **the app never edits the user's gitconfig**:
+the arrangement lives and dies with our own processes. The empty first `helper=`
+resets any inherited chain for that host, so a stale osxkeychain entry can't
+answer first with a dead token. Because the config is scoped to
+`credential.https://github.com.helper`, it is inert for every other host and can
+be applied unconditionally instead of threading each command's remote down to the
+plan; with no `gh` installed it collapses to `[]` and the user's own helpers are
+left alone.
+
+`GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/usr/bin/false` remain as the backstop
+for hosts the helper doesn't cover — a repo that still needs credentials fails
+fast instead of hanging. Git's own auth errors are accurate but unactionable in a
+GUI ("could not read Username" tells you nothing to *do*), so `GitRunner.Failure`
+appends the one command that usually fixes it: `gh auth status`, then
+`gh auth login`. It also names the trap that "Repository not found" is what GitHub
+returns for a private repo your token can't see.
 - **`RepoTracker`** (`@MainActor @Observable`) owns the clone/fetch operations,
   the per-repo activity and error state, and the FIFO of repos waiting to be
   ingested. It has no timer: `fetchAll()` and `requestIngest(_:)` are both driven
@@ -157,8 +183,9 @@ to have done nothing.
   ever becomes annoying, the cheap half (a fetch-only poll, still with no
   automatic agent run) is the thing to add back — `RepoTracker.fetchAll()` is
   already the right entry point for it.
-- Private repos work only if the existing git credential helper or SSH agent
-  already authenticates them; the app never prompts for or stores credentials.
+- Private GitHub repos need `gh` installed and logged in. Non-GitHub hosts fall
+  back to whatever credential helper or SSH agent the user already has; the app
+  never prompts for, stores, or sees a credential itself.
 - `--filter=blob:none` partial clones need network access the first time an old
   blob is materialized.
 - A force-push invalidates the commit range; `RepoSyncPlan` detects it with

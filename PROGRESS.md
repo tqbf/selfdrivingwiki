@@ -60,11 +60,23 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
   It drains only when the launcher is idle **and** no interactive Query session is
   open, and it keeps draining when a queued pass turns out not to start — with no
   poll loop, nothing else would come along to unstick the queue.
-- Ran git with `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/usr/bin/false`: in a
-  GUI-spawned process an auth prompt would hang forever with no visible cause, so
-  a repo needing credentials now fails fast with git's own message. A failed clone
-  keeps its row, carrying the error, so a bad URL leaves a repo you can retry
-  rather than a sheet that appears to have done nothing.
+- Authenticated private GitHub repos through the user's own `gh`. A GUI-spawned
+  git has no terminal and no useful credential state, so a private repo died at
+  clone with "could not read Username"; every invocation now carries
+  `-c credential.https://github.com.helper=!'<gh>' auth git-credential` (plus the
+  empty reset line), which is the pair `gh auth setup-git` installs. Passing it as
+  `-c` flags rather than writing it means the app never edits the user's gitconfig
+  — the arrangement lives and dies with our processes — and scoping it to
+  github.com makes it inert everywhere else, so it can be applied unconditionally
+  instead of threading each command's remote into the plan. No `gh`, no config
+  emitted, and public repos still work.
+- Kept `GIT_TERMINAL_PROMPT=0` / `GIT_ASKPASS=/usr/bin/false` as the backstop for
+  hosts the helper doesn't cover, and taught `GitRunner.Failure` to append the
+  actionable half git omits: `gh auth status` / `gh auth login`, plus the note that
+  "Repository not found" is what GitHub returns for a private repo your token
+  can't see. A failed clone keeps its row, carrying the error, so a bad URL or a
+  missing login leaves a repo you can retry rather than a sheet that appears to
+  have done nothing.
 - Made Query repo-aware: the tracked checkouts' paths and commits are spliced into
   both Query prompts, so a question can be answered from the source as well as the
   wiki. An empty repo list renders nothing at all, so a wiki that tracks none
@@ -90,15 +102,16 @@ monospaced commit shas — rather than introducing a new one. The sidebar badge 
 "Changes", not "12 behind": the tracker stores a head and a watermark, not a commit
 count, and a number the row can't stand behind is worse than a plain word.
 
-**Verified.** `make check` passes and `swift test` passes (**423/423**), up from
+**Verified.** `make check` passes and `swift test` passes (**428/428**), up from
 351 — six new suites (`GitRemoteURLTests`, `GitCommandPlanTests`,
 `RepoSyncPlanTests`, `RepoStateSnapshotTests`, `TrackedRepoStoreTests`,
 `RepoOperationTests`). The v5→6 migration is tested against a hand-built v5 DB with
 content in it, and `repoTableIsNotFoldedIntoTheChangeToken` locks decision #4.
-Every `GitCommandPlan` argv was also run by hand against a real partial clone
-(clone/fetch/rev-parse/ls-files/log/diff/merge-base/reset) plus the credential
-fail-fast, since `GitRunner` and `RepoTracker` live in the executable target and
-can't be imported by the test target.
+Every `GitCommandPlan` argv was also run by hand — against a public repo and
+against a **private** one (clone/fetch/rev-parse/ls-files/log/diff/merge-base/
+reset, 1051 files through the `gh` credential path) — since `GitRunner` and
+`RepoTracker` live in the executable target and can't be imported by the test
+target.
 
 ## 2026-06-17 — Dedicated interactive Query page
 

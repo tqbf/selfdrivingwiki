@@ -25,7 +25,33 @@ enum GitRunner {
 
     var description: String {
       let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-      return detail.isEmpty ? "git exited \(status)" : detail
+      guard !detail.isEmpty else { return "git exited \(status)" }
+      guard let hint = Self.hint(for: detail) else { return detail }
+      return detail + "\n\n" + hint
+    }
+
+    /// Git's auth errors are accurate but unactionable in a GUI ("could not read
+    /// Username" tells you nothing about what to do). Since we route github.com
+    /// through `gh`, the fix is nearly always one command, so say which.
+    private static func hint(for stderr: String) -> String? {
+      let lowered = stderr.lowercased()
+      let looksLikeAuth = ["could not read username", "authentication failed",
+                           "askpass", "permission denied", "repository not found"]
+        .contains { lowered.contains($0) }
+      guard looksLikeAuth else { return nil }
+      switch resolveGitHubCLI() {
+      case .some:
+        return """
+          If this is a private repository, make sure the GitHub CLI can reach it: \
+          `gh auth status`, then `gh auth login` if needed. ("Repository not found" \
+          is what GitHub returns for a private repo your token can't see.)
+          """
+      case .none:
+        return """
+          Private repositories are authenticated through the GitHub CLI, which \
+          isn't on your PATH. Install it (cli.github.com) and run `gh auth login`.
+          """
+      }
     }
   }
 
@@ -49,20 +75,42 @@ enum GitRunner {
     }
   }
 
+  /// Resolve `gh` on the login-shell PATH, or nil if it isn't installed. Cached:
+  /// this is consulted on every git invocation, and each miss costs a `zsh -lc`
+  /// hop. Nil is a valid, non-fatal answer — public repos work fine without it.
+  static func resolveGitHubCLI() -> String? {
+    if let cached = cachedGitHubCLIPath { return cached }
+    guard case .found(let path) = PathPreflight.resolveOnLoginShell(
+      executable: "gh",
+      installHint: "Install the GitHub CLI (cli.github.com)")
+    else { return nil }
+    cachedGitHubCLIPath = path
+    return path
+  }
+
+  private nonisolated(unsafe) static var cachedGitHubCLIPath: String?
+
   /// Run one git invocation and return its trimmed stdout. Throws `Failure` on a
   /// non-zero exit and `NotInstalled` when git can't be resolved.
+  ///
+  /// Every invocation is prefixed with the github.com credential config, so a
+  /// private GitHub repo authenticates through the user's already-logged-in `gh`
+  /// rather than failing at a prompt no GUI process can answer.
   @discardableResult
   static func run(_ arguments: [String]) async throws -> String {
     let git = try resolveGit().get()
+    let credentialArguments = GitCommandPlan.githubCredentialArguments(
+      ghPath: resolveGitHubCLI())
     return try await withCheckedThrowingContinuation { continuation in
       DispatchQueue.global(qos: .utility).async {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: git)
-        process.arguments = arguments
-        // Never let git stop to ask a human anything: in a GUI-spawned process
-        // an auth prompt would hang the run forever with no visible cause. With
-        // these set, a repo needing credentials fails fast and loudly instead,
-        // and the error text tells the user to configure their credential helper.
+        process.arguments = credentialArguments + arguments
+        // Never let git stop to ask a human anything: in a GUI-spawned process a
+        // prompt would hang the run forever with no visible cause. The credential
+        // helper above answers for github.com, so this is the backstop for
+        // everything it doesn't cover — a repo that still needs credentials fails
+        // fast, and `Failure` turns the resulting message into an actionable one.
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_ASKPASS"] = "/usr/bin/false"
