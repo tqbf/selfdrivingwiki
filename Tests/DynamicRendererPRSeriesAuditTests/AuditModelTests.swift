@@ -64,6 +64,21 @@ struct DynamicRendererPRSeriesAuditModelTests {
         #expect(throws: Error.self) { _ = try DynamicRendererPRSeriesAuditMain.options(for: "unknown", arguments: []) }
     }
 
+    @Test func auditMainRunRejectsMissingSubcommandWithoutStartingAShell() {
+        #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.run(arguments: []) }
+    }
+
+    @Test func rejectsMalformedTimestampForMutationFreeGateRecord() throws {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let valid = auditRecord(sha: sha, base: base, mutationReport: nil)
+        try valid.validate()
+        for timestamp in ["2026-08-01T00:00:00Z", "not-a-timestamp+00:00"] {
+            let malformed = DynamicRendererGateRecord(schemaVersion: valid.schemaVersion, auditedSHA: valid.auditedSHA, headRefOID: valid.headRefOID, localHeadOID: valid.localHeadOID, baseRefName: valid.baseRefName, baseRefOID: valid.baseRefOID, cleanCheckout: valid.cleanCheckout, requiredCheckRuns: valid.requiredCheckRuns, review: valid.review, commands: valid.commands, testInventory: valid.testInventory, mutationReport: nil, findings: valid.findings, recordedAt: timestamp)
+            #expect(throws: DynamicRendererAuditError.invalidRecordedAt(timestamp)) { try malformed.validate() }
+        }
+    }
+
     @Test func reviewStatesRoundTripUsingSchemaShape() throws {
         let approved = DynamicRendererAuditReview.approved(author: "reviewer", commitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         let approvedData = try JSONEncoder().encode(approved)
@@ -229,6 +244,8 @@ struct DynamicRendererPRSeriesAuditModelTests {
             { $0["productionSymbols"] = [["symbol": "RendererRelativePath", "tests": ["FixtureTests.coversRenderer"]], ["symbol": "RendererRelativePath", "tests": ["FixtureTests.coversRenderer"]]] },
             { $0["productionSymbols"] = [["symbol": "RendererRelativePath", "tests": ["FixtureTests.missing"]]] },
             { $0["decisionBranches"] = [["path": "fixture branch", "tests": ["FixtureTests.coversDecision", "FixtureTests.coversDecision"]]] },
+            { $0["expectedProductionSymbols"] = [] },
+            { $0["expectedDecisionBranches"] = ["missing fixture branch"] },
             { $0["productionSources"] = [] },
             { $0["productionSources"] = ["Sources/WikiFSTypes/Renderer/RendererRelativePath.swift", "Sources/WikiFSTypes/Renderer/RendererRelativePath.swift"] },
             { $0["productionSources"] = ["Sources/WikiFSTypes/Renderer/Other.swift"] },
@@ -414,6 +431,32 @@ struct DynamicRendererPRSeriesAuditModelTests {
         }
     }
 
+    @Test func rawSchemaPreservesBooleanAndNumberIdentityBeforeDecoding() throws {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let gateSchema = try Data(contentsOf: URL(fileURLWithPath: "plans/dynamic-renderer-gate-record.schema.json"))
+        let gateData = try encodedGateRecord(auditRecord(sha: sha, base: base)) { $0["schemaVersion"] = true }
+        #expect(throws: Error.self) { try GateRecordSchemaValidator.validate(instanceData: gateData, schemaData: gateSchema) }
+
+        let directory = try temporarySeriesDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try writeAuditFixture(in: directory, base: base)
+        let mutationSchema = try Data(contentsOf: URL(fileURLWithPath: "plans/dynamic-renderer-mutation-evidence.schema.json"))
+        let mutationData = try Data(contentsOf: directory.appendingPathComponent("tmp/dynamic-renderer-pr1-mutation-evidence.json"))
+        let cases = [
+            try mutatedJSONObjectData(mutationData) { $0["passed"] = 1 },
+            try mutatedJSONObjectData(mutationData) { document in
+                var result = document["result"] as? [String: Any] ?? [:]
+                result["killed"] = true
+                document["result"] = result
+            },
+            try mutatedJSONObjectData(mutationData) { $0["schemaVersion"] = true },
+        ]
+        for candidate in cases {
+            #expect(throws: Error.self) { try MutationEvidenceSchemaValidator.validate(instanceData: candidate, schemaData: mutationSchema) }
+        }
+    }
+
     @Test func mutationEnvelopeSchemaRejectsUnknownMissingWrongAndNestedFieldsBeforeDecoding() throws {
         let directory = try temporarySeriesDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -466,25 +509,26 @@ struct DynamicRendererPRSeriesAuditModelTests {
         }
     }
 
-    @Test func verifierRejectsFailureOnlyAndThresholdBreakingMutationReports() throws {
+    @Test func verifierRejectsMutationReportMarkedFailed() throws {
         try expectMutationEvidenceRejection { document in
             document["passed"] = false
         }
-        try expectMutationEvidenceRejection { document in
-            document["result"] = ["killed": 0, "survived": 1, "unviable": 0]
-            document["dispositions"] = [["outcome": "survived", "severity": "medium", "count": 1, "disposition": "accepted", "rationale": "not allowed by threshold"]]
-        }
     }
 
-    @Test func verifierRejectsUnresolvedCriticalAndUndispositionedLowerMutationFindings() throws {
-        try expectMutationEvidenceRejection { document in
-            document["result"] = ["killed": 0, "survived": 0, "unviable": 1]
-            document["dispositions"] = [["outcome": "unviable", "severity": "critical", "count": 1, "disposition": "accepted", "rationale": "critical finding"]]
+    @Test func verifierReachesSurvivorThresholdPolicyWithValidNativeMutationLedger() throws {
+        let error = try mutationEvidenceVerificationError { directory, document in
+            let native = Data("{\"files\":{\"/Sources/WikiFSTypes/Renderer/RendererConstraints.swift\":{\"mutants\":[{\"id\":\"m-survivor\",\"status\":\"Survived\"}]}}}".utf8)
+            try replaceMutationEvidence(in: directory, document: &document, native: native, result: ["killed": 0, "survived": 1, "unviable": 0], mutants: [["id": "m-survivor", "outcome": "survived", "severity": "medium", "disposition": "fixed", "rationale": "proves threshold policy"]])
         }
-        try expectMutationEvidenceRejection { document in
-            document["result"] = ["killed": 0, "survived": 0, "unviable": 1]
-            document["dispositions"] = [["outcome": "unviable", "severity": "low", "count": 1, "disposition": "unresolved", "rationale": "missing policy disposition"]]
+        #expect((error as? DynamicRendererAuditError) == .invalidMutationReport)
+    }
+
+    @Test func verifierReachesCriticalUnviableSeverityPolicyWithValidNativeMutationLedger() throws {
+        let error = try mutationEvidenceVerificationError { directory, document in
+            let native = Data("{\"files\":{\"/Sources/WikiFSTypes/Renderer/RendererConstraints.swift\":{\"mutants\":[{\"id\":\"m-critical\",\"status\":\"Unviable\"}]}}}".utf8)
+            try replaceMutationEvidence(in: directory, document: &document, native: native, result: ["killed": 0, "survived": 0, "unviable": 1], mutants: [["id": "m-critical", "outcome": "unviable", "severity": "critical", "disposition": "fixed", "rationale": "proves severity policy"]], threshold: ["maximumSurvivors": 0, "maximumUnviable": 1])
         }
+        #expect(String(describing: error).contains("native mutation report digest or complete mutant ledger does not match"))
     }
 
     @Test func fileGateRecordsRejectsSchemaMismatchAndWrongSHAFilename() throws {
@@ -589,7 +633,7 @@ private func writeAuditFixture(in directory: URL, base: String) throws -> String
     try FileManager.default.createDirectory(at: tests, withIntermediateDirectories: true)
     try Data("import Testing\nstruct FixtureTests { @Test func coversRenderer() {} @Test func coversDecision() {} }".utf8).write(to: tests.appendingPathComponent("FixtureTests.swift"))
     try Data("{\"schemaVersion\":1,\"issue\":1026,\"phases\":[{\"number\":1,\"branch\":\"feature/dynamic-renderers-01-model\",\"base\":\"main\",\"inventory\":\"plans/dynamic-renderers-pr1-test-inventory.json\"}]}".utf8).write(to: plans.appendingPathComponent("series.json"))
-    try Data("{\"schemaVersion\":1,\"issue\":1026,\"pr\":1,\"baseCommit\":\"\(base)\",\"productionSources\":[\"Sources/WikiFSTypes/Renderer/RendererRelativePath.swift\"],\"productionSymbols\":[{\"symbol\":\"RendererRelativePath\",\"tests\":[\"FixtureTests.coversRenderer\"]}],\"decisionBranches\":[{\"path\":\"fixture branch\",\"tests\":[\"FixtureTests.coversDecision\"]}],\"mutationEvidence\":{\"report\":\"tmp/dynamic-renderer-pr1-mutation-evidence.json\",\"scope\":\"Sources/WikiFSTypes/Renderer\",\"coveredSymbols\":[\"RendererRelativePath\"],\"threshold\":{\"maximumSurvivors\":0,\"maximumUnviable\":0},\"phasePolicy\":{\"allowedUnviableSeverities\":[\"medium\",\"low\"]}}}".utf8).write(to: plans.appendingPathComponent("dynamic-renderers-pr1-test-inventory.json"))
+    try Data("{\"schemaVersion\":1,\"issue\":1026,\"pr\":1,\"baseCommit\":\"\(base)\",\"productionSources\":[\"Sources/WikiFSTypes/Renderer/RendererRelativePath.swift\"],\"productionSymbols\":[{\"symbol\":\"RendererRelativePath\",\"tests\":[\"FixtureTests.coversRenderer\"]}],\"decisionBranches\":[{\"path\":\"fixture branch\",\"tests\":[\"FixtureTests.coversDecision\"]}],\"expectedProductionSymbols\":[\"RendererRelativePath\"],\"expectedDecisionBranches\":[\"fixture branch\"],\"mutationEvidence\":{\"report\":\"tmp/dynamic-renderer-pr1-mutation-evidence.json\",\"scope\":\"Sources/WikiFSTypes/Renderer\",\"coveredSymbols\":[\"RendererRelativePath\"],\"threshold\":{\"maximumSurvivors\":0,\"maximumUnviable\":0},\"phasePolicy\":{\"allowedUnviableSeverities\":[\"medium\",\"low\"]}}}".utf8).write(to: plans.appendingPathComponent("dynamic-renderers-pr1-test-inventory.json"))
     let schema = try Data(contentsOf: URL(fileURLWithPath: "plans/dynamic-renderer-gate-record.schema.json"))
     try schema.write(to: plans.appendingPathComponent("dynamic-renderer-gate-record.schema.json"))
     let mutationSchema = try Data(contentsOf: URL(fileURLWithPath: "plans/dynamic-renderer-mutation-evidence.schema.json"))
@@ -614,6 +658,14 @@ private func mutatedJSONObjectData(_ data: Data, mutate: (inout [String: Any]) -
 }
 
 private func expectMutationEvidenceRejection(mutate: (inout [String: Any]) -> Void) throws {
+    _ = try mutationEvidenceVerificationError { _, document in mutate(&document) }
+}
+
+private enum AuditFixtureError: Error {
+    case expectedMutationEvidenceRejection
+}
+
+private func mutationEvidenceVerificationError(mutate: (URL, inout [String: Any]) throws -> Void) throws -> Error {
     let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     let directory = try temporarySeriesDirectory()
@@ -621,12 +673,31 @@ private func expectMutationEvidenceRejection(mutate: (inout [String: Any]) -> Vo
     let seriesPath = try writeAuditFixture(in: directory, base: base)
     let mutationURL = directory.appendingPathComponent("tmp/dynamic-renderer-pr1-mutation-evidence.json")
     var document = try JSONSerialization.jsonObject(with: Data(contentsOf: mutationURL)) as? [String: Any] ?? [:]
-    mutate(&document)
+    try mutate(directory, &document)
     try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: mutationURL)
     let metadata = auditPullRequest(sha: sha, base: base)
 
-    #expect(throws: Error.self) {
+    do {
         try DynamicRendererPRSeriesAuditMain.verify(seriesPath: seriesPath, evidenceDirectory: directory.path, git: AuditFakeGit(head: "feature/dynamic-renderers-01-model", base: base), github: AuditFakeGitHub([metadata]), records: AuditFakeRecords([auditRecord(sha: sha, base: base)]))
+    } catch {
+        return error
+    }
+    throw AuditFixtureError.expectedMutationEvidenceRejection
+}
+
+private func replaceMutationEvidence(in directory: URL, document: inout [String: Any], native: Data, result: [String: Int], mutants: [[String: String]], threshold: [String: Int]? = nil) throws {
+    try native.write(to: directory.appendingPathComponent("tmp/dynamic-renderer-pr1-native-mutation-report.json"))
+    document["nativeReportSHA256"] = RendererSHA256.digest(native).hex
+    document["result"] = result
+    document["mutants"] = mutants
+    if let threshold {
+        document["threshold"] = threshold
+        let inventoryURL = directory.appendingPathComponent("plans/dynamic-renderers-pr1-test-inventory.json")
+        var inventory = try JSONSerialization.jsonObject(with: Data(contentsOf: inventoryURL)) as? [String: Any] ?? [:]
+        var mutationEvidence = inventory["mutationEvidence"] as? [String: Any] ?? [:]
+        mutationEvidence["threshold"] = threshold
+        inventory["mutationEvidence"] = mutationEvidence
+        try JSONSerialization.data(withJSONObject: inventory, options: [.sortedKeys]).write(to: inventoryURL)
     }
 }
 

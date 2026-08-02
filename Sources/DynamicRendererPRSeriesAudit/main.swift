@@ -413,6 +413,8 @@ private struct DynamicRendererAuditInventory: Decodable {
     let productionSources: [String]
     let productionSymbols: [TestMapping]
     let decisionBranches: [TestMapping]
+    let expectedProductionSymbols: [String]
+    let expectedDecisionBranches: [String]
     let mutationEvidence: MutationEvidence
 }
 
@@ -570,8 +572,8 @@ private func validateMutationReport(
           report.result.unviable >= 0,
           report.result.survived <= inventory.threshold.maximumSurvivors,
           report.result.unviable <= inventory.threshold.maximumUnviable,
-          DynamicRendererAuditValidation.hasExplicitOffset(report.generatedAt),
-          DynamicRendererAuditValidation.hasExplicitOffset(record.recordedAt),
+          DynamicRendererAuditValidation.isISO8601TimestampWithExplicitOffset(report.generatedAt),
+          DynamicRendererAuditValidation.isISO8601TimestampWithExplicitOffset(record.recordedAt),
           let generatedAt = ISO8601DateFormatter().date(from: report.generatedAt),
           let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt),
           generatedAt <= recordedAt
@@ -636,6 +638,14 @@ private func validateTestMappings(_ inventory: DynamicRendererAuditInventory, ch
     guard mappings.isEmpty == false,
           mappings.allSatisfy({ $0.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && $0.tests.isEmpty == false }),
           Set(mappings.map(\.subject)).count == mappings.count,
+          inventory.productionSymbols.allSatisfy({ $0.symbol != nil && $0.path == nil }),
+          inventory.decisionBranches.allSatisfy({ $0.path != nil && $0.symbol == nil }),
+          inventory.expectedProductionSymbols.isEmpty == false,
+          inventory.expectedDecisionBranches.isEmpty == false,
+          Set(inventory.expectedProductionSymbols).count == inventory.expectedProductionSymbols.count,
+          Set(inventory.expectedDecisionBranches).count == inventory.expectedDecisionBranches.count,
+          Set(inventory.expectedProductionSymbols) == Set(inventory.productionSymbols.map(\.subject)),
+          Set(inventory.expectedDecisionBranches) == Set(inventory.decisionBranches.map(\.subject)),
           inventory.productionSources.isEmpty == false,
           Set(inventory.productionSources).count == inventory.productionSources.count,
           Set(inventory.productionSources) == changedProductionSources else {

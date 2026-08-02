@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 // pattern: Functional Core
@@ -69,7 +70,9 @@ private enum JSONSchemaValidator {
             if let maximum = schema["maxItems"] as? Int, array.count > maximum { return false }
             if let itemSchema = schema["items"] as? [String: Any], array.allSatisfy({ validates($0, against: itemSchema) }) == false { return false }
         }
-        if let integer = instance as? Int, let minimum = schema["minimum"] as? Int, integer < minimum { return false }
+        if isJSONInteger(instance), let number = instance as? NSNumber,
+           let minimum = schema["minimum"] as? Int,
+           number.decimalValue < Decimal(minimum) { return false }
         if let object = instance as? [String: Any] {
             let required = schema["required"] as? [String] ?? []
             guard required.allSatisfy(object.keys.contains) else { return false }
@@ -88,19 +91,42 @@ private enum JSONSchemaValidator {
         case "object": instance is [String: Any]
         case "array": instance is [Any]
         case "string": instance is String
-        case "boolean": instance is Bool
-        case "integer": instance is Int
+        case "boolean": isJSONBoolean(instance)
+        case "integer": isJSONInteger(instance)
         case "null": instance is NSNull
         default: false
         }
     }
 
     private static func equals(_ left: Any, _ right: Any) -> Bool {
-        switch (left, right) {
-        case let (left as String, right as String): left == right
-        case let (left as Bool, right as Bool): left == right
-        case let (left as Int, right as Int): left == right
-        default: false
+        if isJSONBoolean(left) || isJSONBoolean(right) {
+            guard isJSONBoolean(left), isJSONBoolean(right),
+                  let leftNumber = left as? NSNumber,
+                  let rightNumber = right as? NSNumber else { return false }
+            return leftNumber.boolValue == rightNumber.boolValue
         }
+        if isJSONInteger(left) || isJSONInteger(right) {
+            guard isJSONInteger(left), isJSONInteger(right),
+                  let leftNumber = left as? NSNumber,
+                  let rightNumber = right as? NSNumber else { return false }
+            return leftNumber.decimalValue == rightNumber.decimalValue
+        }
+        if let left = left as? String, let right = right as? String { return left == right }
+        return false
+    }
+
+    /// JSONSerialization represents booleans as NSNumber subclasses, so Swift's
+    /// `as? Int` and `as? Bool` casts cannot preserve the original JSON type.
+    private static func isJSONBoolean(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
+    private static func isJSONInteger(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber, isJSONBoolean(value) == false else { return false }
+        var decimal = number.decimalValue
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &decimal, 0, .plain)
+        return decimal == rounded
     }
 }

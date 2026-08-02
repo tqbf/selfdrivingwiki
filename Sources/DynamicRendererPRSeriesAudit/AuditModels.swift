@@ -178,7 +178,7 @@ public struct DynamicRendererGateRecord: Codable, Equatable, Sendable {
         guard commands.map(\.command) == DynamicRendererBuildAndSuiteGate.requiredCommands.map({ $0.joined(separator: " ") }),
               commands.allSatisfy({ $0.exitCode == 0 }) else { throw DynamicRendererAuditError.invalidCommandEvidence }
         guard findings.allSatisfy(\.isAcceptable) else { throw DynamicRendererAuditError.invalidFinding }
-        guard DynamicRendererAuditValidation.hasExplicitOffset(recordedAt) else { throw DynamicRendererAuditError.invalidRecordedAt(recordedAt) }
+        guard DynamicRendererAuditValidation.isISO8601TimestampWithExplicitOffset(recordedAt) else { throw DynamicRendererAuditError.invalidRecordedAt(recordedAt) }
     }
 }
 
@@ -190,6 +190,9 @@ public enum DynamicRendererAuditValidation {
         value.count == 64 && value.allSatisfy { $0.isASCII && ($0.isNumber || ("a"..."f").contains($0)) }
     }
     public static func hasExplicitOffset(_ value: String) -> Bool { value.range(of: "[+-][0-9]{2}:[0-9]{2}$", options: .regularExpression) != nil }
+    public static func isISO8601TimestampWithExplicitOffset(_ value: String) -> Bool {
+        hasExplicitOffset(value) && ISO8601DateFormatter().date(from: value) != nil
+    }
 }
 
 public enum DynamicRendererBuildAndSuiteGate {
