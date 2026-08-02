@@ -16,7 +16,7 @@ enum RendererFixtures {
         try RendererDescriptor(
             reference: .init(packageID: packageID, version: version, registrationID: registrationID),
             displayName: "Example Viewer",
-            implementation: .builtIn(try BuiltInRendererID(validating: "pdf")),
+            implementation: .builtIn(.pdf),
             matchers: matchers,
             presentations: [.native],
             approvedAssets: [],
@@ -26,6 +26,28 @@ enum RendererFixtures {
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
             compatibility: try compatibility ?? .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
             priority: priority
+        )
+    }
+
+    static func webDescriptor(
+        assets: [RendererAsset],
+        registrationID: RendererRegistrationID = registrationID,
+        matchers: [RendererMatcher] = [.artifactKind(.source)]
+    ) throws -> RendererDescriptor {
+        guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
+        return try RendererDescriptor(
+            reference: .init(packageID: packageID, version: version, registrationID: registrationID),
+            displayName: "Example Web Viewer",
+            implementation: .webPackage(.init(path: entry.path)),
+            matchers: matchers,
+            presentations: [.web],
+            approvedAssets: assets,
+            capabilities: [.inputRead],
+            sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
+            linkPolicy: .none,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 0
         )
     }
 

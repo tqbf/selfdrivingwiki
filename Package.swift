@@ -385,6 +385,14 @@ let package = Package(
             path: "Sources/DynamicRendererPRSeriesAudit",
             swiftSettings: strictSwiftSettings
         ),
+        // A process-isolated hash fixture proves that Set iteration order does
+        // not affect the canonical renderer package envelope.
+        .executableTarget(
+            name: "RendererHashFixture",
+            dependencies: ["WikiFSTypes"],
+            path: "Sources/RendererHashFixture",
+            swiftSettings: strictSwiftSettings
+        ),
         // Renderer contract tests deliberately depend on the portable leaf target
         // alone. This makes an accidental WikiFSTypes -> WikiFSCore dependency
         // a package-graph failure on every supported platform.

@@ -66,6 +66,7 @@ protocol GitHubPullRequestQuerying { func pullRequest(head: String) throws -> Gi
 protocol GateRecordReading { func records(at directory: URL) throws -> [DynamicRendererGateRecord] }
 protocol GateRecordWriting { func write(_ record: DynamicRendererGateRecord, to directory: URL) throws }
 protocol AuditClock { func recordedAt() -> String }
+protocol AuditCommandRunning { func run(command: [String], environment: [String: String]?) throws -> ProcessRunner.Result }
 
 protocol GitHubCommandRunning {
     func run(arguments: [String]) throws -> (status: Int32, output: String)
@@ -105,6 +106,13 @@ struct FileGateRecords: GateRecordReading, GateRecordWriting {
 
 struct SystemAuditClock: AuditClock {
     func recordedAt() -> String { ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: "Z", with: "+00:00") }
+}
+
+private struct ProcessAuditCommandRunner: AuditCommandRunning {
+    func run(command: [String], environment: [String: String]?) throws -> ProcessRunner.Result {
+        let executableArguments = environment == nil ? command : Array(command.dropFirst())
+        return try ProcessRunner.run(executable: "/usr/bin/env", arguments: executableArguments, environment: environment)
+    }
 }
 
 struct ProcessGitHubPullRequestQuery: GitHubPullRequestQuerying {
@@ -241,7 +249,7 @@ struct ProcessRunner {
 enum DynamicRendererPRSeriesAuditMain {
     static func run(arguments: [String]) throws {
         guard let subcommand = arguments.first else { throw AuditCLIError.usage }
-        let options = Dictionary(uniqueKeysWithValues: stride(from: 1, to: arguments.count - 1, by: 2).map { (arguments[$0], arguments[$0 + 1]) })
+        let options = try parseOptions(Array(arguments.dropFirst()))
         switch subcommand {
         case "verify":
             guard let series = options["--series"], let evidence = options["--evidence"] else { throw AuditCLIError.usage }
@@ -249,9 +257,24 @@ enum DynamicRendererPRSeriesAuditMain {
             try verify(seriesPath: series, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), github: ProcessGitHubPullRequestQuery(), records: records, writer: records)
         case "build-suite":
             guard let head = options["--head"], let evidence = options["--evidence"], DynamicRendererAuditValidation.isSHA(head) else { throw AuditCLIError.usage }
-            try buildSuite(head: head, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), records: FileGateRecords(), clock: SystemAuditClock())
+            try buildSuite(head: head, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), github: ProcessGitHubPullRequestQuery(), records: FileGateRecords(), clock: SystemAuditClock())
         default: throw AuditCLIError.usage
         }
+    }
+
+    static func parseOptions(_ arguments: [String]) throws -> [String: String] {
+        guard arguments.count.isMultiple(of: 2) else { throw AuditCLIError.usage }
+        var options: [String: String] = [:]
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            let key = arguments[index]
+            let value = arguments[arguments.index(after: index)]
+            guard key.hasPrefix("--"), options.updateValue(value, forKey: key) == nil else {
+                throw AuditCLIError.usage
+            }
+            index = arguments.index(index, offsetBy: 2)
+        }
+        return options
     }
 
     static func verify(seriesPath: String, evidenceDirectory: String, git: GitRepositoryQuerying, github: GitHubPullRequestQuerying, records: GateRecordReading) throws {
@@ -268,12 +291,8 @@ enum DynamicRendererPRSeriesAuditMain {
         let first = try github.pullRequest(head: branch)
         guard first.headRefOID == localHead else { throw AuditCLIError.invalidHead(first.headRefOID) }
         guard first.headRefName == branch, first.baseRefName == phase.base, first.title.range(of: "^(feat|fix|test|chore|docs|refactor)(\\([^)]+\\))?: .+", options: .regularExpression) != nil else { throw AuditCLIError.invalidRecord("PR metadata does not bind this branch/base/title") }
-        if phase.base == "main" {
-            let currentBase = try git.output(arguments: ["rev-parse", "origin/main"])
-            guard first.baseRefOID == currentBase else { throw AuditCLIError.invalidRecord("PR base is not the current origin/main SHA") }
-        }
-        guard try git.status(arguments: ["merge-base", "--is-ancestor", first.baseRefOID, first.headRefOID]) == 0 else { throw AuditCLIError.invalidRecord("PR base is not an ancestor") }
-        _ = try git.output(arguments: ["diff", "--name-only", "\(first.baseRefOID)...\(first.headRefOID)"])
+        let repositoryRoot = seriesURL.deletingLastPathComponent().deletingLastPathComponent()
+        try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
         let liveChecks = try requiredLiveChecks(from: first)
         guard first.reviewDecision.uppercased() == "APPROVED",
               let approval = effectiveCurrentHeadApproval(from: first) else {
@@ -285,7 +304,7 @@ enum DynamicRendererPRSeriesAuditMain {
         do { try record.validate() }
         catch { throw AuditCLIError.invalidRecord("invalid record: \(error)") }
         guard let inventory = phase.inventory, record.baseRefOID == first.baseRefOID, record.testInventory == inventory else { throw AuditCLIError.invalidRecord("evidence does not bind the PR series") }
-        try validateEvidence(record: record, phase: phase, baseOID: first.baseRefOID, repositoryRoot: seriesURL.deletingLastPathComponent().deletingLastPathComponent())
+        try validateEvidence(record: record, phase: phase, baseOID: first.baseRefOID, repositoryRoot: repositoryRoot)
         let second = try github.pullRequest(head: branch)
         guard second == first else { throw AuditCLIError.invalidRecord("PR changed during audit") }
         guard try git.output(arguments: ["rev-parse", "HEAD"]) == localHead,
@@ -295,24 +314,35 @@ enum DynamicRendererPRSeriesAuditMain {
         try writer.write(retainedRecord, to: evidenceURL)
     }
 
-    static func buildSuite(head: String, evidenceDirectory: String, git: GitRepositoryQuerying, records: GateRecordWriting, clock: AuditClock) throws {
+    static func buildSuite(head: String, evidenceDirectory: String, git: GitRepositoryQuerying, github: GitHubPullRequestQuerying, records: GateRecordWriting, clock: AuditClock, runner: AuditCommandRunning = ProcessAuditCommandRunner(), seriesPath: String? = nil) throws {
         try requireStableCheckout(expectedHead: head, git: git)
+        let branch = try git.output(arguments: ["branch", "--show-current"])
+        let seriesURL = seriesPath.map(URL.init(fileURLWithPath:)) ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("plans/dynamic-renderers-pr-series.json")
+        let series = try decodeSeries(at: seriesURL)
+        guard let phase = series.phases.first(where: { $0.branch == branch }) else { throw AuditCLIError.invalidRecord("branch is not in the PR series") }
+        let first = try github.pullRequest(head: branch)
+        guard first.headRefOID == head, first.headRefName == branch, first.baseRefName == phase.base else {
+            throw AuditCLIError.invalidRecord("PR metadata does not bind this build-suite run")
+        }
+        let repositoryRoot = seriesURL.deletingLastPathComponent().deletingLastPathComponent()
+        try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
         var results: [DynamicRendererAuditCommandResult] = []
         for command in DynamicRendererBuildAndSuiteGate.requiredCommands {
             try requireStableCheckout(expectedHead: head, git: git)
             let environment = command.first?.hasPrefix("WIKIFS_APP_TESTS=") == true ? ["WIKIFS_APP_TESTS": "1"] : nil
-            let executableArguments = environment == nil ? command : Array(command.dropFirst())
-            let result = try ProcessRunner.run(executable: "/usr/bin/env", arguments: executableArguments, environment: environment)
+            let result = try runner.run(command: command, environment: environment)
             results.append(.init(command: command.joined(separator: " "), exitCode: Int(result.status)))
             try requireStableCheckout(expectedHead: head, git: git)
             guard result.status == 0 else { throw AuditCLIError.commandFailed(command.joined(separator: " "), result.status, result.output) }
         }
-        let baseOID = try git.output(arguments: ["rev-parse", "origin/main"])
         try requireStableCheckout(expectedHead: head, git: git)
-        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, localHeadOID: head, baseRefName: "main", baseRefOID: baseOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: "plans/dynamic-renderers-pr1-test-inventory.json", mutationReport: "tmp/dynamic-renderer-pr1-mutation-evidence.json", findings: [], recordedAt: clock.recordedAt())
+        let second = try github.pullRequest(head: branch)
+        guard second == first else { throw AuditCLIError.invalidRecord("PR changed during build-suite") }
+        try verifyExactBase(phase: phase, pullRequest: second, git: git, repositoryRoot: repositoryRoot)
+        let inventory = try decodeInventory(phase: phase, repositoryRoot: repositoryRoot)
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, localHeadOID: head, baseRefName: second.baseRefName, baseRefOID: second.baseRefOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: try requiredInventoryPath(for: phase), mutationReport: inventory.mutationEvidence.report, findings: [], recordedAt: clock.recordedAt())
         try record.validate()
-        let phase = DynamicRendererAuditSeries.Phase(number: 1, branch: "feature/dynamic-renderers-01-model", base: "main", inventory: record.testInventory)
-        try validateEvidence(record: record, phase: phase, baseOID: baseOID, repositoryRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+        try validateEvidence(record: record, phase: phase, baseOID: second.baseRefOID, repositoryRoot: repositoryRoot)
         try requireStableCheckout(expectedHead: head, git: git)
         try records.write(record, to: URL(fileURLWithPath: evidenceDirectory, isDirectory: true))
     }
@@ -341,6 +371,13 @@ private struct DynamicRendererAuditSeries: Decodable {
 }
 
 private struct DynamicRendererAuditInventory: Decodable {
+    struct TestMapping: Decodable {
+        let symbol: String?
+        let path: String?
+        let tests: [String]
+
+        var subject: String { symbol ?? path ?? "" }
+    }
     struct MutationEvidence: Decodable {
         struct Threshold: Decodable, Equatable {
             let maximumSurvivors: Int
@@ -362,6 +399,8 @@ private struct DynamicRendererAuditInventory: Decodable {
     let issue: Int
     let pr: Int
     let baseCommit: String
+    let productionSymbols: [TestMapping]
+    let decisionBranches: [TestMapping]
     let mutationEvidence: MutationEvidence
 }
 
@@ -400,6 +439,32 @@ private func decodeSeries(at url: URL) throws -> DynamicRendererAuditSeries {
     let series = try JSONDecoder().decode(DynamicRendererAuditSeries.self, from: Data(contentsOf: url))
     guard series.schemaVersion == 1, series.issue == 1026 else { throw AuditCLIError.invalidRecord("invalid PR series") }
     return series
+}
+
+private func requiredInventoryPath(for phase: DynamicRendererAuditSeries.Phase) throws -> String {
+    guard let inventory = phase.inventory else { throw AuditCLIError.invalidRecord("PR phase has no test inventory") }
+    return inventory
+}
+
+private func decodeInventory(phase: DynamicRendererAuditSeries.Phase, repositoryRoot: URL) throws -> DynamicRendererAuditInventory {
+    let inventory = try JSONDecoder().decode(DynamicRendererAuditInventory.self, from: Data(contentsOf: repositoryRoot.appendingPathComponent(try requiredInventoryPath(for: phase))))
+    guard inventory.schemaVersion == 1, inventory.issue == 1026, inventory.pr == phase.number else {
+        throw AuditCLIError.invalidRecord("invalid test inventory")
+    }
+    return inventory
+}
+
+private func verifyExactBase(phase: DynamicRendererAuditSeries.Phase, pullRequest: GitHubAuditPullRequest, git: GitRepositoryQuerying, repositoryRoot: URL) throws {
+    let inventory = try decodeInventory(phase: phase, repositoryRoot: repositoryRoot)
+    guard inventory.baseCommit == pullRequest.baseRefOID else { throw AuditCLIError.invalidRecord("PR base does not match the series inventory") }
+    guard try git.status(arguments: ["fetch", "origin", pullRequest.baseRefOID]) == 0,
+          try git.output(arguments: ["rev-parse", pullRequest.baseRefOID]) == pullRequest.baseRefOID else {
+        throw AuditCLIError.invalidRecord("cannot fetch the exact PR base")
+    }
+    guard try git.status(arguments: ["merge-base", "--is-ancestor", pullRequest.baseRefOID, pullRequest.headRefOID]) == 0 else {
+        throw AuditCLIError.invalidRecord("PR base is not an ancestor")
+    }
+    _ = try git.output(arguments: ["diff", "--name-only", "\(pullRequest.baseRefOID)...\(pullRequest.headRefOID)"])
 }
 
 private func requiredLiveChecks(from pullRequest: GitHubAuditPullRequest) throws -> [DynamicRendererAuditCheckRun] {
@@ -447,11 +512,11 @@ private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicR
     do { try GateRecordSchemaValidator.validate(instanceData: recordData, schemaData: schemaData) }
     catch { throw AuditCLIError.invalidRecord("gate record does not match the tracked schema") }
 
-    let inventoryURL = repositoryRoot.appendingPathComponent(expectedInventory)
-    let inventory = try JSONDecoder().decode(DynamicRendererAuditInventory.self, from: Data(contentsOf: inventoryURL))
+    let inventory = try decodeInventory(phase: phase, repositoryRoot: repositoryRoot)
     guard inventory.schemaVersion == 1, inventory.issue == 1026, inventory.pr == phase.number, inventory.baseCommit == baseOID else {
         throw AuditCLIError.invalidRecord("test inventory does not bind the current PR base")
     }
+    try validateTestMappings(inventory, repositoryRoot: repositoryRoot)
     guard record.testInventory == expectedInventory,
           record.mutationReport == inventory.mutationEvidence.report else {
         throw AuditCLIError.invalidRecord("record does not bind the tracked inventory and mutation report")
@@ -478,7 +543,7 @@ private func validateMutationReport(
           report.coveredSymbols.count == Set(report.coveredSymbols).count,
           report.threshold == inventory.threshold,
           report.passed,
-          report.command.hasPrefix("make mutate-scope SOURCES_PATH="),
+          report.command == "make mutate-scope SOURCES_PATH=\(inventory.scope)",
           report.toolVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
           isRetainedTemporaryPath(report.nativeReport),
           DynamicRendererAuditValidation.isSHA256(report.nativeReportSHA256),
@@ -533,7 +598,7 @@ private func nativeMutationOutcomes(from data: Data, expectedScope: String) thro
     var outcomes: [String: String] = [:]
     for (path, value) in files {
         let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard normalized.hasPrefix(expectedScope),
+        guard normalized == expectedScope || normalized.hasPrefix("\(expectedScope)/"),
               let file = value as? [String: Any],
               let mutants = file["mutants"] as? [[String: Any]] else { throw DynamicRendererAuditError.invalidMutationReport }
         for mutant in mutants {
@@ -546,6 +611,43 @@ private func nativeMutationOutcomes(from data: Data, expectedScope: String) thro
     }
     guard outcomes.isEmpty == false else { throw DynamicRendererAuditError.invalidMutationReport }
     return outcomes
+}
+
+private func validateTestMappings(_ inventory: DynamicRendererAuditInventory, repositoryRoot: URL) throws {
+    let mappings = inventory.productionSymbols + inventory.decisionBranches
+    guard mappings.isEmpty == false,
+          mappings.allSatisfy({ $0.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && $0.tests.isEmpty == false }),
+          Set(mappings.map(\.subject)).count == mappings.count else {
+        throw AuditCLIError.invalidRecord("test inventory mappings must be non-empty and unique")
+    }
+    let discovered = try discoveredTestNames(repositoryRoot: repositoryRoot)
+    guard mappings.allSatisfy({ mapping in
+        Set(mapping.tests).count == mapping.tests.count && mapping.tests.allSatisfy(discovered.contains)
+    }) else {
+        throw AuditCLIError.invalidRecord("test inventory references an unknown or duplicate test")
+    }
+}
+
+private func discoveredTestNames(repositoryRoot: URL) throws -> Set<String> {
+    let testsURL = repositoryRoot.appendingPathComponent("Tests", isDirectory: true)
+    guard let enumerator = FileManager.default.enumerator(at: testsURL, includingPropertiesForKeys: [.isRegularFileKey]) else {
+        throw AuditCLIError.invalidRecord("cannot discover test inventory")
+    }
+    let suitePattern = try NSRegularExpression(pattern: "(?:struct|final\\s+class|class)\\s+([A-Za-z_][A-Za-z0-9_]*)")
+    let functionPattern = try NSRegularExpression(pattern: "@Test[\\s\\S]{0,300}?func\\s+([A-Za-z_][A-Za-z0-9_]*)")
+    var names: Set<String> = []
+    for case let url as URL in enumerator where url.pathExtension == "swift" {
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let range = NSRange(source.startIndex..., in: source)
+        let suites = suitePattern.matches(in: source, range: range)
+        for function in functionPattern.matches(in: source, range: range) {
+            guard let functionNameRange = Range(function.range(at: 1), in: source),
+                  let suite = suites.last(where: { $0.range.location < function.range.location }),
+                  let suiteNameRange = Range(suite.range(at: 1), in: source) else { continue }
+            names.insert("\(source[suiteNameRange]).\(source[functionNameRange])")
+        }
+    }
+    return names
 }
 
 private func nativeOutcome(_ status: String) -> String? {

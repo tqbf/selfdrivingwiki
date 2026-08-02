@@ -46,9 +46,16 @@ struct RendererIdentifierBoundaryTypecheckTests {
         #expect(result.status == 0, "positive renderer fixture failed to typecheck:\n\(result.output)")
     }
 
-    @Test func packageVersionNamespacesCannotBeInterchanged() throws {
-        let result = try typecheck("version-for-package.swift")
-        #expect(result.status != 0, "RendererPackageVersion unexpectedly typechecked as RendererPackageID.")
-        #expect(result.output.contains("RendererPackageVersion") && result.output.contains("RendererPackageID"), "unexpected compiler diagnostic:\n\(result.output)")
+    @Test(arguments: [
+        ("version-for-package.swift", "RendererPackageVersion", "RendererPackageID"),
+        ("package-for-version.swift", "RendererPackageID", "RendererPackageVersion"),
+        ("registration-for-package.swift", "RendererRegistrationID", "RendererPackageID"),
+        ("logical-for-exact.swift", "LogicalRendererReference", "RendererReference"),
+        ("exact-for-logical.swift", "RendererReference", "LogicalRendererReference"),
+    ])
+    func rendererIdentifierNamespacesCannotBeInterchanged(_ fixture: String, _ supplied: String, _ expected: String) throws {
+        let result = try typecheck(fixture)
+        #expect(result.status != 0, "\(supplied) unexpectedly typechecked as \(expected).")
+        #expect(result.output.contains(supplied) && result.output.contains(expected), "unexpected compiler diagnostic:\n\(result.output)")
     }
 }

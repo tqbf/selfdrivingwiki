@@ -106,24 +106,10 @@ public struct RendererRegistrationID: RawRepresentable, Codable, Hashable, Senda
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// Closed host-owned identity for a native renderer.
-public struct BuiltInRendererID: RawRepresentable, Codable, Hashable, Sendable, Comparable {
-    public let rawValue: String
-
-    public init?(rawValue: String) {
-        guard RendererIdentifierRules.isRegistrationID(rawValue) else { return nil }
-        self.rawValue = rawValue
-    }
-
-    public init(validating rawValue: String) throws {
-        guard let value = Self(rawValue: rawValue) else {
-            throw RendererValidationError.invalidIdentifier(kind: "built-in renderer ID", value: rawValue)
-        }
-        self = value
-    }
-
-    public init(from decoder: any Decoder) throws { try self.init(validating: String(from: decoder)) }
-    public func encode(to encoder: any Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+/// Closed host-owned identity for a native renderer. Installable package input
+/// cannot add a case to this enum.
+public enum BuiltInRendererID: String, Codable, CaseIterable, Hashable, Sendable, Comparable {
+    case pdf
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }

@@ -165,16 +165,34 @@ struct RendererResolutionTests {
         let input = try RendererFixtures.input()
         #expect(RendererResolution.preferred(descriptors: [old, new], preference: preference, input: input, hostProtocolRevision: 1) == new)
     }
+
+    @Test func rejectsCompoundPreferenceWithDifferentPackageOrRegistrationIdentity() throws {
+        let exact = RendererReference(packageID: RendererFixtures.packageID, version: RendererFixtures.version, registrationID: RendererFixtures.registrationID)
+        let otherPackage = try RendererPackageID(validating: "org.example.other")
+        let otherRegistration = try RendererRegistrationID(validating: "other")
+        #expect(throws: RendererValidationError.mismatchedPreferenceIdentity) {
+            _ = try RendererPreference(exact: exact, logical: .init(packageID: otherPackage, registrationID: exact.registrationID))
+        }
+        #expect(throws: RendererValidationError.mismatchedPreferenceIdentity) {
+            _ = try RendererPreference(exact: exact, logical: .init(packageID: exact.packageID, registrationID: otherRegistration))
+        }
+    }
 }
 
 struct RendererDescriptorValidationTests {
-    @Test func rejectsInvalidSizeAndCompatibilityBounds() throws {
+    @Test func rejectsNonpositiveInputSizeLimit() {
         #expect(throws: RendererValidationError.self) {
             _ = try RendererSizeLimits(maximumInputByteCount: 0, maximumDecodedByteCount: 1)
         }
+    }
+
+    @Test func rejectsDecodedSizeBelowInputSizeLimit() {
         #expect(throws: RendererValidationError.self) {
             _ = try RendererSizeLimits(maximumInputByteCount: 2, maximumDecodedByteCount: 1)
         }
+    }
+
+    @Test func rejectsInvalidCompatibilityBounds() throws {
         #expect(throws: RendererValidationError.self) {
             _ = try RendererCompatibility(minimumProtocolRevision: 0, maximumProtocolRevision: 1)
         }
@@ -194,20 +212,31 @@ struct RendererDescriptorValidationTests {
         let compatibility = try RendererCompatibility(minimumProtocolRevision: 1, maximumProtocolRevision: 1)
 
         #expect(throws: RendererValidationError.self) {
-            _ = try RendererDescriptor(reference: reference, displayName: "Links", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead], sizeLimits: limits, linkPolicy: .userActivatedExternal, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
+            _ = try RendererDescriptor(reference: reference, displayName: "Links", implementation: .builtIn(.pdf), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead], sizeLimits: limits, linkPolicy: .userActivatedExternal, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
         }
         #expect(throws: RendererValidationError.self) {
-            _ = try RendererDescriptor(reference: reference, displayName: "No links", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .externalLink], sizeLimits: limits, linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
+            _ = try RendererDescriptor(reference: reference, displayName: "No links", implementation: .builtIn(.pdf), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .externalLink], sizeLimits: limits, linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: compatibility, priority: 0)
         }
     }
 
-    @Test func rejectsInvalidPresentationCapabilitiesAndLimits() throws {
+    @Test func rejectsNativeDescriptorWithWebPresentation() throws {
         let reference = RendererReference(packageID: RendererFixtures.packageID, version: RendererFixtures.version, registrationID: RendererFixtures.registrationID)
         #expect(throws: RendererValidationError.self) {
-            _ = try RendererDescriptor(reference: reference, displayName: "Native", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.web], approvedAssets: [], capabilities: [.inputRead], sizeLimits: try .init(maximumInputByteCount: 2, maximumDecodedByteCount: 1), linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
+            _ = try RendererDescriptor(reference: reference, displayName: "Native", implementation: .builtIn(.pdf), matchers: [.artifactKind(.source)], presentations: [.web], approvedAssets: [], capabilities: [.inputRead], sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1), linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
         }
+    }
+
+    @Test func rejectsForbiddenNetworkCapability() throws {
+        let reference = RendererReference(packageID: RendererFixtures.packageID, version: RendererFixtures.version, registrationID: RendererFixtures.registrationID)
         #expect(throws: RendererValidationError.self) {
-            _ = try RendererDescriptor(reference: reference, displayName: "Network", implementation: .builtIn(try .init(validating: "native")), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .network], sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1), linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
+            _ = try RendererDescriptor(reference: reference, displayName: "Network", implementation: .builtIn(.pdf), matchers: [.artifactKind(.source)], presentations: [.native], approvedAssets: [], capabilities: [.inputRead, .network], sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1), linkPolicy: .none, accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true), compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
+        }
+    }
+
+    @Test func rejectsDuplicateDescriptorAssetPath() throws {
+        let asset = RendererAsset(path: try .init(validating: "assets/index.html"), digest: try .init(hex: String(repeating: "1", count: 64)))
+        #expect(throws: RendererValidationError.duplicateAsset(asset.path)) {
+            _ = try RendererFixtures.webDescriptor(assets: [asset, asset])
         }
     }
 
@@ -228,7 +257,7 @@ struct RendererDescriptorValidationTests {
 }
 
 struct RendererPackageHashTests {
-    @Test func testCanonicalEnvelopeGoldenDigestAndOrderIndependence() throws {
+    @Test func canonicalEnvelopeGoldenDigestAndOrderIndependence() throws {
         let packageID = RendererFixtures.packageID
         let version = RendererFixtures.version
         let registrationID = RendererFixtures.registrationID
@@ -247,9 +276,9 @@ struct RendererPackageHashTests {
             matchers: [.artifactKind(.source)],
             presentations: [.web],
             approvedAssets: [script, index],
-            capabilities: [.inputRead],
+            capabilities: [.inputRead, .externalLink],
             sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
-            linkPolicy: .none,
+            linkPolicy: .userActivatedExternal,
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
             compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
             priority: 1
@@ -259,12 +288,82 @@ struct RendererPackageHashTests {
         let firstHash = try first.packageHash()
         let secondHash = try second.packageHash()
         #expect(firstHash == secondHash)
-        #expect(firstHash.hex == "67c0d25a259bc84704058493e57a409752c49a6edc888de7c0973228cd82be6a")
+        #expect(firstHash.hex == "84457b45f850cb5e6347b026c8c1135c27d32af329fb17f0d5d7b09afdc80fc6")
+    }
+
+    @Test func canonicalHashIsIndependentOfMultiMemberSetConstructionOrder() throws {
+        let index = RendererAsset(path: try .init(validating: "assets/index.html"), digest: try .init(hex: String(repeating: "a", count: 64)))
+        let first = try RendererFixtures.webDescriptor(assets: [index], matchers: [.artifactKind(.source), .normalizedMIME(try .init(validating: "application/pdf")), .extensionFallback(try .init(validating: "pdf"))])
+        let second = try RendererDescriptor(reference: first.reference, displayName: first.displayName, implementation: first.implementation, matchers: Array(first.matchers.reversed()), presentations: Set([.web]), approvedAssets: first.approvedAssets, capabilities: Set([.inputRead]), sizeLimits: first.sizeLimits, linkPolicy: first.linkPolicy, accessibility: first.accessibility, compatibility: first.compatibility, priority: first.priority)
+        let firstManifest = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [first], assets: [index])
+        let secondManifest = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [second], assets: [index])
+        #expect(try firstManifest.packageHash() == secondManifest.packageHash())
+        #expect(try firstManifest.canonicalJSON() == secondManifest.canonicalJSON())
+    }
+
+    @Test func canonicalHashIsIndependentAcrossFreshProcesses() throws {
+        let forward = try fixtureHash(order: "forward")
+        let reverse = try fixtureHash(order: "reverse")
+        #expect(forward == reverse)
+    }
+
+    private func fixtureHash(order: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let buildDirectory = root.appendingPathComponent(".build", isDirectory: true)
+        let enumerator = try #require(FileManager.default.enumerator(at: buildDirectory, includingPropertiesForKeys: [.isRegularFileKey]))
+        let fixture = try #require((enumerator.allObjects as? [URL])?.first(where: {
+            $0.lastPathComponent == "RendererHashFixture" && FileManager.default.isExecutableFile(atPath: $0.path)
+        }))
+        let process = Process()
+        process.executableURL = fixture
+        process.arguments = [order]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        try #require(process.terminationStatus == 0, "renderer hash fixture failed:\n\(text)")
+        return try #require(text.split(separator: "\n").last.map(String.init))
     }
 }
 
 struct RendererManifestValidationTests {
-    @Test func rejectsDuplicatePathsRegistrationUnsupportedRevisionAndIdentityMismatch() throws {
+    @Test func rejectsEmptyPackageRegistrationList() throws {
+        #expect(throws: RendererValidationError.emptyManifest) {
+            _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [], assets: [])
+        }
+    }
+
+    @Test func rejectsBuiltInDescriptorInPackageManifest() throws {
+        #expect(throws: RendererValidationError.packageManifestContainsBuiltIn(.pdf)) {
+            _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [try RendererFixtures.nativeDescriptor()], assets: [])
+        }
+    }
+
+    @Test func rejectsUnknownBuiltInIdentity() throws {
+        #expect(BuiltInRendererID(rawValue: "untrusted") == nil)
+        #expect(throws: Error.self) { _ = try JSONDecoder().decode(BuiltInRendererID.self, from: Data("\"untrusted\"".utf8)) }
+    }
+
+    @Test func rejectsDuplicateManifestAssetPath() throws {
+        let asset = RendererAsset(path: try .init(validating: "assets/index.html"), digest: try .init(hex: String(repeating: "1", count: 64)))
+        let descriptor = try RendererFixtures.webDescriptor(assets: [asset])
+        #expect(throws: RendererValidationError.duplicatePath(asset.path)) {
+            _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [descriptor], assets: [asset, asset])
+        }
+    }
+
+    @Test func rejectsDescriptorAssetOutsideManifestAssets() throws {
+        let descriptorAsset = RendererAsset(path: try .init(validating: "assets/index.html"), digest: try .init(hex: String(repeating: "1", count: 64)))
+        let manifestAsset = RendererAsset(path: try .init(validating: "assets/viewer.js"), digest: try .init(hex: String(repeating: "2", count: 64)))
+        let descriptor = try RendererFixtures.webDescriptor(assets: [descriptorAsset])
+        #expect(throws: RendererValidationError.manifestAssetNotApproved(descriptorAsset.path)) {
+            _ = try RendererManifest(revision: 1, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [descriptor], assets: [manifestAsset])
+        }
+    }
+
+    @Test func rejectsDuplicateRegistrationUnsupportedRevisionAndIdentityMismatch() throws {
         let descriptor = try RendererFixtures.nativeDescriptor()
         #expect(throws: RendererValidationError.self) {
             _ = try RendererManifest(revision: 2, packageID: RendererFixtures.packageID, version: RendererFixtures.version, descriptors: [descriptor], assets: [])

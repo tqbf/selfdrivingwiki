@@ -19,7 +19,10 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case unsupportedManifestRevision(Int)
     case manifestIdentityMismatch
     case manifestAssetNotApproved(RendererRelativePath)
+    case emptyManifest
+    case packageManifestContainsBuiltIn(BuiltInRendererID)
     case emptyPreference
+    case mismatchedPreferenceIdentity
 
     public var description: String {
         switch self {
@@ -40,7 +43,10 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case let .unsupportedManifestRevision(revision): "unsupported renderer manifest revision: \(revision)"
         case .manifestIdentityMismatch: "renderer descriptor does not match manifest identity"
         case let .manifestAssetNotApproved(path): "renderer descriptor does not approve manifest asset: \(path.rawValue)"
+        case .emptyManifest: "renderer manifest must register at least one renderer"
+        case let .packageManifestContainsBuiltIn(id): "renderer package manifest cannot contain built-in renderer: \(id.rawValue)"
         case .emptyPreference: "renderer preference has no exact or logical reference"
+        case .mismatchedPreferenceIdentity: "renderer preference exact and logical identities differ"
         }
     }
 }

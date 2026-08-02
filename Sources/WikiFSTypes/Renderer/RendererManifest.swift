@@ -20,6 +20,9 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             throw RendererValidationError.unsupportedManifestRevision(revision)
         }
         let sortedDescriptors = descriptors.sorted { $0.reference.registrationID < $1.reference.registrationID }
+        guard sortedDescriptors.isEmpty == false else {
+            throw RendererValidationError.emptyManifest
+        }
         guard Set(sortedDescriptors.map(\.reference.registrationID)).count == sortedDescriptors.count else {
             guard let duplicate = zip(sortedDescriptors, sortedDescriptors.dropFirst()).first(where: {
                 $0.reference.registrationID == $1.reference.registrationID
@@ -36,6 +39,9 @@ public struct RendererManifest: Codable, Hashable, Sendable {
         for descriptor in sortedDescriptors {
             guard descriptor.reference.packageID == packageID, descriptor.reference.version == version else {
                 throw RendererValidationError.manifestIdentityMismatch
+            }
+            if case let .builtIn(identifier) = descriptor.implementation {
+                throw RendererValidationError.packageManifestContainsBuiltIn(identifier)
             }
             let packageAssets = Set(sortedAssets)
             for asset in descriptor.approvedAssets where packageAssets.contains(asset) == false {
@@ -60,12 +66,13 @@ public struct RendererManifest: Codable, Hashable, Sendable {
         )
     }
 
-    /// JSON with Foundation's sorted-key encoder. All arrays were normalized at
-    /// construction, so bytes are independent of input and installation order.
+    /// JSON with Foundation's sorted-key encoder. This uses an explicit
+    /// canonical DTO because synthesized Codable does not impose an order on
+    /// `Set` members nested inside a descriptor.
     public func canonicalJSON() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        return try encoder.encode(CanonicalManifest(self))
     }
 
     /// SHA-256 of a versioned envelope that embeds normalized manifest JSON and
@@ -81,5 +88,59 @@ public struct RendererManifest: Codable, Hashable, Sendable {
         ]
         let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys, .withoutEscapingSlashes])
         return RendererSHA256.digest(data)
+    }
+}
+
+private struct CanonicalManifest: Encodable {
+    let revision: Int
+    let packageID: RendererPackageID
+    let version: RendererPackageVersion
+    let descriptors: [CanonicalRendererDescriptor]
+    let assets: [RendererAsset]
+
+    init(_ manifest: RendererManifest) throws {
+        revision = manifest.revision
+        packageID = manifest.packageID
+        version = manifest.version
+        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptor.init)
+        assets = manifest.assets.sorted()
+    }
+}
+
+private struct CanonicalRendererDescriptor: Encodable {
+    let reference: RendererReference
+    let displayName: String
+    let implementation: RendererImplementation
+    let matchers: [RendererMatcher]
+    let presentations: [RendererPresentation]
+    let approvedAssets: [RendererAsset]
+    let capabilities: [RendererCapability]
+    let sizeLimits: RendererSizeLimits
+    let linkPolicy: RendererLinkPolicy
+    let accessibility: RendererAccessibility
+    let compatibility: RendererCompatibility
+    let priority: Int
+
+    init(_ descriptor: RendererDescriptor) throws {
+        reference = descriptor.reference
+        displayName = descriptor.displayName
+        implementation = descriptor.implementation
+        matchers = try CanonicalRendererDescriptor.sortedCodable(descriptor.matchers)
+        presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
+        approvedAssets = descriptor.approvedAssets.sorted()
+        capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
+        sizeLimits = descriptor.sizeLimits
+        linkPolicy = descriptor.linkPolicy
+        accessibility = descriptor.accessibility
+        compatibility = descriptor.compatibility
+        priority = descriptor.priority
+    }
+
+    private static func sortedCodable<T: Encodable>(_ values: [T]) throws -> [T] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try values.map { (value: $0, key: try encoder.encode($0)) }
+            .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            .map(\.value)
     }
 }

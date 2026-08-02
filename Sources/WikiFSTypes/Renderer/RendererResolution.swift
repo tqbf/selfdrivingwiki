@@ -16,6 +16,11 @@ public struct RendererPreference: Codable, Hashable, Sendable {
 
     public init(exact: RendererReference?, logical: LogicalRendererReference?) throws {
         guard exact != nil || logical != nil else { throw RendererValidationError.emptyPreference }
+        if let exact, let logical {
+            guard exact.packageID == logical.packageID, exact.registrationID == logical.registrationID else {
+                throw RendererValidationError.mismatchedPreferenceIdentity
+            }
+        }
         self.exact = exact
         self.logical = logical
     }
