@@ -93,12 +93,16 @@ final class AgentLauncher {
     /// - `onLock`/`onUnlock` are the edit-lock callbacks: `onLock` fires before the
     ///   spawn, `onUnlock` from the `terminationHandler` (so a killed agent still
     ///   releases). Both run on the main actor.
+    /// - `repos` is the wiki's tracked-repository contexts, so a Query can read the
+    ///   tracked SOURCE as well as the wiki. Empty for wikis that track none, which
+    ///   renders no prompt block at all.
     func run(
         request: OperationRequest,
         wikiID: String,
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
+        repos: [RepoStateSnapshot.Context] = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) {
@@ -141,7 +145,8 @@ final class AgentLauncher {
             systemPrompt: systemPrompt,
             scratchDirectory: scratch.path,
             wikictlDirectory: wikictlDirectory,
-            claudeExecutable: claudeExecutable
+            claudeExecutable: claudeExecutable,
+            repos: repos
         )
 
         resetRunState()
@@ -214,6 +219,7 @@ final class AgentLauncher {
         wikiRoot: String,
         systemPrompt: String,
         wikictlDirectory: String,
+        repos: [RepoStateSnapshot.Context] = [],
         onLock: @escaping @MainActor () -> Void,
         onUnlock: @escaping @MainActor @Sendable () -> Void
     ) {
@@ -252,7 +258,8 @@ final class AgentLauncher {
             systemPrompt: systemPrompt,
             scratchDirectory: scratch.path,
             wikictlDirectory: wikictlDirectory,
-            claudeExecutable: claudeExecutable
+            claudeExecutable: claudeExecutable,
+            repos: repos
         )
 
         resetRunState()

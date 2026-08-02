@@ -100,4 +100,42 @@ public protocol WikiStore {
 
     /// Replace the wiki-index body wholesale, bumping its version + `updated_at`.
     func updateWikiIndex(body: String) throws
+
+    // MARK: - Tracked repositories (v6)
+    //
+    // The whole repo surface lives on the protocol, not just the app's share of
+    // it: `wikictl repo …` runs against `WikiStore` exactly as the `page` and
+    // `log` commands do, so the reads (`listRepos`, `findRepo`) and the agent's
+    // one write (`markRepoIngested`) have to be reachable without downcasting.
+
+    /// Start tracking a repository. Throws if `remoteURL` is already tracked.
+    @discardableResult
+    func addRepo(name: String, remoteURL: String, branch: String) throws -> TrackedRepo
+
+    /// Every tracked repo, oldest-first (ULID order == the order added).
+    func listRepos() throws -> [TrackedRepo]
+
+    /// One tracked repo by id. Throws `.notFound` if absent.
+    func getRepo(id: PageID) throws -> TrackedRepo
+
+    /// Resolve a repo by its `owner/repo` display name — how the agent addresses
+    /// repos, since it never sees ULIDs. nil when nothing matches.
+    func findRepo(name: String) throws -> TrackedRepo?
+
+    /// Record a fetch result (upstream tip + when we looked). App-written.
+    func updateRepoSync(id: PageID, headCommit: String, fetchedAt: Date) throws
+
+    /// Move the ingested watermark to `commit`. AGENT-written, via
+    /// `wikictl repo mark-ingested`, after a pass that actually wrote pages.
+    func markRepoIngested(id: PageID, commit: String) throws
+
+    /// Record the branch the clone actually landed on (the row is created before
+    /// the clone, so an unspecified branch can only be filled in afterwards).
+    func setRepoBranch(id: PageID, branch: String) throws
+
+    /// Turn this repo's unattended updates on or off.
+    func setRepoAutoIngest(id: PageID, enabled: Bool) throws
+
+    /// Stop tracking a repo. The on-disk checkout is removed by the app.
+    func deleteRepo(id: PageID) throws
 }

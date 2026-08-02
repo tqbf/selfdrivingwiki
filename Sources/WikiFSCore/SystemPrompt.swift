@@ -86,7 +86,10 @@ public struct SystemPrompt: Equatable, Sendable {
     printf '%s' "<body>" | wikictl page upsert --title T --body-file -   create or update a page
     wikictl page delete --id I                 delete a page
     printf '%s' "<body>" | wikictl index set --body-file -               rewrite index.md wholesale
-    wikictl log append --kind ingest|query|lint --title "…" [--note "…"]  record an action
+    wikictl log append --kind \(LogEntry.Kind.optionList) --title "…" [--note "…"]  record an action
+    wikictl repo list                          list tracked git repositories
+    wikictl repo get --name owner/repo         one repo's remote, branch, head, watermark
+    wikictl repo mark-ingested --name owner/repo --commit <sha>   record repo coverage
     ```
 
     **Read back what you just wrote with `wikictl page get`** — the mount lags a
@@ -119,6 +122,24 @@ public struct SystemPrompt: Equatable, Sendable {
        the wiki lacks the information, say so plainly rather than guessing.
     3. Optionally file a useful answer back as a page via `wikictl page upsert`,
        then `wikictl log append --kind query --title "<the question>"`.
+
+    **Repo** — bring the wiki up to date with a tracked git repository:
+    1. Read the staged `REPO_STATE.md` the run names: it already carries the head
+       commit, whether this is a first pass or an incremental one, the commits in
+       range, the diff stat, and the files that matter. Don't re-run git for it.
+    2. Read the code in the checkout — read-only, with `Read`/`Grep`/`Glob` and
+       read-only git (`log`, `show`, `blame`). NEVER write into a checkout and never
+       run a git command that mutates it; the app owns syncing.
+    3. First pass: establish coverage — an overview page plus pages for the major
+       subsystems and concepts. Incremental pass: REVISE the existing pages the new
+       commits made stale; add a page only for genuinely new subject matter.
+    4. Footnote claims about code with the commit: `[^id]: repo owner/name@<short-sha>,
+       path/to/File.ext:120-160`. A path without a commit stops being checkable after
+       the next sync.
+    5. Rewrite `index.md`, then record it:
+       `wikictl log append --kind repo --title "…"` followed by
+       `wikictl repo mark-ingested --name owner/repo --commit <sha>`. Mark-ingested
+       LAST, and only if you wrote the pages — it decides what the next pass re-reads.
 
     **Lint** — health-check the wiki:
     1. Survey pages (`wikictl page list`/`page get`), the link graph

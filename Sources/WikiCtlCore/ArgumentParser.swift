@@ -11,8 +11,11 @@ import WikiFSCore
 ///   wikictl [--wiki <id>] page get (--title X | --id Y)
 ///   wikictl [--wiki <id>] page upsert --title X [--id Y] --body-file <path|->
 ///   wikictl [--wiki <id>] page delete --id Y
-///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N]
+///   wikictl [--wiki <id>] log append --kind ingest|query|lint|repo --title X [--note N]
 ///   wikictl [--wiki <id>] index set --body-file <path|->
+///   wikictl [--wiki <id>] repo list [--json]
+///   wikictl [--wiki <id>] repo get --name owner/repo
+///   wikictl [--wiki <id>] repo mark-ingested --name owner/repo --commit <sha>
 ///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
 public enum ArgumentParser {
@@ -43,6 +46,12 @@ public enum ArgumentParser {
         /// Phase B: rewrite the singleton wiki-index body. Like `upsert`, the body
         /// source is `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String)
+        /// Repo tracking: the agent's read + watermark surface over `tracked_repos`.
+        /// Repos are addressed by their `owner/repo` NAME, never by ULID — the
+        /// agent is handed the name in its prompt and never sees an id.
+        case repoList(json: Bool)
+        case repoGet(name: String)
+        case repoMarkIngested(name: String, commit: String)
     }
 
     public enum Failure: Error, Equatable, CustomStringConvertible {
@@ -66,9 +75,13 @@ public enum ArgumentParser {
       page upsert --title X [--id Y] --body-file <path|->
                                              create-or-update a page from a body
       page delete --id Y                     delete a page
-      log append --kind ingest|query|lint --title X [--note N]
+      log append --kind \(LogEntry.Kind.optionList) --title X [--note N]
                                              append one dated row to log.md
       index set --body-file <path|->         rewrite the curated index.md body
+      repo list [--json]                     list tracked git repositories
+      repo get --name owner/repo             print one repo's tracking state
+      repo mark-ingested --name owner/repo --commit <sha>
+                                             record that the wiki now covers <sha>
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -101,6 +114,8 @@ public enum ArgumentParser {
             command = try parseLogCommand(Array(args.dropFirst()))
         case "index":
             command = try parseIndexCommand(Array(args.dropFirst()))
+        case "repo":
+            command = try parseRepoCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -147,16 +162,49 @@ public enum ArgumentParser {
         }
         let options = try Options(Array(args.dropFirst()))
         guard let kindRaw = options.value("--kind") else {
-            throw Failure.usage("log append: --kind is required (ingest|query|lint)")
+            throw Failure.usage("log append: --kind is required (\(LogEntry.Kind.optionList))")
         }
         guard let kind = LogEntry.Kind(rawValue: kindRaw) else {
             throw Failure.usage(
-                "log append: --kind must be one of ingest|query|lint, got \(kindRaw.debugDescription)")
+                "log append: --kind must be one of \(LogEntry.Kind.optionList), "
+                + "got \(kindRaw.debugDescription)")
         }
         guard let title = options.value("--title") else {
             throw Failure.usage("log append: --title is required")
         }
         return .logAppend(kind: kind, title: title, note: options.value("--note"))
+    }
+
+    /// `repo list|get|mark-ingested`. Everything selects by `--name owner/repo`,
+    /// matching how the agent is told about repos; there is deliberately no
+    /// `--id` form, and no `add`/`remove` — adding a repo means cloning it, which
+    /// is the app's job, not the agent's.
+    private static func parseRepoCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("repo: missing subcommand") }
+        let options = try Options(Array(args.dropFirst()))
+
+        switch sub {
+        case "list":
+            return .repoList(json: options.flag("--json"))
+
+        case "get":
+            guard let name = options.value("--name") else {
+                throw Failure.usage("repo get: --name is required (owner/repo)")
+            }
+            return .repoGet(name: name)
+
+        case "mark-ingested":
+            guard let name = options.value("--name") else {
+                throw Failure.usage("repo mark-ingested: --name is required (owner/repo)")
+            }
+            guard let commit = options.value("--commit"), !commit.isEmpty else {
+                throw Failure.usage("repo mark-ingested: --commit is required (a commit sha)")
+            }
+            return .repoMarkIngested(name: name, commit: commit)
+
+        default:
+            throw Failure.usage("repo: unknown subcommand \(sub.debugDescription)")
+        }
     }
 
     private static func parseIndexCommand(_ args: [String]) throws -> Command {

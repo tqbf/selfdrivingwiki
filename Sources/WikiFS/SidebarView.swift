@@ -11,10 +11,14 @@ struct SidebarView: View {
     @Bindable var manager: WikiManager
     /// Used to open an ingested file in its default app via its user-visible URL.
     let fileProvider: FileProviderSpike
+    /// Owns the tracked repositories' clones, fetch loop, and update queue.
+    let tracker: RepoTracker
     @State private var renameTarget: WikiPageSummary?
     @State private var renameText: String = ""
     /// Drives the "Add from URL…" sheet (fetch a URL → ingested file).
     @State private var showingAddFromURL = false
+    /// Drives the "Track a Repository" sheet (clone a git remote → tracked repo).
+    @State private var showingAddRepository = false
 
     var body: some View {
         List(selection: $store.selection) {
@@ -90,6 +94,32 @@ struct SidebarView: View {
                     }
                 }
             }
+            // Repositories are oldest-first (the order they were added), so the
+            // list doesn't reshuffle every time one syncs.
+            if !store.repos.isEmpty {
+                Section {
+                    ForEach(store.repos) { repo in
+                        RepoRow(
+                            repo: repo,
+                            activity: tracker.activity[repo.id],
+                            onFetch: { Task { await tracker.fetch(repo) } },
+                            onRemove: { tracker.removeRepo(repo) }
+                        )
+                        .tag(WikiSelection.repo(repo.id))
+                    }
+                } header: {
+                    HStack {
+                        Text("Repositories")
+                        Spacer()
+                        Button("Track a Repository…", systemImage: "plus") {
+                            showingAddRepository = true
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Clone a git repository and keep the wiki up to date with it")
+                    }
+                }
+            }
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
@@ -99,11 +129,22 @@ struct SidebarView: View {
             ideal: PageEditorMetrics.sidebarIdealWidth
         )
         .toolbar {
+            // One "add a source" menu rather than a button per source kind: the
+            // toolbar doubles as the window drag area and should stay sparse, and
+            // both sections' inline headers only exist once they have content —
+            // so this is the entry point when the wiki is empty.
             ToolbarItem {
-                Button("Add from URL…", systemImage: "link.badge.plus") {
-                    showingAddFromURL = true
+                Menu {
+                    Button("Add from URL…", systemImage: "link.badge.plus") {
+                        showingAddFromURL = true
+                    }
+                    Button("Track a Repository…", systemImage: "arrow.triangle.branch") {
+                        showingAddRepository = true
+                    }
+                } label: {
+                    Label("Add Source", systemImage: "tray.and.arrow.down")
                 }
-                .help("Fetch a web page or PDF by URL and ingest it into this wiki")
+                .help("Ingest a web page or PDF by URL, or track a git repository")
             }
             ToolbarItem {
                 Button("New Page", systemImage: "plus") { store.newPage() }
@@ -111,6 +152,9 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showingAddFromURL) {
             AddFromURLSheet(store: store)
+        }
+        .sheet(isPresented: $showingAddRepository) {
+            AddRepositorySheet(tracker: tracker)
         }
         .alert("Rename Page", isPresented: renamePresented) {
             TextField("Title", text: $renameText)

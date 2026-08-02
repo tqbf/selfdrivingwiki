@@ -42,6 +42,26 @@ public enum AgentStaging {
     return url.path
   }
 
+  /// The fixed leaf name of the staged repo-state snapshot (repo ingest only).
+  public static let repoStateFileName = "REPO_STATE.md"
+
+  /// Write `REPO_STATE.md` into `scratchDirectory` and return its absolute path.
+  ///
+  /// The repo counterpart of `stageStateFile`: a repo ingest stages TWO state
+  /// documents, one describing the wiki (what pages exist to cross-link and
+  /// revise) and one describing the repository (what commit, what changed, which
+  /// files). Staged for the same reason — the app already ran the git commands, so
+  /// the agent's turns should go into reading code, not re-deriving state.
+  @discardableResult
+  public static func stageRepoState(
+    _ repoStateMarkdown: String,
+    in scratchDirectory: URL
+  ) throws -> String {
+    let url = scratchDirectory.appendingPathComponent(repoStateFileName, isDirectory: false)
+    try Data(repoStateMarkdown.utf8).write(to: url, options: .atomic)
+    return url.path
+  }
+
   /// Write the raw `source.<ext>` bytes into `scratchDirectory` and return its
   /// absolute path. Throws if the write fails.
   @discardableResult

@@ -10,6 +10,11 @@ struct ContentView: View {
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
     @Bindable var agentLauncher: AgentLauncher
+    /// Owns this wiki's repo clones, the fetch loop, and the update queue.
+    /// Created here (not in `RootView`) because `ContentView` is already rebuilt
+    /// per wiki via `.id(manager.activeWikiID)` — so the tracker's identity, and
+    /// its in-flight state, are correctly scoped to one wiki.
+    @State private var tracker: RepoTracker
     @State private var showingPathPopover = false
     @State private var showingAgentSheet = false
     @State private var operationInitialSourceID: PageID?
@@ -20,9 +25,27 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    init(
+        store: WikiStoreModel,
+        manager: WikiManager,
+        fileProvider: FileProviderSpike,
+        agentLauncher: AgentLauncher
+    ) {
+        self.store = store
+        self.manager = manager
+        self.fileProvider = fileProvider
+        self.agentLauncher = agentLauncher
+        _tracker = State(
+            initialValue: RepoTracker(
+                store: store, manager: manager,
+                launcher: agentLauncher, fileProvider: fileProvider))
+    }
+
     var body: some View {
         NavigationSplitView {
-            SidebarView(store: store, manager: manager, fileProvider: fileProvider)
+            SidebarView(
+                store: store, manager: manager,
+                fileProvider: fileProvider, tracker: tracker)
         } detail: {
             HStack(spacing: 0) {
                 WikiDetailView(
@@ -30,6 +53,7 @@ struct ContentView: View {
                     launcher: agentLauncher,
                     manager: manager,
                     fileProvider: fileProvider,
+                    tracker: tracker,
                     onIngestFile: runIngest
                 )
 
@@ -108,8 +132,13 @@ struct ContentView: View {
                 store: store,
                 manager: manager,
                 fileProvider: fileProvider,
+                tracker: tracker,
                 initialSourceID: operationInitialSourceID
             )
+        }
+        // The repo poll loop lives for as long as this wiki is on screen.
+        .task {
+            tracker.start()
         }
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
@@ -123,6 +152,11 @@ struct ContentView: View {
         .onChange(of: agentLauncher.isRunning) { _, isRunning in
             if isRunning && !isQuerySelected {
                 isTranscriptExpanded = true
+            }
+            // A finished run is the tracker's cue that the single agent slot is
+            // free again, so a queued repo can start.
+            if !isRunning {
+                tracker.agentRunDidFinish()
             }
         }
     }

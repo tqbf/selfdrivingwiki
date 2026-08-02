@@ -50,6 +50,7 @@ public struct OperationCommand: Equatable, Sendable {
         scratchDirectory: String,
         wikictlDirectory: String,
         claudeExecutable: String = "claude",
+        repos: [RepoStateSnapshot.Context] = [],
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> OperationCommand {
         var environment = baseEnvironment
@@ -67,7 +68,7 @@ public struct OperationCommand: Equatable, Sendable {
             // source up front — the live gate showed the agent burning turns probing
             // for structure and (under the old allowlist) getting every
             // `$WIKI_ROOT`-expanded command rejected.
-            "-p", operation.prompt(wikiRoot: wikiRoot),
+            "-p", operation.prompt(wikiRoot: wikiRoot, repos: repos),
             // Model tiering (problem #3, verified against CLI 2.1.178): `--model`
             // sets the TOP-LEVEL model, which is ALWAYS `opus` — Opus is the
             // curator/writer for both Ingest modes and for Query/Lint. The tiering is
@@ -131,6 +132,7 @@ public struct OperationCommand: Equatable, Sendable {
         scratchDirectory: String,
         wikictlDirectory: String,
         claudeExecutable: String = "claude",
+        repos: [RepoStateSnapshot.Context] = [],
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> OperationCommand {
         var environment = baseEnvironment
@@ -145,7 +147,8 @@ public struct OperationCommand: Equatable, Sendable {
             "--output-format", "stream-json",
             "--verbose",
             "--model", operation.topLevelModelAlias,
-            "--append-system-prompt", systemPrompt + "\n\n" + operation.prompt(wikiRoot: wikiRoot),
+            "--append-system-prompt",
+            systemPrompt + "\n\n" + operation.prompt(wikiRoot: wikiRoot, repos: repos),
             "--dangerously-skip-permissions",
         ]
 

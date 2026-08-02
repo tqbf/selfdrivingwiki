@@ -23,6 +23,20 @@ enum OperationRequest {
   /// Lint the wiki. `stateMarkdown` is the rendered `WIKI_STATE.md`.
   case lint(stateMarkdown: String)
 
+  /// Bring the wiki up to date with a tracked repo. Unlike `.ingest` there are no
+  /// source bytes to stage — the material is the live checkout at `repoPath` —
+  /// so what gets staged is the second STATE document (`REPO_STATE.md`), rendered
+  /// by the app from the git output it already collected. The plan is decided
+  /// BEFORE staging (it's what the snapshot describes), so it is passed in rather
+  /// than computed here.
+  case repoIngest(
+    repoName: String,
+    repoPath: String,
+    stateMarkdown: String,
+    repoStateMarkdown: String,
+    plan: RepoSyncPlan
+  )
+
   /// Stage this request's inputs into `scratch` and return the finalized
   /// `WikiOperation`. Writes `WIKI_STATE.md` (always) and, for Ingest, the raw
   /// `source.<ext>`; the Ingest plan (single Opus pass vs Opus curator + Sonnet
@@ -47,6 +61,16 @@ enum OperationRequest {
     case .lint(let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lint(stateFilePath: stateFilePath)
+
+    case .repoIngest(let repoName, let repoPath, let stateMarkdown, let repoStateMarkdown, let plan):
+      let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
+      let repoStateFilePath = try AgentStaging.stageRepoState(repoStateMarkdown, in: scratch)
+      return .repoIngest(
+        repoName: repoName,
+        repoPath: repoPath,
+        stateFilePath: stateFilePath,
+        repoStateFilePath: repoStateFilePath,
+        plan: plan)
     }
   }
 }

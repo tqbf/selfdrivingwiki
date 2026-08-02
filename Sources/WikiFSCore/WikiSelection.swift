@@ -12,4 +12,6 @@ public enum WikiSelection: Hashable, Sendable {
     case page(PageID)
     /// A raw source file stored in the wiki, by id.
     case ingestedFile(PageID)
+    /// A tracked git repository, by id.
+    case repo(PageID)
 }

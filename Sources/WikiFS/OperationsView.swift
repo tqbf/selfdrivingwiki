@@ -15,10 +15,12 @@ struct OperationsView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
+    @Bindable var tracker: RepoTracker
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedKind: WikiOperation.Kind = .ingest
     @State private var selectedSourceID: PageID?
+    @State private var selectedRepoID: PageID?
     @State private var queryText = ""
     @State private var showsInternals = false
 
@@ -27,12 +29,14 @@ struct OperationsView: View {
         store: WikiStoreModel,
         manager: WikiManager,
         fileProvider: FileProviderSpike,
+        tracker: RepoTracker,
         initialSourceID: PageID? = nil
     ) {
         self.launcher = launcher
         self.store = store
         self.manager = manager
         self.fileProvider = fileProvider
+        self.tracker = tracker
         _selectedSourceID = State(initialValue: initialSourceID)
     }
 
@@ -86,6 +90,40 @@ struct OperationsView: View {
         case .ingest: ingestInput
         case .query: queryInput
         case .lint: lintInput
+        case .repo: repoInput
+        }
+    }
+
+    private var repoInput: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Repository")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            if store.repos.isEmpty {
+                Text("No repositories tracked yet. Use ‘Track a Repository…’ in the sidebar to clone one.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Picker("Repository", selection: $selectedRepoID) {
+                    Text("Choose a repository…").tag(PageID?.none)
+                    ForEach(store.repos) { repo in
+                        Text(repo.name).tag(PageID?.some(repo.id))
+                    }
+                }
+                .labelsHidden()
+                .disabled(launcher.isRunning)
+            }
+            // The global pause lives here rather than in a repo's own pane: it
+            // governs the whole tracker, and this sheet is where the wiki's agent
+            // behavior is already configured.
+            Toggle("Update tracked repositories automatically", isOn: $tracker.autoUpdatesEnabled)
+                .toggleStyle(.checkbox)
+                .font(.callout)
+            Text("The agent reads what changed since the wiki was last updated, revises the affected pages, and records the commit it covered.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -265,6 +303,10 @@ struct OperationsView: View {
                 && !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .lint:
             return fileProvider.path != nil
+        case .repo:
+            // Like Ingest, a repo pass reads local disk (the checkout + the two
+            // staged state files), so it doesn't wait on the mount.
+            return selectedRepoID != nil
         }
     }
 
@@ -294,11 +336,17 @@ struct OperationsView: View {
                     store: store,
                     manager: manager,
                     fileProvider: fileProvider)
+            case .repo:
+                guard let selectedRepoID, let repo = store.repo(id: selectedRepoID) else { return }
+                await tracker.requestIngest(repo)
             }
         }
     }
 
     private func reconcileSelectedSource() {
+        if selectedRepoID == nil || !store.repos.contains(where: { $0.id == selectedRepoID }) {
+            selectedRepoID = store.repos.first?.id
+        }
         guard selectedKind == .ingest else { return }
         if let selectedSourceID,
            store.ingestedFiles.contains(where: { $0.id == selectedSourceID }) {

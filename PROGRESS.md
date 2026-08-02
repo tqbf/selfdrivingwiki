@@ -2,6 +2,90 @@
 
 Newest first. To get up to speed: read `PLAN.md` then this file.
 
+## 2026-08-01 — Tracked git repositories
+
+- Added repository tracking: a wiki can follow git repositories, the app keeps its
+  own clone of each, and Claude authors and revises wiki pages about them as
+  commits land. Design doc: `plans/repo-tracking.md`.
+- Added the schema v5→6 step, `tracked_repos`. It is a new object kind rather than
+  a reuse of `ingested_files`, because that table's contract is verbatim immutable
+  bytes in SQLite and a repository is remote, mutable, on disk, and ingested
+  repeatedly. `remote_url` is UNIQUE, so tracking the same repo twice is a visible
+  error rather than a second silent clone.
+- Split the two commit columns by writer, which is the decision the whole feature
+  rests on. The app writes `head_commit`/`last_fetched_at` after a fetch; only the
+  agent writes `last_ingested_commit`, via the new `wikictl repo mark-ingested`,
+  at the end of a pass that actually wrote pages. The app proposes a commit range;
+  the agent confirms what it covered, so an interrupted run leaves the watermark
+  behind and the next pass re-covers the gap instead of skipping it.
+- Deliberately left `tracked_repos` out of `changeToken()`. Repos are not projected
+  onto the File Provider mount, and folding them in would churn the sync anchor —
+  and every materialized copy — on each 15-minute fetch for nothing. Repo writes
+  reach the sidebar through the existing Darwin-notification bridge instead.
+- Added the pure core, all unit-tested without spawning anything: `GitRemoteURL`
+  (accepts https / schemeless / scp-form / ssh, derives `owner/repo`),
+  `GitCommandPlan` (every git argv, each repo-scoped command `-C`-anchored so
+  concurrent fetches can't race a shared cwd), `RepoCheckoutLocation` (ULID-keyed
+  paths under Application Support — not the App Group container, which wiki
+  export/import copies around), `RepoSyncPlan`, and `RepoStateSnapshot`.
+- Added `WikiOperation.repoIngest` (kind `.repo`) with its own prompt. It stages a
+  second state document, `REPO_STATE.md`, alongside `WIKI_STATE.md`, for the same
+  reason the first one exists: the app already ran the git commands, so the agent's
+  turns should go into reading code rather than re-deriving state.
+- Kept the Ingest tiering philosophy exactly: Opus is always the curator and the
+  writer, and the tier only decides whether there is a fan-out. A repo under 25
+  files or a diff under 10 files is a single Opus pass; anything larger fans out to
+  2–19 Sonnet `repo-reader` workers with `["Bash","Read","Grep","Glob"]` and no
+  `wikictl`.
+- Wrote two rules into the prompt that are specific to code as a source. First, the
+  checkout is read-only and that has to be *said*: unlike the mount, which rejects
+  writes by design, a checkout is an ordinary directory where a write would
+  succeed, so the prompt forbids writing there and forbids every mutating git
+  command. Second, footnotes carry the commit — `repo owner/name@<sha>,
+  path/File.ext:120-160` — because a path alone stops being checkable after the
+  next sync.
+- Added `RepoTracker`: a 15-minute poll that fetches every repo and queues the ones
+  that drifted. Fetching and ingesting are separate loops on purpose — fetching is
+  cheap and frequent, ingesting spends model budget and writes to the wiki. The
+  queue drains only when the agent launcher is idle **and** no interactive Query
+  session is open, so an unattended run can never land mid-conversation and take
+  the editor lock out from under the user.
+- Ran git with `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/usr/bin/false`: in a
+  GUI-spawned process an auth prompt would hang forever with no visible cause, so
+  a repo needing credentials now fails fast with git's own message. A failed clone
+  keeps its row, carrying the error, so a bad URL leaves a repo you can retry
+  rather than a sheet that appears to have done nothing.
+- Made Query repo-aware: the tracked checkouts' paths and commits are spliced into
+  both Query prompts, so a question can be answered from the source as well as the
+  wiki. An empty repo list renders nothing at all, so a wiki that tracks none
+  produces a byte-identical prompt to before this feature existed (locked by test).
+- Added `wikictl repo list|get|mark-ingested` and the `repo` log kind. There is no
+  `add`/`remove`: adding a repo means cloning over the network into app-managed
+  storage, which is the app's job, and keeping it out of the CLI is what stops an
+  agent run from quietly expanding what the wiki tracks.
+- Added the UI: a Repositories sidebar section, `AddRepositorySheet`, and
+  `RepoDetailView` with Update Wiki Now / Fetch Now / an auto-update switch, plus a
+  global pause in the Maintain Wiki sheet.
+
+**Skill pass.** Before code: `macos-design` replaced a third top-level toolbar
+button with one "Add Source" menu covering both URL ingest and repo tracking, so
+the drag zone stays sparse and there is still an entry point when both sections are
+empty; it also pushed the sync state into an inline sidebar badge rather than new
+chrome. After code: `swiftui-pro` caught the icon-only status glyph with no
+VoiceOver label, a `Text(date, style: .relative)` that would have rendered
+"2 minutes ago ago", and a spinner scaled with `scaleEffect` instead of
+`controlSize`. `typography-designer` was satisfied by reusing the existing scale —
+`.largeTitle` bold titles, `.callout` secondary status, `.caption` metadata with
+monospaced commit shas — rather than introducing a new one. The sidebar badge says
+"Changes", not "12 behind": the tracker stores a head and a watermark, not a commit
+count, and a number the row can't stand behind is worse than a plain word.
+
+**Verified.** `make check` passes and `swift test` passes (**422/422**), up from
+351 — six new suites (`GitRemoteURLTests`, `GitCommandPlanTests`,
+`RepoSyncPlanTests`, `RepoStateSnapshotTests`, `TrackedRepoStoreTests`,
+`RepoOperationTests`). The v5→6 migration is tested against a hand-built v5 DB with
+content in it, and `repoTableIsNotFoldedIntoTheChangeToken` locks decision #4.
+
 ## 2026-06-17 — Dedicated interactive Query page
 
 - Added a first-class Query destination in the sidebar, separate from individual

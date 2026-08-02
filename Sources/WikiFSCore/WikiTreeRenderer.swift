@@ -54,7 +54,16 @@ public enum WikiTreeRenderer {
         - `wikictl page get --title T` (or `--id I`)  — print a page body (instant, authoritative).
         - `printf '%s' "<body>" | wikictl page upsert --title T --body-file -`  — create/update a page.
         - `printf '%s' "<body>" | wikictl index set --body-file -`              — rewrite index.md.
-        - `wikictl log append --kind ingest|query|lint --title "…" [--note "…"]` — record an action.
+        - `wikictl log append --kind \(LogEntry.Kind.optionList) --title "…" [--note "…"]` — record an action.
+        - `wikictl repo list`                         — tracked git repositories, one per line.
+        - `wikictl repo get --name owner/repo`        — one repo's remote, branch, head, watermark.
+        - `wikictl repo mark-ingested --name owner/repo --commit <sha>` — record that the wiki now
+          covers this repository through `<sha>`. Run it LAST in a repo pass, and only if you
+          actually wrote the pages.
+
+        Tracked repositories are NOT projected onto this mount: they are ordinary local
+        checkouts the app clones and keeps in sync, and a repo operation is told its
+        checkout path directly. Treat any checkout as read-only.
 
         After any write, read it back with `wikictl page get` — the read-only mount
         lags a few seconds, so don't `cat` the mount to verify a fresh write.

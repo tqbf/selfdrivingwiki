@@ -9,6 +9,7 @@ struct WikiDetailView: View {
     @Bindable var launcher: AgentLauncher
     @Bindable var manager: WikiManager
     let fileProvider: FileProviderSpike
+    let tracker: RepoTracker
     let onIngestFile: (PageID) -> Void
 
     var body: some View {
@@ -52,6 +53,24 @@ struct WikiDetailView: View {
                     Label("File Missing", systemImage: "doc.badge.questionmark")
                 } description: {
                     Text("This ingested file is no longer available.")
+                }
+            }
+        case .repo(let id):
+            if let repo = store.repo(id: id) {
+                RepoDetailView(
+                    repo: repo,
+                    activity: tracker.activity[id],
+                    error: tracker.errors[id],
+                    isAgentRunning: launcher.isRunning,
+                    onUpdate: { Task { await tracker.requestIngest(repo) } },
+                    onFetch: { Task { await tracker.fetch(repo) } },
+                    onToggleAuto: { store.setRepoAutoIngest(id: id, enabled: $0) }
+                )
+            } else {
+                ContentUnavailableView {
+                    Label("Repository Missing", systemImage: "questionmark.folder")
+                } description: {
+                    Text("This repository is no longer tracked.")
                 }
             }
         }

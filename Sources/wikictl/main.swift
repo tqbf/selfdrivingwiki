@@ -55,8 +55,9 @@ func run() -> Int32 {
     }
 }
 
-/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family)
-/// or `LogIndexCommand` (the Phase-B `log append` / `index set`). The deferred
+/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …` family),
+/// `LogIndexCommand` (the Phase-B `log append` / `index set`), or `RepoCommand`
+/// (the repo-tracking reads + the ingested watermark). The deferred
 /// body read (`-` = stdin, else a file path) happens here — the only I/O the
 /// parser left for `main`.
 func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throws -> PageCommand.Result {
@@ -75,6 +76,12 @@ func execute(_ command: ArgumentParser.Command, in store: SQLiteWikiStore) throw
     case .indexSet(let bodyFile):
         let body = try readBody(from: bodyFile)
         return try LogIndexCommand.run(.indexSet(body: body), in: store)
+    case .repoList(let json):
+        return try RepoCommand.run(.list(json: json), in: store)
+    case .repoGet(let name):
+        return try RepoCommand.run(.get(name: name), in: store)
+    case .repoMarkIngested(let name, let commit):
+        return try RepoCommand.run(.markIngested(name: name, commit: commit), in: store)
     }
 }
 

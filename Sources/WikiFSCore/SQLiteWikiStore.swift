@@ -237,6 +237,42 @@ public final class SQLiteWikiStore: WikiStore {
             try exec("PRAGMA user_version=5;")
             version = 5
         }
+
+        // Step 5 → 6 (repo tracking): the `tracked_repos` table — one row per git
+        // repository this wiki follows. A NEW object kind, deliberately NOT
+        // `ingested_files`: that table's contract is verbatim immutable bytes in
+        // SQLite (`content BLOB NOT NULL`, a 100 MB cap, ingested once), and a
+        // tracked repo is remote, mutable, lives on disk, and is ingested
+        // repeatedly. `head_commit` is what upstream has (written by the app after
+        // a fetch); `last_ingested_commit` is what the wiki has been told about
+        // (written by the AGENT via `wikictl repo mark-ingested`) — the gap
+        // between them is the pending work. `remote_url` is UNIQUE so the same
+        // repository can't be tracked twice in one wiki.
+        //
+        // NOT folded into `changeToken()` on purpose: repos are app + agent state
+        // and are not projected onto the File Provider mount, so they must not
+        // move the mount's sync anchor. The sidebar refreshes off the existing
+        // Darwin-notification path instead (`WikiChangeBridge`).
+        if version < 6 {
+            try exec("""
+            CREATE TABLE tracked_repos (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                remote_url TEXT NOT NULL,
+                branch TEXT NOT NULL,
+                head_commit TEXT,
+                last_ingested_commit TEXT,
+                last_fetched_at REAL,
+                auto_ingest INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            try exec("CREATE UNIQUE INDEX tracked_repos_remote_unique ON tracked_repos(remote_url);")
+            try exec("PRAGMA user_version=6;")
+            version = 6
+        }
     }
 
     // MARK: - WikiStore
@@ -661,6 +697,166 @@ public final class SQLiteWikiStore: WikiStore {
             createdAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
             updatedAt: Date(timeIntervalSince1970: stmt.double(at: 6)),
             version: Int(stmt.int(at: 7))
+        )
+    }
+
+    // MARK: - Tracked repositories (v6)
+
+    /// Start tracking a repository. The id is a fresh ULID (sortable == the order
+    /// repos were added). `head_commit` / `last_ingested_commit` start NULL: the
+    /// app fills the head after its first fetch, and only the agent ever moves the
+    /// ingested watermark. Throws if `remoteURL` is already tracked (the UNIQUE
+    /// index), which is what makes "add the same repo twice" a visible error
+    /// rather than a silent duplicate clone.
+    @discardableResult
+    public func addRepo(name: String, remoteURL: String, branch: String) throws -> TrackedRepo {
+        let id = PageID(rawValue: ULID.generate())
+        let now = Date()
+        let stmt = try statement("""
+        INSERT INTO tracked_repos
+          (id, name, remote_url, branch, head_commit, last_ingested_commit,
+           last_fetched_at, auto_ingest, created_at, updated_at, version)
+        VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 1, ?5, ?5, 1);
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try stmt.bind(name, at: 2)
+        try stmt.bind(remoteURL, at: 3)
+        try stmt.bind(branch, at: 4)
+        try stmt.bind(now.timeIntervalSince1970, at: 5)
+        _ = try stmt.step()
+
+        return TrackedRepo(
+            id: id, name: name, remoteURL: remoteURL, branch: branch,
+            headCommit: nil, lastIngestedCommit: nil, lastFetchedAt: nil,
+            autoIngest: true, createdAt: now, updatedAt: now, version: 1
+        )
+    }
+
+    /// Every tracked repo, oldest-first (ULID order == the order they were added),
+    /// so the sidebar list is stable as repos sync.
+    public func listRepos() throws -> [TrackedRepo] {
+        let stmt = try statement("\(Self.repoColumns) ORDER BY id ASC;")
+        defer { stmt.reset() }
+        var out: [TrackedRepo] = []
+        while try stmt.step() {
+            out.append(Self.repo(from: stmt))
+        }
+        return out
+    }
+
+    /// One tracked repo by id. Throws `.notFound` if absent.
+    public func getRepo(id: PageID) throws -> TrackedRepo {
+        let stmt = try statement("\(Self.repoColumns) WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        guard try stmt.step() else { throw WikiStoreError.notFound(id) }
+        return Self.repo(from: stmt)
+    }
+
+    /// Resolve a repo by its `owner/repo` display name — how the AGENT addresses
+    /// repos (`wikictl repo get --name o/r`), since it never sees ULIDs. On the
+    /// (unlikely) duplicate name, the oldest wins, matching `resolveTitleToID`.
+    public func findRepo(name: String) throws -> TrackedRepo? {
+        let stmt = try statement("\(Self.repoColumns) WHERE name = ?1 ORDER BY id ASC;")
+        defer { stmt.reset() }
+        try stmt.bind(name, at: 1)
+        guard try stmt.step() else { return nil }
+        return Self.repo(from: stmt)
+    }
+
+    /// Record the result of a fetch: the upstream tip and when we looked. Written
+    /// by the APP only — this says nothing about what the wiki knows.
+    public func updateRepoSync(id: PageID, headCommit: String, fetchedAt: Date) throws {
+        try mutateRepo(id: id, assignments: "head_commit = ?2, last_fetched_at = ?3") { stmt in
+            try stmt.bind(headCommit, at: 2)
+            try stmt.bind(fetchedAt.timeIntervalSince1970, at: 3)
+        }
+    }
+
+    /// Move the ingested watermark. Written by the AGENT (via `wikictl repo
+    /// mark-ingested`) after a pass that actually wrote pages, so an interrupted
+    /// run leaves the watermark behind and the next pass re-covers the gap.
+    public func markRepoIngested(id: PageID, commit: String) throws {
+        try mutateRepo(id: id, assignments: "last_ingested_commit = ?2") { stmt in
+            try stmt.bind(commit, at: 2)
+        }
+    }
+
+    /// Record the branch the clone actually landed on. Written once, right after
+    /// a clone where the user didn't name a branch and we accepted the remote's
+    /// default — the row has to exist before the clone (its ULID names the
+    /// checkout directory), so the branch can only be filled in afterwards.
+    public func setRepoBranch(id: PageID, branch: String) throws {
+        try mutateRepo(id: id, assignments: "branch = ?2") { stmt in
+            try stmt.bind(branch, at: 2)
+        }
+    }
+
+    /// Turn this repo's unattended updates on or off.
+    public func setRepoAutoIngest(id: PageID, enabled: Bool) throws {
+        try mutateRepo(id: id, assignments: "auto_ingest = ?2") { stmt in
+            try stmt.bind(Int64(enabled ? 1 : 0), at: 2)
+        }
+    }
+
+    /// Stop tracking a repo. The on-disk checkout is removed separately by the
+    /// app (`RepoCheckoutLocation.removeCheckout`) — the store owns rows, not files.
+    public func deleteRepo(id: PageID) throws {
+        let stmt = try statement("DELETE FROM tracked_repos WHERE id = ?1;")
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        _ = try stmt.step()
+    }
+
+    /// Shared UPDATE shape for the repo mutators: every write bumps `updated_at`
+    /// and `version` so a row's version reflects how many times it changed, in
+    /// line with every other versioned table here. `?1` is always the id; callers
+    /// bind their own values from `?2`.
+    private func mutateRepo(
+        id: PageID,
+        assignments: String,
+        bind: (SQLiteStatement) throws -> Void
+    ) throws {
+        let stmt = try statement("""
+        UPDATE tracked_repos
+        SET \(assignments), updated_at = ?4, version = version + 1
+        WHERE id = ?1;
+        """)
+        defer { stmt.reset() }
+        try stmt.bind(id.rawValue, at: 1)
+        try bind(stmt)
+        try stmt.bind(Date().timeIntervalSince1970, at: 4)
+        _ = try stmt.step()
+    }
+
+    /// The one SELECT column list for `tracked_repos`, so every reader and
+    /// `repo(from:)` agree on column order.
+    private static let repoColumns = """
+        SELECT id, name, remote_url, branch, head_commit, last_ingested_commit, \
+        last_fetched_at, auto_ingest, created_at, updated_at, version FROM tracked_repos
+        """
+
+    /// Map the current row of a `repoColumns` SELECT to a `TrackedRepo`, reading
+    /// the three nullable columns as NULL→nil via the column type.
+    private static func repo(from stmt: SQLiteStatement) -> TrackedRepo {
+        func nullableText(_ index: Int32) -> String? {
+            sqlite3_column_type(stmt.handle, index) == SQLITE_NULL ? nil : stmt.text(at: index)
+        }
+        let fetchedAt = sqlite3_column_type(stmt.handle, 6) == SQLITE_NULL
+            ? nil : Date(timeIntervalSince1970: stmt.double(at: 6))
+        return TrackedRepo(
+            id: PageID(rawValue: stmt.text(at: 0)),
+            name: stmt.text(at: 1),
+            remoteURL: stmt.text(at: 2),
+            branch: stmt.text(at: 3),
+            headCommit: nullableText(4),
+            lastIngestedCommit: nullableText(5),
+            lastFetchedAt: fetchedAt,
+            autoIngest: stmt.int(at: 7) != 0,
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 8)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 9)),
+            version: Int(stmt.int(at: 10))
         )
     }
 

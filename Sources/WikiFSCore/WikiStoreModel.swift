@@ -33,6 +33,13 @@ public final class WikiStoreModel {
     /// projection leaf, or path in either the log title or note.
     private var ingestedFileStatus: [PageID: Bool] = [:]
 
+    /// The tracked git repositories (v6), oldest-first. Same discipline as
+    /// `ingestedFiles`: always rebuilt wholesale from `store.listRepos()`, never
+    /// patched in place — the tracker and the agent both write these rows behind
+    /// the model's back (the agent through `wikictl repo mark-ingested`), so a
+    /// cached incremental view would drift.
+    public private(set) var repos: [TrackedRepo] = []
+
     /// Invoked on the main actor after any successful persisted mutation
     /// (save / new / rename / delete). The app wires this to the File Provider
     /// `signalChange()` so Terminal reads see edits without relaunch (INITIAL
@@ -70,6 +77,7 @@ public final class WikiStoreModel {
         self.store = store
         reloadSummaries()
         reloadIngestedFiles()
+        reloadRepos()
         // Preload the system-prompt draft so its editor has content immediately;
         // selecting it later reloads fresh from the store.
         draftSystemPrompt = (try? store.getSystemPrompt())?.body ?? SystemPrompt.defaultBody
@@ -164,7 +172,7 @@ public final class WikiStoreModel {
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
-        case .ingestedFile:
+        case .ingestedFile, .repo:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -540,6 +548,7 @@ public final class WikiStoreModel {
     public func reloadFromStore() {
         reloadSummaries()
         reloadIngestedFiles()
+        reloadRepos()
         pruneHistoryToCurrentStore()
     }
 
@@ -569,23 +578,92 @@ public final class WikiStoreModel {
         })
     }
 
+    private func reloadRepos() {
+        repos = (try? store.listRepos()) ?? []
+    }
+
+    // MARK: - Tracked repositories (v6)
+
+    /// Start tracking a repository. The row is created here; CLONING it is the
+    /// app's next step (`RepoTracker`), because the row must exist first — its
+    /// ULID is what names the checkout directory.
+    @discardableResult
+    public func addRepo(name: String, remoteURL: String, branch: String) throws -> TrackedRepo {
+        let repo = try store.addRepo(name: name, remoteURL: remoteURL, branch: branch)
+        reloadRepos()
+        return repo
+    }
+
+    /// Record a fetch result (upstream tip + when we looked).
+    public func updateRepoSync(id: PageID, headCommit: String, fetchedAt: Date) {
+        try? store.updateRepoSync(id: id, headCommit: headCommit, fetchedAt: fetchedAt)
+        reloadRepos()
+    }
+
+    /// Record the branch the clone landed on, when the user didn't name one.
+    public func setRepoBranch(id: PageID, branch: String) {
+        try? store.setRepoBranch(id: id, branch: branch)
+        reloadRepos()
+    }
+
+    public func setRepoAutoIngest(id: PageID, enabled: Bool) {
+        try? store.setRepoAutoIngest(id: id, enabled: enabled)
+        reloadRepos()
+    }
+
+    /// Stop tracking a repo. Only the ROW is removed here — the caller deletes the
+    /// checkout (`RepoCheckoutLocation.removeCheckout`), since the model has no
+    /// business touching the filesystem.
+    public func deleteRepo(id: PageID) {
+        try? store.deleteRepo(id: id)
+        if selection == .repo(id) { select(nil) }
+        reloadRepos()
+    }
+
+    public func repo(id: PageID) -> TrackedRepo? {
+        repos.first { $0.id == id }
+    }
+
+    /// The tracked-repo contexts handed to a Query run so the agent can read the
+    /// SOURCE as well as the wiki. Repos that haven't finished cloning (no head
+    /// commit yet) are omitted: pointing the agent at a half-materialized
+    /// checkout would be worse than not mentioning it.
+    public func repoContexts(wikiID: String) -> [RepoStateSnapshot.Context] {
+        repos.compactMap { repo in
+            guard let head = repo.headCommit, !head.isEmpty,
+                  let dir = try? RepoCheckoutLocation.directory(
+                    wikiID: wikiID, repoID: repo.id.rawValue)
+            else { return nil }
+            return RepoStateSnapshot.Context(
+                name: repo.name, clonePath: dir.path, headCommit: head, branch: repo.branch)
+        }
+    }
+
     private func pruneHistoryToCurrentStore() {
         let pageIDs = Set(summaries.map(\.id))
         let fileIDs = Set(ingestedFiles.map(\.id))
-        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
-        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs) }
+        let repoIDs = Set(repos.map(\.id))
+        backStack.removeAll {
+            !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs, repoIDs: repoIDs)
+        }
+        forwardStack.removeAll {
+            !isAvailableHistorySelection($0, pageIDs: pageIDs, fileIDs: fileIDs, repoIDs: repoIDs)
+        }
     }
 
     private func isAvailableHistorySelection(
         _ value: WikiSelection,
         pageIDs: Set<PageID>,
-        fileIDs: Set<PageID>
+        fileIDs: Set<PageID>,
+        repoIDs: Set<PageID>
     ) -> Bool {
         switch value {
         case .page(let id):
             pageIDs.contains(id)
         case .ingestedFile(let id):
             fileIDs.contains(id)
+        case .repo(let id):
+            repoIDs.contains(id)
         case .query, .systemPrompt, .changeLog:
             true
         }

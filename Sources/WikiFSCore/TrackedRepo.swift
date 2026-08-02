@@ -1,0 +1,81 @@
+import Foundation
+
+/// One git repository this wiki TRACKS — a `tracked_repos` row (schema v6).
+///
+/// **Why this is not an ingested file.** Every other source in this wiki is
+/// *immutable verbatim bytes stored in SQLite* (`ingested_files`): staged once,
+/// ingested once, never re-read. A tracked repo is the opposite — it is remote,
+/// mutable, lives on disk as a working tree outside the database, and gets
+/// ingested repeatedly as commits land. The two facts that carry that difference
+/// are `headCommit` (what upstream has) and `lastIngestedCommit` (what the wiki
+/// has actually been told about); the gap between them IS the work queue.
+///
+/// **Who moves the watermark.** The app only ever writes `headCommit` /
+/// `lastFetchedAt` (it ran `git fetch`, it knows). `lastIngestedCommit` is moved
+/// by the AGENT via `wikictl repo mark-ingested`, at the end of a run that
+/// actually wrote pages — the app proposes a commit range, the agent confirms
+/// what it covered. That keeps the watermark honest when a run is interrupted.
+///
+/// `id` reuses `PageID` (a ULID-string wrapper) exactly as `IngestedFileSummary`
+/// does, so the raw value sorts by tracking order. Identifiable + Hashable so it
+/// drives a SwiftUI `List`/`ForEach` directly.
+public struct TrackedRepo: Identifiable, Hashable, Sendable {
+  public let id: PageID
+  /// Display name, `owner/repo`, derived from the remote by `GitRemoteURL`.
+  public let name: String
+  /// The remote as handed to `git clone` (canonical form, no trailing slash).
+  public let remoteURL: String
+  /// The branch being tracked (resolved at add time; never empty).
+  public let branch: String
+  /// Upstream tip as of the last successful fetch; nil before the first clone.
+  public let headCommit: String?
+  /// The commit the WIKI has been brought up to date with, as confirmed by the
+  /// agent. nil until the first successful repo ingest.
+  public let lastIngestedCommit: String?
+  public let lastFetchedAt: Date?
+  /// Whether the tracker may start an ingest on its own when this repo drifts.
+  public let autoIngest: Bool
+  public let createdAt: Date
+  public let updatedAt: Date
+  public let version: Int
+
+  public init(
+    id: PageID,
+    name: String,
+    remoteURL: String,
+    branch: String,
+    headCommit: String?,
+    lastIngestedCommit: String?,
+    lastFetchedAt: Date?,
+    autoIngest: Bool,
+    createdAt: Date,
+    updatedAt: Date,
+    version: Int
+  ) {
+    self.id = id
+    self.name = name
+    self.remoteURL = remoteURL
+    self.branch = branch
+    self.headCommit = headCommit
+    self.lastIngestedCommit = lastIngestedCommit
+    self.lastFetchedAt = lastFetchedAt
+    self.autoIngest = autoIngest
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+    self.version = version
+  }
+
+  /// True when upstream has commits the wiki has not been told about. A repo that
+  /// has never been ingested (`lastIngestedCommit == nil`) but HAS been cloned is
+  /// drifted by definition — the whole repo is the pending work.
+  public var isDrifted: Bool {
+    guard let headCommit, !headCommit.isEmpty else { return false }
+    return headCommit != lastIngestedCommit
+  }
+
+  /// The first 7 characters of `headCommit`, for compact display. Empty when the
+  /// repo has not been cloned yet.
+  public var shortHead: String {
+    String((headCommit ?? "").prefix(7))
+  }
+}

@@ -35,6 +35,7 @@ with a plain-folder export, even though that would dodge the signing requirement
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
 | [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning Self Driving Wiki into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
 | [`plans/page-reader-ui.md`](plans/page-reader-ui.md) | **Current UI direction:** page detail is reader-first because the agent should maintain wiki content; manual source editing is an explicit, rare mode. |
+| [`plans/repo-tracking.md`](plans/repo-tracking.md) | **Tracked git repositories:** the wiki clones repos it follows, auto-fetches them, and runs an incremental agent pass when commits land; the schema v6 `tracked_repos` table, the app-writes-head / agent-writes-watermark split, the `repo-reader` fan-out, `wikictl repo`, and the repo-aware Query. |
 | [`plans/query-conversation.md`](plans/query-conversation.md) | **Current Query direction:** a dedicated sidebar page with an interactive Claude session; output-first chat by default, hidden tool/internal rows behind a checkbox, and writes via `wikictl` only when the user asks to persist changes. |
 | [`plans/BRINGUP.md`](plans/BRINGUP.md) | The 4-phase bring-up plan from skeleton to v0 (groups INITIAL.md's M0–M6). Source of truth for *the order we build in*. |
 | [`plans/build-environment.md`](plans/build-environment.md) | How the app is built: SwiftPM + `build.sh` + `Makefile`, signing, icon generation, app-bundle layout. Source of truth for *how we build and run*. |
@@ -60,6 +61,16 @@ features below are merged to `main` (single-branch repo, ready for developer
 handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
 
 **Post-completion features (also on `main`):**
+- **Repository tracking** — a wiki can follow git repositories. You add one by
+  remote URL; the app clones it under Application Support, polls it every 15
+  minutes, and when commits land runs an **incremental** agent pass that revises
+  the affected pages (initial passes and large diffs fan out to 2–19 Sonnet
+  `repo-reader` workers; Opus still writes everything). The app writes
+  `head_commit`; only the agent moves `last_ingested_commit`, via
+  `wikictl repo mark-ingested`, so an interrupted run re-covers its gap. Query is
+  repo-aware, so questions can be answered from the tracked source as well as the
+  wiki. Repos are **not** projected onto the mount. See
+  [`plans/repo-tracking.md`](plans/repo-tracking.md).
 - **Wiki backup/restore management** — the wiki switcher can rename the active
   wiki, export its checkpointed standalone SQLite file, and import a SQLite wiki
   backup under a new display name/new ULID. Rename refreshes the File Provider

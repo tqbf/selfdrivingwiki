@@ -54,18 +54,19 @@ struct SQLiteWikiStoreTests {
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"))
         #expect(tables.isSuperset(of:
             ["pages", "attachments", "page_links", "ingested_files", "system_prompt",
-             "log", "wiki_index"]))
+             "log", "wiki_index", "tracked_repos"]))
 
         let indexes = Set(rows(db,
             "SELECT name FROM sqlite_master WHERE type='index';"))
         #expect(indexes.contains("pages_slug_unique"))
         #expect(indexes.contains("ingested_files_created"))
+        #expect(indexes.contains("tracked_repos_remote_unique"))
 
-        // user_version guard: a fresh DB runs all migration steps → version 5
-        // (v4 `log`, v5 `wiki_index`); reopening must not re-run DDL (no-op
-        // bootstrap).
+        // user_version guard: a fresh DB runs all migration steps → version 6
+        // (v4 `log`, v5 `wiki_index`, v6 `tracked_repos`); reopening must not
+        // re-run DDL (no-op bootstrap).
         let userVersion = scalarText(db, "PRAGMA user_version;")
-        #expect(userVersion == "5")
+        #expect(userVersion == "6")
         let reopened = try SQLiteWikiStore(databaseURL: url)
         // If bootstrap weren't guarded, the CREATE TABLE would throw here.
         #expect((try? reopened.listPages()) != nil)
