@@ -48,6 +48,22 @@ struct Phase5StoreCanonicalizationTests {
         #expect(sourceLinks.contains { $0.to == source.id.rawValue })
     }
 
+    @Test func upsertCanonicalizesLegacySourceProjectionLink() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let source = try store.addSource(filename: "ScalaTestingWithSpecs2.md", data: Data("source".utf8))
+        let projection = "\(source.filename)–\(source.id.rawValue).md"
+        let quote = #""Mocks are used to isolate unit tests against external dependencies.""#
+
+        let outcome = try PageUpsert.upsert(
+            in: store, id: nil, title: "Linker",
+            body: "See [[source:\(projection)#\(quote)]].")
+
+        let stored = try store.getPage(id: outcome.id)
+        #expect(stored.bodyMarkdown
+            == "See [[source:\(source.id.rawValue)#\(quote)|\(projection)]].")
+        #expect(try store.sourceLinkingPages(to: source.id) == [outcome.id])
+    }
+
     // MARK: - AC.3 — forward link stored verbatim, no edge
 
     @Test func unresolvedForwardLinkStoredVerbatim() throws {

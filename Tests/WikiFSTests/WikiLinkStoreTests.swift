@@ -153,6 +153,26 @@ struct WikiLinkStoreTests {
         #expect(try store.sourceLinkingPages(to: src.id) == [a.id])
     }
 
+    @Test func replaceLinksResolvesIssue908SourceFilenameWithQuoteAnchor() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "A")
+        let source = try store.addSource(filename: "ScalaTestingWithSpecs2.md", data: Data("source".utf8))
+        // #908's target is a legacy File Provider projection leaf, not the
+        // source row's filename. It encodes the original filename plus the
+        // full SourceID after a Unicode en dash.
+        let projectionFilename = "\(source.filename)–\(source.id.rawValue).md"
+
+        // Resolve the generated leaf before removing its `#\"…\"` quote
+        // anchor; the graph must point at the source row, not a fictitious
+        // source whose filename happens to equal the projection leaf.
+        try store.replaceLinks(
+            from: page.id,
+            parsedLinks: WikiLinkParser.parse(
+                "[[source:\(projectionFilename)#\"Mocks are used to isolate unit tests against external dependencies.\"]]"))
+
+        #expect(try store.sourceLinkingPages(to: source.id) == [page.id])
+    }
+
     @Test func replaceLinksResolvesHashTitleWithRealAnchor() throws {
         let store = try tempStore()
         let a = try store.createPage(title: "A")

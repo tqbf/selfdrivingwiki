@@ -72,8 +72,6 @@ public enum RelativeLinkRewriter {
         }
     }
 
-    private static let regex = WikiLinkSpan.regex
-
     /// Rewrite all resolvable `[[wiki-links]]` in `body` to relative Markdown links.
     ///
     /// - Parameters:
@@ -84,7 +82,7 @@ public enum RelativeLinkRewriter {
     public static func rewrite(_ body: String, resolver: Resolver) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
 
         var out = ""
         var cursor = 0

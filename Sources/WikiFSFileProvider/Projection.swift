@@ -1360,7 +1360,10 @@ struct Projection {
                 page:   { t, isID in isID ? pageByID[t.uppercased()]   : pageByTitle[t] },
                 source: { t, isID in
                     if isID { return sourceByID[t.uppercased()] }
-                    return sourceByName[t] ?? sourceByLooseKey[WikiNameRules.looseMatchKey(t)]
+                    return sourceByName[t]
+                        ?? WikiLinkResolver.legacySourceProjectionID(from: t)
+                            .flatMap { sourceByID[$0.rawValue.uppercased()] }
+                        ?? sourceByLooseKey[WikiNameRules.looseMatchKey(t)]
                 },
                 chat:   { t, isID in
                     if isID { return chatByID[t.uppercased()] }
