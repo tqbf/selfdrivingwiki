@@ -249,7 +249,7 @@ struct ProcessRunner {
 enum DynamicRendererPRSeriesAuditMain {
     static func run(arguments: [String]) throws {
         guard let subcommand = arguments.first else { throw AuditCLIError.usage }
-        let options = try parseOptions(Array(arguments.dropFirst()))
+        let options = try options(for: subcommand, arguments: Array(arguments.dropFirst()))
         switch subcommand {
         case "verify":
             guard let series = options["--series"], let evidence = options["--evidence"] else { throw AuditCLIError.usage }
@@ -269,11 +269,23 @@ enum DynamicRendererPRSeriesAuditMain {
         while index < arguments.endIndex {
             let key = arguments[index]
             let value = arguments[arguments.index(after: index)]
-            guard key.hasPrefix("--"), options.updateValue(value, forKey: key) == nil else {
+            guard key.hasPrefix("--"), value.isEmpty == false, options.updateValue(value, forKey: key) == nil else {
                 throw AuditCLIError.usage
             }
             index = arguments.index(index, offsetBy: 2)
         }
+        return options
+    }
+
+    static func options(for subcommand: String, arguments: [String]) throws -> [String: String] {
+        let options = try parseOptions(arguments)
+        let allowed: Set<String>
+        switch subcommand {
+        case "verify": allowed = ["--series", "--evidence"]
+        case "build-suite": allowed = ["--head", "--evidence"]
+        default: throw AuditCLIError.usage
+        }
+        guard Set(options.keys) == allowed else { throw AuditCLIError.usage }
         return options
     }
 
@@ -292,7 +304,7 @@ enum DynamicRendererPRSeriesAuditMain {
         guard first.headRefOID == localHead else { throw AuditCLIError.invalidHead(first.headRefOID) }
         guard first.headRefName == branch, first.baseRefName == phase.base, first.title.range(of: "^(feat|fix|test|chore|docs|refactor)(\\([^)]+\\))?: .+", options: .regularExpression) != nil else { throw AuditCLIError.invalidRecord("PR metadata does not bind this branch/base/title") }
         let repositoryRoot = seriesURL.deletingLastPathComponent().deletingLastPathComponent()
-        try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
+        let changedProductionSources = try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
         let liveChecks = try requiredLiveChecks(from: first)
         guard first.reviewDecision.uppercased() == "APPROVED",
               let approval = effectiveCurrentHeadApproval(from: first) else {
@@ -303,13 +315,13 @@ enum DynamicRendererPRSeriesAuditMain {
         guard matchingRecords.count == 1, let record = matchingRecords.first else { throw AuditCLIError.invalidRecord("missing exact-head gate record") }
         do { try record.validate() }
         catch { throw AuditCLIError.invalidRecord("invalid record: \(error)") }
-        guard let inventory = phase.inventory, record.baseRefOID == first.baseRefOID, record.testInventory == inventory else { throw AuditCLIError.invalidRecord("evidence does not bind the PR series") }
-        try validateEvidence(record: record, phase: phase, baseOID: first.baseRefOID, repositoryRoot: repositoryRoot)
+        guard let inventory = phase.inventory, record.baseRefName == first.baseRefName, record.baseRefOID == first.baseRefOID, record.testInventory == inventory else { throw AuditCLIError.invalidRecord("evidence does not bind the PR series") }
+        try validateEvidence(record: record, phase: phase, baseOID: first.baseRefOID, changedProductionSources: changedProductionSources, repositoryRoot: repositoryRoot)
         let second = try github.pullRequest(head: branch)
         guard second == first else { throw AuditCLIError.invalidRecord("PR changed during audit") }
         guard try git.output(arguments: ["rev-parse", "HEAD"]) == localHead,
               try git.output(arguments: ["status", "--porcelain"]).isEmpty else { throw DynamicRendererAuditError.dirtyCheckout }
-        let retainedRecord = DynamicRendererGateRecord(schemaVersion: record.schemaVersion, auditedSHA: record.auditedSHA, headRefOID: record.headRefOID, localHeadOID: localHead, baseRefName: record.baseRefName, baseRefOID: record.baseRefOID, cleanCheckout: record.cleanCheckout, requiredCheckRuns: liveChecks, review: .approved(author: approval.author, commitSHA: approval.commitSHA), commands: record.commands, testInventory: record.testInventory, mutationReport: record.mutationReport, findings: record.findings, recordedAt: record.recordedAt)
+        let retainedRecord = DynamicRendererGateRecord(schemaVersion: record.schemaVersion, auditedSHA: record.auditedSHA, headRefOID: record.headRefOID, localHeadOID: localHead, baseRefName: second.baseRefName, baseRefOID: second.baseRefOID, cleanCheckout: record.cleanCheckout, requiredCheckRuns: liveChecks, review: .approved(author: approval.author, commitSHA: approval.commitSHA), commands: record.commands, testInventory: record.testInventory, mutationReport: record.mutationReport, findings: record.findings, recordedAt: record.recordedAt)
         try retainedRecord.validate()
         try writer.write(retainedRecord, to: evidenceURL)
     }
@@ -325,7 +337,7 @@ enum DynamicRendererPRSeriesAuditMain {
             throw AuditCLIError.invalidRecord("PR metadata does not bind this build-suite run")
         }
         let repositoryRoot = seriesURL.deletingLastPathComponent().deletingLastPathComponent()
-        try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
+        _ = try verifyExactBase(phase: phase, pullRequest: first, git: git, repositoryRoot: repositoryRoot)
         var results: [DynamicRendererAuditCommandResult] = []
         for command in DynamicRendererBuildAndSuiteGate.requiredCommands {
             try requireStableCheckout(expectedHead: head, git: git)
@@ -338,11 +350,10 @@ enum DynamicRendererPRSeriesAuditMain {
         try requireStableCheckout(expectedHead: head, git: git)
         let second = try github.pullRequest(head: branch)
         guard second == first else { throw AuditCLIError.invalidRecord("PR changed during build-suite") }
-        try verifyExactBase(phase: phase, pullRequest: second, git: git, repositoryRoot: repositoryRoot)
-        let inventory = try decodeInventory(phase: phase, repositoryRoot: repositoryRoot)
-        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, localHeadOID: head, baseRefName: second.baseRefName, baseRefOID: second.baseRefOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: try requiredInventoryPath(for: phase), mutationReport: inventory.mutationEvidence.report, findings: [], recordedAt: clock.recordedAt())
+        let changedProductionSources = try verifyExactBase(phase: phase, pullRequest: second, git: git, repositoryRoot: repositoryRoot)
+        let record = DynamicRendererGateRecord(schemaVersion: 1, auditedSHA: head, headRefOID: head, localHeadOID: head, baseRefName: second.baseRefName, baseRefOID: second.baseRefOID, cleanCheckout: true, requiredCheckRuns: DynamicRendererBuildAndSuiteGate.requiredLiveCheckNames.map { .init(name: $0, headSHA: head, conclusion: "pending") }, review: .noReview, commands: results, testInventory: try requiredInventoryPath(for: phase), mutationReport: nil, findings: [], recordedAt: clock.recordedAt())
         try record.validate()
-        try validateEvidence(record: record, phase: phase, baseOID: second.baseRefOID, repositoryRoot: repositoryRoot)
+        try validateEvidence(record: record, phase: phase, baseOID: second.baseRefOID, changedProductionSources: changedProductionSources, repositoryRoot: repositoryRoot)
         try requireStableCheckout(expectedHead: head, git: git)
         try records.write(record, to: URL(fileURLWithPath: evidenceDirectory, isDirectory: true))
     }
@@ -399,6 +410,7 @@ private struct DynamicRendererAuditInventory: Decodable {
     let issue: Int
     let pr: Int
     let baseCommit: String
+    let productionSources: [String]
     let productionSymbols: [TestMapping]
     let decisionBranches: [TestMapping]
     let mutationEvidence: MutationEvidence
@@ -454,7 +466,7 @@ private func decodeInventory(phase: DynamicRendererAuditSeries.Phase, repository
     return inventory
 }
 
-private func verifyExactBase(phase: DynamicRendererAuditSeries.Phase, pullRequest: GitHubAuditPullRequest, git: GitRepositoryQuerying, repositoryRoot: URL) throws {
+private func verifyExactBase(phase: DynamicRendererAuditSeries.Phase, pullRequest: GitHubAuditPullRequest, git: GitRepositoryQuerying, repositoryRoot: URL) throws -> Set<String> {
     let inventory = try decodeInventory(phase: phase, repositoryRoot: repositoryRoot)
     guard inventory.baseCommit == pullRequest.baseRefOID else { throw AuditCLIError.invalidRecord("PR base does not match the series inventory") }
     guard try git.status(arguments: ["fetch", "origin", pullRequest.baseRefOID]) == 0,
@@ -464,7 +476,8 @@ private func verifyExactBase(phase: DynamicRendererAuditSeries.Phase, pullReques
     guard try git.status(arguments: ["merge-base", "--is-ancestor", pullRequest.baseRefOID, pullRequest.headRefOID]) == 0 else {
         throw AuditCLIError.invalidRecord("PR base is not an ancestor")
     }
-    _ = try git.output(arguments: ["diff", "--name-only", "\(pullRequest.baseRefOID)...\(pullRequest.headRefOID)"])
+    let diff = try git.output(arguments: ["diff", "--name-only", "\(pullRequest.baseRefOID)...\(pullRequest.headRefOID)"])
+    return Set(diff.split(separator: "\n").map(String.init).filter { $0.hasPrefix("Sources/") })
 }
 
 private func requiredLiveChecks(from pullRequest: GitHubAuditPullRequest) throws -> [DynamicRendererAuditCheckRun] {
@@ -504,7 +517,7 @@ private func effectiveCurrentHeadApproval(from pullRequest: GitHubAuditPullReque
         .max(by: { $0.submittedAt < $1.submittedAt })
 }
 
-private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicRendererAuditSeries.Phase, baseOID: String, repositoryRoot: URL) throws {
+private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicRendererAuditSeries.Phase, baseOID: String, changedProductionSources: Set<String>, repositoryRoot: URL) throws {
     guard let expectedInventory = phase.inventory else { throw AuditCLIError.invalidRecord("PR phase has no test inventory") }
     let schemaURL = repositoryRoot.appendingPathComponent("plans/dynamic-renderer-gate-record.schema.json")
     let schemaData = try Data(contentsOf: schemaURL)
@@ -516,13 +529,18 @@ private func validateEvidence(record: DynamicRendererGateRecord, phase: DynamicR
     guard inventory.schemaVersion == 1, inventory.issue == 1026, inventory.pr == phase.number, inventory.baseCommit == baseOID else {
         throw AuditCLIError.invalidRecord("test inventory does not bind the current PR base")
     }
-    try validateTestMappings(inventory, repositoryRoot: repositoryRoot)
-    guard record.testInventory == expectedInventory,
-          record.mutationReport == inventory.mutationEvidence.report else {
-        throw AuditCLIError.invalidRecord("record does not bind the tracked inventory and mutation report")
+    try validateTestMappings(inventory, changedProductionSources: changedProductionSources, repositoryRoot: repositoryRoot)
+    guard record.testInventory == expectedInventory else {
+        throw AuditCLIError.invalidRecord("record does not bind the tracked inventory")
     }
-    let mutationURL = repositoryRoot.appendingPathComponent(inventory.mutationEvidence.report)
-    let mutationReport = try JSONDecoder().decode(DynamicRendererMutationReport.self, from: Data(contentsOf: mutationURL))
+    guard let mutationPath = record.mutationReport else { return }
+    guard mutationPath == inventory.mutationEvidence.report else { throw AuditCLIError.invalidRecord("record does not bind the tracked mutation report") }
+    let mutationURL = repositoryRoot.appendingPathComponent(mutationPath)
+    let mutationData = try Data(contentsOf: mutationURL)
+    let mutationSchemaURL = repositoryRoot.appendingPathComponent("plans/dynamic-renderer-mutation-evidence.schema.json")
+    do { try MutationEvidenceSchemaValidator.validate(instanceData: mutationData, schemaData: Data(contentsOf: mutationSchemaURL)) }
+    catch { throw AuditCLIError.invalidRecord("mutation report does not match the tracked schema") }
+    let mutationReport = try JSONDecoder().decode(DynamicRendererMutationReport.self, from: mutationData)
     try validateMutationReport(mutationReport, inventory: inventory.mutationEvidence, record: record, baseOID: baseOID, repositoryRoot: repositoryRoot)
 }
 
@@ -613,11 +631,14 @@ private func nativeMutationOutcomes(from data: Data, expectedScope: String) thro
     return outcomes
 }
 
-private func validateTestMappings(_ inventory: DynamicRendererAuditInventory, repositoryRoot: URL) throws {
+private func validateTestMappings(_ inventory: DynamicRendererAuditInventory, changedProductionSources: Set<String>, repositoryRoot: URL) throws {
     let mappings = inventory.productionSymbols + inventory.decisionBranches
     guard mappings.isEmpty == false,
           mappings.allSatisfy({ $0.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && $0.tests.isEmpty == false }),
-          Set(mappings.map(\.subject)).count == mappings.count else {
+          Set(mappings.map(\.subject)).count == mappings.count,
+          inventory.productionSources.isEmpty == false,
+          Set(inventory.productionSources).count == inventory.productionSources.count,
+          Set(inventory.productionSources) == changedProductionSources else {
         throw AuditCLIError.invalidRecord("test inventory mappings must be non-empty and unique")
     }
     let discovered = try discoveredTestNames(repositoryRoot: repositoryRoot)

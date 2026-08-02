@@ -4,15 +4,37 @@ import Foundation
 
 enum GateRecordSchemaValidator {
     static func validate(instanceData: Data, schemaData: Data) throws {
-        let instance = try JSONSerialization.jsonObject(with: instanceData)
         let schema = try JSONSerialization.jsonObject(with: schemaData)
-        guard let schemaObject = schema as? [String: Any], isSupportedGateRecordSchema(schemaObject), validates(instance, against: schemaObject) else {
+        guard let schemaObject = schema as? [String: Any], isSupportedGateRecordSchema(schemaObject) else {
             throw DynamicRendererAuditError.invalidSchema
         }
+        try JSONSchemaValidator.validate(instanceData: instanceData, schema: schemaObject)
     }
 
     private static func isSupportedGateRecordSchema(_ schema: [String: Any]) -> Bool {
-        let required: Set<String> = ["schemaVersion", "auditedSHA", "headRefOID", "localHeadOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "mutationReport", "findings", "recordedAt"]
+        let required: Set<String> = ["schemaVersion", "auditedSHA", "headRefOID", "localHeadOID", "baseRefName", "baseRefOID", "cleanCheckout", "requiredCheckRuns", "review", "commands", "testInventory", "findings", "recordedAt"]
+        let properties: Set<String> = required.union(["mutationReport"])
+        guard schema["$schema"] as? String == "https://json-schema.org/draft/2020-12/schema",
+              schema["type"] as? String == "object",
+              schema["additionalProperties"] as? Bool == false,
+              Set(schema["required"] as? [String] ?? []) == required,
+              let propertySchemas = schema["properties"] as? [String: Any], Set(propertySchemas.keys) == properties
+        else { return false }
+        return true
+    }
+}
+
+enum MutationEvidenceSchemaValidator {
+    static func validate(instanceData: Data, schemaData: Data) throws {
+        let schema = try JSONSerialization.jsonObject(with: schemaData)
+        guard let schemaObject = schema as? [String: Any], isSupportedMutationEvidenceSchema(schemaObject) else {
+            throw DynamicRendererAuditError.invalidSchema
+        }
+        try JSONSchemaValidator.validate(instanceData: instanceData, schema: schemaObject)
+    }
+
+    private static func isSupportedMutationEvidenceSchema(_ schema: [String: Any]) -> Bool {
+        let required: Set<String> = ["schemaVersion", "auditedSHA", "baseOID", "generatedAt", "command", "toolVersion", "nativeReport", "nativeReportSHA256", "scope", "coveredSymbols", "result", "threshold", "mutants", "passed"]
         guard schema["$schema"] as? String == "https://json-schema.org/draft/2020-12/schema",
               schema["type"] as? String == "object",
               schema["additionalProperties"] as? Bool == false,
@@ -20,6 +42,13 @@ enum GateRecordSchemaValidator {
               let properties = schema["properties"] as? [String: Any], Set(properties.keys) == required
         else { return false }
         return true
+    }
+}
+
+private enum JSONSchemaValidator {
+    static func validate(instanceData: Data, schema: [String: Any]) throws {
+        let instance = try JSONSerialization.jsonObject(with: instanceData)
+        guard validates(instance, against: schema) else { throw DynamicRendererAuditError.invalidSchema }
     }
 
     private static func validates(_ instance: Any, against schema: [String: Any]) -> Bool {
@@ -40,6 +69,7 @@ enum GateRecordSchemaValidator {
             if let maximum = schema["maxItems"] as? Int, array.count > maximum { return false }
             if let itemSchema = schema["items"] as? [String: Any], array.allSatisfy({ validates($0, against: itemSchema) }) == false { return false }
         }
+        if let integer = instance as? Int, let minimum = schema["minimum"] as? Int, integer < minimum { return false }
         if let object = instance as? [String: Any] {
             let required = schema["required"] as? [String] ?? []
             guard required.allSatisfy(object.keys.contains) else { return false }
@@ -60,6 +90,7 @@ enum GateRecordSchemaValidator {
         case "string": instance is String
         case "boolean": instance is Bool
         case "integer": instance is Int
+        case "null": instance is NSNull
         default: false
         }
     }

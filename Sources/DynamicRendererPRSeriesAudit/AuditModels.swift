@@ -170,8 +170,10 @@ public struct DynamicRendererGateRecord: Codable, Equatable, Sendable {
         guard testInventory.hasPrefix("plans/"), testInventory.hasSuffix(".json") else {
             throw DynamicRendererAuditError.invalidInventoryPath(testInventory)
         }
-        guard let mutationReport, mutationReport.hasPrefix("tmp/"), mutationReport.hasSuffix(".json") else {
-            throw DynamicRendererAuditError.invalidMutationReport
+        if let mutationReport {
+            guard mutationReport.hasPrefix("tmp/"), mutationReport.hasSuffix(".json") else {
+                throw DynamicRendererAuditError.invalidMutationReport
+            }
         }
         guard commands.map(\.command) == DynamicRendererBuildAndSuiteGate.requiredCommands.map({ $0.joined(separator: " ") }),
               commands.allSatisfy({ $0.exitCode == 0 }) else { throw DynamicRendererAuditError.invalidCommandEvidence }
