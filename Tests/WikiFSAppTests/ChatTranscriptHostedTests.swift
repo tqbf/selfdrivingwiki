@@ -155,9 +155,9 @@ struct ChatTranscriptHostedTests {
     @Test func hostedExpandedToolRowsStackAndDisplayTheUnfencedPayload() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1_600, height: 480))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 1_600, height: 480),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.contentView = webView
@@ -192,16 +192,19 @@ struct ChatTranscriptHostedTests {
                 var details=document.querySelector("[data-row-id='tool-tool-hosted']");
                 var summary=details.querySelector('summary');
                 var detail=details.querySelector('.chat-tool-detail');
+                var name=details.querySelector('.chat-tool-name');
+                var status=details.querySelector('.chat-tool-summary');
                 details.open=true;
                 return [
                     detail.textContent,
                     String(detail.getBoundingClientRect().top > summary.getBoundingClientRect().top),
-                    getComputedStyle(details).display
+                    getComputedStyle(details).display,
+                    String(status.getBoundingClientRect().top > name.getBoundingClientRect().top)
                 ].join('|');
             })()
             """)
 
-        #expect(state == "head_version_id: 01KX94Y|true|block")
+        #expect(state == "head_version_id: 01KX94Y|true|block|true")
     }
 
     @Test func hostedExpandedReasoningRowsPlaceTheirBodyBelowTheSummary() async throws {
