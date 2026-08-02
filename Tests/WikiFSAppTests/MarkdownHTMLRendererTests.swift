@@ -10,6 +10,35 @@ import Testing
 /// these feed standard Markdown and assert the HTML structure.
 struct MarkdownHTMLRendererTests {
 
+    @Test("#908 keeps every citation sentence through the reader pipeline")
+    func issue908LegacySourceProjectionNameRetainsAllSentences() {
+        let sourceID = "01KY7MKKGGFHF6SY6QHKVMT3GX"
+        let projectionFilename = "ScalaTestingWithSpecs2.md–\(sourceID).md"
+        let sentences = [
+            "See [[source:\(projectionFilename)#\"The location for tests is in the \"test\" folder.\"]] for test directory organization and sbt console commands.",
+            "See \(projectionFilename) for Eclipse integration requirements.",
+            "See [[source:\(projectionFilename)#\"The expression that follows the must keyword are known as matchers.\"]] for matcher details.",
+            "See [[source:\(projectionFilename)#\"Mocks are used to isolate unit tests against external dependencies.\"]] for Mockito usage in specs2.",
+            "See [[source:\(projectionFilename)#\"abstract database access behind a repository layer.\"]] for decoupling models and repositories.",
+        ]
+
+        let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
+            name == projectionFilename && kind == .source
+        }
+        let html = MarkdownHTMLRenderer.render(prepared)
+
+        for sentence in [
+            "for test directory organization and sbt console commands.",
+            "for Eclipse integration requirements.",
+            "for matcher details.",
+            "for Mockito usage in specs2.",
+            "for decoupling models and repositories.",
+        ] {
+            #expect(html.contains(sentence), "Missing sentence: \(sentence). HTML: \(html)")
+        }
+        #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
+    }
+
     @Test func sourceFrontmatterIsExcludedBeforeRendering() {
         let markdown = """
         ---

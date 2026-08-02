@@ -4,6 +4,24 @@ import Testing
 /// Pure tests for the lookup-driven `[[wiki-link]]` target disambiguation.
 struct WikiLinkResolverTests {
 
+    // MARK: - Legacy source projection compatibility (#908)
+
+    @Test func legacySourceProjectionExtractsFullSourceID() {
+        let id = "01KY7MKKGGFHF6SY6QHKVMT3GX"
+        let projection = "ScalaTestingWithSpecs2.md–\(id).md"
+
+        #expect(WikiLinkResolver.legacySourceProjectionID(from: projection)?.rawValue == id)
+    }
+
+    @Test func legacySourceProjectionRejectsNonLegacyForms() {
+        #expect(WikiLinkResolver.legacySourceProjectionID(
+            from: "ScalaTestingWithSpecs2.md--01KY7MKK.md") == nil)
+        #expect(WikiLinkResolver.legacySourceProjectionID(
+            from: "ScalaTestingWithSpecs2.md–not-a-source-id.md") == nil)
+        #expect(WikiLinkResolver.legacySourceProjectionID(
+            from: "–01KY7MKKGGFHF6SY6QHKVMT3GX.md") == nil)
+    }
+
     // MARK: - candidateSplits ordering
 
     @Test func plainTargetHasSingleCandidate() {

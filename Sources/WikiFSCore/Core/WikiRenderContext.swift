@@ -247,8 +247,11 @@ public struct WikiRenderContext: Sendable {
                 }
             }
             switch kind {
-            case .source: return sourceNames.contains(name.lowercased())
-                || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+            case .source:
+                return sourceNames.contains(name.lowercased())
+                    || uniqueLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+                    || WikiLinkResolver.legacySourceProjectionID(from: name)
+                        .map { sourceIDToName[$0] != nil } == true
             case .chat:   return chatTitles.contains(name.lowercased())
             case .page:   return pageTitles.contains(name.lowercased())
             }
@@ -259,7 +262,11 @@ public struct WikiRenderContext: Sendable {
     /// to its `(id, mimeType, target)` via the captured embed map (lowercased
     /// lookup). Pure — no store access at render time.
     public var embedInfo: (String) -> WikiLinkMarkdown.SourceEmbedInfo? {
-        { name in embedMap[name.lowercased()] }
+        { name in
+            embedMap[name.lowercased()]
+                ?? WikiLinkResolver.legacySourceProjectionID(from: name)
+                    .flatMap { embedMap[$0.rawValue.lowercased()] }
+        }
     }
 
     /// `(id, kind) -> String?`: display-at-render heal. A canonical

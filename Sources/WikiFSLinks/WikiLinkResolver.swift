@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 
 /// Lookup-driven disambiguation for `[[wiki-link]]` targets whose NAME may
 /// contain `#`.
@@ -20,6 +21,21 @@ import Foundation
 /// caller's heuristic split (`WikiLinkParser.splitFragment`) — there is no
 /// namespace to consult for a ghost link.
 public enum WikiLinkResolver {
+
+    /// Extract the source ID from the legacy File Provider projection leaf
+    /// `<filename>–<full-source-id>.md`. Older exports used this Unicode en-dash
+    /// format before the current short-ID (`--<id-prefix>`) convention. The
+    /// filename portion is presentation only; callers must still verify that
+    /// the extracted ID exists in their source namespace.
+    public static func legacySourceProjectionID(from target: String) -> SourceID? {
+        guard target.hasSuffix(legacySourceMarkdownExtension) else { return nil }
+        let stem = String(target.dropLast(legacySourceMarkdownExtension.count))
+        guard let separator = stem.lastIndex(of: legacySourceProjectionSeparator),
+              separator != stem.startIndex else { return nil }
+        let rawID = String(stem[stem.index(after: separator)...])
+        guard WikiLinkParser.isCanonicalULID(rawID) else { return nil }
+        return SourceID(rawValue: rawID)
+    }
 
     /// One possible reading of a raw target: a normalized base name plus the
     /// verbatim remainder after the splitting `#` (`nil` = no fragment).
@@ -60,4 +76,7 @@ public enum WikiLinkResolver {
         }
         return nil
     }
+
+    private static let legacySourceProjectionSeparator: Character = "–"
+    private static let legacySourceMarkdownExtension = ".md"
 }

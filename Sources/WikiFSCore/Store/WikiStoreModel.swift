@@ -1640,11 +1640,16 @@ public final class WikiStoreModel {
                 // For source links, also check looseMatchKey so a name with a
                 // dash variant still counts as resolved (mirrors the store's
                 // resolveSourceByName pass 3 and the projection's LinkMaps).
-                known = { [self] name in
-                    self.sources.contains { $0.effectiveName == name }
-                    || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
+                let sourceIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+                known = { [self, sourceIDs] name in
+                    if let sourceID = WikiLinkResolver.legacySourceProjectionID(from: name),
+                       sourceIDs.contains(sourceID.rawValue.uppercased()) {
+                        return true
+                    }
+                    return self.sources.contains { $0.effectiveName == name }
+                        || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
                 }
-                knownIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+                knownIDs = sourceIDs
             case .chat:
                 known = { knownChatTitles.contains($0) }
                 knownIDs = knownChatIDs
