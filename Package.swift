@@ -379,6 +379,7 @@ let package = Package(
         .executableTarget(
             name: "DynamicRendererPRSeriesAudit",
             dependencies: [
+                "WikiFSTypes",
                 .product(name: "Crypto", package: "swift-crypto",
                          condition: .when(platforms: [.linux])),
             ],

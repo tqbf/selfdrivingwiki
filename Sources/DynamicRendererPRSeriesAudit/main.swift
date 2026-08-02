@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 
 #if os(Linux)
 import Glibc
@@ -180,11 +181,32 @@ struct ProcessRunner {
         let timeout: TimeInterval
         let terminationGrace: TimeInterval
         let isCancelled: @Sendable () -> Bool
+        let requestTermination: @Sendable (Process) -> Void
+        let observeProcess: @Sendable (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity?
+        let sendSignal: @Sendable (Int32, Int32) -> Int32
 
-        init(timeout: TimeInterval = 300, terminationGrace: TimeInterval = 2, isCancelled: @escaping @Sendable () -> Bool = { false }) {
+        init(
+            timeout: TimeInterval = 300,
+            terminationGrace: TimeInterval = 2,
+            isCancelled: @escaping @Sendable () -> Bool = { false },
+            requestTermination: @escaping @Sendable (Process) -> Void = { process in
+                if process.isRunning {
+                    process.terminate()
+                }
+            },
+            observeProcess: @escaping @Sendable (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity? = {
+                ProcessIdentityObservation.observe(processID: $0)
+            },
+            sendSignal: @escaping @Sendable (Int32, Int32) -> Int32 = { processID, signal in
+                kill(processID, signal)
+            }
+        ) {
             self.timeout = timeout
             self.terminationGrace = terminationGrace
             self.isCancelled = isCancelled
+            self.requestTermination = requestTermination
+            self.observeProcess = observeProcess
+            self.sendSignal = sendSignal
         }
     }
 
@@ -212,6 +234,8 @@ struct ProcessRunner {
         let terminated = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in terminated.signal() }
         try process.run()
+        let launchedIdentity = ProcessSignalSafety.PositivePID(rawValue: process.processIdentifier)
+            .flatMap(policy.observeProcess)
         drains.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             stdoutData.set(stdout.fileHandleForReading.readDataToEndOfFile())
@@ -230,7 +254,11 @@ struct ProcessRunner {
             if Date() >= deadline { failure = .timedOut; break }
         }
         if let failure {
-            terminate(process, grace: policy.terminationGrace, completion: terminated)
+            terminate(
+                process,
+                launchedIdentity: launchedIdentity,
+                policy: policy,
+                completion: terminated)
             _ = drains.wait(timeout: .now() + policy.terminationGrace)
             throw failure
         }
@@ -238,11 +266,56 @@ struct ProcessRunner {
         return .init(status: process.terminationStatus, output: String(decoding: stdoutData.value() + stderrData.value(), as: UTF8.self))
     }
 
-    private static func terminate(_ process: Process, grace: TimeInterval, completion: DispatchSemaphore) {
-        process.terminate()
-        guard completion.wait(timeout: .now() + grace) == .timedOut else { return }
-        _ = kill(process.processIdentifier, SIGKILL)
-        _ = completion.wait(timeout: .now() + grace)
+    private static func terminate(
+        _ process: Process,
+        launchedIdentity: ProcessSignalSafety.Identity?,
+        policy: Policy,
+        completion: DispatchSemaphore
+    ) {
+        guard let launchedIdentity else {
+            logCleanupRefusal("identity unavailable at launch")
+            return
+        }
+        guard let parentProcessID = ProcessSignalSafety.PositivePID(rawValue: getpid()) else {
+            logCleanupRefusal("invalid parent PID")
+            return
+        }
+        guard process.isRunning, process.processIdentifier == launchedIdentity.processID.rawValue else {
+            logCleanupRefusal("direct child is no longer live")
+            return
+        }
+        switch ProcessSignalSafety.verify(
+            processID: launchedIdentity.processID,
+            expectedIdentity: launchedIdentity,
+            expectedParentProcessID: parentProcessID,
+            observedIdentity: policy.observeProcess(launchedIdentity.processID)) {
+        case .verified:
+            break
+        case .refused(let refusal):
+            logCleanupRefusal("refused termination for PID \(launchedIdentity.processID.rawValue): \(refusal)")
+            return
+        }
+        policy.requestTermination(process)
+        guard completion.wait(timeout: .now() + policy.terminationGrace) == .timedOut else { return }
+
+        switch ProcessSignalSafety.signal(
+            processID: launchedIdentity.processID,
+            expectedIdentity: launchedIdentity,
+            expectedParentProcessID: parentProcessID,
+            observedIdentity: policy.observeProcess(launchedIdentity.processID),
+            signal: policy.sendSignal) {
+        case .sent(let result) where result == 0:
+            break
+        case .sent(let result):
+            logCleanupRefusal("signal failed for verified child PID \(launchedIdentity.processID.rawValue): result=\(result)")
+        case .refused(let refusal):
+            logCleanupRefusal("refused signal for PID \(launchedIdentity.processID.rawValue): \(refusal)")
+        }
+        _ = completion.wait(timeout: .now() + policy.terminationGrace)
+    }
+
+    private static func logCleanupRefusal(_ message: String) {
+        DebugLog.agent("DynamicRendererPRSeriesAudit cleanup \(message)")
     }
 }
 

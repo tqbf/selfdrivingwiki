@@ -14,9 +14,19 @@ public enum PdfExtractionService {
     /// Process registry — non-isolated so termination handlers (which fire on
     /// background threads) can call track/untrack without crossing actor isolation.
     final class ProcessRegistry: @unchecked Sendable {
+        private let isProcessRunning: @Sendable (Process) -> Bool
+        private let requestTermination: @Sendable (Process) -> Void
         private var procs = Set<Process>()
         private var registered = false
         private let lock = NSLock()
+
+        init(
+            isProcessRunning: @escaping @Sendable (Process) -> Bool = { $0.isRunning },
+            requestTermination: @escaping @Sendable (Process) -> Void = { $0.terminate() }
+        ) {
+            self.isProcessRunning = isProcessRunning
+            self.requestTermination = requestTermination
+        }
 
         func registerIfNeeded() {
             lock.lock()
@@ -53,8 +63,8 @@ public enum PdfExtractionService {
             lock.lock()
             let snapshot = procs
             lock.unlock()
-            for p in snapshot where p.isRunning {
-                p.terminate()
+            for process in snapshot where isProcessRunning(process) {
+                requestTermination(process)
             }
         }
     }

@@ -2,8 +2,45 @@ import Foundation
 import Testing
 @testable import DynamicRendererPRSeriesAudit
 import WikiFSTypes
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 
 struct DynamicRendererPRSeriesAuditModelTests {
+    /// The timeout test records cleanup requests without sending OS signals.
+    // swiftlint:disable:next unchecked_sendable
+    private final class NonSignalingProcessControl: @unchecked Sendable {
+        private let lock = NSLock()
+        private var terminationRequests = 0
+        private var signalRequests = 0
+
+        func requestTermination(_: Process) {
+            lock.lock()
+            terminationRequests += 1
+            lock.unlock()
+        }
+
+        func sendSignal(_: Int32, _: Int32) -> Int32 {
+            lock.lock()
+            signalRequests += 1
+            lock.unlock()
+            return 0
+        }
+
+        func terminationRequestCount() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return terminationRequests
+        }
+
+        func signalRequestCount() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return signalRequests
+        }
+    }
     @Test func rejectsRecordWithMismatchedHeads() throws {
         let record = DynamicRendererGateRecord(
             schemaVersion: 1,
@@ -415,14 +452,37 @@ struct DynamicRendererPRSeriesAuditModelTests {
         }
     }
 
-    @Test func processRunnerDrainsVerboseOutputAndTerminatesTimedOutCommand() throws {
+    @Test func processRunnerDrainsVerboseOutputAndUsesNonSignalingTimeoutSeams() throws {
         let verbose = try ProcessRunner.run(executable: "/usr/bin/env", arguments: ["sh", "-c", "i=0; while [ $i -lt 20000 ]; do echo stdout-$i; echo stderr-$i >&2; i=$((i+1)); done"], policy: .init(timeout: 5))
         #expect(verbose.status == 0)
         #expect(verbose.output.contains("stdout-19999"))
         #expect(verbose.output.contains("stderr-19999"))
+        let control = NonSignalingProcessControl()
         #expect(throws: ProcessRunnerError.timedOut) {
-            _ = try ProcessRunner.run(executable: "/usr/bin/env", arguments: ["sh", "-c", "sleep 30"], policy: .init(timeout: 0.05, terminationGrace: 0.5))
+            _ = try ProcessRunner.run(
+                executable: "/usr/bin/env",
+                arguments: ["sh", "-c", "sleep 0.2"],
+                policy: .init(
+                    timeout: 0.05,
+                    terminationGrace: 0.05,
+                    requestTermination: control.requestTermination,
+                    observeProcess: Self.testIdentity,
+                    sendSignal: control.sendSignal))
         }
+        #expect(control.terminationRequestCount() == 1)
+        #expect(control.signalRequestCount() == 1)
+    }
+
+    private static func testIdentity(
+        processID: ProcessSignalSafety.PositivePID
+    ) -> ProcessSignalSafety.Identity? {
+        guard let parentProcessID = ProcessSignalSafety.PositivePID(rawValue: getpid()) else {
+            return nil
+        }
+        return .init(
+            processID: processID,
+            parentProcessID: parentProcessID,
+            startTime: .init(seconds: 1, microseconds: 1))
     }
 
     @Test func verifierRejectsChangesRequestedAfterApproval() throws {
