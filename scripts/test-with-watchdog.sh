@@ -26,6 +26,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 TIMEOUT_SECS="${TEST_TIMEOUT:-900}"
+NUM_WORKERS="${SWIFT_TEST_NUM_WORKERS:-1}"
 LOG_DIR="tmp/test-logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/swift-test-$(date +%Y%m%d-%H%M%S).log"
@@ -35,12 +36,12 @@ reap_helpers() {
 }
 trap reap_helpers EXIT TERM INT
 
-echo "==> swift test -v $* "
+echo "==> swift test -v --parallel --num-workers ${NUM_WORKERS} $* "
 echo "==> log: $LOG_FILE"
 echo "==> timeout: ${TIMEOUT_SECS}s (override with TEST_TIMEOUT=<seconds>)"
 
 reap_helpers
-swift test -v "$@" >"$LOG_FILE" 2>&1 &
+swift test -v --parallel --num-workers "$NUM_WORKERS" "$@" >"$LOG_FILE" 2>&1 &
 TEST_PID=$!
 
 START_TS=$(date +%s)
