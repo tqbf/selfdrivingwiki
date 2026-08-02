@@ -248,16 +248,34 @@ struct ProcessRunner {
 
 enum DynamicRendererPRSeriesAuditMain {
     static func run(arguments: [String]) throws {
+        let records = FileGateRecords()
+        try run(
+            arguments: arguments,
+            git: ProcessGitRepositoryQuery(),
+            github: ProcessGitHubPullRequestQuery(),
+            records: records,
+            clock: SystemAuditClock()
+        )
+    }
+
+    static func run<Records: GateRecordReading & GateRecordWriting>(
+        arguments: [String],
+        git: GitRepositoryQuerying,
+        github: GitHubPullRequestQuerying,
+        records: Records,
+        clock: AuditClock,
+        runner: AuditCommandRunning = ProcessAuditCommandRunner(),
+        seriesPath: String? = nil
+    ) throws {
         guard let subcommand = arguments.first else { throw AuditCLIError.usage }
         let options = try options(for: subcommand, arguments: Array(arguments.dropFirst()))
         switch subcommand {
         case "verify":
             guard let series = options["--series"], let evidence = options["--evidence"] else { throw AuditCLIError.usage }
-            let records = FileGateRecords()
-            try verify(seriesPath: series, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), github: ProcessGitHubPullRequestQuery(), records: records, writer: records)
+            try verify(seriesPath: series, evidenceDirectory: evidence, git: git, github: github, records: records, writer: records)
         case "build-suite":
             guard let head = options["--head"], let evidence = options["--evidence"], DynamicRendererAuditValidation.isSHA(head) else { throw AuditCLIError.usage }
-            try buildSuite(head: head, evidenceDirectory: evidence, git: ProcessGitRepositoryQuery(), github: ProcessGitHubPullRequestQuery(), records: FileGateRecords(), clock: SystemAuditClock())
+            try buildSuite(head: head, evidenceDirectory: evidence, git: git, github: github, records: records, clock: clock, runner: runner, seriesPath: seriesPath)
         default: throw AuditCLIError.usage
         }
     }

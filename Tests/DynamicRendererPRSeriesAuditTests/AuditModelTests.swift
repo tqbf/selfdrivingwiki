@@ -64,8 +64,41 @@ struct DynamicRendererPRSeriesAuditModelTests {
         #expect(throws: Error.self) { _ = try DynamicRendererPRSeriesAuditMain.options(for: "unknown", arguments: []) }
     }
 
-    @Test func auditMainRunRejectsMissingSubcommandWithoutStartingAShell() {
-        #expect(throws: Error.self) { try DynamicRendererPRSeriesAuditMain.run(arguments: []) }
+    @Test func auditMainRunRoutesVerifyWithInjectedDependencies() throws {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let directory = try temporarySeriesDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let seriesPath = try writeAuditFixture(in: directory, base: base)
+        let records = AuditFakeRecords([auditRecord(sha: sha, base: base)])
+        let metadata = auditPullRequest(sha: sha, base: base)
+
+        try DynamicRendererPRSeriesAuditMain.run(arguments: ["verify", "--series", seriesPath, "--evidence", directory.path], git: AuditFakeGit(head: "feature/dynamic-renderers-01-model", base: base), github: AuditFakeGitHub([metadata, metadata]), records: records, clock: AuditFakeClock())
+
+        #expect(records.written?.auditedSHA == sha)
+    }
+
+    @Test func auditMainRunRoutesBuildSuiteWithInjectedDependencies() throws {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let directory = try temporarySeriesDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let seriesPath = try writeAuditFixture(in: directory, base: base)
+        let records = AuditFakeRecords([])
+        let metadata = auditPullRequest(sha: sha, base: base)
+
+        try DynamicRendererPRSeriesAuditMain.run(arguments: ["build-suite", "--head", sha, "--evidence", directory.path], git: AuditFakeGit(head: "feature/dynamic-renderers-01-model", base: base), github: AuditFakeGitHub([metadata, metadata]), records: records, clock: AuditFakeClock(), runner: AuditFakeCommandRunner(), seriesPath: seriesPath)
+
+        #expect(records.written?.auditedSHA == sha)
+    }
+
+    @Test func auditMainRunRejectsUnknownSubcommandWithInjectedDependencies() {
+        let records = AuditFakeRecords([])
+
+        #expect(throws: Error.self) {
+            try DynamicRendererPRSeriesAuditMain.run(arguments: ["unknown"], git: AuditFakeGit(head: "feature/dynamic-renderers-01-model"), github: AuditFakeGitHub([]), records: records, clock: AuditFakeClock())
+        }
+        #expect(records.written == nil)
     }
 
     @Test func rejectsMalformedTimestampForMutationFreeGateRecord() throws {
