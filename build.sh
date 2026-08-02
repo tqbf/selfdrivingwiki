@@ -338,10 +338,9 @@ fi
 
 # SwiftPM module resources — the prompt .md files loaded at runtime via
 # GeneratedPrompts in PromptLoader. Without these, the File Provider extension
-# CRASHES on changeToken() → systemPromptVersion → SystemPrompt.defaultBody →
-# Bundle.module → fatalError, which kills the extension process, breaks ALL
-# getUserVisibleURL calls ("Couldn't communicate with a helper application"),
-# and silently disables Share / Reveal in Finder.
+# CRASHES on changeToken() / a daemon prompt request → SystemPrompt.defaultBody
+# → Bundle.module → fatalError. That kills the File Provider extension or the
+# wikid XPC service, breaking Finder actions or queue work respectively.
 #
 # We copy the Prompts/ directory directly into Contents/Resources/ (NOT the
 # .bundle at the bundle root) because codesign rejects unsealed contents at
@@ -350,10 +349,11 @@ fi
 # (which works in the SwiftPM .build context).
 SPM_RESOURCE_BUNDLE="${BIN_DIR}/WikiFS_WikiFSCore.bundle"
 if [ -d "${SPM_RESOURCE_BUNDLE}/Prompts" ]; then
-  mkdir -p "${APPEX_CONTENTS}/Resources"
+  mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
   cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${RESOURCES_DIR}/"
   cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${APPEX_CONTENTS}/Resources/"
-  echo "  ✓ bundled prompt resources into app + extension"
+  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${DAEMON_XPC_CONTENTS}/Resources/"
+  echo "  ✓ bundled prompt resources into app + extension + wikid XPC service"
 else
   echo "  ⚠ SwiftPM resource bundle not found at ${SPM_RESOURCE_BUNDLE}" >&2
   echo "    Run 'make prompts' then rebuild. Prompt loading will crash at runtime." >&2
