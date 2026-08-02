@@ -63,8 +63,7 @@ struct WikiDetailView: View {
                     error: tracker.errors[id],
                     isAgentRunning: launcher.isRunning,
                     onUpdate: { Task { await tracker.requestIngest(repo) } },
-                    onFetch: { Task { await tracker.fetch(repo) } },
-                    onToggleAuto: { store.setRepoAutoIngest(id: id, enabled: $0) }
+                    onFetch: { Task { await tracker.fetch(repo) } }
                 )
             } else {
                 ContentUnavailableView {

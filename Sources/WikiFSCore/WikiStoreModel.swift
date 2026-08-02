@@ -606,11 +606,6 @@ public final class WikiStoreModel {
         reloadRepos()
     }
 
-    public func setRepoAutoIngest(id: PageID, enabled: Bool) {
-        try? store.setRepoAutoIngest(id: id, enabled: enabled)
-        reloadRepos()
-    }
-
     /// Stop tracking a repo. Only the ROW is removed here — the caller deletes the
     /// checkout (`RepoCheckoutLocation.removeCheckout`), since the model has no
     /// business touching the filesystem.

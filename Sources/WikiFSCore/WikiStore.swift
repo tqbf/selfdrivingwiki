@@ -133,9 +133,6 @@ public protocol WikiStore {
     /// the clone, so an unspecified branch can only be filled in afterwards).
     func setRepoBranch(id: PageID, branch: String) throws
 
-    /// Turn this repo's unattended updates on or off.
-    func setRepoAutoIngest(id: PageID, enabled: Bool) throws
-
     /// Stop tracking a repo. The on-disk checkout is removed by the app.
     func deleteRepo(id: PageID) throws
 }

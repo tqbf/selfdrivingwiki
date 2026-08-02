@@ -253,6 +253,10 @@ public final class SQLiteWikiStore: WikiStore {
         // and are not projected onto the File Provider mount, so they must not
         // move the mount's sync anchor. The sidebar refreshes off the existing
         // Darwin-notification path instead (`WikiChangeBridge`).
+        //
+        // There is deliberately NO `auto_ingest` column: fetching and updating are
+        // both user-initiated, so there is no unattended path for a per-repo
+        // opt-out to govern.
         if version < 6 {
             try exec("""
             CREATE TABLE tracked_repos (
@@ -263,7 +267,6 @@ public final class SQLiteWikiStore: WikiStore {
                 head_commit TEXT,
                 last_ingested_commit TEXT,
                 last_fetched_at REAL,
-                auto_ingest INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1
@@ -715,8 +718,8 @@ public final class SQLiteWikiStore: WikiStore {
         let stmt = try statement("""
         INSERT INTO tracked_repos
           (id, name, remote_url, branch, head_commit, last_ingested_commit,
-           last_fetched_at, auto_ingest, created_at, updated_at, version)
-        VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 1, ?5, ?5, 1);
+           last_fetched_at, created_at, updated_at, version)
+        VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, ?5, ?5, 1);
         """)
         defer { stmt.reset() }
         try stmt.bind(id.rawValue, at: 1)
@@ -729,7 +732,7 @@ public final class SQLiteWikiStore: WikiStore {
         return TrackedRepo(
             id: id, name: name, remoteURL: remoteURL, branch: branch,
             headCommit: nil, lastIngestedCommit: nil, lastFetchedAt: nil,
-            autoIngest: true, createdAt: now, updatedAt: now, version: 1
+            createdAt: now, updatedAt: now, version: 1
         )
     }
 
@@ -793,13 +796,6 @@ public final class SQLiteWikiStore: WikiStore {
         }
     }
 
-    /// Turn this repo's unattended updates on or off.
-    public func setRepoAutoIngest(id: PageID, enabled: Bool) throws {
-        try mutateRepo(id: id, assignments: "auto_ingest = ?2") { stmt in
-            try stmt.bind(Int64(enabled ? 1 : 0), at: 2)
-        }
-    }
-
     /// Stop tracking a repo. The on-disk checkout is removed separately by the
     /// app (`RepoCheckoutLocation.removeCheckout`) — the store owns rows, not files.
     public func deleteRepo(id: PageID) throws {
@@ -834,7 +830,7 @@ public final class SQLiteWikiStore: WikiStore {
     /// `repo(from:)` agree on column order.
     private static let repoColumns = """
         SELECT id, name, remote_url, branch, head_commit, last_ingested_commit, \
-        last_fetched_at, auto_ingest, created_at, updated_at, version FROM tracked_repos
+        last_fetched_at, created_at, updated_at, version FROM tracked_repos
         """
 
     /// Map the current row of a `repoColumns` SELECT to a `TrackedRepo`, reading
@@ -853,10 +849,9 @@ public final class SQLiteWikiStore: WikiStore {
             headCommit: nullableText(4),
             lastIngestedCommit: nullableText(5),
             lastFetchedAt: fetchedAt,
-            autoIngest: stmt.int(at: 7) != 0,
-            createdAt: Date(timeIntervalSince1970: stmt.double(at: 8)),
-            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 9)),
-            version: Int(stmt.int(at: 10))
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 7)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 8)),
+            version: Int(stmt.int(at: 9))
         )
     }
 

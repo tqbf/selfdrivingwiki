@@ -82,7 +82,7 @@ existing DB runs only the new ones:
 | **→ 3** | agent schema | `system_prompt` singleton (`id INTEGER PRIMARY KEY CHECK(id=1)`), seeded with `SystemPrompt.defaultBody` |
 | **→ 4** | chronological log | `log` (id ULID, ts, kind, title, note) — append-only |
 | **→ 5** | curated catalog | `wiki_index` singleton (`CHECK(id=1)`), seeded with `WikiIndex.defaultBody` |
-| **→ 6** | repository tracking | `tracked_repos` (id ULID, name, remote_url UNIQUE, branch, head_commit, last_ingested_commit, last_fetched_at, auto_ingest, timestamps, version) — a remote, mutable, on-disk source, **not** `ingested_files` |
+| **→ 6** | repository tracking | `tracked_repos` (id ULID, name, remote_url UNIQUE, branch, head_commit, last_ingested_commit, last_fetched_at, timestamps, version) — a remote, mutable, on-disk source, **not** `ingested_files` |
 
 The two singletons (`system_prompt`, `wiki_index`) are **rows in that wiki's own
 DB** — multi-wiki is "one DB per wiki," so there are no `wiki_id` columns and no
@@ -102,7 +102,10 @@ Schema notes worth knowing:
   `last_ingested_commit`, through `wikictl repo mark-ingested`, at the end of a
   pass that actually wrote pages. The gap between the two columns is the pending
   work, and putting the watermark under the agent's control is what makes an
-  interrupted run re-cover its gap instead of silently skipping it. Checkouts live
+  interrupted run re-cover its gap instead of silently skipping it. Both the fetch
+  that moves `head_commit` and the pass that moves the watermark are
+  **user-initiated** — there is no poll loop and no unattended agent run, which is
+  also why there is no `auto_ingest` column. Checkouts live
   outside the DB (and outside the App Group container) at
   `~/Library/Application Support/WikiFS/repos/<wikiULID>/<repoULID>/` — see
   [`plans/repo-tracking.md`](repo-tracking.md).
@@ -142,8 +145,8 @@ against a not-yet-migrated DB), so the token always answers.
 **`tracked_repos` (v6) is deliberately NOT folded in.** The rule above is "must
 advance on any change *that a projected file reflects*" — repos are app + agent
 state and are not projected onto the mount, so folding them in would churn the
-sync anchor (and every materialized copy) on each 15-minute fetch for no gain. The
-sidebar learns about repo writes through the existing Darwin-notification path
+sync anchor, and every materialized copy, on each fetch for no gain. The sidebar
+learns about repo writes through the existing Darwin-notification path
 (`wikictl` → `WikiChangeBridge` → `reloadFromStore()`) instead.
 
 ### Registry & container layout

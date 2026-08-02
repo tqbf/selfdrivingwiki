@@ -34,8 +34,7 @@ public struct LogEntry: Equatable, Sendable {
         case lint
         /// A tracked-repository pass — the wiki being brought up to date with new
         /// commits. Distinct from `.ingest` (a one-shot source) so `log.md` can be
-        /// grepped for "what did the repo tracker do", which is the one operation
-        /// that can run unattended.
+        /// grepped for "when was this repo last covered, and through which commit".
         case repo
 
         /// The `a|b|c` list used in the CLI's usage/validation text and the

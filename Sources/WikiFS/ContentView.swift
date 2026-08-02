@@ -136,10 +136,6 @@ struct ContentView: View {
                 initialSourceID: operationInitialSourceID
             )
         }
-        // The repo poll loop lives for as long as this wiki is on screen.
-        .task {
-            tracker.start()
-        }
         // List(selection:) writes store.selection directly; observe it here so
         // the model flushes the outgoing page and loads the incoming one
         // (§3.5). The view, not the binding, is the right place for this.
@@ -154,7 +150,7 @@ struct ContentView: View {
                 isTranscriptExpanded = true
             }
             // A finished run is the tracker's cue that the single agent slot is
-            // free again, so a queued repo can start.
+            // free again, so a repo the user queued behind it can start.
             if !isRunning {
                 tracker.agentRunDidFinish()
             }

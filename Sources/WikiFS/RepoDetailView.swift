@@ -17,7 +17,6 @@ struct RepoDetailView: View {
     let isAgentRunning: Bool
     let onUpdate: () -> Void
     let onFetch: () -> Void
-    let onToggleAuto: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -55,7 +54,7 @@ struct RepoDetailView: View {
             ContentUnavailableView {
                 Label("Tracked Repository", systemImage: "arrow.triangle.branch")
             } description: {
-                Text("The app keeps its own clone of this repository. When new commits land, Claude reads what changed and revises the wiki pages about it — it never writes to the checkout. Ask about the code in Query.")
+                Text("The app keeps its own clone of this repository, and nothing happens to it on its own. Check for new commits when you want to know if it moved, then Update Wiki Now to have Claude read what changed and revise the pages about it — it never writes to the checkout. Ask about the code in Query.")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -101,22 +100,10 @@ struct RepoDetailView: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(isAgentRunning || activity != nil || repo.headCommit == nil)
                 .help("Have Claude read what changed and revise the wiki pages for this repository")
-            Button("Fetch Now", systemImage: "arrow.clockwise", action: onFetch)
+            Button("Check for New Commits", systemImage: "arrow.clockwise", action: onFetch)
                 .disabled(activity != nil)
-                .help("Check the remote for new commits")
+                .help("Fetch the remote and see whether this repository has moved")
             Spacer()
-            // A write-through binding rather than mirrored `@State`: the flag
-            // lives in SQLite, and this row is also rebuilt when an external
-            // `wikictl` write lands (§3.1 — cached local copies of store state
-            // are how views go stale). Reading the model directly is what keeps
-            // the switch honest.
-            Toggle(
-                "Update automatically",
-                isOn: Binding(get: { repo.autoIngest }, set: { onToggleAuto($0) })
-            )
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help("Let the app update the wiki on its own when this repository changes")
         }
     }
 

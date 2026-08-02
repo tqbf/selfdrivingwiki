@@ -62,14 +62,16 @@ handoff). 341 tests green; clean signed bundle (app + appex + `wikictl`).**
 
 **Post-completion features (also on `main`):**
 - **Repository tracking** — a wiki can follow git repositories. You add one by
-  remote URL; the app clones it under Application Support, polls it every 15
-  minutes, and when commits land runs an **incremental** agent pass that revises
-  the affected pages (initial passes and large diffs fan out to 2–19 Sonnet
-  `repo-reader` workers; Opus still writes everything). The app writes
-  `head_commit`; only the agent moves `last_ingested_commit`, via
-  `wikictl repo mark-ingested`, so an interrupted run re-covers its gap. Query is
-  repo-aware, so questions can be answered from the tracked source as well as the
-  wiki. Repos are **not** projected onto the mount. See
+  remote URL and the app clones it under Application Support; "Check for New
+  Commits" fetches, and "Update Wiki Now" runs an **incremental** agent pass that
+  revises the affected pages (initial passes and large diffs fan out to 2–19
+  Sonnet `repo-reader` workers; Opus still writes everything). Both steps are
+  **manual by design** — there is no timer and no unattended agent run, because a
+  repo pass is an Opus run and a background loop would spend on work nobody asked
+  for. The app writes `head_commit`; only the agent moves `last_ingested_commit`,
+  via `wikictl repo mark-ingested`, so an interrupted run re-covers its gap. Query
+  is repo-aware, so questions can be answered from the tracked source as well as
+  the wiki. Repos are **not** projected onto the mount. See
   [`plans/repo-tracking.md`](plans/repo-tracking.md).
 - **Wiki backup/restore management** — the wiki switcher can rename the active
   wiki, export its checkpointed standalone SQLite file, and import a SQLite wiki

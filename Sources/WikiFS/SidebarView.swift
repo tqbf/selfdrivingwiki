@@ -108,15 +108,24 @@ struct SidebarView: View {
                         .tag(WikiSelection.repo(repo.id))
                     }
                 } header: {
-                    HStack {
+                    HStack(spacing: 10) {
                         Text("Repositories")
                         Spacer()
+                        // Checking is explicit: nothing fetches on a timer, so
+                        // this is how a repo's "Changes" badge gets refreshed.
+                        Button("Check for New Commits", systemImage: "arrow.clockwise") {
+                            Task { await tracker.fetchAll() }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .disabled(tracker.isBusy)
+                        .help("Fetch every tracked repository and show which ones have moved")
                         Button("Track a Repository…", systemImage: "plus") {
                             showingAddRepository = true
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
-                        .help("Clone a git repository and keep the wiki up to date with it")
+                        .help("Clone a git repository so the wiki can be kept up to date with it")
                     }
                 }
             }

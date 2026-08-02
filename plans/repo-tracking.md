@@ -2,11 +2,17 @@
 
 ## Direction
 
-A wiki can **track git repositories**. You add one by remote URL; the app clones
-it into its own storage, watches it, and when new commits land Claude reads what
-changed and revises the wiki pages about that repository. The Query conversation
-becomes repo-aware, so a question can be answered from the wiki *and* from the
-tracked source.
+A wiki can **track git repositories**. You add one by remote URL and the app
+clones it into its own storage. When you ask, it checks the remote for new
+commits; when you ask again, Claude reads what changed and revises the wiki pages
+about that repository. The Query conversation becomes repo-aware, so a question
+can be answered from the wiki *and* from the tracked source.
+
+**Nothing here runs on its own.** No timer, no unattended agent run. A repo pass
+is an Opus run with a Sonnet fan-out, and a background loop that starts one
+overnight spends real money on work nobody asked for. Learning about drift a
+click late is a far smaller problem, so both steps — check, then update — are
+explicit.
 
 This is the first source in the wiki that is **remote, mutable, and on disk**.
 Every other source is verbatim immutable bytes in SQLite: staged once, ingested
@@ -29,8 +35,13 @@ the LLM doing all synthesis.
    `~/Library/Application Support/WikiFS/repos/<wikiULID>/<repoULID>/`. The app
    never points at a checkout you are working in, and never writes to any
    checkout other than syncing its own.
-2. **Auto-fetch + auto-ingest.** A 15-minute poll fetches; a repo that drifted and
-   has `auto_ingest` on is queued for an unattended agent pass.
+2. **Manual refresh, manual update.** No poll loop and no unattended agent runs.
+   "Check for New Commits" fetches (network only, zero tokens) and updates the
+   drift badges; "Update Wiki Now" is the only thing that starts a pass. Adding a
+   repo clones it and stops there — tracking a repo says *watch this*, not *spend
+   on it right now*. There is consequently no `auto_ingest` column and no
+   automatic-update toggle: with nothing unattended to govern, a switch wired to
+   nothing is worse than no switch.
 3. **One repo-aware Query chat**, not a per-repo conversation surface.
 4. **No File Provider projection.** Repos are app + agent state. The mount keeps
    its exact shape — no new containers, no `signalChange` changes, and no
@@ -44,9 +55,8 @@ the LLM doing all synthesis.
 ## App Shape
 
 - **`tracked_repos` (schema v6)** — `id, name, remote_url, branch, head_commit,
-  last_ingested_commit, last_fetched_at, auto_ingest, created_at, updated_at,
-  version`, with `remote_url` UNIQUE so the same repository can't be tracked twice
-  in one wiki. Not folded into `changeToken()` (decision #4); the sidebar refreshes
+  last_ingested_commit, last_fetched_at, created_at, updated_at, version`, with
+  `remote_url` UNIQUE so the same repository can't be tracked twice in one wiki. Not folded into `changeToken()` (decision #4); the sidebar refreshes
   off the existing Darwin-notification path in `WikiChangeBridge`.
 - **Pure core** (`WikiFSCore`, all unit-tested): `TrackedRepo`, `GitRemoteURL`
   (what we accept and what we hand `git clone`), `GitCommandPlan` (every git argv),
@@ -59,26 +69,29 @@ the LLM doing all synthesis.
   credentials fails fast and visibly instead of hanging a GUI-spawned process on
   an invisible prompt, and it reads both pipes before waiting so a large file list
   can't deadlock against a full pipe buffer.
-- **`RepoTracker`** (`@MainActor @Observable`) owns the poll loop, the per-repo
-  activity/error state, the global auto-update switch, and the FIFO of repos
-  waiting to be ingested. Fetching and ingesting are deliberately separate loops:
-  fetching is cheap and frequent, ingesting spends model budget and writes to the
-  wiki.
-- **UI**: a "Repositories" sidebar section (`RepoRow` with a sync badge), a
+- **`RepoTracker`** (`@MainActor @Observable`) owns the clone/fetch operations,
+  the per-repo activity and error state, and the FIFO of repos waiting to be
+  ingested. It has no timer: `fetchAll()` and `requestIngest(_:)` are both driven
+  by a click.
+- **UI**: a "Repositories" sidebar section (`RepoRow` with a sync badge) whose
+  header carries "Check for New Commits" and "Track a Repository…", a
   `AddRepositorySheet` modeled on `AddFromURLSheet`, and a `RepoDetailView`
-  modeled on `IngestedFileDetailView` (Update Wiki Now / Fetch Now / an
-  auto-update switch). One toolbar "Add Source" menu now covers both "Add from
-  URL…" and "Track a Repository…", so the drag-zone stays sparse and there is an
-  entry point when both sections are still empty.
+  modeled on `IngestedFileDetailView` (Update Wiki Now / Check for New Commits).
+  One toolbar "Add Source" menu covers both "Add from URL…" and "Track a
+  Repository…", so the drag-zone stays sparse and there is an entry point when
+  both sections are still empty.
 
 ### The serialization rule
 
-`AgentLauncher` is app-wide and refuses to start a second run. An unattended
-ingest that fired at the wrong moment wouldn't queue — it would silently vanish,
-or worse, land mid-conversation and take the editor lock out from under someone
-talking to the wiki. So the tracker drains its queue only when the launcher is
-idle **and** no interactive Query session is open, and `ContentView` nudges it
-from `onChange(of: launcher.isRunning)` when a run ends.
+Even with every run user-initiated, the queue is still needed. `AgentLauncher` is
+app-wide and refuses to start a second run, so an Update requested while another
+run is going wouldn't queue — it would silently vanish. The tracker drains only
+when the launcher is idle **and** no interactive Query session is open (an agent
+run that grabs the editor lock mid-conversation is its own kind of surprise), and
+`ContentView` nudges it from `onChange(of: launcher.isRunning)` when a run ends.
+If a queued pass turns out not to start — missing checkout, git failure, already
+up to date — the drain keeps going rather than waiting for a completion that will
+never arrive, because with no poll loop nothing else would unstick it.
 
 ## Agent Session
 
@@ -125,9 +138,12 @@ expanding what the wiki tracks.
 
 The sidebar badge says only what the app actually knows. It shows "Changes", not
 "12 behind": the tracker stores a head and a watermark, not a commit count, and a
-number the row can't stand behind is worse than a plain word. In-flight work
-("Cloning…", "Checking…", "Queued", "Updating…") wins over drift, because a state
-that's about to change is less useful than what is happening now.
+number the row can't stand behind is worse than a plain word. It is also only as
+fresh as your last check — nothing fetches on a timer, so the badge answers "what
+did I know when I last looked", which is why the check action sits right in the
+section header. In-flight work ("Cloning…", "Checking…", "Queued", "Updating…")
+wins over drift, because a state that's about to change is less useful than what
+is happening now.
 
 A failed clone **keeps the row**, carrying the error, so a bad URL or a missing
 credential leaves you with a repo you can retry rather than a sheet that appears
@@ -135,9 +151,12 @@ to have done nothing.
 
 ## Accepted limitations
 
-- Auto-ingest spends real model budget without a click. Mitigations: the
-  15-minute poll, per-repo and global toggles, one run at a time, and never during
-  a live chat.
+- Drift is only as current as your last check. A repo can be days behind and the
+  sidebar will happily show a green check until you press the refresh button.
+  That is the deliberate trade for never spending model budget unprompted; if it
+  ever becomes annoying, the cheap half (a fetch-only poll, still with no
+  automatic agent run) is the thing to add back — `RepoTracker.fetchAll()` is
+  already the right entry point for it.
 - Private repos work only if the existing git credential helper or SSH agent
   already authenticates them; the app never prompts for or stores credentials.
 - `--filter=blob:none` partial clones need network access the first time an old

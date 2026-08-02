@@ -65,7 +65,6 @@ public enum RepoCommand {
     let branch: String
     let head: String?
     let lastIngested: String?
-    let autoIngest: Bool
 
     init(_ repo: TrackedRepo) {
       name = repo.name
@@ -73,7 +72,6 @@ public enum RepoCommand {
       branch = repo.branch
       head = repo.headCommit
       lastIngested = repo.lastIngestedCommit
-      autoIngest = repo.autoIngest
     }
   }
 
@@ -89,7 +87,6 @@ public enum RepoCommand {
       "branch\t\(repo.branch)",
       "head\t\(repo.headCommit ?? "-")",
       "last_ingested\t\(repo.lastIngestedCommit ?? "-")",
-      "auto_ingest\t\(repo.autoIngest ? "on" : "off")",
     ]
     if let fetchedAt = repo.lastFetchedAt {
       lines.append("last_fetched\t\(ISO8601DateFormatter().string(from: fetchedAt))")

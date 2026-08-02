@@ -33,8 +33,6 @@ public struct TrackedRepo: Identifiable, Hashable, Sendable {
   /// agent. nil until the first successful repo ingest.
   public let lastIngestedCommit: String?
   public let lastFetchedAt: Date?
-  /// Whether the tracker may start an ingest on its own when this repo drifts.
-  public let autoIngest: Bool
   public let createdAt: Date
   public let updatedAt: Date
   public let version: Int
@@ -47,7 +45,6 @@ public struct TrackedRepo: Identifiable, Hashable, Sendable {
     headCommit: String?,
     lastIngestedCommit: String?,
     lastFetchedAt: Date?,
-    autoIngest: Bool,
     createdAt: Date,
     updatedAt: Date,
     version: Int
@@ -59,15 +56,17 @@ public struct TrackedRepo: Identifiable, Hashable, Sendable {
     self.headCommit = headCommit
     self.lastIngestedCommit = lastIngestedCommit
     self.lastFetchedAt = lastFetchedAt
-    self.autoIngest = autoIngest
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.version = version
   }
 
-  /// True when upstream has commits the wiki has not been told about. A repo that
-  /// has never been ingested (`lastIngestedCommit == nil`) but HAS been cloned is
-  /// drifted by definition — the whole repo is the pending work.
+  /// True when upstream has commits the wiki has not been told about — as of the
+  /// last fetch, which is always user-initiated, so this answers "what did I know
+  /// when I last checked", not "what is true upstream right now".
+  ///
+  /// A repo that has never been ingested (`lastIngestedCommit == nil`) but HAS
+  /// been cloned is drifted by definition — the whole repo is the pending work.
   public var isDrifted: Bool {
     guard let headCommit, !headCommit.isEmpty else { return false }
     return headCommit != lastIngestedCommit

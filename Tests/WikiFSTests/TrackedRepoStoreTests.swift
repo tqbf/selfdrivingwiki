@@ -103,7 +103,6 @@ struct TrackedRepoStoreTests {
     #expect(added.headCommit == nil)
     #expect(added.lastIngestedCommit == nil)
     #expect(added.lastFetchedAt == nil)
-    #expect(added.autoIngest)  // tracking implies wanting updates
     #expect(added.version == 1)
 
     let listed = try store.listRepos()
@@ -153,16 +152,24 @@ struct TrackedRepoStoreTests {
     #expect(current.version == 3)
   }
 
-  @Test func branchAndAutoIngestAreSettable() throws {
+  @Test func branchIsFilledInAfterTheClone() throws {
+    // The row must exist before the clone (its ULID names the checkout), so a
+    // repo added without an explicit branch starts blank and is filled in with
+    // whatever git actually checked out.
     let store = try tempStore()
     let repo = try store.addRepo(name: "o/r", remoteURL: "https://host/o/r", branch: "")
+    #expect(try store.getRepo(id: repo.id).branch.isEmpty)
     try store.setRepoBranch(id: repo.id, branch: "trunk")
     #expect(try store.getRepo(id: repo.id).branch == "trunk")
+  }
 
-    try store.setRepoAutoIngest(id: repo.id, enabled: false)
-    #expect(try store.getRepo(id: repo.id).autoIngest == false)
-    try store.setRepoAutoIngest(id: repo.id, enabled: true)
-    #expect(try store.getRepo(id: repo.id).autoIngest)
+  @Test func thereIsNoAutoIngestColumn() throws {
+    // Fetching and updating are both user-initiated, so there is no unattended
+    // path for a per-repo opt-out to govern. A column nothing reads is debt.
+    let store = try tempStore()
+    _ = try store.addRepo(name: "o/r", remoteURL: "https://host/o/r", branch: "main")
+    let detail = try RepoCommand.run(.get(name: "o/r"), in: store).output
+    #expect(!detail.contains("auto_ingest"))
   }
 
   @Test func deleteRemovesTheRow() throws {
@@ -260,7 +267,6 @@ struct TrackedRepoStoreTests {
     #expect(result.output.contains("name\to/r"))
     #expect(result.output.contains("head\tbbb"))
     #expect(result.output.contains("last_ingested\t-"))
-    #expect(result.output.contains("auto_ingest\ton"))
     #expect(!result.didCommit)
   }
 

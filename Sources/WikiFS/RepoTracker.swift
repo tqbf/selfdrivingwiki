@@ -2,30 +2,25 @@ import Foundation
 import Observation
 import WikiFSCore
 
-/// Keeps the app's clones of tracked repositories in sync, and starts the agent
-/// when a repo drifts — the "tracking" half of repository tracking.
+/// Keeps the app's clones of tracked repositories in sync — the "tracking" half
+/// of repository tracking.
 ///
-/// **Two loops, deliberately separate.** Fetching is cheap, safe, and frequent;
-/// ingesting is expensive, spends model budget, and writes to the wiki. So a poll
-/// tick only ever *fetches* and records what it found; whether that turns into an
-/// agent run is a second decision, gated on the repo's `autoIngest` flag, the
-/// global pause, and whether anything else is already running.
+/// **Everything here is user-initiated.** There is no timer and no unattended
+/// agent run: a fetch happens when you ask for one, and an agent pass happens
+/// when you click Update. That is a deliberate cost decision — a repo pass is an
+/// Opus run with a Sonnet fan-out, and a background loop that starts one while
+/// you're asleep spends real money on work you didn't ask for. Discovering drift
+/// a click late is a much smaller problem than that.
 ///
-/// **The serialization rule.** `AgentLauncher` is app-wide and refuses to start a
-/// second run (`guard !isRunning`), so an unattended ingest that fired at the
-/// wrong moment wouldn't queue — it would silently vanish. Worse, it could land
-/// mid-conversation and take the editor lock out from under a user who is talking
-/// to the wiki. So the tracker keeps its own FIFO and drains it only when the
-/// launcher is idle, and never at all while an interactive Query session is open.
+/// **The serialization rule (still needed).** `AgentLauncher` is app-wide and
+/// refuses to start a second run (`guard !isRunning`), so a second Update
+/// requested while one is going wouldn't queue — it would silently vanish. So the
+/// tracker keeps its own FIFO and drains it only when the launcher is idle, and
+/// never while an interactive Query session is open (an agent run that grabs the
+/// editor lock mid-conversation is its own kind of surprise).
 @MainActor
 @Observable
 final class RepoTracker {
-  /// How often to poll upstream. Chosen to be useful without being expensive:
-  /// each tick is one `git fetch` per repo, and the thing it gates — an Opus
-  /// agent run — is something you'd rather learn about within the quarter hour
-  /// than within the minute.
-  static let pollInterval: TimeInterval = 15 * 60
-
   /// What the tracker is doing to one repo right now, for the sidebar badge.
   enum Activity: Equatable {
     case cloning
@@ -39,9 +34,6 @@ final class RepoTracker {
   /// The last error per repo, shown in its detail pane. Cleared on the next
   /// successful operation for that repo. Carries git's own message verbatim.
   private(set) var errors: [PageID: String] = [:]
-  /// Global kill switch for unattended updates. Fetching continues (it's cheap
-  /// and it's what powers the drift badge); only the automatic agent runs stop.
-  var autoUpdatesEnabled = true
 
   private let store: WikiStoreModel
   private let manager: WikiManager
@@ -52,7 +44,6 @@ final class RepoTracker {
   /// queued repo actually runs, the right commit range may have moved on, so the
   /// plan is recomputed at drain time rather than captured here.
   private var pendingIngests: [PageID] = []
-  private var pollTask: Task<Void, Never>?
   private var isDraining = false
 
   init(
@@ -67,35 +58,21 @@ final class RepoTracker {
     self.fileProvider = fileProvider
   }
 
-  // MARK: - Lifecycle
+  // MARK: - Checking for new commits
 
-  /// Start the poll loop. Idempotent — calling it again while running is a no-op,
-  /// so the app can call it on launch, on activation, and on wiki switch without
-  /// stacking timers.
-  func start() {
-    guard pollTask == nil else { return }
-    pollTask = Task { [weak self] in
-      while !Task.isCancelled {
-        await self?.pollNow()
-        try? await Task.sleep(for: .seconds(RepoTracker.pollInterval))
-      }
-    }
-  }
-
-  func stop() {
-    pollTask?.cancel()
-    pollTask = nil
-  }
-
-  /// Fetch every tracked repo in the active wiki and queue whatever drifted.
-  /// Also the "Fetch All" action; safe to call at any time.
-  func pollNow() async {
+  /// Fetch every tracked repo in the active wiki — the "Check for New Commits"
+  /// action. Costs nothing but network: it updates each repo's head so the
+  /// sidebar can show which ones have drifted. It NEVER starts an agent run;
+  /// that is always a separate, explicit click.
+  func fetchAll() async {
     guard manager.activeWikiID != nil else { return }
     for repo in store.repos {
       await fetch(repo)
     }
-    await drainQueue()
   }
+
+  /// Whether a check-all would do anything (used to disable the button).
+  var isBusy: Bool { !activity.isEmpty }
 
   // MARK: - Adding
 
@@ -116,9 +93,6 @@ final class RepoTracker {
     }
 
     activity[repo.id] = .cloning
-    // Clear ONLY the cloning marker: by the time this returns, the repo may
-    // already have been queued or started ingesting, and wiping that would make
-    // the row claim to be idle while a run is going.
     defer { if activity[repo.id] == .cloning { activity[repo.id] = nil } }
 
     do {
@@ -142,8 +116,9 @@ final class RepoTracker {
         GitCommandPlan.revParse(at: directory.path, ref: "HEAD"))
       store.updateRepoSync(id: repo.id, headCommit: head, fetchedAt: Date())
       errors[repo.id] = nil
-      queueIfDrifted(store.repo(id: repo.id))
-      await drainQueue()
+      // Cloned, NOT ingested. The first pass is an Opus run, so it waits for an
+      // explicit "Update Wiki Now" like every other pass — adding a repo says
+      // "watch this", not "spend on it right now".
       return store.repo(id: repo.id)
     } catch {
       errors[repo.id] = "\(error)"
@@ -165,8 +140,8 @@ final class RepoTracker {
 
   // MARK: - Fetch
 
-  /// Fetch one repo and record the upstream tip. Never starts an agent run —
-  /// that's `drainQueue`'s job — but does queue the repo if it drifted.
+  /// Fetch one repo and record the upstream tip. Never starts an agent run: its
+  /// only effect is that the row can now say whether the repo has drifted.
   func fetch(_ repo: TrackedRepo) async {
     guard let wikiID = manager.activeWikiID,
       let directory = try? RepoCheckoutLocation.directory(
@@ -187,7 +162,6 @@ final class RepoTracker {
       _ = try await GitRunner.run(GitCommandPlan.resetHard(at: directory.path, to: head))
       store.updateRepoSync(id: repo.id, headCommit: head, fetchedAt: Date())
       errors[repo.id] = nil
-      queueIfDrifted(store.repo(id: repo.id))
     } catch {
       errors[repo.id] = "\(error)"
     }
@@ -195,16 +169,8 @@ final class RepoTracker {
 
   // MARK: - Ingest queue
 
-  /// Queue a drifted repo for an unattended pass, if it's allowed to have one.
-  private func queueIfDrifted(_ repo: TrackedRepo?) {
-    guard let repo, repo.isDrifted, repo.autoIngest, autoUpdatesEnabled else { return }
-    guard !pendingIngests.contains(repo.id) else { return }
-    pendingIngests.append(repo.id)
-    activity[repo.id] = .queuedForIngest
-  }
-
-  /// Explicit "Update Wiki Now" — bypasses `autoIngest` and the global pause
-  /// (the user asked for this one), but still respects the single-run rule.
+  /// "Update Wiki Now" — the ONLY way an agent pass starts. Queued rather than
+  /// run directly because the launcher takes one run at a time.
   func requestIngest(_ repo: TrackedRepo) async {
     guard !pendingIngests.contains(repo.id) else { return }
     pendingIngests.append(repo.id)
@@ -213,7 +179,7 @@ final class RepoTracker {
   }
 
   /// Start the next queued repo, if now is a good time. Re-entrant-safe via
-  /// `isDraining`, since both the poll loop and explicit actions call it.
+  /// `isDraining`, since both `requestIngest` and run-completion call it.
   private func drainQueue() async {
     guard !isDraining else { return }
     isDraining = true
@@ -222,8 +188,8 @@ final class RepoTracker {
     while !pendingIngests.isEmpty {
       // The two "not now" conditions. An interactive Query session is a HARDER
       // stop than a busy launcher: the user is mid-conversation, and an agent run
-      // that grabs the editor lock and rewrites pages underneath them is the kind
-      // of surprise unattended automation must not produce.
+      // that grabs the editor lock and rewrites pages underneath them is not a
+      // surprise a queued update should be able to produce.
       guard !launcher.isRunning, !launcher.isInteractiveSession else { return }
 
       let id = pendingIngests.removeFirst()
@@ -241,8 +207,8 @@ final class RepoTracker {
       // asynchronously), so stop and let the run's completion bring us back. If
       // it did NOT start — a missing checkout, a git failure, or a repo that
       // turned out to be up to date — keep draining: waiting on a completion
-      // that will never arrive would strand the rest of the queue until the next
-      // poll, 15 minutes later.
+      // that will never arrive would strand the rest of the queue indefinitely,
+      // and with no poll loop nothing would ever come along to unstick it.
       if launcher.isRunning { return }
       if activity[id] == .ingesting { activity[id] = nil }
     }

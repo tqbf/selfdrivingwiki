@@ -56,12 +56,10 @@ public enum WikiOperation: Equatable, Sendable {
 
   /// Bring the wiki up to date with a tracked git repository.
   ///
-  /// The repo analogue of `.ingest`, and the one operation that can run
-  /// UNATTENDED (the tracker starts it when commits land). The differences that
-  /// matter: the material is a live checkout on disk rather than staged bytes, so
-  /// `repoPath` is a real directory the agent navigates; and the work is usually a
-  /// DIFF rather than a document, so `plan` carries the commit range as well as
-  /// the model tier.
+  /// The repo analogue of `.ingest`. The differences that matter: the material is
+  /// a live checkout on disk rather than staged bytes, so `repoPath` is a real
+  /// directory the agent navigates; and the work is usually a DIFF rather than a
+  /// document, so `plan` carries the commit range as well as the model tier.
   ///
   /// - `repoName`: the `owner/repo` display name — how the agent addresses this
   ///   repo in `wikictl repo mark-ingested`.

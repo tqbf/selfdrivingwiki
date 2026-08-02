@@ -114,12 +114,6 @@ struct OperationsView: View {
                 .labelsHidden()
                 .disabled(launcher.isRunning)
             }
-            // The global pause lives here rather than in a repo's own pane: it
-            // governs the whole tracker, and this sheet is where the wiki's agent
-            // behavior is already configured.
-            Toggle("Update tracked repositories automatically", isOn: $tracker.autoUpdatesEnabled)
-                .toggleStyle(.checkbox)
-                .font(.callout)
             Text("The agent reads what changed since the wiki was last updated, revises the affected pages, and records the commit it covered.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

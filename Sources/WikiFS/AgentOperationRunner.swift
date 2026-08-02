@@ -231,7 +231,7 @@ enum AgentOperationRunner {
         } else if case .repoIngest = request {
             // Same reasoning: a repo pass reads the checkout and the two staged
             // state files, all on real local disk. Requiring the mount would make
-            // unattended updates fail whenever the domain is still settling.
+            // an update fail whenever the domain is still settling.
             root = ""
         } else {
             return

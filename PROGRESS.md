@@ -7,6 +7,15 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
 - Added repository tracking: a wiki can follow git repositories, the app keeps its
   own clone of each, and Claude authors and revises wiki pages about them as
   commits land. Design doc: `plans/repo-tracking.md`.
+- Kept every step **user-initiated**. There is no poll timer and no unattended
+  agent run: "Check for New Commits" fetches (network only, zero tokens) and
+  refreshes the drift badges, and "Update Wiki Now" is the only thing that starts
+  a pass. Adding a repo clones it and stops — tracking one says "watch this", not
+  "spend on it right now". A repo pass is an Opus run with a Sonnet fan-out, and a
+  background loop that starts one overnight spends real money on work nobody asked
+  for; learning about drift a click late is the much smaller problem. There is
+  consequently no `auto_ingest` column and no automatic-update toggle — with
+  nothing unattended to govern, a switch wired to nothing is worse than no switch.
 - Added the schema v5→6 step, `tracked_repos`. It is a new object kind rather than
   a reuse of `ingested_files`, because that table's contract is verbatim immutable
   bytes in SQLite and a repository is remote, mutable, on disk, and ingested
@@ -44,12 +53,13 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
   command. Second, footnotes carry the commit — `repo owner/name@<sha>,
   path/File.ext:120-160` — because a path alone stops being checkable after the
   next sync.
-- Added `RepoTracker`: a 15-minute poll that fetches every repo and queues the ones
-  that drifted. Fetching and ingesting are separate loops on purpose — fetching is
-  cheap and frequent, ingesting spends model budget and writes to the wiki. The
-  queue drains only when the agent launcher is idle **and** no interactive Query
-  session is open, so an unattended run can never land mid-conversation and take
-  the editor lock out from under the user.
+- Added `RepoTracker`, which owns the clone/fetch operations and a FIFO of repos
+  waiting to be updated. The queue is still needed even with every run
+  user-initiated: the agent launcher is app-wide and takes one run at a time, so
+  an Update requested while another run is going would otherwise silently vanish.
+  It drains only when the launcher is idle **and** no interactive Query session is
+  open, and it keeps draining when a queued pass turns out not to start — with no
+  poll loop, nothing else would come along to unstick the queue.
 - Ran git with `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/usr/bin/false`: in a
   GUI-spawned process an auth prompt would hang forever with no visible cause, so
   a repo needing credentials now fails fast with git's own message. A failed clone
@@ -63,9 +73,9 @@ Newest first. To get up to speed: read `PLAN.md` then this file.
   `add`/`remove`: adding a repo means cloning over the network into app-managed
   storage, which is the app's job, and keeping it out of the CLI is what stops an
   agent run from quietly expanding what the wiki tracks.
-- Added the UI: a Repositories sidebar section, `AddRepositorySheet`, and
-  `RepoDetailView` with Update Wiki Now / Fetch Now / an auto-update switch, plus a
-  global pause in the Maintain Wiki sheet.
+- Added the UI: a Repositories sidebar section whose header carries "Check for New
+  Commits" and "Track a Repository…", `AddRepositorySheet`, and `RepoDetailView`
+  with Update Wiki Now / Check for New Commits.
 
 **Skill pass.** Before code: `macos-design` replaced a third top-level toolbar
 button with one "Add Source" menu covering both URL ingest and repo tracking, so
@@ -80,11 +90,15 @@ monospaced commit shas — rather than introducing a new one. The sidebar badge 
 "Changes", not "12 behind": the tracker stores a head and a watermark, not a commit
 count, and a number the row can't stand behind is worse than a plain word.
 
-**Verified.** `make check` passes and `swift test` passes (**422/422**), up from
+**Verified.** `make check` passes and `swift test` passes (**423/423**), up from
 351 — six new suites (`GitRemoteURLTests`, `GitCommandPlanTests`,
 `RepoSyncPlanTests`, `RepoStateSnapshotTests`, `TrackedRepoStoreTests`,
 `RepoOperationTests`). The v5→6 migration is tested against a hand-built v5 DB with
 content in it, and `repoTableIsNotFoldedIntoTheChangeToken` locks decision #4.
+Every `GitCommandPlan` argv was also run by hand against a real partial clone
+(clone/fetch/rev-parse/ls-files/log/diff/merge-base/reset) plus the credential
+fail-fast, since `GitRunner` and `RepoTracker` live in the executable target and
+can't be imported by the test target.
 
 ## 2026-06-17 — Dedicated interactive Query page
 
