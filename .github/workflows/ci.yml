@@ -89,12 +89,13 @@ jobs:
         # and are covered by `make test` before every PR — CI skips them to
         # avoid the 30-min timeout. See plans/ci-speedup.md, #732, #448.
         #
-        # `--parallel` is safe with the skip list — no suite can starve the pool.
+        # Keep SwiftPM's worker count at one (#1003, #1021): the core suite
+        # otherwise intermittently crashes its shared test helper under load.
         # timeout-minutes: 30 is a safety net for a cache-miss full rebuild.
         timeout-minutes: 30
         env:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
-        run: xcrun swift test --parallel --filter WikiFSCoreTests --skip "$SKIP"
+        run: xcrun swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
       - name: Test opt-in chat lifecycle suites
         # This opt-in app target contains source-contract and daemon lifecycle
         # tests only. It does not host AppKit or WebKit views, so it avoids the
@@ -103,7 +104,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests'
+        run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests'
 
   # Linux Swift CI (#754) — builds and tests the portable target
   # (WikiFSCoreTests) on ubuntu-latest. Validates the macOS/Linux
@@ -164,7 +165,7 @@ jobs:
         timeout-minutes: 15
         env:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests|MermaidValidatorTests|MarkdownLinterTests|MarkdownEditorWarningTests|MermaidEditorWarningTests|WikiStoreModelMarkdownImportTests|SandboxProfileTests|WikiCtlCommandTests|ChatStoreTests'
-        run: swift test --parallel --filter WikiFSCoreTests --skip "$SKIP"
+        run: swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
 
   python:
     runs-on: ubuntu-latest

@@ -3,6 +3,11 @@ import Testing
 @testable import WikiFSCore
 
 struct ProvenanceDeletionRestrictionTests {
+    private enum DeletionRestrictionExpectationError: Error {
+        case sourceDeletionDidNotThrow
+        case unexpectedDeletionError(WikiStoreError)
+    }
+
     private func recorder(for store: GRDBWikiStore) -> SignalRecorder {
         let bus = WikiEventBus(wikiID: WikiID(rawValue: "provenance-tests"))
         store.eventBus = bus
@@ -15,12 +20,10 @@ struct ProvenanceDeletionRestrictionTests {
     ) throws -> NonEmptyProvenanceDeletionBlockers {
         do {
             try store.deleteSource(id: sourceID)
-            Issue.record("expected provenance deletion restriction")
-            fatalError("expected provenance deletion restriction")
+            throw DeletionRestrictionExpectationError.sourceDeletionDidNotThrow
         } catch let error as WikiStoreError {
             guard case .deletionRestricted(.provenance(let blockers)) = error else {
-                Issue.record("unexpected deletion error: \(error)")
-                fatalError("unexpected deletion error")
+                throw DeletionRestrictionExpectationError.unexpectedDeletionError(error)
             }
             return blockers
         }
