@@ -149,8 +149,12 @@ check: deps
 	@echo "✓ compiles ($(CONFIG))"
 
 # Run the test suite.
+# Keep SwiftPM test execution deterministic on constrained machines. Override
+# only when explicitly investigating parallel-safety issues (#1003, #1021).
+SWIFT_TEST_NUM_WORKERS ?= 1
+
 test: deps
-	swift test
+	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
 	@echo "✓ tests pass"
 
 print-version:
