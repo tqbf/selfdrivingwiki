@@ -859,7 +859,9 @@ struct ChatWebView: NSViewRepresentable {
           }
           /* Thinking rows: dimmed + italic, visually subordinate to the
              conversation (issue #391). */
-          .row-thinking { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; }
+          .chat-row.row-thinking {
+            display: block; font-size: 11.5px; color: var(--muted); margin: 0 0 8px;
+          }
           .row-thinking > summary { font-style: italic; }
           .row-thinking-label { font-weight: 600; color: var(--muted); }
           .row-thinking-preview { opacity: 0.7; }
