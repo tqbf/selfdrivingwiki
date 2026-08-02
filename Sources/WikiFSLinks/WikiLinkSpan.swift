@@ -1,6 +1,8 @@
 import Foundation
 
-/// Shared regex + code-range detection for `[[wiki-link]]` span processing.
+// pattern: Functional Core
+
+/// Shared wiki-link span parsing + code-range detection.
 ///
 /// Extracted from `WikiLinkMarkdown` and `WikiFootnoteMarkdown` (which had
 /// copy-pasted `protectedCodeRanges`) so `WikiLinkRewriter` (Phase D) can reuse
@@ -9,16 +11,114 @@ import Foundation
 /// This is intentionally a pure dependency-free helper — no store, no SwiftUI.
 public enum WikiLinkSpan {
 
-    /// The canonical `[[…]]` bracket-span regex (shared with `WikiLinkParser`,
-    /// `WikiLinkMarkdown`). Group 1 = target, group 2 = optional alias.
+    /// One parsed `[[target|alias]]` span. Ranges use UTF-16 offsets so they
+    /// interoperate with `NSString` replacement APIs used by the Markdown
+    /// rewrite pipeline.
+    public struct Match: Sendable {
+        public let range: NSRange
+        public let targetRange: NSRange
+        public let aliasRange: NSRange
+
+        /// Mirrors the capture-group API previously supplied by
+        /// `NSTextCheckingResult`: group 0 is the complete link, group 1 the
+        /// target, and group 2 the optional alias.
+        public func range(at index: Int) -> NSRange {
+            switch index {
+            case 0: range
+            case 1: targetRange
+            case 2: aliasRange
+            default: NSRange(location: NSNotFound, length: 0)
+            }
+        }
+    }
+
+    /// Find all complete `[[…]]` spans in document order.
     ///
-    /// Group 1 allows a `]` when it falls inside a `"…"` quoted run (the
-    /// `#"quote"` anchor syntax) — `(?:[^\]\|"]|"[^"]*")+` consumes either an
-    /// ordinary non-delimiter character, or a whole balanced quoted span in one
-    /// bite, so an unbalanced `]` inside the quote (e.g. a bracketed aside like
-    /// `[(note)]`) can't terminate the match early (issue #118).
-    public static let pattern = #"\[\[((?:[^\]\|"]|"[^"]*")+)(?:\|([^\]]+))?\]\]"#
-    public static let regex = try! NSRegularExpression(pattern: pattern)
+    /// This intentionally uses a deterministic scanner instead of a regular
+    /// expression. `]]` is always structural: it closes the current link even
+    /// if the target has malformed quote-anchor punctuation. Balanced quote runs
+    /// only affect whether `|` belongs to a quoted fragment or starts an alias.
+    /// That retains issue #118's `]` / `|` quote support while preventing the
+    /// #908 malformed `"" ]]` form from consuming later paragraphs.
+    public static func matches(in body: String) -> [Match] {
+        let text = body as NSString
+        var matches: [Match] = []
+        var cursor = 0
+
+        while cursor + openingDelimiterLength <= text.length {
+            guard text.character(at: cursor) == openingBracket,
+                  text.character(at: cursor + 1) == openingBracket else {
+                cursor += 1
+                continue
+            }
+
+            let start = cursor
+            let targetStart = start + openingDelimiterLength
+            guard let end = closingDelimiter(after: targetStart, in: text) else {
+                // An unclosed `[[` is literal text. Resume after its opener so
+                // a later independent wiki link can still be found.
+                cursor = targetStart
+                continue
+            }
+
+            var index = targetStart
+            var aliasStart: Int?
+            while index < end {
+                if text.character(at: index) == quote,
+                   let quoteEnd = matchingQuote(after: index, before: end, in: text) {
+                    index = quoteEnd + 1
+                    continue
+                }
+                if text.character(at: index) == pipe, aliasStart == nil {
+                    aliasStart = index
+                }
+                index += 1
+            }
+
+            let targetEnd = aliasStart ?? end
+            // Match the former grammar: neither an empty target nor an empty
+            // explicit alias is a complete wiki link.
+            guard targetEnd > targetStart,
+                  aliasStart.map({ $0 + 1 < end }) ?? true else {
+                cursor = end + closingDelimiterLength
+                continue
+            }
+            let aliasRange = aliasStart.map {
+                NSRange(location: $0 + 1, length: end - $0 - 1)
+            } ?? NSRange(location: NSNotFound, length: 0)
+            matches.append(Match(
+                range: NSRange(location: start, length: end + closingDelimiterLength - start),
+                targetRange: NSRange(location: targetStart, length: targetEnd - targetStart),
+                aliasRange: aliasRange))
+            cursor = end + closingDelimiterLength
+        }
+        return matches
+    }
+
+    /// The first `]]` is always a structural terminator. This intentionally
+    /// does not inspect quote state: a stray quote must not change link bounds.
+    private static func closingDelimiter(after start: Int, in text: NSString) -> Int? {
+        var index = start
+        while index + 1 < text.length {
+            if text.character(at: index) == closingBracket,
+               text.character(at: index + 1) == closingBracket {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    /// Return the next quote before a known link terminator. An unmatched quote
+    /// is literal, so malformed data cannot suppress a later alias delimiter.
+    private static func matchingQuote(after start: Int, before end: Int, in text: NSString) -> Int? {
+        var index = start + 1
+        while index < end {
+            if text.character(at: index) == quote { return index }
+            index += 1
+        }
+        return nil
+    }
 
     // MARK: - Code-range detection
 
@@ -112,6 +212,12 @@ public enum WikiLinkSpan {
     private static let backtick: unichar = 0x60 // `
     private static let bang: unichar = 0x21     // !
     private static let backslash: unichar = 0x5C // \
+    private static let openingBracket: unichar = 0x5B // [
+    private static let closingBracket: unichar = 0x5D // ]
+    private static let quote: unichar = 0x22 // "
+    private static let pipe: unichar = 0x7C // |
+    private static let openingDelimiterLength = 2
+    private static let closingDelimiterLength = 2
 
     // MARK: - Embed prefix detection
 

@@ -1594,8 +1594,7 @@ public final class WikiStoreModel {
         let body = didFix ? fixedBody : original
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = WikiLinkSpan.regex.matches(
-            in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
         let knownTitles = Set(summaries.map { $0.title })
         let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
         let allChats = DebugLog.trying("listAllChatsOrderedByID", operation: { try store.listAllChatsOrderedByID() }) ?? []

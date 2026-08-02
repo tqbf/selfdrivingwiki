@@ -1,5 +1,7 @@
 import Foundation
 
+// pattern: Functional Core
+
 /// Pure, dependency-free parser for `[[wiki-link]]` syntax (INITIAL §4 v1).
 ///
 /// Kept deliberately free of any storage / File Provider knowledge so it is
@@ -32,12 +34,6 @@ public enum WikiLinkParser {
         case cite
         case embed
     }
-
-    // [[ target (no ] or | outside a "quoted" run) ( | alias (no ]) )? ]]
-    // Kept in sync with WikiLinkSpan.pattern (shared grammar, two copies so
-    // WikiLinkSpan doesn't need to depend on this parser).
-    private static let pattern = #"\[\[((?:[^\]\|"]|"[^"]*")+)(?:\|([^\]]+))?\]\]"#
-    private static let regex = try! NSRegularExpression(pattern: pattern)
 
     // MARK: - Prefix classification
 
@@ -145,7 +141,7 @@ public enum WikiLinkParser {
     /// links can be embeds (`![[source:…]]`).
     public static func parse(_ body: String) -> [ParsedLink] {
         let ns = body as NSString
-        let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
 
         var seen = Set<String>()
         var out: [ParsedLink] = []

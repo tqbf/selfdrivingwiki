@@ -53,8 +53,7 @@ public enum LinkUnlinker {
 
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = WikiLinkSpan.regex.matches(
-            in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
 
         var result = body
         var changed = false
