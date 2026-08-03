@@ -373,52 +373,6 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
-        // Exact-head audit support for the seven dynamic-renderer PRs. The
-        // executable owns process and GitHub calls; this target keeps record
-        // decoding and command planning testable without external state.
-        .executableTarget(
-            name: "DynamicRendererPRSeriesAudit",
-            dependencies: [
-                "WikiFSTypes",
-                .product(name: "Crypto", package: "swift-crypto",
-                         condition: .when(platforms: [.linux])),
-            ],
-            path: "Sources/DynamicRendererPRSeriesAudit",
-            swiftSettings: strictSwiftSettings
-        ),
-        // A process-isolated hash fixture proves that Set iteration order does
-        // not affect the canonical renderer package envelope.
-        .executableTarget(
-            name: "RendererHashFixture",
-            dependencies: ["WikiFSTypes"],
-            path: "Sources/RendererHashFixture",
-            swiftSettings: strictSwiftSettings
-        ),
-        // Renderer contract tests deliberately depend on the portable leaf target
-        // alone. This makes an accidental WikiFSTypes -> WikiFSCore dependency
-        // a package-graph failure on every supported platform.
-        .testTarget(
-            name: "WikiFSTypesRendererTests",
-            dependencies: ["WikiFSTypes"],
-            path: "Tests/WikiFSTypesRendererTests",
-            exclude: ["Fixtures"],
-            swiftSettings: strictSwiftSettings
-        ),
-        // Condition A signal checks compile against the pure validation target
-        // only. They cannot link the production `kill` closures in WikiFSCore
-        // or DynamicRendererPRSeriesAudit.
-        .testTarget(
-            name: "ProcessSignalSafetySeamTests",
-            dependencies: ["WikiFSTypes"],
-            path: "Tests/ProcessSignalSafetySeamTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "DynamicRendererPRSeriesAuditTests",
-            dependencies: ["DynamicRendererPRSeriesAudit", "WikiFSTypes"],
-            path: "Tests/DynamicRendererPRSeriesAuditTests",
-            swiftSettings: strictSwiftSettings
-        ),
         // macOS-only integration tests — AppKit/WebKit/FileProvider/SwiftUI-hosted
         // views, Tantivy integration, MLX embedder, PDF extraction, JS linter/
         // validator. Kept out of the default test graph because these suites can

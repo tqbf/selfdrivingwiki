@@ -113,14 +113,13 @@ struct WikiLinkStoreTests {
         // the same millisecond order by their random bits, so derive the expected
         // order from the actual ids rather than assuming creation order == lexical
         // order. The three links are a→b, a→c, c→a.
-        let expectedPairs: [(String, String)] = [
+        let expected = [
             (a.id.rawValue, b.id.rawValue),
             (a.id.rawValue, c.id.rawValue),
             (c.id.rawValue, a.id.rawValue),
         ]
-        let expected = expectedPairs
-            .sorted { lhs, rhs in lhs.0 != rhs.0 ? lhs.0 < rhs.0 : lhs.1 < rhs.1 }
-            .map { pair in "\(pair.0)->\(pair.1)" }
+        .sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }
+        .map { "\($0.0)->\($0.1)" }
         #expect(links.map { "\($0.from)->\($0.to)" } == expected)
     }
 
