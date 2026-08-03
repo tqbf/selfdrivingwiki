@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic renderer PR1 mutation provenance envelope",
+  "type": "object",
+  "required": ["schemaVersion", "auditedSHA", "baseOID", "generatedAt", "command", "toolVersion", "nativeReport", "nativeReportSHA256", "scope", "coveredSymbols", "result", "threshold", "mutants", "passed"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "auditedSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "baseOID": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "generatedAt": { "type": "string", "pattern": "[+-][0-9]{2}:[0-9]{2}$" },
+    "command": { "type": "string", "pattern": "^make mutate-scope SOURCES_PATH=" },
+    "toolVersion": { "type": "string", "minLength": 1 },
+    "nativeReport": { "type": "string", "pattern": "^tmp/.+\\.json$" },
+    "nativeReportSHA256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "scope": { "type": "string", "minLength": 1 },
+    "coveredSymbols": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "result": { "type": "object", "required": ["killed", "survived", "unviable"], "properties": { "killed": { "type": "integer", "minimum": 0 }, "survived": { "type": "integer", "minimum": 0 }, "unviable": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+    "threshold": { "type": "object", "required": ["maximumSurvivors", "maximumUnviable"], "properties": { "maximumSurvivors": { "type": "integer", "minimum": 0 }, "maximumUnviable": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+    "mutants": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "outcome", "severity", "disposition", "rationale"], "properties": { "id": { "type": "string", "minLength": 1 }, "outcome": { "enum": ["killed", "survived", "unviable"] }, "severity": { "enum": ["critical", "high", "medium", "low"] }, "disposition": { "enum": ["fixed", "rebutted"] }, "rationale": { "type": "string", "minLength": 1 } }, "additionalProperties": false } },
+    "passed": { "const": true }
+  },
+  "additionalProperties": false
+}

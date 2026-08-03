@@ -5,7 +5,6 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite struct PdfExtractionServiceTests {
-
     /// Wait for a process to exit without blocking the cooperative thread
     /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
     /// thread; on CI's 3-vCPU runner with `--parallel`, that starves the pool
@@ -26,6 +25,34 @@ import Testing
     // MARK: - ProcessRegistry
 
     @Suite struct ProcessRegistryTests {
+        /// Test-only process control records requests.
+        /// It does not start or signal an operating-system process.
+        // swiftlint:disable:next unchecked_sendable
+        private final class NonSignalingProcessControl: @unchecked Sendable {
+            private let lock = NSLock()
+            private var terminationRequests = 0
+
+            func isRunning(_: Process) -> Bool { true }
+
+            func requestTermination(_: Process) {
+                lock.lock()
+                terminationRequests += 1
+                lock.unlock()
+            }
+
+            var terminationRequestCount: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return terminationRequests
+            }
+        }
+
+        private func registry(_ control: NonSignalingProcessControl) -> PdfExtractionService.ProcessRegistry {
+            PdfExtractionService.ProcessRegistry(
+                isProcessRunning: control.isRunning,
+                requestTermination: control.requestTermination)
+        }
+
         @Test func tracksAndUntracks() {
             let reg = PdfExtractionService.ProcessRegistry()
             let p = Process()
@@ -34,51 +61,35 @@ import Testing
             reg.untrack(p)
         }
 
-        @Test func terminatesTrackedProcesses() async throws {
-            let reg = PdfExtractionService.ProcessRegistry()
-            // Use /bin/sleep as a long-running process we can cleanly kill.
+        @Test func terminationRequestTargetsTrackedProcessesWithoutOSSignals() {
+            let control = NonSignalingProcessControl()
+            let reg = registry(control)
             let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/sleep")
-            p.arguments = ["999"]
-            try? p.run()
-            #expect(p.isRunning)
 
             reg.track(p)
-            // Force termination via the same mechanism the notification uses.
             reg.terminateAllForTesting()
-            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
-            #expect(!p.isRunning)
-            #expect(p.terminationStatus != 0)  // killed, not exited cleanly
+            #expect(control.terminationRequestCount == 1)
         }
 
-        @Test func untrackedProcessNotTerminated() async throws {
-            let reg = PdfExtractionService.ProcessRegistry()
+        @Test func untrackedProcessDoesNotReceiveATerminationRequest() {
+            let control = NonSignalingProcessControl()
+            let reg = registry(control)
             let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/sleep")
-            p.arguments = ["999"]
-            try? p.run()
-            #expect(p.isRunning)
 
             reg.track(p)
             reg.untrack(p)
             reg.terminateAllForTesting()
-            // Process should still be running — it was untracked before terminate.
-            // Clean up manually.
-            if p.isRunning { p.terminate() }
-            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
+            #expect(control.terminationRequestCount == 0)
         }
 
-        @Test func doubleTrackDoesNotDuplicate() async throws {
-            let reg = PdfExtractionService.ProcessRegistry()
+        @Test func doubleTrackDoesNotDuplicateTerminationRequests() {
+            let control = NonSignalingProcessControl()
+            let reg = registry(control)
             let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/sleep")
-            p.arguments = ["999"]
-            try? p.run()
             reg.track(p)
             reg.track(p)  // double track — set semantics dedupe
             reg.terminateAllForTesting()
-            try await PdfExtractionServiceTests().asyncWaitUntilExit(p)
-            #expect(!p.isRunning)
+            #expect(control.terminationRequestCount == 1)
         }
 
         @Test func terminateWhenNoneRunningDoesNotCrash() {
