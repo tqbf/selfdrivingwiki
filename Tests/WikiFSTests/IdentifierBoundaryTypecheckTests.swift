@@ -17,6 +17,47 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(3)))
 struct IdentifierBoundaryTypecheckTests {
 
+    private enum ProcessExitWaitError: Error {
+        case timedOut
+    }
+
+    private final class ProcessExitWaiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var result: Result<Void, Error>?
+
+        func install(_ continuation: CheckedContinuation<Void, Error>) {
+            let result: Result<Void, Error>?
+            lock.lock()
+            if let storedResult = self.result {
+                result = storedResult
+            } else {
+                self.continuation = continuation
+                result = nil
+            }
+            lock.unlock()
+            if let result {
+                continuation.resume(with: result)
+            }
+        }
+
+        @discardableResult
+        func finish(_ result: Result<Void, Error>) -> Bool {
+            let continuation: CheckedContinuation<Void, Error>?
+            lock.lock()
+            guard self.result == nil else {
+                lock.unlock()
+                return false
+            }
+            self.result = result
+            continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+            return true
+        }
+    }
+
     private struct BuildProducts {
         let debugDirectory: URL
         let modulesDirectory: URL
@@ -115,21 +156,50 @@ struct IdentifierBoundaryTypecheckTests {
         process.standardError = output
         try process.run()
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            if !process.isRunning {
-                cont.resume()
-                return
-            }
-            process.terminationHandler = { _ in
-                cont.resume()
-            }
-        }
+        try await asyncWaitUntilExit(process)
 
         let outputData = output.fileHandleForReading.readDataToEndOfFile()
         return CompilerResult(
             status: process.terminationStatus,
             output: String(decoding: outputData, as: UTF8.self)
         )
+    }
+
+    private func asyncWaitUntilExit(_ process: Process, timeout: Duration = .seconds(30)) async throws {
+        let waiter = ProcessExitWaiter()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                        waiter.install(cont)
+                        process.terminationHandler = { _ in
+                            waiter.finish(.success(()))
+                        }
+                        if !process.isRunning {
+                            waiter.finish(.success(()))
+                        }
+                    }
+                } onCancel: {
+                    if waiter.finish(.failure(CancellationError())), process.isRunning {
+                        process.terminate()
+                    }
+                }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                guard waiter.finish(.failure(ProcessExitWaitError.timedOut)) else { return }
+                if process.isRunning {
+                    process.terminate()
+                }
+                throw ProcessExitWaitError.timedOut
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        }
     }
 
     private func typecheckTargetTriple() -> String {
