@@ -46,11 +46,6 @@ struct AsyncProcessRunnerTests {
             defer { lock.unlock() }
             return value
         }
-
-        func recordSignal(_: Int32, _: Int32) -> Int32 {
-            increment()
-            return 0
-        }
     }
 
     private actor LaunchGate {
@@ -173,21 +168,15 @@ struct AsyncProcessRunnerTests {
         #expect(launched.get() == false)
     }
 
-    @Test func cancellationEscalationUsesNonSignalingSeams() async throws {
+    @Test func cancellationEscalatesWhenChildIgnoresTermination() async throws {
         let readyFile = try makeMarkerFile()
-        let signals = Counter()
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
-            arguments: ["-c", "ready=\"$1\"; echo started > \"$ready\"; sleep 0.3", "sh", readyFile.path],
-            cancellationGracePeriod: .milliseconds(25))
+            arguments: ["-c", "ready=\"$1\"; echo started > \"$ready\"; trap '' TERM; while :; do sleep 1; done", "sh", readyFile.path],
+            cancellationGracePeriod: .milliseconds(100))
 
         let task = Task {
-            try await AsyncProcessRunner.run(
-                request,
-                hooks: .init(
-                    requestTermination: { _ in },
-                    observeProcess: Self.testIdentity,
-                    sendSignal: signals.recordSignal))
+            try await AsyncProcessRunner.run(request)
         }
 
         try await waitForFile(readyFile)
@@ -195,26 +184,32 @@ struct AsyncProcessRunnerTests {
         await #expect(throws: AsyncProcessRunnerError.cancelled) {
             _ = try await task.value
         }
-        #expect(signals.get() == 1)
     }
 
     @Test func cancellationReturnsWhenDescendantKeepsPipeOpen() async throws {
         let readyFile = try makeMarkerFile()
+        let holdFile = try makeMarkerFile()
+        if FileManager.default.fileExists(atPath: holdFile.path) {
+            try FileManager.default.removeItem(at: holdFile)
+        }
+
         let launchedProcessID = Counter()
-        let signals = Counter()
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
             arguments: [
                 "-c",
                 """
                 ready="$1"
-                /usr/bin/perl -e 'open my $fh, ">", $ARGV[0] or die "open: $!"; print {$fh} $$; close $fh or die "close: $!"; sleep 0.3;' "$ready" &
-                sleep 0.15
+                hold="$2"
+                /usr/bin/perl -MPOSIX=setsid -e 'setsid() or die "setsid: $!"; open my $fh, ">", $ARGV[0] or die "open: $!"; print {$fh} $$; close $fh or die "close: $!"; exec "sleep", "60" or die "exec: $!";' "$ready" &
+                trap '' TERM
+                while [ ! -f "$hold" ]; do sleep 0.05; done
                 """,
                 "sh",
                 readyFile.path,
+                holdFile.path,
             ],
-            cancellationGracePeriod: .milliseconds(25))
+            cancellationGracePeriod: .milliseconds(100))
 
         let task = Task {
             try await AsyncProcessRunner.run(
@@ -222,23 +217,24 @@ struct AsyncProcessRunnerTests {
                 hooks: .init(didLaunch: { pid in
                     launchedProcessID.increment()
                     _ = pid
-                }, requestTermination: { _ in }, observeProcess: Self.testIdentity, sendSignal: signals.recordSignal))
+                }))
         }
 
-        try await waitForFile(readyFile)
+        let descendantPID = try await waitForPIDFile(readyFile)
+        #expect(kill(descendantPID, 0) == 0)
 
         task.cancel()
         await #expect(throws: AsyncProcessRunnerError.cancelled) {
             _ = try await task.value
         }
+        #expect(kill(descendantPID, 0) == 0)
+        _ = kill(descendantPID, SIGKILL)
         #expect(launchedProcessID.get() == 1)
-        #expect(signals.get() == 1)
     }
 
     @Test func cancellationDuringOutputCleansUpOnce() async throws {
         let readyFile = try makeMarkerFile()
         let terminations = Counter()
-        let signals = Counter()
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
             arguments: [
@@ -246,7 +242,8 @@ struct AsyncProcessRunnerTests {
                 """
                 ready="$1"
                 echo started > "$ready"
-                for i in 1 2 3 4 5 6; do
+                trap '' TERM
+                while :; do
                   printf 'streaming-line\\n'
                   sleep 0.05
                 done
@@ -254,14 +251,14 @@ struct AsyncProcessRunnerTests {
                 "sh",
                 readyFile.path,
             ],
-            cancellationGracePeriod: .milliseconds(25))
+            cancellationGracePeriod: .milliseconds(100))
 
         let task = Task {
             try await AsyncProcessRunner.run(
                 request,
                 hooks: .init(didTerminate: { _, _ in
                     terminations.increment()
-                }, requestTermination: { _ in }, observeProcess: Self.testIdentity, sendSignal: signals.recordSignal))
+                }))
         }
 
         try await waitForFile(readyFile)
@@ -270,7 +267,6 @@ struct AsyncProcessRunnerTests {
             _ = try await task.value
         }
         #expect(terminations.get() == 1)
-        #expect(signals.get() == 1)
     }
 
     @Test func loginShellPathUsesAsyncRunner() async {
@@ -367,18 +363,6 @@ struct AsyncProcessRunnerTests {
         return directory.appendingPathComponent(UUID().uuidString, isDirectory: false)
     }
 
-    private static func testIdentity(
-        processID: ProcessSignalSafety.PositivePID
-    ) -> ProcessSignalSafety.Identity? {
-        guard let parentProcessID = ProcessSignalSafety.PositivePID(rawValue: getpid()) else {
-            return nil
-        }
-        return .init(
-            processID: processID,
-            parentProcessID: parentProcessID,
-            startTime: .init(seconds: 1, microseconds: 1))
-    }
-
     private func waitForFile(_ url: URL, timeout: Duration = .seconds(15)) async throws {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
@@ -392,5 +376,12 @@ struct AsyncProcessRunnerTests {
         ])
     }
 
+    private func waitForPIDFile(_ url: URL, timeout: Duration = .seconds(5)) async throws -> Int32 {
+        try await waitForFile(url, timeout: timeout)
+        let data = try Data(contentsOf: url)
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Int32(text) ?? -1
+    }
 }
 #endif

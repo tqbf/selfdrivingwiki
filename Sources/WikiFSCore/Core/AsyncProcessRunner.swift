@@ -105,17 +105,6 @@ public enum AsyncProcessRunner {
         var didTerminate: (@Sendable (Int32, Int32) -> Void)?
         var didRequestCancellation: (@Sendable () -> Void)?
         var runProcess: (@Sendable (Process) throws -> Void)?
-        var requestTermination: @Sendable (Process) -> Void = { process in
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-        var observeProcess: @Sendable (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity? = {
-            ProcessIdentityObservation.observe(processID: $0)
-        }
-        var sendSignal: @Sendable (Int32, Int32) -> Int32 = { processID, signal in
-            kill(processID, signal)
-        }
 
         static let none = Hooks()
     }
@@ -215,21 +204,13 @@ public enum AsyncProcessRunner {
                         } else {
                             try process.run()
                         }
-                        let processID = process.processIdentifier
-                        let expectedIdentity = ProcessSignalSafety.PositivePID(rawValue: processID)
-                            .flatMap(hooks.observeProcess)
-                        hooks.didLaunch?(processID)
-                        if let target = state.recordLaunch(
-                            processID: processID,
-                            expectedIdentity: expectedIdentity) {
+                        hooks.didLaunch?(process.processIdentifier)
+                        if let pid = state.recordLaunch(processID: process.processIdentifier) {
                             requestCancellation(
                                 of: process,
-                                target: target,
+                                processID: pid,
                                 gracePeriod: request.cancellationGracePeriod,
-                                state: state,
-                                requestTermination: hooks.requestTermination,
-                                observeProcess: hooks.observeProcess,
-                                sendSignal: hooks.sendSignal)
+                                state: state)
                         }
                     } catch {
                         if state.recordLaunchFailure(error.localizedDescription) {
@@ -241,17 +222,14 @@ public enum AsyncProcessRunner {
                 }
             }
         } onCancel: {
-            let target = state.requestCancellation()
+            let pid = state.requestCancellation()
             hooks.didRequestCancellation?()
-            if let target {
+            if let pid {
                 requestCancellation(
                     of: process,
-                    target: target,
+                    processID: pid,
                     gracePeriod: request.cancellationGracePeriod,
-                    state: state,
-                    requestTermination: hooks.requestTermination,
-                    observeProcess: hooks.observeProcess,
-                    sendSignal: hooks.sendSignal)
+                    state: state)
             }
         }
     }
@@ -280,37 +258,13 @@ public enum AsyncProcessRunner {
 
     private static func requestCancellation(
         of process: Process,
-        target: ExecutionState.CancellationTarget,
+        processID: Int32,
         gracePeriod: Duration,
-        state: ExecutionState,
-        requestTermination: @escaping @Sendable (Process) -> Void,
-        observeProcess: @escaping @Sendable (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity?,
-        sendSignal: @escaping @Sendable (Int32, Int32) -> Int32
+        state: ExecutionState
     ) {
-        guard let expectedIdentity = target.expectedIdentity else {
-            DebugLog.agent("AsyncProcessRunner refused cancellation for PID \(target.processID): identity unavailable at launch")
-            return
+        if process.isRunning {
+            process.terminate()
         }
-        guard let parentProcessID = ProcessSignalSafety.PositivePID(rawValue: getpid()) else {
-            DebugLog.agent("AsyncProcessRunner refused cancellation for PID \(target.processID): invalid parent PID")
-            return
-        }
-        guard process.isRunning, process.processIdentifier == expectedIdentity.processID.rawValue else {
-            DebugLog.agent("AsyncProcessRunner refused cancellation for PID \(target.processID): direct child is no longer live")
-            return
-        }
-        switch ProcessSignalSafety.verify(
-            processID: expectedIdentity.processID,
-            expectedIdentity: expectedIdentity,
-            expectedParentProcessID: parentProcessID,
-            observedIdentity: observeProcess(expectedIdentity.processID)) {
-        case .verified:
-            break
-        case .refused(let refusal):
-            DebugLog.agent("AsyncProcessRunner refused cancellation for PID \(target.processID): \(refusal)")
-            return
-        }
-        requestTermination(process)
 
         state.installEscalationTask(Task {
             do {
@@ -318,29 +272,8 @@ public enum AsyncProcessRunner {
             } catch {
                 return
             }
-            guard state.shouldEscalateKill(for: target.processID) else { return }
-            guard let expectedIdentity = target.expectedIdentity,
-                  let parentProcessID = ProcessSignalSafety.PositivePID(rawValue: getpid())
-            else { return }
-            guard process.isRunning, process.processIdentifier == expectedIdentity.processID.rawValue else {
-                DebugLog.agent("AsyncProcessRunner refused escalation for PID \(target.processID): direct child is no longer live")
-                return
-            }
-            let observedIdentity = observeProcess(expectedIdentity.processID)
-
-            switch ProcessSignalSafety.signal(
-                processID: expectedIdentity.processID,
-                expectedIdentity: expectedIdentity,
-                expectedParentProcessID: parentProcessID,
-                observedIdentity: observedIdentity,
-                signal: sendSignal) {
-            case .sent(let result) where result == 0:
-                break
-            case .sent(let result):
-                DebugLog.agent("AsyncProcessRunner escalation signal failed for verified child PID \(target.processID): result=\(result)")
-            case .refused(let refusal):
-                DebugLog.agent("AsyncProcessRunner refused escalation for PID \(target.processID): \(refusal)")
-            }
+            guard state.shouldEscalateKill(for: processID) else { return }
+            _ = kill(processID, SIGKILL)
         })
     }
 }
@@ -350,11 +283,6 @@ public enum AsyncProcessRunner {
 /// `cancelRequested`, `didResume`, and `escalationTask`.
 // swiftlint:disable:next unchecked_sendable
 private final class ExecutionState: @unchecked Sendable {
-    struct CancellationTarget: Sendable {
-        let processID: Int32
-        let expectedIdentity: ProcessSignalSafety.Identity?
-    }
-
     enum Phase {
         case preparing
         case launching
@@ -376,7 +304,6 @@ private final class ExecutionState: @unchecked Sendable {
     private var launchFailedMessage: String?
     private(set) var terminationStatus: Int32?
     private var cancelRequested = false
-    private var launchedIdentity: ProcessSignalSafety.Identity?
     private var didResume = false
     private var escalationTask: Task<Void, Never>?
 
@@ -396,23 +323,19 @@ private final class ExecutionState: @unchecked Sendable {
         return true
     }
 
-    func recordLaunch(
-        processID: Int32,
-        expectedIdentity: ProcessSignalSafety.Identity?
-    ) -> CancellationTarget? {
+    func recordLaunch(processID: Int32) -> Int32? {
         lock.lock()
         defer { lock.unlock() }
-        launchedIdentity = expectedIdentity
         switch phase {
         case .launching where cancelRequested:
             phase = .cancelling(processID: processID)
-            return CancellationTarget(processID: processID, expectedIdentity: expectedIdentity)
+            return processID
         case .launching:
             phase = .running(processID: processID)
             return nil
         case .cancelling:
             phase = .cancelling(processID: processID)
-            return CancellationTarget(processID: processID, expectedIdentity: expectedIdentity)
+            return processID
         case .running, .terminated, .completed:
             return nil
         case .preparing:
@@ -430,7 +353,7 @@ private final class ExecutionState: @unchecked Sendable {
         return true
     }
 
-    func requestCancellation() -> CancellationTarget? {
+    func requestCancellation() -> Int32? {
         lock.lock()
         defer { lock.unlock() }
         cancelRequested = true
@@ -443,7 +366,7 @@ private final class ExecutionState: @unchecked Sendable {
             return nil
         case .running(let processID):
             phase = .cancelling(processID: processID)
-            return CancellationTarget(processID: processID, expectedIdentity: launchedIdentity)
+            return processID
         case .cancelling, .terminated, .completed:
             return nil
         }

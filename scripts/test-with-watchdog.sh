@@ -10,9 +10,9 @@
 # the WHOLE `swift test` process hanging with no diagnostic. This script:
 #   1. Runs the suite with a real timeout (default 900s; override with
 #      TEST_TIMEOUT), tee'd to a timestamped log under tmp/test-logs/.
-#   2. On timeout, signals only the `swift test` child that this script
-#      launched and has just re-verified as its direct child. It never sweeps
-#      helpers by path, process group, session, or user.
+#   2. On timeout, kills the swift-test process tree AND its
+#      swiftpm-testing-helper child (same orphan pattern as `make test`'s
+#      trap) and reports exactly which test(s) started but never finished.
 #   3. On any exit, prints the slowest tests (parsed from Swift Testing's own
 #      "passed/failed after N seconds" lines) so a newly-slow test is visible
 #      as a trend, not just a future hang.
@@ -24,7 +24,6 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
-source "$REPO_ROOT/scripts/lib/test-watchdog-process-control.sh"
 
 TIMEOUT_SECS="${TEST_TIMEOUT:-900}"
 NUM_WORKERS="${SWIFT_TEST_NUM_WORKERS:-1}"
@@ -32,27 +31,22 @@ LOG_DIR="tmp/test-logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/swift-test-$(date +%Y%m%d-%H%M%S).log"
 
-if ! watchdog_has_precise_identity_observer; then
-    echo "test watchdog: high-precision process identity unavailable; refusing to launch an unbounded test child" >&2
-    exit 78
-fi
+reap_helpers() {
+    pkill -f "[s]wiftpm-testing-helper.*$REPO_ROOT/.build" 2>/dev/null || true
+}
+trap reap_helpers EXIT TERM INT
 
 echo "==> swift test -v --parallel --num-workers ${NUM_WORKERS} $* "
 echo "==> log: $LOG_FILE"
 echo "==> timeout: ${TIMEOUT_SECS}s (override with TEST_TIMEOUT=<seconds>)"
 
+reap_helpers
 swift test -v --parallel --num-workers "$NUM_WORKERS" "$@" >"$LOG_FILE" 2>&1 &
 TEST_PID=$!
-TEST_IDENTITY="$(watchdog_capture_identity "$TEST_PID")"
-
-if [[ -z "$TEST_IDENTITY" ]] || ! watchdog_identity_is_direct_child "$TEST_IDENTITY"; then
-    echo "test watchdog: post-launch process identity unavailable; refusing signal and wait for test child PID $TEST_PID" >&2
-    exit 78
-fi
 
 START_TS=$(date +%s)
 TIMED_OUT=0
-while watchdog_is_verified_direct_child "$TEST_PID" "$TEST_IDENTITY"; do
+while kill -0 "$TEST_PID" 2>/dev/null; do
     ELAPSED=$(( $(date +%s) - START_TS ))
     if [ "$ELAPSED" -ge "$TIMEOUT_SECS" ]; then
         TIMED_OUT=1
@@ -61,28 +55,17 @@ while watchdog_is_verified_direct_child "$TEST_PID" "$TEST_IDENTITY"; do
     sleep 2
 done
 
-if [ "$TIMED_OUT" -ne 1 ]; then
-    # An unproven running job might use a reused PID. Do not wait for it.
-    # Bash lists only running jobs with `jobs -pr`.
-    # If it is absent, `wait` reaps an already-completed child.
-    if jobs -pr | grep -Fx -- "$TEST_PID" >/dev/null; then
-        echo "test watchdog: child identity is no longer verified; refusing signal and wait" >&2
-        exit 78
-    fi
-    # The child already completed, so this wait is bounded.
+if [ "$TIMED_OUT" -eq 1 ]; then
+    echo ""
+    echo "✗ TIMED OUT after ${TIMEOUT_SECS}s — killing swift test and reaping its helper."
+    kill "$TEST_PID" 2>/dev/null
+    sleep 1
+    kill -9 "$TEST_PID" 2>/dev/null
+    reap_helpers
+    EXIT_CODE=124
+else
     wait "$TEST_PID"
     EXIT_CODE=$?
-else
-    echo ""
-    echo "✗ TIMED OUT after ${TIMEOUT_SECS}s — signaling only the verified swift test child."
-    if ! watchdog_signal_verified_child TERM "$TEST_PID" "$TEST_IDENTITY"; then
-        echo "test watchdog: refused TERM for unverified test child" >&2
-    fi
-    sleep 1
-    if ! watchdog_signal_verified_child KILL "$TEST_PID" "$TEST_IDENTITY"; then
-        echo "test watchdog: refused KILL for unverified test child" >&2
-    fi
-    EXIT_CODE=124
 fi
 
 perl -ne '
