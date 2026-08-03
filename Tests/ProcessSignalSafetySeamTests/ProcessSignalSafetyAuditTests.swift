@@ -93,6 +93,18 @@ struct ProcessSignalSafetyAuditTests {
             primitive: .nodeSignal)))
     }
 
+    @Test func scannerIgnoresProcessControlTextInsideStringLiterals() {
+        let source = "client.terminate()\nDebugLog.agent(\"client.terminate()\")\n"
+        let callSites = processControlCallSites(in: source, relativePath: "Fixtures/string-literal.swift")
+
+        #expect(callSites == [
+            .init(
+                relativePath: "Fixtures/string-literal.swift",
+                line: 1,
+                primitive: .processTermination),
+        ])
+    }
+
     @Test func sourceEnumerationIncludesObjectiveCProcessHelperSources() throws {
         let paths = try repositoryExecutableSourceFiles(root: repositoryRoot())
         #expect(paths.contains("Sources/PodcastTokenHelper/main.m"))
@@ -190,7 +202,7 @@ struct ProcessSignalSafetyAuditTests {
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1366, primitive: .posixSignal): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1411, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1418, primitive: .processTermination): .productOutsideConditionA,
-            .init(relativePath: "Sources/WikiFSEngine/ACPProviderModelProbe.swift", line: 394, primitive: .processTermination): .productOutsideConditionA,
+            .init(relativePath: "Sources/WikiFSEngine/ACPProviderModelProbe.swift", line: 393, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 25, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 191, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 484, primitive: .processTermination): .productOutsideConditionA,
@@ -242,9 +254,17 @@ struct ProcessSignalSafetyAuditTests {
             guard isExecutableLine(line) else { return [CallSite]() }
             let window = detectionWindow(lines: lines, startingAt: index)
             let firstLineLength = line.utf16.count
+            let stringLiteralRanges = relativePath.hasSuffix(".swift")
+                ? stringLiteralRanges(in: line)
+                : []
             return processControlPatterns.flatMap { primitive, expression in
                 expression.matches(in: window, range: NSRange(window.startIndex..., in: window))
-                    .filter { $0.range.location < firstLineLength }
+                    .filter { match in
+                        match.range.location < firstLineLength
+                            && stringLiteralRanges.allSatisfy { literalRange in
+                                NSIntersectionRange(match.range, literalRange).length == 0
+                            }
+                    }
                     .enumerated()
                     .map { occurrence, _ in
                         .init(
@@ -255,6 +275,12 @@ struct ProcessSignalSafetyAuditTests {
                     }
             }
         }
+    }
+
+    private func stringLiteralRanges(in source: String) -> [NSRange] {
+        let expression = expression("\"(?:\\\\.|[^\"\\\\\\r\\n])*\"|'(?:\\\\.|[^'\\\\\\r\\n])*'")
+        let range = NSRange(source.startIndex..., in: source)
+        return expression.matches(in: source, range: range).map(\.range)
     }
 
     private func detectionWindow(lines: [String], startingAt index: Int) -> String {
