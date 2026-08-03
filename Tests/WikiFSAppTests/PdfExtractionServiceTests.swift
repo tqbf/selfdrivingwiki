@@ -5,6 +5,23 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite struct PdfExtractionServiceTests {
+    /// Wait for a process to exit without blocking the cooperative thread
+    /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
+    /// thread; on CI's 3-vCPU runner with `--parallel`, that starves the pool
+    /// and deadlocks every other test (#732). Use `terminationHandler` +
+    /// `CheckedContinuation` instead — same semantics, non-blocking.
+    private func asyncWaitUntilExit(_ process: Process) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            if !process.isRunning {
+                cont.resume()
+                return
+            }
+            process.terminationHandler = { _ in
+                cont.resume()
+            }
+        }
+    }
+
     // MARK: - ProcessRegistry
 
     @Suite struct ProcessRegistryTests {
