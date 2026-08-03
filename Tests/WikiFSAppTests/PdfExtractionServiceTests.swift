@@ -4,22 +4,95 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-@Suite struct PdfExtractionServiceTests {
+@Suite(.timeLimit(.minutes(2))) struct PdfExtractionServiceTests {
+
+    private enum ProcessExitWaitError: Error {
+        case timedOut
+    }
+
+    private final class ProcessExitWaiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var result: Result<Void, Error>?
+
+        func install(_ continuation: CheckedContinuation<Void, Error>) {
+            let result: Result<Void, Error>?
+            lock.lock()
+            if let storedResult = self.result {
+                result = storedResult
+            } else {
+                self.continuation = continuation
+                result = nil
+            }
+            lock.unlock()
+            if let result {
+                continuation.resume(with: result)
+            }
+        }
+
+        @discardableResult
+        func finish(_ result: Result<Void, Error>) -> Bool {
+            let continuation: CheckedContinuation<Void, Error>?
+            lock.lock()
+            guard self.result == nil else {
+                lock.unlock()
+                return false
+            }
+            self.result = result
+            continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+            return true
+        }
+    }
 
     /// Wait for a process to exit without blocking the cooperative thread
     /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
     /// thread; on CI's 3-vCPU runner with `--parallel`, that starves the pool
     /// and deadlocks every other test (#732). Use `terminationHandler` +
     /// `CheckedContinuation` instead — same semantics, non-blocking.
-    private func asyncWaitUntilExit(_ process: Process) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            if !process.isRunning {
-                cont.resume()
-                return
+    ///
+    /// The 30s timeout (issue #1051) is a safety net: if the `terminationHandler`
+    /// completion is starved off the cooperative pool (same bug class as
+    /// #664/#732/#926), a bare `withCheckedContinuation` hangs forever and
+    /// `.timeLimit` can't rescue it (cancelling the test's Task doesn't resume
+    /// an abandoned continuation). The timeout produces a fast, diagnosed
+    /// failure instead of an infinite hang.
+    private func asyncWaitUntilExit(_ process: Process, timeout: Duration = .seconds(30)) async throws {
+        let waiter = ProcessExitWaiter()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                        waiter.install(cont)
+                        process.terminationHandler = { _ in
+                            waiter.finish(.success(()))
+                        }
+                        if !process.isRunning {
+                            waiter.finish(.success(()))
+                        }
+                    }
+                } onCancel: {
+                    if waiter.finish(.failure(CancellationError())), process.isRunning {
+                        process.terminate()
+                    }
+                }
             }
-            process.terminationHandler = { _ in
-                cont.resume()
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                guard waiter.finish(.failure(ProcessExitWaitError.timedOut)) else { return }
+                if process.isRunning {
+                    process.terminate()
+                }
+                throw ProcessExitWaitError.timedOut
             }
+            _ = try await group.next()
+            group.cancelAll()
         }
     }
 

@@ -7,7 +7,7 @@ import WikiFSCore
 /// Regression coverage for the synchronous provider-callback seam. The store
 /// is real in the durability cases so these tests cover translation, ordering,
 /// SQLite persistence, and the live event value together.
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct QueueTranscriptConcurrencyTests {
     @Test func sameAttemptCallbacksCommitInAcceptedOrder() throws {
         let store = try makeStore()

@@ -4,7 +4,59 @@ import Testing
 /// Runs small fixtures through `swiftc -typecheck` against the modules that
 /// SwiftPM built for this test run. This proves the namespace boundary at the
 /// compiler level, rather than only observing runtime behavior.
+///
+/// `.serialized` AND `.timeLimit(.minutes(2))` (issue #1051): each test spawns
+/// `swiftc -typecheck` as a subprocess. The original implementation used
+/// `Process.waitUntilExit()` — a synchronous call that parks the cooperative
+/// thread pool thread the test is running on. Under `--parallel` with multiple
+/// non-`.serialized` suites scheduled concurrently, 26 simultaneous
+/// `waitUntilExit()` calls can exhaust the pool, starving other suites'
+/// `withCheckedContinuation` completions (same bug class as #664/#732/#926).
+/// The async `terminationHandler` + `CheckedContinuation` pattern below is
+/// non-blocking; `.serialized` + `.timeLimit` are the safety net.
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct IdentifierBoundaryTypecheckTests {
+
+    private enum ProcessExitWaitError: Error {
+        case timedOut
+    }
+
+    private final class ProcessExitWaiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var result: Result<Void, Error>?
+
+        func install(_ continuation: CheckedContinuation<Void, Error>) {
+            let result: Result<Void, Error>?
+            lock.lock()
+            if let storedResult = self.result {
+                result = storedResult
+            } else {
+                self.continuation = continuation
+                result = nil
+            }
+            lock.unlock()
+            if let result {
+                continuation.resume(with: result)
+            }
+        }
+
+        @discardableResult
+        func finish(_ result: Result<Void, Error>) -> Bool {
+            let continuation: CheckedContinuation<Void, Error>?
+            lock.lock()
+            guard self.result == nil else {
+                lock.unlock()
+                return false
+            }
+            self.result = result
+            continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+            return true
+        }
+    }
 
     private struct BuildProducts {
         let debugDirectory: URL
@@ -71,7 +123,7 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    private func runTypecheck(_ fixtureName: String) throws -> CompilerResult {
+    private func runTypecheck(_ fixtureName: String) async throws -> CompilerResult {
         let root = repositoryRoot()
         let buildProducts = try buildProducts(for: fixtureName)
         let scratchDirectory = root
@@ -103,13 +155,51 @@ struct IdentifierBoundaryTypecheckTests {
         process.standardOutput = output
         process.standardError = output
         try process.run()
-        process.waitUntilExit()
+
+        try await asyncWaitUntilExit(process)
 
         let outputData = output.fileHandleForReading.readDataToEndOfFile()
         return CompilerResult(
             status: process.terminationStatus,
             output: String(decoding: outputData, as: UTF8.self)
         )
+    }
+
+    private func asyncWaitUntilExit(_ process: Process, timeout: Duration = .seconds(30)) async throws {
+        let waiter = ProcessExitWaiter()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                        waiter.install(cont)
+                        process.terminationHandler = { _ in
+                            waiter.finish(.success(()))
+                        }
+                        if !process.isRunning {
+                            waiter.finish(.success(()))
+                        }
+                    }
+                } onCancel: {
+                    if waiter.finish(.failure(CancellationError())), process.isRunning {
+                        process.terminate()
+                    }
+                }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                guard waiter.finish(.failure(ProcessExitWaitError.timedOut)) else { return }
+                if process.isRunning {
+                    process.terminate()
+                }
+                throw ProcessExitWaitError.timedOut
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        }
     }
 
     private func typecheckTargetTriple() -> String {
@@ -191,27 +281,27 @@ struct IdentifierBoundaryTypecheckTests {
         return arguments
     }
 
-    @Test func positiveFixturesCompile() throws {
-        let result = try runTypecheck("positive.swift")
+    @Test func positiveFixturesCompile() async throws {
+        let result = try await runTypecheck("positive.swift")
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
     #if canImport(WikiFSEngine)
-    @Test func positiveChatDomainFixturesCompile() throws {
-        let result = try runTypecheck("positive-chat-domain.swift")
+    @Test func positiveChatDomainFixturesCompile() async throws {
+        let result = try await runTypecheck("positive-chat-domain.swift")
         #expect(result.status == 0, "positive chat-domain fixture failed to typecheck:\n\(result.output)")
     }
     #endif
 
     #if os(macOS)
-    @Test func launcherPositiveFixturesCompile() throws {
-        let result = try runTypecheck("positive-launcher-macos.swift")
+    @Test func launcherPositiveFixturesCompile() async throws {
+        let result = try await runTypecheck("positive-launcher-macos.swift")
         #expect(result.status == 0, "launcher positive fixture failed to typecheck:\n\(result.output)")
     }
     #endif
 
-    @Test func pageIDIsRejectedByChatAPI() throws {
-        let result = try runTypecheck("page-id-to-chat-api.swift")
+    @Test func pageIDIsRejectedByChatAPI() async throws {
+        let result = try await runTypecheck("page-id-to-chat-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
@@ -220,8 +310,8 @@ struct IdentifierBoundaryTypecheckTests {
     }
 
     #if os(macOS)
-    @Test func pageIDIsRejectedByLauncherChatAPI() throws {
-        let result = try runTypecheck("page-id-to-launcher-chat-api.swift")
+    @Test func pageIDIsRejectedByLauncherChatAPI() async throws {
+        let result = try await runTypecheck("page-id-to-launcher-chat-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
@@ -229,8 +319,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func stringIsRejectedByLauncherChatAPI() throws {
-        let result = try runTypecheck("string-to-launcher-chat-api.swift")
+    @Test func stringIsRejectedByLauncherChatAPI() async throws {
+        let result = try await runTypecheck("string-to-launcher-chat-api.swift")
         #expect(result.status != 0, "String unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
         #expect(
             result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatID'"),
@@ -239,8 +329,8 @@ struct IdentifierBoundaryTypecheckTests {
     }
     #endif
 
-    @Test func pageIDIsRejectedBySourceAPI() throws {
-        let result = try runTypecheck("page-id-to-source-api.swift")
+    @Test func pageIDIsRejectedBySourceAPI() async throws {
+        let result = try await runTypecheck("page-id-to-source-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at a SourceID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceID'"),
@@ -248,8 +338,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func pageIDIsRejectedBySourceVersionAPI() throws {
-        let result = try runTypecheck("page-id-to-source-version-api.swift")
+    @Test func pageIDIsRejectedBySourceVersionAPI() async throws {
+        let result = try await runTypecheck("page-id-to-source-version-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at a SourceVersionID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
@@ -257,8 +347,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func chatIDIsRejectedByPageAPI() throws {
-        let result = try runTypecheck("chat-id-to-page-api.swift")
+    @Test func chatIDIsRejectedByPageAPI() async throws {
+        let result = try await runTypecheck("chat-id-to-page-api.swift")
         #expect(result.status != 0, "ChatID unexpectedly typechecked at a PageID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'PageID'"),
@@ -266,8 +356,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceIDIsRejectedByPageAPI() throws {
-        let result = try runTypecheck("source-id-to-page-api.swift")
+    @Test func sourceIDIsRejectedByPageAPI() async throws {
+        let result = try await runTypecheck("source-id-to-page-api.swift")
         #expect(result.status != 0, "SourceID unexpectedly typechecked at a PageID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'PageID'"),
@@ -275,8 +365,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceIDIsRejectedBySourceVersionAPI() throws {
-        let result = try runTypecheck("source-id-to-source-version-api.swift")
+    @Test func sourceIDIsRejectedBySourceVersionAPI() async throws {
+        let result = try await runTypecheck("source-id-to-source-version-api.swift")
         #expect(result.status != 0, "SourceID unexpectedly typechecked at a SourceVersionID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceVersionID'"),
@@ -284,8 +374,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceIDIsRejectedByChatAPI() throws {
-        let result = try runTypecheck("source-id-to-chat-api.swift")
+    @Test func sourceIDIsRejectedByChatAPI() async throws {
+        let result = try await runTypecheck("source-id-to-chat-api.swift")
         #expect(result.status != 0, "SourceID unexpectedly typechecked at a ChatID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'ChatID'"),
@@ -293,8 +383,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func chatIDIsRejectedBySourceAPI() throws {
-        let result = try runTypecheck("chat-id-to-source-api.swift")
+    @Test func chatIDIsRejectedBySourceAPI() async throws {
+        let result = try await runTypecheck("chat-id-to-source-api.swift")
         #expect(result.status != 0, "ChatID unexpectedly typechecked at a SourceID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceID'"),
@@ -302,8 +392,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func markdownVersionIDIsRejectedBySourceVersionAPI() throws {
-        let result = try runTypecheck("markdown-version-id-to-source-version-api.swift")
+    @Test func markdownVersionIDIsRejectedBySourceVersionAPI() async throws {
+        let result = try await runTypecheck("markdown-version-id-to-source-version-api.swift")
         #expect(result.status != 0, "SourceMarkdownVersion.id unexpectedly typechecked at a SourceVersionID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceMarkdownVersionID' to expected argument type 'SourceVersionID'"),
@@ -311,8 +401,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func pageIDIsRejectedByProcessedMarkdownVersionAPI() throws {
-        let result = try runTypecheck("page-id-to-processed-markdown-version-api.swift")
+    @Test func pageIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
+        let result = try await runTypecheck("page-id-to-processed-markdown-version-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at processedMarkdownVersion(id:).")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceMarkdownVersionID'"),
@@ -320,8 +410,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceIDIsRejectedByProcessedMarkdownVersionAPI() throws {
-        let result = try runTypecheck("source-id-to-processed-markdown-version-api.swift")
+    @Test func sourceIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
+        let result = try await runTypecheck("source-id-to-processed-markdown-version-api.swift")
         #expect(result.status != 0, "SourceID unexpectedly typechecked at processedMarkdownVersion(id:).")
         #expect(
             result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceMarkdownVersionID'"),
@@ -329,8 +419,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func chatIDIsRejectedByProcessedMarkdownVersionAPI() throws {
-        let result = try runTypecheck("chat-id-to-processed-markdown-version-api.swift")
+    @Test func chatIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
+        let result = try await runTypecheck("chat-id-to-processed-markdown-version-api.swift")
         #expect(result.status != 0, "ChatID unexpectedly typechecked at processedMarkdownVersion(id:).")
         #expect(
             result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceMarkdownVersionID'"),
@@ -338,8 +428,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceVersionIDIsRejectedBySourceAPI() throws {
-        let result = try runTypecheck("source-version-id-to-source-api.swift")
+    @Test func sourceVersionIDIsRejectedBySourceAPI() async throws {
+        let result = try await runTypecheck("source-version-id-to-source-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a SourceID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceID'"),
@@ -347,8 +437,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI() throws {
-        let result = try runTypecheck("source-version-id-to-processed-markdown-version-api.swift")
+    @Test func sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
+        let result = try await runTypecheck("source-version-id-to-processed-markdown-version-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at processedMarkdownVersion(id:).")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
@@ -356,8 +446,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceVersionIDIsRejectedBySetActiveMarkdownAPI() throws {
-        let result = try runTypecheck("source-version-id-to-set-active-markdown-api.swift")
+    @Test func sourceVersionIDIsRejectedBySetActiveMarkdownAPI() async throws {
+        let result = try await runTypecheck("source-version-id-to-set-active-markdown-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at setActiveMarkdown(sourceID:to:).")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
@@ -365,8 +455,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceVersionIDIsRejectedByPageAPI() throws {
-        let result = try runTypecheck("source-version-id-to-page-api.swift")
+    @Test func sourceVersionIDIsRejectedByPageAPI() async throws {
+        let result = try await runTypecheck("source-version-id-to-page-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a PageID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
@@ -374,8 +464,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func sourceVersionIDIsRejectedByChatAPI() throws {
-        let result = try runTypecheck("source-version-id-to-chat-api.swift")
+    @Test func sourceVersionIDIsRejectedByChatAPI() async throws {
+        let result = try await runTypecheck("source-version-id-to-chat-api.swift")
         #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a ChatID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'ChatID'"),
@@ -383,8 +473,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func pageIDIsRejectedByChatTurnAPI() throws {
-        let result = try runTypecheck("page-id-to-chat-turn-api.swift")
+    @Test func pageIDIsRejectedByChatTurnAPI() async throws {
+        let result = try await runTypecheck("page-id-to-chat-turn-api.swift")
         #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatTurnID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatTurnID'"),
@@ -392,8 +482,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func chatIDIsRejectedByChatMessageAPI() throws {
-        let result = try runTypecheck("chat-id-to-chat-message-api.swift")
+    @Test func chatIDIsRejectedByChatMessageAPI() async throws {
+        let result = try await runTypecheck("chat-id-to-chat-message-api.swift")
         #expect(result.status != 0, "ChatID unexpectedly typechecked at a ChatMessageID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'ChatMessageID'"),
@@ -401,8 +491,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func stringIsRejectedByChatCommandAPI() throws {
-        let result = try runTypecheck("string-to-chat-command-api.swift")
+    @Test func stringIsRejectedByChatCommandAPI() async throws {
+        let result = try await runTypecheck("string-to-chat-command-api.swift")
         #expect(result.status != 0, "String unexpectedly typechecked at a ChatCommandID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatCommandID'"),
@@ -410,8 +500,8 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    @Test func permissionRequestIDIsRejectedByToolCallAPI() throws {
-        let result = try runTypecheck("permission-request-id-to-tool-call-api.swift")
+    @Test func permissionRequestIDIsRejectedByToolCallAPI() async throws {
+        let result = try await runTypecheck("permission-request-id-to-tool-call-api.swift")
         #expect(result.status != 0, "PermissionRequestID unexpectedly typechecked at a ToolCallID API boundary.")
         #expect(
             result.output.contains("cannot convert value of type 'PermissionRequestID' to expected argument type 'ToolCallID'"),

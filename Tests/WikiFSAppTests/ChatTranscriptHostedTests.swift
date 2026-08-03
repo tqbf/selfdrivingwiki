@@ -9,7 +9,7 @@ import WebKit
 
 /// Exercises the Phase 4 transcript markup against a live WebKit document.
 /// It is serialized through the shared gate because SwiftPM has one AppKit host.
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct ChatTranscriptHostedTests {
     private static let app: NSApplication = {
