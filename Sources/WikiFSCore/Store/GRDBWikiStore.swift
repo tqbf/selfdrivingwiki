@@ -4187,6 +4187,31 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func sourceMatchingURLIdentity(_ identity: String) throws -> SourceSummary? {
+        try dbWriter.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
+                   s.created_at, s.updated_at, s.version,
+                   s.zotero_item_key, s.zotero_item_title, s.display_name, s.role,
+                   a.plan, a.external_ref, sv.external_identity
+            FROM sources s
+            JOIN refs r ON r.kind = 'source-content' AND r.owner_id = s.id
+            JOIN source_versions sv ON sv.id = r.version_id
+            LEFT JOIN activities a ON a.id = sv.activity_id
+            ORDER BY s.updated_at DESC;
+            """)
+            for row in rows {
+                let candidates: [String?] = [
+                    row["plan"], row["external_ref"], row["external_identity"],
+                ]
+                if candidates.contains(where: { URLFetchService.urlIdentity($0 ?? "") == identity }) {
+                    return try Self.readSourceSummary(from: row)
+                }
+            }
+            return nil
+        }
+    }
+
     /// The full edit history for a source — every `source_versions` row joined
     /// to its `activities` → `agents` (the source-side mirror of
     /// `pageEditHistory`). Ordered NEWEST-FIRST (the provenance panel renders

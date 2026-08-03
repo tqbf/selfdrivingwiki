@@ -19,6 +19,10 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     /// row so callers can reference it (e.g. "already added as <name>") instead
     /// of just reporting a bare failure.
     case duplicateContent(existing: SourceSummary)
+    /// Thrown before URL materialization when an active source already records
+    /// the same normalized URL provenance. This remains distinct from content
+    /// hash deduplication, which happens only after bytes are available.
+    case duplicateURL(existing: SourceSummary)
 
     public var description: String {
         switch self {
@@ -35,6 +39,8 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
             return "Duplicate content: already stored as \(existing.effectiveName) (\(existing.id.rawValue))"
+        case .duplicateURL(let existing):
+            return "Duplicate URL: already stored as \(existing.effectiveName) (\(existing.id.rawValue))"
         }
     }
 }
@@ -290,6 +296,10 @@ public protocol WikiStore: Sendable {
     /// website sources with different URLs each return their own URL); `agentName`
     /// from the **agent** row.
     func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin?
+
+    /// Find an active source whose URL provenance has the given canonical
+    /// identity. The identity is produced by `URLFetchService.urlIdentity(_:)`.
+    func sourceMatchingURLIdentity(_ identity: String) throws -> SourceSummary?
 
     /// The full edit history for a source — every `source_versions` row joined
     /// to its `activities` → `agents` (the source-side mirror of

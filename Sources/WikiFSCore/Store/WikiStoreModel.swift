@@ -2211,14 +2211,17 @@ public final class WikiStoreModel {
     public func addURL(
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
-        youtubeFetcher: (any YouTubeTranscriptFetching)?? = nil
+        youtubeFetcher: (any YouTubeTranscriptFetching)?? = nil,
+        allowDuplicateURL: Bool = false
     ) async throws -> URLFetchService.FetchOutcome {
+        try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
         #if PODCAST_TRANSCRIPTS
         // Delegate to the podcast-aware overload so routing is in one place.
         return try await addURL(
             rawInput, fetcher: fetcher,
             podcastFetcher: ApplePodcastTranscriptService.bundled(),
-            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService())
+            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(),
+            allowDuplicateURL: true)
         #else
         // Phase 5b: byteless external-embed media (YouTube/Vimeo/Spotify/
         // SoundCloud/remote-media) routes uniformly through `bytelessMediaOutcome`,
@@ -2251,8 +2254,10 @@ public final class WikiStoreModel {
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher,
         podcastFetcher: (any PodcastTranscriptFetching)?,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = nil
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = nil,
+        allowDuplicateURL: Bool = false
     ) async throws -> URLFetchService.FetchOutcome {
+        try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
         // An Apple Podcasts EPISODE link is recognized before the generic web
         // fetch: its HTML is the useless player page, so we route to the
         // byteless-embed pipeline instead. The pageURL is re-normalized from
@@ -2326,6 +2331,17 @@ public final class WikiStoreModel {
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
     }
     #endif
+
+    /// Guard URL intake before any provider routing or network work. Invalid
+    /// input remains the fetch service's responsibility so callers retain its
+    /// existing user-facing validation error.
+    private func rejectExistingURL(_ rawInput: String, allowDuplicateURL: Bool) throws {
+        guard !allowDuplicateURL,
+              let identity = URLFetchService.urlIdentity(rawInput),
+              let existing = try store.sourceMatchingURLIdentity(identity)
+        else { return }
+        throw WikiStoreError.duplicateURL(existing: existing)
+    }
 
     /// **Generic RSS-feed podcast intake** (podcast-generalize, M3): a dedicated
     /// entry point for pasting a direct RSS feed URL. Bypasses the generic
