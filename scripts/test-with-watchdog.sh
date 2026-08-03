@@ -9,13 +9,22 @@
 # by another concurrently-running blocking suite; see #664/#732). That leaves
 # the WHOLE `swift test` process hanging with no diagnostic. This script:
 #   1. Runs the suite with a real timeout (default 900s; override with
-#      TEST_TIMEOUT), tee'd to a timestamped log under tmp/test-logs/.
-#   2. On timeout, kills the swift-test process tree AND its
-#      swiftpm-testing-helper child (same orphan pattern as `make test`'s
-#      trap) and reports exactly which test(s) started but never finished.
+#      TEST_TIMEOUT), logged to a timestamped file under tmp/test-logs/.
+#   2. On timeout, signals ONLY the `swift test` child it launched, and only
+#      while bash still lists that PID as a running job of this shell. It never
+#      sweeps helpers by command line, path, process group, session, or user.
 #   3. On any exit, prints the slowest tests (parsed from Swift Testing's own
 #      "passed/failed after N seconds" lines) so a newly-slow test is visible
 #      as a trend, not just a future hang.
+#
+# Signal safety (#1051): this script previously ran
+# `pkill -f "[s]wiftpm-testing-helper.*$REPO_ROOT/.build"` on every exit and
+# used `kill -0` for liveness. Both select by appearance rather than ownership.
+# The sweep is gone, and every signal now goes through the verified-child
+# boundary in scripts/lib/test-watchdog-process-control.sh.
+#
+# Orphaned helpers are NOT reaped here. A helper belongs to the `swift test`
+# process that launched it; if one is left behind, reap it by hand.
 #
 # Usage: scripts/test-with-watchdog.sh [swift test args...]
 #   TEST_TIMEOUT=1200 scripts/test-with-watchdog.sh --filter QueueEngineTests
@@ -24,6 +33,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
+source "$REPO_ROOT/scripts/lib/test-watchdog-process-control.sh"
 
 TIMEOUT_SECS="${TEST_TIMEOUT:-900}"
 NUM_WORKERS="${SWIFT_TEST_NUM_WORKERS:-1}"
@@ -31,23 +41,20 @@ LOG_DIR="tmp/test-logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/swift-test-$(date +%Y%m%d-%H%M%S).log"
 
-reap_helpers() {
-    pkill -f "[s]wiftpm-testing-helper.*$REPO_ROOT/.build" 2>/dev/null || true
-}
-trap reap_helpers EXIT TERM INT
-
 echo "==> swift test -v --parallel --num-workers ${NUM_WORKERS} $* "
 echo "==> log: $LOG_FILE"
 echo "==> timeout: ${TIMEOUT_SECS}s (override with TEST_TIMEOUT=<seconds>)"
 
-reap_helpers
 swift test -v --parallel --num-workers "$NUM_WORKERS" "$@" >"$LOG_FILE" 2>&1 &
 TEST_PID=$!
 
 START_TS=$(date +%s)
 TIMED_OUT=0
-while kill -0 "$TEST_PID" 2>/dev/null; do
-    ELAPSED=$(( $(date +%s) - START_TS ))
+# `watchdog_running_child_pids` must be evaluated in this shell, which owns the
+# job. The loop ends when the child leaves the running-job table, either by
+# finishing or by being signalled.
+while watchdog_is_verified_child "$TEST_PID" "$(watchdog_running_child_pids)"; do
+    ELAPSED=$(($(date +%s) - START_TS))
     if [ "$ELAPSED" -ge "$TIMEOUT_SECS" ]; then
         TIMED_OUT=1
         break
@@ -57,15 +64,31 @@ done
 
 if [ "$TIMED_OUT" -eq 1 ]; then
     echo ""
-    echo "✗ TIMED OUT after ${TIMEOUT_SECS}s — killing swift test and reaping its helper."
-    kill "$TEST_PID" 2>/dev/null
+    echo "✗ TIMED OUT after ${TIMEOUT_SECS}s — signaling only the verified swift test child."
+    if ! watchdog_signal_verified_child TERM "$TEST_PID" "$(watchdog_running_child_pids)"; then
+        echo "test watchdog: TERM not delivered; child is no longer a verified running child." >&2
+    fi
     sleep 1
-    kill -9 "$TEST_PID" 2>/dev/null
-    reap_helpers
+    # Escalate only if the child is still running. A child that exited on TERM is
+    # the expected outcome, not a refusal worth reporting.
+    KILL_SNAPSHOT="$(watchdog_running_child_pids)"
+    if watchdog_is_verified_child "$TEST_PID" "$KILL_SNAPSHOT"; then
+        echo "==> child survived TERM; escalating to KILL."
+        if ! watchdog_signal_verified_child KILL "$TEST_PID" "$KILL_SNAPSHOT"; then
+            echo "test watchdog: KILL not delivered; child is no longer a verified running child." >&2
+        fi
+    else
+        echo "==> child exited on TERM; no KILL needed."
+    fi
     EXIT_CODE=124
-else
-    wait "$TEST_PID"
-    EXIT_CODE=$?
+fi
+
+# `wait` is safe and bounded here: the child has either finished on its own or
+# been signalled above, so it is a terminated-but-unreaped job in both paths.
+wait "$TEST_PID"
+WAIT_STATUS=$?
+if [ "$TIMED_OUT" -ne 1 ]; then
+    EXIT_CODE=$WAIT_STATUS
 fi
 
 perl -ne '

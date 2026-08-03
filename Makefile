@@ -265,19 +265,22 @@ check-release: deps prompts version keychain
 
 # Run the test suite.
 #
-# Orphan guard: `swift test` runs Swift Testing through a child
-# `swittpm-testing-helper`. If its `swift` parent is killed mid-run (e.g. a
-# timeout), the helper reparents to init and keeps grinding the full suite;
-# left behind, these accumulate and thrash subsequent runs. We pre-sweep any
-# stale helper for THIS repo's build dir before starting, and trap
-# EXIT/TERM/INT to reap it again on exit so a killed run can't leave one
-# behind. `[s]wiftpm-testing-helper` is the bracket trick so the reap never
-# matches its own command line; `$(CURDIR)/.build` scopes it to this repo so
-# it never touches other repos/worktrees.
+# No orphan sweep here, deliberately (#1051).
+#
+# This target used to pre-sweep and trap-reap stale `swiftpm-testing-helper`
+# processes with `pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build"`. A
+# command-line regex is not proof of process identity: it selects by what a
+# process looks like, not by what this Makefile launched. On 2026-08-02 that
+# sweep was credited with terminating 125 PIDs when one hung child was the
+# intended target.
+#
+# A test helper is owned by the `swift test` process that launched it. Only an
+# owner may signal it, and only after re-verifying the child's identity — see
+# `ProcessSignalSafety` for the product-side rule and
+# `scripts/test-with-watchdog.sh` for the timeout path. If a helper is orphaned,
+# reap it by hand; a broad matcher must fail closed rather than pick a stranger.
 test: deps prompts version keychain
-	@trap 'pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build" 2>/dev/null || true' EXIT TERM INT; \
-	 pkill -f "[s]wiftpm-testing-helper.*$(CURDIR)/.build" 2>/dev/null || true; \
-	 swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
+	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
 	@echo "✓ tests pass"
 
 # Same full suite as `test`, but with a hard wall-clock timeout and a
