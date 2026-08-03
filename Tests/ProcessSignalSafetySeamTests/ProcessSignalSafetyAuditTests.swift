@@ -94,7 +94,7 @@ struct ProcessSignalSafetyAuditTests {
     }
 
     @Test func scannerIgnoresProcessControlTextInsideStringLiterals() {
-        let source = "client.terminate()\nDebugLog.agent(\"client.terminate()\")\n"
+        let source = "    client.terminate()\n    DebugLog.agent(\"client.terminate()\")\n"
         let callSites = processControlCallSites(in: source, relativePath: "Fixtures/string-literal.swift")
 
         #expect(callSites == [
@@ -250,12 +250,13 @@ struct ProcessSignalSafetyAuditTests {
     private func processControlCallSites(in source: String, relativePath: String) -> [CallSite] {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         return lines.indices.flatMap { index in
-            let line = lines[index].trimmingCharacters(in: .whitespaces)
+            let sourceLine = lines[index]
+            let line = sourceLine.trimmingCharacters(in: .whitespaces)
             guard isExecutableLine(line) else { return [CallSite]() }
             let window = detectionWindow(lines: lines, startingAt: index)
-            let firstLineLength = line.utf16.count
+            let firstLineLength = sourceLine.utf16.count
             let stringLiteralRanges = relativePath.hasSuffix(".swift")
-                ? stringLiteralRanges(in: line)
+                ? stringLiteralRanges(in: sourceLine)
                 : []
             return processControlPatterns.flatMap { primitive, expression in
                 expression.matches(in: window, range: NSRange(window.startIndex..., in: window))
