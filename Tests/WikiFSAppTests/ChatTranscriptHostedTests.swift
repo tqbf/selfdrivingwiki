@@ -155,9 +155,9 @@ struct ChatTranscriptHostedTests {
     @Test func hostedExpandedToolRowsStackAndDisplayTheUnfencedPayload() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1_600, height: 480))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 1_600, height: 480),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.contentView = webView
@@ -192,16 +192,66 @@ struct ChatTranscriptHostedTests {
                 var details=document.querySelector("[data-row-id='tool-tool-hosted']");
                 var summary=details.querySelector('summary');
                 var detail=details.querySelector('.chat-tool-detail');
+                var name=details.querySelector('.chat-tool-name');
+                var status=details.querySelector('.chat-tool-summary');
                 details.open=true;
                 return [
                     detail.textContent,
                     String(detail.getBoundingClientRect().top > summary.getBoundingClientRect().top),
+                    getComputedStyle(details).display,
+                    String(status.getBoundingClientRect().top > name.getBoundingClientRect().top)
+                ].join('|');
+            })()
+            """)
+
+        #expect(state == "head_version_id: 01KX94Y|true|block|true")
+    }
+
+    @Test func hostedExpandedReasoningRowsPlaceTheirBodyBelowTheSummary() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let reasoning = ChatDisplayRow.reasoning(
+            id: ChatMessageID(rawValue: "reasoning-hosted"),
+            turnID: ChatTurnID(rawValue: "turn-hosted-reasoning"),
+            text: "Read file '/tmp/WIKI_STATE.md'", createdAt: .distantPast,
+            contentState: .final
+        )
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(reasoning)
+        let data = try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed])
+        let json = try #require(String(data: data, encoding: .utf8))
+
+        let acknowledgement = await webView.chatTranscriptJavaScriptResult(
+            "appendChatRows(\(json), false, 72, \"message-reasoning-hosted\")"
+        )
+        #expect(acknowledgementField("outcome", in: acknowledgement) == "success")
+
+        let state = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var details=document.querySelector("[data-row-id='message-reasoning-hosted']");
+                var summary=details.querySelector('summary');
+                var body=details.querySelector('.row-thinking-body');
+                details.open=true;
+                return [
+                    String(body.getBoundingClientRect().top > summary.getBoundingClientRect().top),
                     getComputedStyle(details).display
                 ].join('|');
             })()
             """)
 
-        #expect(state == "head_version_id: 01KX94Y|true|block")
+        #expect(state == "true|block")
     }
 
     private func acknowledgementField<T>(

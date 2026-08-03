@@ -10,6 +10,69 @@ import Testing
 /// these feed standard Markdown and assert the HTML structure.
 struct MarkdownHTMLRendererTests {
 
+    @Test("#908 malformed quote anchors stay within their own wiki link")
+    func issue908MalformedQuoteAnchorsDoNotConsumeFollowingParagraphs() {
+        let sourceID = "01KY7MKKGGFHF6SY6QHKVMT3GX"
+        let projectionFilename = "ScalaTestingWithSpecs2.md–\(sourceID).md"
+        // This is the exact stored form from the failing page: the quoted
+        // passage ends with TWO quotes before `]]`. It is malformed, but a
+        // reader must still bound the link at that delimiter rather than turn
+        // following paragraphs into one giant link.
+        let malformedFragments = [
+            "\"The location for tests is in the \"test\" folder.\"\"",
+            "\"The expression that follows the must keyword are known as matchers.\"\"",
+            "\"Mocks are used to isolate unit tests against external dependencies.\"\"",
+            "\"abstract database access behind a repository layer.\"\"",
+        ]
+        let sentences = [
+            "See [[source:\(projectionFilename)#\(malformedFragments[0])]] for test directory organization and sbt console commands.",
+            "See \(projectionFilename) for Eclipse integration requirements.",
+            "See [[source:\(projectionFilename)#\(malformedFragments[1])]] for matcher details.",
+            "See [[source:\(projectionFilename)#\(malformedFragments[2])]] for Mockito usage in specs2.",
+            "See [[source:\(projectionFilename)#\(malformedFragments[3])]] for decoupling models and repositories.",
+        ]
+
+        let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
+            name == projectionFilename && kind == .source
+        }
+        let html = MarkdownHTMLRenderer.render(prepared)
+
+        #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
+        #expect(!html.contains("for test directory organization and sbt console commands. See"),
+                "First link consumed the next paragraph. HTML: \(html)")
+        #expect(!html.contains("for Mockito usage in specs2. See"),
+                "Third link consumed the next paragraph. HTML: \(html)")
+    }
+
+    @Test("#908 keeps every citation sentence through the reader pipeline")
+    func issue908LegacySourceProjectionNameRetainsAllSentences() {
+        let sourceID = "01KY7MKKGGFHF6SY6QHKVMT3GX"
+        let projectionFilename = "ScalaTestingWithSpecs2.md–\(sourceID).md"
+        let sentences = [
+            "See [[source:\(projectionFilename)#\"The location for tests is in the \"test\" folder.\"]] for test directory organization and sbt console commands.",
+            "See \(projectionFilename) for Eclipse integration requirements.",
+            "See [[source:\(projectionFilename)#\"The expression that follows the must keyword are known as matchers.\"]] for matcher details.",
+            "See [[source:\(projectionFilename)#\"Mocks are used to isolate unit tests against external dependencies.\"]] for Mockito usage in specs2.",
+            "See [[source:\(projectionFilename)#\"abstract database access behind a repository layer.\"]] for decoupling models and repositories.",
+        ]
+
+        let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
+            name == projectionFilename && kind == .source
+        }
+        let html = MarkdownHTMLRenderer.render(prepared)
+
+        for sentence in [
+            "for test directory organization and sbt console commands.",
+            "for Eclipse integration requirements.",
+            "for matcher details.",
+            "for Mockito usage in specs2.",
+            "for decoupling models and repositories.",
+        ] {
+            #expect(html.contains(sentence), "Missing sentence: \(sentence). HTML: \(html)")
+        }
+        #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
+    }
+
     @Test func sourceFrontmatterIsExcludedBeforeRendering() {
         let markdown = """
         ---

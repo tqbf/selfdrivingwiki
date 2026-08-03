@@ -2737,6 +2737,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         ) {
             return SourceID(rawValue: id)
         }
+        // Issue #908: imports from the pre-short-ID File Provider projection
+        // cite sources as `<filename>–<full-source-id>.md`. Preserve exact
+        // filename precedence above, then resolve this legacy presentation
+        // form by its embedded source ID when that row still exists.
+        if let projectedID = WikiLinkResolver.legacySourceProjectionID(from: displayName),
+           let id = try String.fetchOne(
+                db,
+                sql: "SELECT id FROM sources WHERE id = ? LIMIT 1;",
+                arguments: [projectedID.rawValue]
+           ) {
+            return SourceID(rawValue: id)
+        }
         // Pass 2 + 3: scan all sources — extension-stripped match (immediate)
         // and loose-key collection (unique-only at the end).
         let queryLooseKey = WikiNameRules.looseMatchKey(displayName)

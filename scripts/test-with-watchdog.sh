@@ -27,6 +27,7 @@ cd "$REPO_ROOT" || exit 1
 source "$REPO_ROOT/scripts/lib/test-watchdog-process-control.sh"
 
 TIMEOUT_SECS="${TEST_TIMEOUT:-900}"
+NUM_WORKERS="${SWIFT_TEST_NUM_WORKERS:-1}"
 LOG_DIR="tmp/test-logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/swift-test-$(date +%Y%m%d-%H%M%S).log"
@@ -36,11 +37,11 @@ if ! watchdog_has_precise_identity_observer; then
     exit 78
 fi
 
-echo "==> swift test -v $* "
+echo "==> swift test -v --parallel --num-workers ${NUM_WORKERS} $* "
 echo "==> log: $LOG_FILE"
 echo "==> timeout: ${TIMEOUT_SECS}s (override with TEST_TIMEOUT=<seconds>)"
 
-swift test -v "$@" >"$LOG_FILE" 2>&1 &
+swift test -v --parallel --num-workers "$NUM_WORKERS" "$@" >"$LOG_FILE" 2>&1 &
 TEST_PID=$!
 TEST_IDENTITY="$(watchdog_capture_identity "$TEST_PID")"
 

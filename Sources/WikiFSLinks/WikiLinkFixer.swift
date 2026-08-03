@@ -38,8 +38,7 @@ public enum WikiLinkFixer {
     public static func applyFixes(to markdown: String) -> String {
         let ns = markdown as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: markdown)
-        let matches = WikiLinkSpan.regex.matches(
-            in: markdown, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: markdown)
 
         var out = ""
         var cursor = 0

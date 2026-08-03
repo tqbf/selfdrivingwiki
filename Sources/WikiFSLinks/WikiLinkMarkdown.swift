@@ -70,9 +70,6 @@ public enum WikiLinkMarkdown {
     /// Host for a link whose target has no page/source (rendered dimmed, inert).
     public static let unresolvedHost = "missing"
 
-    // Shared grammar from WikiLinkSpan (same pattern as WikiLinkParser).
-    private static let regex = WikiLinkSpan.regex
-
     /// Rewrite all `[[…]]` spans in `body` to Markdown links, EXCEPT those that
     /// fall inside a backtick code span or fenced code block (where `[[…]]` is
     /// literal text the user wants shown verbatim). The display text is the alias
@@ -101,7 +98,7 @@ public enum WikiLinkMarkdown {
     ) -> String {
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = regex.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
 
         // Build the output by walking matches left→right, copying the gaps
         // verbatim and replacing each (non-code) match with a Markdown link.

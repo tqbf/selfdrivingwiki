@@ -1594,8 +1594,7 @@ public final class WikiStoreModel {
         let body = didFix ? fixedBody : original
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = WikiLinkSpan.regex.matches(
-            in: body, range: NSRange(location: 0, length: ns.length))
+        let matches = WikiLinkSpan.matches(in: body)
         let knownTitles = Set(summaries.map { $0.title })
         let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
         let allChats = DebugLog.trying("listAllChatsOrderedByID", operation: { try store.listAllChatsOrderedByID() }) ?? []
@@ -1640,11 +1639,16 @@ public final class WikiStoreModel {
                 // For source links, also check looseMatchKey so a name with a
                 // dash variant still counts as resolved (mirrors the store's
                 // resolveSourceByName pass 3 and the projection's LinkMaps).
-                known = { [self] name in
-                    self.sources.contains { $0.effectiveName == name }
-                    || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
+                let sourceIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+                known = { [self, sourceIDs] name in
+                    if let sourceID = WikiLinkResolver.legacySourceProjectionID(from: name),
+                       sourceIDs.contains(sourceID.rawValue.uppercased()) {
+                        return true
+                    }
+                    return self.sources.contains { $0.effectiveName == name }
+                        || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
                 }
-                knownIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+                knownIDs = sourceIDs
             case .chat:
                 known = { knownChatTitles.contains($0) }
                 knownIDs = knownChatIDs

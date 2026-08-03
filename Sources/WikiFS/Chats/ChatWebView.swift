@@ -859,7 +859,9 @@ struct ChatWebView: NSViewRepresentable {
           }
           /* Thinking rows: dimmed + italic, visually subordinate to the
              conversation (issue #391). */
-          .row-thinking { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; }
+          .chat-row.row-thinking {
+            display: block; font-size: 11.5px; color: var(--muted); margin: 0 0 8px;
+          }
           .row-thinking > summary { font-style: italic; }
           .row-thinking-label { font-weight: 600; color: var(--muted); }
           .row-thinking-preview { opacity: 0.7; }
@@ -931,8 +933,14 @@ struct ChatWebView: NSViewRepresentable {
           .chat-tool.is-error { color: #ff453a; }
           .chat-tool.is-error .chat-tool-name { color: #ff453a; }
           .chat-tool > summary {
-            display: flex; align-items: baseline; gap: 6px;
+            display: grid; grid-template-columns: auto minmax(0, 1fr);
+            align-items: baseline; column-gap: 6px; row-gap: 2px;
             list-style: none; cursor: pointer;
+          }
+          .chat-tool > summary .row-status { grid-row: 1 / span 2; }
+          .chat-tool > summary .chat-tool-name,
+          .chat-tool > summary .chat-tool-summary {
+            grid-column: 2; min-width: 0; overflow-wrap: anywhere;
           }
           .chat-tool > summary::-webkit-details-marker { display: none; }
           .chat-tool[open] > summary .chat-tool-summary::before {

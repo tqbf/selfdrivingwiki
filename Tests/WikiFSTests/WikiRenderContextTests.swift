@@ -98,6 +98,7 @@ struct WikiRenderContextTests {
         #expect(isResolved("Paper.pdf", .source))       // filename
         #expect(isResolved("Paper", .source))           // ext-stripped
         #expect(isResolved(paperID.rawValue, .source))  // canonical ULID
+        #expect(isResolved("Paper.pdf–\(paperID.rawValue).md", .source)) // legacy projection
         // A name with no source → ghost (no loose match either, since it's unique).
         #expect(!isResolved("Nonexistent Source", .source))
     }
@@ -120,6 +121,8 @@ struct WikiRenderContextTests {
         // By canonical id (lowercased).
         let byID = try #require(embedInfo(paperID.rawValue.lowercased()))
         #expect(byID.id == paperID)
+        let byLegacyProjection = try #require(embedInfo("Paper.pdf–\(paperID.rawValue).md"))
+        #expect(byLegacyProjection.id == paperID)
         // Unknown name → nil.
         #expect(embedInfo("nope") == nil)
     }

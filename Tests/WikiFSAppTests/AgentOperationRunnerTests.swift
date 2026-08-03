@@ -156,6 +156,19 @@ struct AgentOperationRunnerTests {
         #expect(preflight?.brokenSourceLinks.isEmpty == true)
     }
 
+    @Test func legacySourceProjectionLinkIsNotBroken() throws {
+        let (model, store) = try tempStore()
+        let source = try store.addSource(filename: "ScalaTestingWithSpecs2.md", data: Data("source".utf8))
+        let page = try store.createPage(title: "Citing Page")
+        let projection = "\(source.filename)–\(source.id.rawValue).md"
+        try store.updatePage(id: page.id, title: "Citing Page",
+            body: "[[source:\(projection)#\"quoted passage\"]]")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenSourceLinks.isEmpty == true)
+    }
+
     @Test func sourceLinkWithDashMismatchIsNotBroken() throws {
         let (model, store) = try tempStore()
         let src = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))

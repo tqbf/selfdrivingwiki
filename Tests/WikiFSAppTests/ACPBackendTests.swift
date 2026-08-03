@@ -53,6 +53,34 @@ import ACPModel
         )
     }
 
+    @Test func fullAccessSelectsAdvertisedAgentFullAccessMode() {
+        let options = [
+            SessionConfigOption(
+                id: SessionConfigId("mode"),
+                name: "Mode",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("agent"),
+                    options: .ungrouped([
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("read-only"), name: "Read-only"),
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("agent"), name: "Agent"),
+                        SessionConfigSelectOption(
+                            value: SessionConfigValueId("agent-full-access"), name: "Agent (full access)"),
+                    ]))))
+        ]
+
+        #expect(
+            ACPExecutionAccessResolver.configuration(
+                for: .fullAccess,
+                options: options
+            ) == ACPConfigOptionApplication(
+                configID: "mode",
+                value: "agent-full-access"
+            )
+        )
+    }
+
     @Test func standardAccessDoesNotChangeAgentMode() {
         let options = [
             SessionConfigOption(

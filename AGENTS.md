@@ -1,5 +1,7 @@
 Last verified: 2026-07-27
 
+* Running `/graphify` is always permitted, including from read-only branches or other read-only repository states, when `tmp/graphify-out` is specified as the output directory.
+
 * **All Swift code must compile via SwiftPM from the command line — prefer
   `make build` / `make test` as the default entrypoints, and ensure bare
   `swift build` / `swift test` also work when used directly. Never rely on
