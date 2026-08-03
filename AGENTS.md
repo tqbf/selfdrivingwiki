@@ -205,6 +205,47 @@ agents, NOT Polytoken):
     and look for any non-optional `URL` await where the Obj-C completion is `(NSURL?, …)`.
     See `plans/fileprovider-crash-fix.md` for the full root-cause writeup.
 
+* **Never block the cooperative thread pool in tests — `Process.waitUntilExit()`,
+  `Thread.sleep`, `DispatchSemaphore.wait` on a `Task.detached` body, and bare
+  `withCheckedContinuation` with no timeout can all hang `swift test` under
+  `--parallel` (#664, #732, #926, #1051).** The cooperative thread pool is
+  finite (as few as 3 on CI). A synchronous blocking call parks the pool thread
+  it runs on; enough concurrent blockers exhaust the pool, and other suites'
+  `withCheckedContinuation` completions can't be delivered — the whole `swift
+  test` process hangs with no diagnostic. `.timeLimit` can't rescue this: it
+  cancels the test's `Task`, but cancelling a Task does NOT resume an abandoned
+  continuation.
+  - **The rule:** every test that waits on a subprocess or a continuation must
+    (a) use the non-blocking `terminationHandler` + `withCheckedContinuation`
+    pattern instead of `Process.waitUntilExit()`, (b) race the continuation
+    against a timeout so a starved pool produces a fast, diagnosed failure
+    instead of an infinite hang, and (c) annotate the suite with
+    `@Suite(.serialized, .timeLimit(.minutes(N)))`.
+  ```swift
+  // BAD — parks a cooperative thread; starves the pool under --parallel:
+  process.waitUntilExit()
+
+  // BAD — hangs forever if the completion is starved off the pool:
+  await withCheckedContinuation { cont in process.terminationHandler = { _ in cont.resume() } }
+
+  // GOOD — non-blocking, and a timeout turns starvation into a fast failure:
+  try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+          try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+              if !process.isRunning { cont.resume(); return }
+              process.terminationHandler = { _ in cont.resume() }
+          }
+      }
+      group.addTask { try await Task.sleep(for: .seconds(30)) }
+      _ = try await group.next()
+      group.cancelAll()
+  }
+  ```
+  - **Audit recipe:** `rg -n 'waitUntilExit|Thread\.sleep|DispatchSemaphore.*wait|withCheckedContinuation' Tests/`
+    and confirm every hit is either non-blocking, timeout-bounded, or in a
+    `.serialized` + `.timeLimit` suite. See #1051 for the full root-cause
+    writeup; regression watchdog: `scripts/test-with-watchdog.sh`.
+
 * **SQLite concurrency (graph-model Phase 0): the store is method-atomic —
   every `SQLiteWikiStore` entry point holds an internal recursive lock; writes
   still flow through the `@MainActor` model; off-main reads go through

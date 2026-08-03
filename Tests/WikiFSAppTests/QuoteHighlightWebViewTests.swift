@@ -12,7 +12,7 @@ import WebKit
 /// JS that emits the right text but doesn't actually produce a `<mark>`). If
 /// these fail, the highlight JS itself is broken; if they pass, the bug is in
 /// the trigger path (the pending-anchor consume that decides to run it).
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct QuoteHighlightWebViewTests {
     private static var retainedWindow: NSWindow?

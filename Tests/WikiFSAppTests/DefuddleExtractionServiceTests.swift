@@ -9,7 +9,7 @@ import Testing
 /// **skip gracefully** if `DefuddleExtractionService.resolve()` returns nil
 /// (CI, clean dev before `make build`) — defuddle is opt-in until the script is
 /// bundled via `build.sh`. See `plans/defuddle-extraction.md` §5.
-@Suite struct DefuddleExtractionServiceTests {
+@Suite(.timeLimit(.minutes(2))) struct DefuddleExtractionServiceTests {
 
     /// Whether bun + the defuddle script are resolvable on this machine.
     private var resolved: (bun: URL, script: URL)? {
@@ -22,15 +22,29 @@ import Testing
     /// suite scheduled onto it (#732, same fix as `PdfExtractionServiceTests`).
     /// Use `terminationHandler` + `CheckedContinuation` instead — same
     /// semantics, non-blocking.
-    private func asyncWaitUntilExit(_ process: Process) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            if !process.isRunning {
-                cont.resume()
-                return
+    ///
+    /// The 30s timeout (issue #1051) is a safety net: if the `terminationHandler`
+    /// completion is starved off the cooperative pool, a bare
+    /// `withCheckedContinuation` hangs forever. The timeout produces a fast,
+    /// diagnosed failure instead of an infinite hang.
+    private func asyncWaitUntilExit(_ process: Process, timeout: Duration = .seconds(30)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    if !process.isRunning {
+                        cont.resume()
+                        return
+                    }
+                    process.terminationHandler = { _ in
+                        cont.resume()
+                    }
+                }
             }
-            process.terminationHandler = { _ in
-                cont.resume()
+            group.addTask {
+                try await Task.sleep(for: timeout)
             }
+            _ = try await group.next()
+            group.cancelAll()
         }
     }
 

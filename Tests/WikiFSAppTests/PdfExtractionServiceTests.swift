@@ -4,22 +4,38 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSEngine
 
-@Suite struct PdfExtractionServiceTests {
+@Suite(.timeLimit(.minutes(2))) struct PdfExtractionServiceTests {
 
     /// Wait for a process to exit without blocking the cooperative thread
     /// pool. `Process.waitUntilExit()` is synchronous and parks the calling
     /// thread; on CI's 3-vCPU runner with `--parallel`, that starves the pool
     /// and deadlocks every other test (#732). Use `terminationHandler` +
     /// `CheckedContinuation` instead — same semantics, non-blocking.
-    private func asyncWaitUntilExit(_ process: Process) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            if !process.isRunning {
-                cont.resume()
-                return
+    ///
+    /// The 30s timeout (issue #1051) is a safety net: if the `terminationHandler`
+    /// completion is starved off the cooperative pool (same bug class as
+    /// #664/#732/#926), a bare `withCheckedContinuation` hangs forever and
+    /// `.timeLimit` can't rescue it (cancelling the test's Task doesn't resume
+    /// an abandoned continuation). The timeout produces a fast, diagnosed
+    /// failure instead of an infinite hang.
+    private func asyncWaitUntilExit(_ process: Process, timeout: Duration = .seconds(30)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    if !process.isRunning {
+                        cont.resume()
+                        return
+                    }
+                    process.terminationHandler = { _ in
+                        cont.resume()
+                    }
+                }
             }
-            process.terminationHandler = { _ in
-                cont.resume()
+            group.addTask {
+                try await Task.sleep(for: timeout)
             }
+            _ = try await group.next()
+            group.cancelAll()
         }
     }
 

@@ -70,7 +70,7 @@ fi
 
 perl -ne '
     if (/Test (.+\(.*\)) started\./) { $started{$1} = 1 }
-    if (/Test (.+\(.*\)) (passed|failed) after ([0-9.]+) seconds/) {
+    if (/Test (.+\(.*\))(?: with \d+ test cases)? (passed|failed) after ([0-9.]+) seconds/) {
         $finished{$1} = 1;
         push @durations, [$3 + 0, $2, $1];
     }
