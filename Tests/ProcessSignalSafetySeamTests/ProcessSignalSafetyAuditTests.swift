@@ -31,7 +31,19 @@ struct ProcessSignalSafetyAuditTests {
         /// Distinguishes multiple process-control invocations of one kind on
         /// the same source line. Adding a second call then needs a second
         /// explicit disposition instead of collapsing into a file-level pass.
-        let occurrence: Int = 1
+        let occurrence: Int
+
+        init(
+            relativePath: String,
+            line: Int,
+            primitive: Primitive,
+            occurrence: Int = 1
+        ) {
+            self.relativePath = relativePath
+            self.line = line
+            self.primitive = primitive
+            self.occurrence = occurrence
+        }
     }
 
     @Test func everyExecutableProcessControlCallSiteHasAnExplicitDisposition() throws {
@@ -227,7 +239,7 @@ struct ProcessSignalSafetyAuditTests {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         return lines.indices.flatMap { index in
             let line = lines[index].trimmingCharacters(in: .whitespaces)
-            guard isExecutableLine(line) else { return [] }
+            guard isExecutableLine(line) else { return [CallSite]() }
             let window = detectionWindow(lines: lines, startingAt: index)
             let firstLineLength = line.utf16.count
             return processControlPatterns.flatMap { primitive, expression in
