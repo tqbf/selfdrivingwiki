@@ -117,10 +117,26 @@ public struct URLFetchService {
             withScheme = "https://" + trimmed
         }
         guard let url = URL(string: withScheme),
-              let scheme = url.scheme, scheme == "http" || scheme == "https",
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               url.host?.isEmpty == false
         else { return nil }
         return url
+    }
+
+    /// A stable identity for URL-source provenance. This deliberately preserves
+    /// paths, query strings, ports, and trailing slashes: those can identify
+    /// different resources. Fragments are client-side navigation only and are
+    /// therefore ignored. Use this for duplicate-source checks, not for fetches.
+    public static func urlIdentity(_ raw: String) -> String? {
+        guard let normalizedURL = normalizeURL(raw),
+              var components = URLComponents(url: normalizedURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased()
+        else { return nil }
+        components.scheme = scheme
+        components.host = host
+        components.fragment = nil
+        return components.url?.absoluteString
     }
 
     /// Fetch `rawInput`, dispatch by content type, and store the result in the

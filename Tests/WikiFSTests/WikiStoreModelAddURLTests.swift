@@ -8,9 +8,23 @@ import Testing
 @MainActor
 struct WikiStoreModelAddURLTests {
 
+    actor FetchCallCounter {
+        private(set) var count = 0
+        func record() { count += 1 }
+    }
+
     struct FakeFetcher: URLFetchService.URLResourceFetcher {
         let response: URLFetchService.FetchResponse
         func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse { response }
+    }
+
+    struct CountingFetcher: URLFetchService.URLResourceFetcher {
+        let response: URLFetchService.FetchResponse
+        let counter: FetchCallCounter
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            await counter.record()
+            return response
+        }
     }
 
     private func tempStore() throws -> GRDBWikiStore {
@@ -94,5 +108,34 @@ struct WikiStoreModelAddURLTests {
             try await model.addURL("https://example.com", fetcher: fetcher)
         }
         #expect(model.sources.isEmpty)
+    }
+
+    @Test func duplicateURLIsRejectedBeforeFetchingAndCanBeExplicitlyOverridden() async throws {
+        let store = try tempStore()
+        let existing = try store.addSource(
+            filename: "existing.html", data: Data("first".utf8),
+            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "text/html",
+            provenance: SourceProvenance(
+                agentName: "website", activityKind: "fetch",
+                plan: "https://example.com/article", externalRef: "https://example.com/article#saved"))
+        let model = WikiStoreModel(store: store)
+        let counter = FetchCallCounter()
+        let fetcher = CountingFetcher(response: URLFetchService.FetchResponse(
+            data: Data("changed content".utf8), contentType: "text/plain",
+            finalURL: URL(string: "https://example.com/article")!), counter: counter)
+
+        do {
+            _ = try await model.addURL("HTTPS://EXAMPLE.com/article#new", fetcher: fetcher)
+            Issue.record("expected a URL duplicate")
+        } catch WikiStoreError.duplicateURL(let matched) {
+            #expect(matched.id == existing.id)
+        }
+        #expect(await counter.count == 0)
+        #expect(try store.listSources().count == 1)
+
+        _ = try await model.addURL(
+            "https://example.com/article", fetcher: fetcher, allowDuplicateURL: true)
+        #expect(await counter.count == 1)
+        #expect(try store.listSources().count == 2)
     }
 }

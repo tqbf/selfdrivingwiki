@@ -307,6 +307,17 @@ struct URLFetchServiceTests {
         #expect(URLFetchService.normalizeURL("ftp://a.com") == nil)  // unsupported scheme
     }
 
+    @Test func urlIdentityNormalizesAuthorityAndDropsFragmentOnly() {
+        #expect(URLFetchService.urlIdentity(" HTTPS://EXAMPLE.com/Path?x=1#section ")
+            == "https://example.com/Path?x=1")
+        #expect(URLFetchService.urlIdentity("example.com/Path?x=1")
+            == "https://example.com/Path?x=1")
+        #expect(URLFetchService.urlIdentity("https://example.com/Path/")
+            != URLFetchService.urlIdentity("https://example.com/Path"))
+        #expect(URLFetchService.urlIdentity("https://example.com/Path?x=1")
+            != URLFetchService.urlIdentity("https://example.com/Path?x=2"))
+    }
+
     // MARK: - Pure helpers
 
     @Test func normalizedMIMEStripsCharset() {

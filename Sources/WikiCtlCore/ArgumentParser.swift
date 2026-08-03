@@ -114,6 +114,8 @@ public enum ArgumentParser {
                                               rewrite the curated index.md body;
                                               --workspace W stages into workspace W
       source list [--json]                    list sources (TSV, or JSON lines)
+      source add --url URL [--allow-duplicate]
+                                              fetch and add a URL source
       source cat  (--id X | --name N) [--markdown]
                                               write raw source bytes (or extracted markdown
                                               with --markdown) to stdout
@@ -320,9 +322,14 @@ public enum ArgumentParser {
         let rest = Array(args.dropFirst())
         // `--markdown` applies to `cat` and `export`; include it here so the
         // outer parse doesn't reject it as a value flag needing an argument.
-        let options = try Options(rest, booleanFlags: ["--json", "--markdown"])
+        let options = try Options(rest, booleanFlags: ["--json", "--markdown", "--allow-duplicate"])
 
         switch sub {
+        case "add":
+            guard let url = options.value("--url") else {
+                throw Failure.usage("source add: --url is required")
+            }
+            return .source(.addURL(url, allowDuplicateURL: options.flag("--allow-duplicate")))
         case "list":
             return .source(.list(json: options.flag("--json")))
 

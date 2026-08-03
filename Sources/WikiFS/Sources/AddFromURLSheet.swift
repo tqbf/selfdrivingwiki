@@ -35,6 +35,7 @@ struct AddFromURLSheet: View {
         case idle
         case fetching
         case failed(String)
+        case duplicate(SourceSummary)
     }
 
     var body: some View {
@@ -75,6 +76,7 @@ struct AddFromURLSheet: View {
             .onChange(of: urlText) {
                 // Clear a stale error as soon as the user edits the URL.
                 if case .failed = phase { phase = .idle }
+                if case .duplicate = phase { phase = .idle }
             }
     }
 
@@ -95,6 +97,15 @@ struct AddFromURLSheet: View {
                     .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+            case .duplicate(let source):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Already added as \(source.effectiveName)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                    Text("Open the existing source, cancel, or explicitly add another copy.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             case .idle:
                 Color.clear.frame(height: 0)
             }
@@ -112,6 +123,7 @@ struct AddFromURLSheet: View {
         case .idle: return 0
         case .fetching: return Metrics.statusRowHeight
         case .failed: return Metrics.errorRowHeight
+        case .duplicate: return Metrics.duplicateRowHeight
         }
     }
 
@@ -123,10 +135,19 @@ struct AddFromURLSheet: View {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(isFetching)
+            if case .duplicate(let source) = phase {
+                Button("Open Existing") {
+                    store.openTab(.source(source.id), title: source.effectiveName)
+                    dismiss()
+                }
+                Button("Add Anyway") { fetch(allowDuplicateURL: true) }
+                    .buttonStyle(.borderedProminent)
+            } else {
             Button("Fetch") { fetch() }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!canFetch)
+            }
         }
     }
 
@@ -150,15 +171,17 @@ struct AddFromURLSheet: View {
 
     // MARK: - Action
 
-    private func fetch() {
+    private func fetch(allowDuplicateURL: Bool = false) {
         // Read the field fresh at click time (§3.5), not a captured-early copy.
         let input = urlText
         guard URLFetchService.normalizeURL(input) != nil else { return }
         phase = .fetching
         Task {
             do {
-                _ = try await store.addURL(input)
+                _ = try await store.addURL(input, allowDuplicateURL: allowDuplicateURL)
                 dismiss()  // success: the new file is already in store.sources
+            } catch WikiStoreError.duplicateURL(let existing) {
+                phase = .duplicate(existing)
             } catch {
                 let message = (error as? URLFetchService.FetchError)?.errorDescription
                     ?? error.localizedDescription
@@ -174,5 +197,6 @@ struct AddFromURLSheet: View {
         static let sectionSpacing: CGFloat = 14
         static let statusRowHeight: CGFloat = 22
         static let errorRowHeight: CGFloat = 44
+        static let duplicateRowHeight: CGFloat = 54
     }
 }

@@ -38,6 +38,7 @@ public enum SourceCommand {
     }
 
     public enum Action: Equatable {
+        case addURL(String, allowDuplicateURL: Bool)
         case list(json: Bool)
         case cat(Selector, markdown: Bool)
         case export(Selector, out: String?, markdown: Bool)
@@ -75,6 +76,8 @@ public enum SourceCommand {
         bm25Leg: [SourceSummary]? = nil
     ) throws -> Result {
         switch action {
+        case .addURL:
+            throw Failure.message("source add requires async execution")
         case .list(let json):
             return try list(in: store, json: json)
         case .cat(let selector, let markdown):
@@ -97,6 +100,35 @@ public enum SourceCommand {
             // This case is unreachable through the sync `run` path.
             throw Failure.message("source refresh requires async execution")
         }
+    }
+
+    /// Add a website source from a URL for non-interactive callers. The URL
+    /// identity check happens before materialization so a duplicate performs no
+    /// network request unless the caller explicitly supplies --allow-duplicate.
+    public static func runAddURL(
+        _ rawInput: String,
+        allowDuplicateURL: Bool,
+        in store: WikiStore,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> Result {
+        guard let identity = URLFetchService.urlIdentity(rawInput) else {
+            throw Failure.message("invalid URL: \(rawInput)")
+        }
+        if !allowDuplicateURL, let existing = try store.sourceMatchingURLIdentity(identity) {
+            throw Failure.message(
+                "URL already added as \(existing.effectiveName) (\(existing.id.rawValue)); use --allow-duplicate to add another source")
+        }
+        let (material, _) = try await WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
+            .materializeWithPlan()
+        let summary = try store.addSource(
+            filename: material.filename, data: material.data,
+            zoteroItemKey: material.zoteroItemKey, zoteroItemTitle: material.zoteroItemTitle,
+            mimeType: material.mimeType, provenance: material.provenance,
+            role: .primary, originalPath: nil, activityID: nil,
+            resolvedDisplayName: nil)
+        return Result(
+            payload: .text("Added \(summary.effectiveName) (\(summary.id.rawValue))."),
+            didCommit: true)
     }
 
     // MARK: - list

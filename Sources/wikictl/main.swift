@@ -178,6 +178,11 @@ func execute(
         let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .source(let action):
+        if case .addURL(let rawInput, let allowDuplicateURL) = action {
+            return try await SourceCommand.runAddURL(
+                rawInput, allowDuplicateURL: allowDuplicateURL,
+                in: store, fetcher: URLSessionFetcher())
+        }
         if case .refresh(let selector) = action {
             return try await SourceCommand.runRefresh(
                 selector,
