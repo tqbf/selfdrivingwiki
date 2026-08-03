@@ -1,5 +1,17 @@
 # Tab System with Right-Click Context Menus — From-Scratch Rebuild
 
+## Issue #1043 update: tab pinning and menu icons
+
+Issue #1043 adds a per-tab `isPinned` value. Pinning is session-only because
+the tab bar itself is session-only. A pinned tab keeps its current selection
+when ordinary navigation opens a different item. The model opens an unpinned
+tab for that item instead. If the item already has a tab, the model focuses it.
+
+The tab bar shows `pin.fill` for pinned tabs. The right-click menu changes its
+first item between Pin and Unpin. Each context-menu action uses a labeled SF
+Symbol. The model keeps the pin state through refreshes, in-place retargets,
+and close/reopen. Tab drag reordering is not supported.
+
 ## Goal
 
 Replace the existing multi-tab feature (merged to `main` in `b7c366f`, plus the

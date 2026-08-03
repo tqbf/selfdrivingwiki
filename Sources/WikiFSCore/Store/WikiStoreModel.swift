@@ -1052,6 +1052,10 @@ public final class WikiStoreModel {
             openTab(target)
             return
         }
+        if tabs[i].isPinned {
+            openTab(target)
+            return
+        }
         flushPendingSaves()
         isApplyingTabSelection = true
         tabs[i].selection = target
@@ -1155,6 +1159,14 @@ public final class WikiStoreModel {
         tabs[i].isEditing = isEditing
     }
 
+    /// Toggle whether a tab keeps its current selection during ordinary
+    /// navigation. Unknown tab IDs are ignored so context-menu actions remain
+    /// safe if the tab closes before the action is delivered.
+    public func toggleTabPin(id: UUID) {
+        guard let i = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[i].isPinned.toggle()
+    }
+
     /// Close one tab by ID. Preserves it in `recentlyClosedTabs` for Cmd+Shift+T.
     /// If the closed tab is the active tab AND is in edit mode, the close is
     /// deferred: `pendingCloseTabID` is set and the view shows a confirmation
@@ -1248,7 +1260,13 @@ public final class WikiStoreModel {
     /// Reopen the last closed tab.
     public func reopenLastClosedTab() {
         guard let lastClosed = recentlyClosedTabs.popLast() else { return }
-        openTab(lastClosed.selection, title: lastClosed.title)
+        if lastClosed.selection != .newChat,
+           let existing = tabs.first(where: { $0.selection == lastClosed.selection }) {
+            setActiveTab(existing.id)
+            return
+        }
+        tabs.append(lastClosed)
+        setActiveTab(lastClosed.id)
     }
 
     /// Push a closed tab onto the reopen stack, capping at `maxRecentlyClosedTabs`.
