@@ -1,0 +1,2157 @@
+// pattern: Mixed (unavoidable)
+// Reason: this SwiftUI detail surface combines view state, user actions, and
+// store-backed presentation data at the app boundary.
+
+import SwiftUI
+import WikiFSEngine
+import WikiFSCore
+
+/// Detail pane for one ingested source file. Shows metadata header + inline
+/// content (markdown render, inline PDF, or tabbed Markdown⇄PDF when extraction
+/// output exists). Cmd-E flips between reader and editor for processed markdown;
+/// source bytes are never modified.
+struct SourceDetailView: View {
+    @Environment(QueueActivityTracker.self) private var tracker
+    @Environment(WindowRightInspectorController.self) private var rightInspector
+    let file: SourceSummary
+    let hasBeenIngested: Bool
+    let isIngesting: Bool
+    let isRunning: Bool
+    /// `true` when any file (not necessarily this one) is mid-ingest — covers the
+    /// PDF-conversion phase before the agent process starts, when `isRunning` is
+    /// still `false`.
+    let isAnySourceIngesting: Bool
+    /// `true` when THIS file is mid-extraction via the ingest path (pdf2md running
+    /// during an ingest of this file, before the agent spawns). Disables the
+    /// standalone "Extract Markdown" button for this file only — pdf2md is safe to
+    /// overlap with a claude run, so a query/ingest agent run does NOT disable it.
+    let isThisFileExtracting: Bool
+    /// `true` when the edit lock is held by an agent OTHER than the ingest agent
+    /// (i.e., the query agent with "Allow wiki edits" checked). Disables the
+    /// Ingest button so the user sees it's unavailable before clicking.
+    let isEditLockedExternally: Bool
+    /// The wiki this source belongs to. Used as the FP domain selector for
+    /// Share / Reveal in Finder, which route through `FileProviderFacade`'s
+    /// `getUserVisibleURL`. Multi-window means the shared `activeWikiID` is
+    /// last-activate-wins, so passing the session's explicit `wikiID` here is
+    /// required to reach the correct FP extension (issue #672).
+    let wikiID: WikiID
+    let runIngest: (SourceID) -> Void
+    /// Shared launcher — used by the standalone `runExtraction` to take the
+    /// extraction slot (so a standalone extract and an ingest-path extract serialize
+    /// against each other) and to mirror this file's id into `extractingSourceIDs`
+    /// so the sidebar row labels it "Extracting…".
+    let launcher: AgentLauncher
+    /// Resolves the selected extraction backend (local pdf2md / Claude / Docling
+    /// Serve) for the standalone Extract button.
+    let extractionCoordinator: ExtractionCoordinator
+    let queueEngine: any QueueEngineClient
+    let extractionProvider: any QueueExtractionProvider
+    let fileProvider: FileProviderFacade
+    @Bindable var store: WikiStoreModel
+
+    @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
+    @AppStorage("sourceInspectorTab") private var inspectorTab: InspectorTab = .metadata
+    @AppStorage("sourceOutlineWidth") private var outlineWidth: Double = 260
+    /// Per-view collapse state for the header. Starts collapsed; persists
+    /// across same-type tab switches (SwiftUI keeps the view alive).
+    @State private var isHeaderExpanded = false
+    @State private var headVersion: SourceMarkdownVersion?
+    @State private var origin: SourceOrigin?
+    /// Provenance edit history for the inspector's History tab. Loaded via
+    /// `.task(id:)` keyed on `file.id`.
+    @State private var editHistory: [SourceOrigin] = []
+    @State private var metadataState: MetadataHydrationState = .idle
+    @State private var isEditing = false
+    @State private var editBuffer = ""
+    /// Pending scroll-to-heading for the editor (outline click while editing).
+    @State private var editorScrollRequest: EditorScrollRequest?
+    /// Caret position in the editor, for outline cursor tracking (issue #268).
+    @State private var caretCharIndex: Int?
+    @State private var isExtracting = false
+    /// True while a podcast transcription (re-fetch via the signing-helper
+    /// pipeline) is in flight (issue #799 PR4). Sibling of `isExtracting`
+    /// (PDF/HTML Extract) and `isRefreshing` (Refresh) — the three gates
+    /// stay mutually exclusive in the View-level button rendering (each
+    /// button dispatches to exactly one of `runExtraction` /
+    /// `runHtmlExtraction` / `runRefresh` / `runTranscription`).
+    @State private var isRefreshing = false
+    /// Set when a refresh fails — surfaced inline below the action row.
+    @State private var refreshError: String?
+    /// Whether THIS source can actually be refreshed — the authoritative gate
+    /// from `store.isSourceRefreshable(for:)` (mirrors the refresh service's real
+    /// decision, incl. the snapshot-with-images guard and podcast-helper
+    /// availability). Loaded per-file alongside `origin` so `body` stays free of
+    /// DB/filesystem probes.
+    @State private var isRefreshable = false
+    /// Tracks the active tab ID as of the last resolved update cycle — used to
+    /// distinguish tab switches from in-tab file navigation.
+    @State private var lastKnownActiveTabID: UUID? = nil
+    /// Set when a tab switch targets a tab that was in edit mode but whose
+    /// headVersion has not yet loaded. Cleared once headVersion arrives or
+    /// the user navigates to a different file.
+    @State private var shouldRestoreEditing = false
+    /// Raised when the user taps Ingest on a document that has already been
+    /// ingested — prompts before re-ingesting, since that may create duplicate
+    /// pages. (Replaces the old always-on "already ingested" warning banner.)
+    @State private var showReingestConfirmation = false
+    @State private var selectedTab = FileContentTab.reader
+    /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
+    /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
+    @State private var pdfQuote: String?
+    /// Phase 6: the pinned extraction to render instead of HEAD, set when a
+    /// `[[source:X@v3#"quote"]]` link is clicked. The quote lives in v3's
+    /// extraction; rendering it (not HEAD) means the highlighter finds the quote
+    /// even after the source is reprocessed (HEAD moves, v3 stays). Transient:
+    /// cleared on navigation away (returns to HEAD).
+    @State private var pinnedExtraction: SourceMarkdownVersion?
+    /// Opens the Compare Extractions window (value-driven `WindowGroup`).
+    @Environment(\.openWindow) private var openWindow
+
+    /// Opens the Activity (queue) window for a specific queue kind — injected
+    /// from the environment (#745, #842 PR2). Used by the Transcribe button to
+    /// navigate to the running transcription job when one is in flight for
+    /// this source (#842 PR2 C5).
+    @Environment(\.openActivityWindow) private var openActivityWindow
+
+    // Find bar state. Shared via environment (see `ContentView`) so the address
+    // bar's "Find on Page…" menu item and Cmd+F drive the same model (#157).
+    @Environment(FindModel.self) private var findModel
+    @State private var findVersion = 0
+
+    private enum FileContentTab: String, CaseIterable {
+        case reader = "Reader"
+        case pdf = "PDF"
+        /// The original HTML rendered in a WKWebView — the "HTML" tab for HTML
+        /// sources (issue #599). Mirrors the PDF tab: the original document
+        /// rendered faithfully alongside the Reader (extracted markdown) tab.
+        case html = "HTML"
+        /// The rendered Mermaid diagram (inline SVG). Only shown for Mermaid
+        /// sources (`.mmd` or markdown containing a ```mermaid block); the raw
+        /// value is the picker label.
+        case rendered = "Rendered"
+        /// The embedded media player pane — covers both video (YouTube/Vimeo/
+        /// direct-remote `<video>`) and audio (Apple Podcasts/Spotify/
+        /// SoundCloud/direct-remote `<audio>`). The picker label is dynamic
+        /// ("Video"/"Audio"/"Media"); the raw value is the generic fallback.
+        case media = "Media"
+        case split = "Split"
+    }
+
+    // MARK: - Computed
+
+    private var isMarkdownNative: Bool {
+        if let mime = file.mimeType { return MimeType.isText(mime) }
+        return false
+    }
+
+    private var isPDF: Bool { MimeType.isPDF(file.mimeType) }
+
+    /// `true` for sources whose original bytes are HTML (issue #599). Detects
+    /// the canonical HTML MIME types (text/html, application/xhtml+xml) and the
+    /// `.html`/`.htm`/`.xhtml` extensions. A source whose original HTML was
+    /// discarded by the pre-#599 ingest path (stored as markdown with format
+    /// `.htmlConverted`) does NOT match here — it has a markdown MIME and no
+    /// HTML extension — so it stays in the markdown-only path with no HTML tab,
+    /// matching the "no migration needed" rule in the issue.
+    private var isHTMLSource: Bool {
+        if let mime = file.mimeType {
+            return mime == MimeType.html || mime == MimeType.xhtml
+        }
+        let ext = file.ext.lowercased()
+        return ext == "html" || ext == "htm" || ext == "xhtml"
+    }
+
+    /// The source's resolved `ContentKind` — the registry classification for
+    /// this source's MIME + provider + extension. PR2 (§5.4): the Extract /
+    /// Transcribe button gating switches on this kind's `capabilities` rather
+    /// than re-deriving the PDF/HTML/transcript decision ad-hoc. Kept `private`
+    /// to the view; tests exercise the same `resolve(mimeType:provider:ext:)`
+    /// call via the `internal static` seam (`SourceDetailView.extractionDecision`,
+    /// below).
+    private var contentKind: ContentKind {
+        ContentKind.resolve(
+            mimeType: file.mimeType,
+            provider: origin?.provider,
+            ext: file.ext)
+    }
+
+    /// The source's original HTML bytes, decoded as text. Used by the HTML tab
+    /// (the WKWebView renders them verbatim). Returns `nil` when the source
+    /// isn't HTML or the bytes couldn't be decoded.
+    private var htmlSourceString: String? {
+        guard isHTMLSource, let data = store.sourceBytes(id: file.id) else { return nil }
+        return String(data: data, encoding: .utf8)
+            ?? String(decoding: data, as: UTF8.self)  // lossy, never nil
+    }
+
+    private var hasMarkdown: Bool { headVersion != nil }
+
+    private var showsSourceOutlineTab: Bool {
+        isOutlineApplicable && currentMarkdownContent != nil
+    }
+
+    private var sourceInspectorTabs: [InspectorTab] {
+        InspectorTab.sourceAvailableTabs(hasOutline: showsSourceOutlineTab)
+    }
+
+    /// `true` for byteless Apple Podcasts embed sources (issue #799 PR4).
+    /// Detects via the loaded `origin`'s provider — the byteless-source
+    /// synthetic MIME (`audio/apple-podcast`) is also a tell, but
+    /// `origin.provider` is the single source of truth (matches how
+    /// `isSourceRefreshable` gates the existing Refresh button). Returns
+    /// `false` until `origin` loads, so the predicate is re-evaluated when
+    /// `.task(id: file.id)` finishes loading origin — same shape as
+    /// `isRefreshable`.
+    private var isPodcastEmbed: Bool { origin?.provider == .applePodcast }
+
+    /// `true` for byteless YouTube embed sources (issue #799 PR5). Mirrors
+    /// `isPodcastEmbed` — `origin.provider` is the single source of truth.
+    /// Returns `false` until `origin` loads, same shape as `isRefreshable`.
+    private var isYouTubeEmbed: Bool { origin?.provider == .youtube }
+
+    /// True while a transcription queue job is running for this source (C5:
+    /// replaces the old `@State isTranscribing` with a computed property
+    /// derived from the activity tracker's `transcribingSourceIDs`). Drives
+    /// the Transcribe button's disabled state + "Transcribing…" label, so
+    /// re-clicks are prevented while a job is in flight (#842).
+    private var isTranscribing: Bool { tracker.isTranscribing(sourceID: file.id) }
+
+    /// `true` when this source can be transcribed right now — the single
+    /// source of truth for the Transcribe button's enable state (issue #799
+    /// PR4 AC.16, generalized to YouTube in PR5). The registry half of the
+    /// gate (PR2 §5.4) consults `contentKind.capabilities.hasTranscriptBackend`
+    /// (true only for `.podcastTranscript` / `.youtubeTranscript`), then
+    /// runtime guards layer on top: the podcast runtime guard (bundled
+    /// signing helper present AND this build compiles podcast support via
+    /// `#if PODCAST_TRANSCRIPTS`) delegates to
+    /// `store.isSourceRefreshable(for:)` so the predicate is identical to
+    /// the Refresh button's guard for podcasts. YouTube and generic RSS need
+    /// no signing helper, so they're always "available" once the provider
+    /// matches (the model throws `.missingPlan` when the ID is missing,
+    /// surfaced by `runTranscription`).
+    private var isTranscribable: Bool {
+        guard contentKind.capabilities.hasTranscriptBackend else { return false }
+        switch origin?.provider {
+        case .applePodcast:
+            // Mirror the Refresh button's runtime guard (helper present +
+            // build compiles podcast support). The predicate returns `false`
+            // for `.applePodcast` outside `#if PODCAST_TRANSCRIPTS` or when
+            // `ApplePodcastTranscriptService.bundled()` is nil.
+            return store.isSourceRefreshable(for: file.id)
+        case .podcast:
+            // Generic RSS-feed podcast: always transcribable on every build —
+            // the `podcast-transcript` script needs only `uv` (no signing
+            // helper). Mirrors YouTube's "no runtime guard" shape.
+            return true
+        case .youtube:
+            // No signing helper needed — YouTube's pure-Swift scrape is always
+            // available on every build. The model throws `.missingPlan` if
+            // `origin.externalIdentity` is missing (a data-integrity edge case
+            // surfaced by `runTranscription`, not gated here).
+            return true
+        // Unreachable when `hasTranscriptBackend == true` (the registry
+        // resolves `.applePodcast` / `.podcast` / `.youtube` providers to
+        // transcript kinds and every other provider to a non-transcript
+        // kind). The switch stays exhaustive so a future transcript-capable
+        // provider is automatically flagged by the compiler.
+        case .vimeo, .spotify, .soundcloud, .remoteMedia,
+             .localFile, .website, .zotero, .markdownFolder, .legacyImport, .none:
+            return false
+        }
+    }
+
+    /// A transcribable source with no transcript yet — the gate for the
+    /// prominent "Transcribe" call-to-action (issue #799 PR4, generalized to
+    /// YouTube in PR5). Analog of `needsExtraction` for PDF/HTML sources.
+    /// Exclusivity guarded: a podcast/YouTube source with no transcript shows
+    /// Transcribe (NOT Refresh — there's nothing to refresh yet); once a
+    /// transcript exists, the provenance chip + Re-transcribe menu take over
+    /// (and Refresh is offered when `isRefreshable && !needsExtraction` — the
+    /// existing gate).
+    private var needsTranscription: Bool { isTranscribable && !hasMarkdown }
+
+    /// Whether this source should expose the Mermaid diagram tabs
+    /// (Reader / Rendered / Split). Detection is content-aware: a standalone
+    /// `.mmd` file or a `text/mermaid` source is always a Mermaid source, and a
+    /// markdown document carrying a fenced ` ```mermaid ` block becomes one once
+    /// its content loads. See `MermaidSourceDetector` (pure + unit-tested).
+    private var isMermaidSource: Bool {
+        MermaidSourceDetector.isMermaidSource(
+            mimeType: file.mimeType,
+            filename: file.filename,
+            content: currentMarkdownContent)
+    }
+
+    /// Mirrors `WikiStoreModel.canIngest` — the single "can this source be
+    /// ingested?" rule shared with the sources outline context menu and the
+    /// `enqueueIngestion` chokepoint. A source is ingestible iff it has a
+    /// processed-markdown version (`hasMarkdown`) **or** raw bytes
+    /// (`byteSize > 0`) the staging path hands the agent directly. Gating the
+    /// Ingest button on `hasMarkdown` alone greyed it for a not-yet-extracted
+    /// PDF (raw bytes present, no markdown) while the context menu stayed
+    /// enabled — a state mismatch, since the row also showed "Ready to ingest".
+    /// Computed from already-loaded `headVersion` (reactive) rather than a DB
+    /// read in the body; `byteSize > 0` covers byteful sources on first render.
+    private var canIngest: Bool {
+        hasMarkdown || file.byteSize > 0
+    }
+
+    /// The byteless-embed descriptor for THIS source, built from the loaded
+    /// origin + the source mime — so `ExternalEmbed` can resolve an iframe
+    /// target without the full reader's embed-info precompute. `nil` when the
+    /// source is not a byteless provider/direct-remote embed (or its origin
+    /// hasn't loaded yet). Issue #572.
+    private var embedDescriptor: SourceEmbedDescriptor? {
+        guard let mime = file.mimeType, let origin else { return nil }
+        return SourceEmbedDescriptor(
+            id: file.id,
+            mimeType: mime,
+            externalIdentity: origin.externalIdentity,
+            agentName: origin.agentName,
+            planURL: origin.plan)
+    }
+
+    /// The resolved embed target for this source, or `nil` when it is not a
+    /// renderable external embed. Drives the dedicated player section in the
+    /// detail view so byteless video sources surface the player above their
+    /// transcript (the transcript markdown has no embed directive, so the
+    /// inline reader path never emits the iframe here).
+    private var embedTarget: EmbedTarget? {
+        guard let descriptor = embedDescriptor else { return nil }
+        return ExternalEmbed.target(for: descriptor)
+    }
+
+    /// `true` when this source should render the embed-player + transcript
+    /// layout (a byteless provider video/audio, or direct-remote media) rather
+    /// than the PDF/markdown/binary branches.
+    private var isBytelessEmbedWithPlayer: Bool { embedTarget != nil }
+
+    /// The dynamic label for the media tab — "Video" / "Audio" / "Media" —
+    /// derived from the embed descriptor's classification (audio vs video via
+    /// MIME prefix or `agentName`, with Apple Podcasts → Audio). Falls back to
+    /// "Media" before the origin loads; the picker only renders once the embed
+    /// resolves (`availableTabs` gates on `isBytelessEmbedWithPlayer`), so the
+    /// fallback is never user-visible in practice.
+    private var mediaTabLabel: String {
+        guard let descriptor = embedDescriptor,
+              let label = ExternalEmbed.mediaTabLabel(for: descriptor) else {
+            return FileContentTab.media.rawValue
+        }
+        return label
+    }
+
+    /// Per-tab label for the picker. Most tabs use their `rawValue`; the media
+    /// tab's label is dynamic ("Video"/"Audio"/"Media") per the source kind.
+    private func tabLabel(for tab: FileContentTab) -> String {
+        tab == .media ? mediaTabLabel : tab.rawValue
+    }
+
+    /// Phase 6: consume a pending pinned-extraction id (if any) for the current
+    /// source and load that extraction into `pinnedExtraction`. Called from
+    /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
+    /// Does NOT clear on nil — the `.onChange(of: pendingScrollAnchorVersion)`
+    /// handler owns the clear (so a `.task(id: file.id)` re-fire can't clobber a
+    /// pin consumed synchronously by `.onChange`).
+    private func consumePinnedExtraction() {
+        if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+            pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+        }
+    }
+
+    /// The tabs applicable to this source. PDFs with extracted markdown show
+    /// Reader / PDF / Split (the classic three-way). Byteless media embeds
+    /// (YouTube/Vimeo/Spotify/SoundCloud/Apple Podcasts/direct-remote audio &
+    /// video) show Reader (the transcript) / Media (the player) / Split (both
+    /// side-by-side); a media source without a transcript drops Split (nothing
+    /// to split) but keeps Reader so the "no transcript" placeholder is
+    /// discoverable. Empty for a PDF with no extraction yet — that branch
+    /// renders the bare PDF with no picker.
+    ///
+    /// Issue #599: HTML sources with extracted markdown show Reader (markdown)
+    /// / HTML (rendered WKWebView) / Split (both) — mirrors the PDF three-way
+    /// so HTML is treated like a PDF (original bytes preserved + extracted
+    /// markdown alongside). An HTML source whose extracted markdown didn't
+    /// land (e.g. a conversion failure on a fresh ingest) still shows the
+    /// Reader / HTML pair via the `hasMarkdown || isHTMLSource` gate so the
+    /// user can see something on each tab.
+    private var availableTabs: [FileContentTab] {
+        if isBytelessEmbedWithPlayer {
+            var tabs: [FileContentTab] = [.reader, .media]
+            if hasMarkdown { tabs.append(.split) }
+            return tabs
+        }
+        if isPDF && hasMarkdown {
+            return [.reader, .pdf, .split]
+        }
+        // An HTML source with extracted markdown (or at minimum HTML bytes to
+        // show on the HTML tab): Reader (markdown) ⇄ HTML (rendered) ⇄ Split
+        // (both). Checked after PDF so a PDF whose extracted text happens to
+        // be HTML stays a PDF; checked before Mermaid so a `.mmd` source stays
+        // on the Mermaid three-way.
+        if isHTMLSource && (hasMarkdown || htmlSourceString != nil) {
+            return hasMarkdown ? [.reader, .html, .split] : [.html]
+        }
+        // A Mermaid source (standalone `.mmd` / `text/mermaid`, or markdown
+        // carrying a fenced ```mermaid block): Reader (raw source) ⇄ Rendered
+        // (the SVG diagram) ⇄ Split (both). Checked after PDF so a PDF whose
+        // extracted text happens to mention mermaid stays a PDF.
+        if isMermaidSource {
+            return [.reader, .rendered, .split]
+        }
+        return []
+    }
+
+    private var showTabs: Bool { !availableTabs.isEmpty }
+
+    /// `true` when this source's content type has a file-extraction backend
+    /// — the gate for the Extract button and the Re-extract menu. PR2 §5.4:
+    /// migrated from `isPDF || isHTMLSource` (which already encoded the same
+    /// intent ad-hoc) onto the registry's `hasFileExtractionBackend`
+    /// (`extractionPath == .pdfBackend || .htmlToMarkdown`). Stays PDF/HTML
+    /// only — podcast / YouTube transcript kinds have
+    /// `canExtractToMarkdown == true` too, but their affordance is the
+    /// Transcribe button (`isTranscribable`, gated on
+    /// `hasTranscriptBackend`). The two are mutually exclusive per kind, so
+    /// `needsExtraction` and `needsTranscription` never both become `true`
+    /// for the same source — the UI shows one prominent button per source.
+    ///
+    /// Text/binary/byteless sources skip extraction entirely (their
+    /// `extractionPath == nil`). A PDF with bytes (isPDF true) and a raw
+    /// HTML byte source (isHTMLSource true) both resolve to a kind with a
+    /// file-extraction backend via `ContentKind.resolve` — the registry's
+    /// MIME + ext path matches the same MIME/extension checks the old
+    /// predicate did.
+    private var isExtractable: Bool {
+        contentKind.capabilities.hasFileExtractionBackend
+    }
+
+    /// `true` when this source's content type has a provenance chip — the gate
+    /// for `extractionProvenanceChip(head:)` rendering above the action row
+    /// (issue #799 PR2). Widened in PR4 to include transcribable podcast
+    /// sources (a podcast source WITH a transcript shows the chip so the
+    /// Re-transcribe with menu is reachable). Mirrors `isExtractable` for
+    /// HTML/PDF; adds `isTranscribable` for podcasts.
+    private var hasExtractionChip: Bool {
+        (isExtractable || isTranscribable) && hasMarkdown
+    }
+
+    /// An extractable source with no markdown derivation yet — the gate for
+    /// the prominent "Extract" call-to-action. Also the exclusivity guard for
+    /// the source's single "act on this source's content" affordance: an
+    /// unextracted PDF or HTML source shows Extract, so Refresh is suppressed
+    /// until it has a derivation (one affordance per source). PR2: relies on
+    /// `isExtractable`'s registry-backed gate (no shape change to this
+    /// predicate).
+    private var needsExtraction: Bool { isExtractable && !hasMarkdown }
+
+    /// `true` when this source has ≥2 extraction alternatives — the gate for the
+    /// "Compare Extractions…" button (compare is meaningless with one).
+    private var hasMultipleExtractions: Bool {
+        store.processedMarkdownHistory(for: file.id).count >= 2
+    }
+
+    private var isMarkdownEditable: Bool {
+        isMarkdownNative || hasMarkdown
+    }
+
+    /// `true` when this source is a STANDALONE Mermaid diagram (`.mmd` /
+    /// `text/mermaid` / `text/x-mermaid`) — as opposed to a markdown document
+    /// that merely CONTAINS a fenced ```mermaid block. The outline parses
+    /// markdown headings, which a pure diagram source has none of; suppress
+    /// the outline sidebar and its toggle for these sources (issue #642).
+    /// Uses mime + extension (not a content scan) so it's stable before the
+    /// raw bytes load.
+    private var isPureMermaidSource: Bool {
+        if MimeType.isMermaid(file.mimeType) { return true }
+        let ext = file.ext.lowercased()
+        return ext == MermaidSourceDetector.mermaidExtension || ext == "mermaid"
+    }
+
+    /// `true` when the outline sidebar is meaningful for this source: there's
+    /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
+    /// outline pane and its toggle button so a `.mmd` source never shows a
+    /// useless empty outline (and never gets stuck with the pane open and no
+    /// way to close it — `isOutlineExpanded` is persisted `@AppStorage`, so
+    /// without this guard it leaks from a previous markdown source).
+    /// Issue #642.
+    private var isOutlineApplicable: Bool {
+        !isPureMermaidSource && isMarkdownEditable
+    }
+
+    private var displayName: String {
+        let name = file.effectiveName
+        return name.isEmpty ? "Untitled" : name
+    }
+
+    /// The markdown content currently shown (from processed head or native
+    /// markdown source). Used as the find bar's search content.
+    private var currentMarkdownContent: String? {
+        if isEditing { return editBuffer }
+        if let head = headVersion { return pinnedExtraction?.content ?? head.content }
+        // Issue #599: HTML sources preserve the original HTML bytes as the
+        // source blob — the markdown lives in a processed-markdown version
+        // (headVersion, above). Don't fall through to `sourceBytes` for HTML
+        // sources — the raw bytes are HTML, not markdown, and rendering them
+        // as markdown would show raw `<html>` tags. The Reader tab falls back
+        // to its "No Processed Markdown" placeholder until headVersion loads.
+        if isHTMLSource { return nil }
+        if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
+            return String(data: data, encoding: .utf8)
+        }
+        // #620: defense-in-depth — when a Mermaid-detected source arrives
+        // without a text MIME (e.g. a pre-existing NULL-mime `.mmd` row from
+        // before the `addSource` extension fallback, or any future ingest path
+        // that bypasses it), still surface the raw diagram bytes so the Reader
+        // and Rendered tabs render instead of empty states. Calls the static
+        // detector with `content: nil` (mime+filename arms only) — NOT the
+        // `isMermaidSource` computed property, which reads this same property
+        // and would recurse. The content-scan arm is irrelevant here: this
+        // branch is only reached when `isMarkdownNative` is false, and a
+        // fenced-block-only source (no `.mmd`, no `text/mermaid` mime) already
+        // had nowhere to read its bytes from before #620.
+        if MermaidSourceDetector.isMermaidSource(
+               mimeType: file.mimeType, filename: file.filename, content: nil),
+           let data = store.sourceBytes(id: file.id) {
+            return String(data: data, encoding: .utf8)
+        }
+        return nil
+    }
+
+    private var findText: String? {
+        guard findModel.isShowing,
+              let content = findModel.content,
+              findModel.currentMatchIndex > 0,
+              findModel.currentMatchIndex <= findModel.matches.count
+        else { return nil }
+        let range = findModel.matches[findModel.currentMatchIndex - 1]
+        return String(content[range])
+    }
+
+    /// 1-based current match index, forwarded to the reader so next/previous
+    /// navigation targets distinct occurrences instead of always the first.
+    private var findOccurrence: Int { findModel.currentMatchIndex }
+
+    // MARK: - Body
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            headerSection
+            if showTabs, !isEditing {
+                tabPicker
+            }
+            Divider().opacity(PageEditorMetrics.dividerOpacity)
+            contentAndOutline
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .textBackgroundColor))
+        // Keep the reader column from collapsing when the window-owned trailing
+        // inspector claims its persisted width. Matches PageDetailView and
+        // ChatDetailView's minimum detail-column contract.
+        .frame(minWidth: PageEditorMetrics.detailMinWidth)
+        .onAppear {
+            headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
+            editHistory = store.sourceEditHistory(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
+            lastKnownActiveTabID = store.activeTabID
+            consumePinnedExtraction()
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: file.id) {
+            // Navigating between ingested files REUSES this view instance (same
+            // type/position), so SwiftUI preserves `@State` across the switch.
+            // Reset every per-file @State here — including `isExtracting`, which
+            // otherwise leaks A's "Extracting…" flag onto B's header. The header
+            // spinner is additionally driven off the per-file `isThisFileExtracting`
+            // launcher flag below, so it can never survive a navigation.
+            flushEditIfDirty()
+            isEditing = false
+            isExtracting = false
+            isRefreshing = false
+            refreshError = nil
+            showReingestConfirmation = false
+            headVersion = nil
+            origin = nil
+            editHistory = []
+            isRefreshable = false
+            selectedTab = .reader
+            pdfQuote = nil
+            pinnedExtraction = nil
+            // Cancel any pending edit-mode restoration so it doesn't apply to
+            // the new file when its headVersion loads.
+            shouldRestoreEditing = false
+        }
+        .task(id: file.id) {
+            headVersion = store.processedMarkdownHead(for: file)
+            origin = store.sourceOrigin(for: file.id)
+            editHistory = store.sourceEditHistory(for: file.id)
+            isRefreshable = store.isSourceRefreshable(for: file.id)
+            updateRightSidebarRegistration()
+        }
+        .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
+            await hydrateMetadata(sourceID: file.id)
+        }
+        .task(id: "\(file.id.rawValue)-\(showsSourceOutlineTab)") {
+            let normalized = InspectorTab.normalize(selection: inspectorTab, availableTabs: sourceInspectorTabs)
+            guard normalized != inspectorTab else { return }
+            inspectorTab = normalized
+            updateRightSidebarRegistration()
+        }
+        .task(id: PDFTaskKey(sourceID: file.id, anchorVersion: store.pendingScrollAnchorVersion)) {
+            // Only consume for un-extracted PDFs (the markdown side handles
+            // extracted PDFs via WikiReaderView). Double-check at consume time
+            // since `hasMarkdown` may have changed since render.
+            guard isPDF, !hasMarkdown else { return }
+            if let frag = store.consumePendingScrollAnchor(for: store.selection) {
+                pdfQuote = frag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            }
+        }
+        // Phase 6: consume the pinned-extraction id on every navigation cycle
+        // (fires for new-source navigation AND re-clicks on an already-open
+        // source). Clearing on no-pin returns to HEAD; a pinned quote link sets
+        // `pinnedExtraction` so the rendered DOM contains the quote.
+        .onChange(of: store.pendingScrollAnchorVersion) {
+            if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
+                pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+            } else {
+                pinnedExtraction = nil
+            }
+        }
+        .onChange(of: store.selection) {
+            flushEditIfDirty()
+            isEditing = false
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: sourceInspectorTabs) { _, _ in
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: showsSourceOutlineTab) { _, _ in updateRightSidebarRegistration() }
+        // #842 PR2 C6: refresh the transcript head when the store's source list
+        // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
+        // a `ResourceChangeEvent(.source, .updated)` → the model's bus
+        // subscriber calls `reloadFromStore()` → `reloadSources()` bumps
+        // `store.sources`. This onChange picks up that bump and re-reads
+        // `processedMarkdownHead` so the reader shows the new transcript
+        // immediately after the queue worker persists it — without relying
+        // solely on `runTranscription`'s post-completion refresh (which only
+        // fires for the view that initiated the job; another wiki window
+        // viewing the same source would see the stale head without this).
+        .onChange(of: store.sources) { _, _ in
+            if !isEditing {
+                headVersion = store.processedMarkdownHead(for: file)
+            }
+            updateRightSidebarRegistration()
+        }
+        .background { findShortcutButton }
+        .overlay(alignment: .top) { findBarOverlay }
+        .onChange(of: file.id) { findModel.dismiss() }
+        .onChange(of: currentMarkdownContent) { _, newContent in
+            findModel.content = newContent
+            findModel.search()
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: findModel.isShowing) { _, showing in
+            if showing {
+                findModel.content = currentMarkdownContent
+                findModel.search()
+            }
+        }
+        .onChange(of: findModel.currentMatchIndex) { _, _ in
+            guard findModel.currentMatchIndex > 0 else { return }
+            findVersion &+= 1
+        }
+        .onChange(of: store.activeTabID) { _, newID in
+            lastKnownActiveTabID = newID
+            let tab = store.tabs.first(where: { $0.id == newID })
+            guard tab?.isEditing == true else {
+                shouldRestoreEditing = false
+                return
+            }
+            // Restore edit mode for the returning tab. If headVersion is already
+            // loaded (same file, different tab), restore immediately; otherwise
+            // defer until the async load completes.
+            if let content = headVersion?.content {
+                editBuffer = content
+                isEditing = true
+            } else {
+                shouldRestoreEditing = true
+            }
+        }
+        .onChange(of: headVersion) { _, newVersion in
+            guard shouldRestoreEditing, let content = newVersion?.content else { return }
+            editBuffer = content
+            isEditing = true
+            shouldRestoreEditing = false
+            updateRightSidebarRegistration()
+        }
+        .onChange(of: isEditing) { _, newValue in
+            if let id = store.activeTabID {
+                store.setTabEditing(tabID: id, isEditing: newValue)
+            }
+            if newValue { isHeaderExpanded = true } // reveal Save/Cancel
+            if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
+            updateRightSidebarRegistration()
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+            CollapsibleDetailHeader(
+                systemImage: symbol,
+                title: displayName,
+                placeholder: "Untitled",
+                titleLineLimit: 2,
+                isTitleDisabled: isEditLockedExternally,
+                isExpanded: $isHeaderExpanded,
+                onTitleCommit: { store.renameSource(id: file.id, to: $0) }
+            ) {
+                VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
+                    HStack(spacing: 8) {
+                    Text(Self.sizeFormatter.string(fromByteCount: Int64(file.byteSize)))
+                    metadataSeparator
+                    // Compact, single-line dates — "Added Jun 26, 2026 · Updated
+                    // Jun 28". The exact clock time was noise here (and wrapped);
+                    // it lives in the version menu where it's actually decided.
+                    Text("Added \(Self.compactDate(file.createdAt))")
+                    if file.updatedAt != file.createdAt {
+                        Text("· Updated \(Self.compactDate(file.updatedAt))")
+                    }
+                    // For non-PDF markdown the origin is plain provenance text here;
+                    // for PDFs the interactive extraction chip lives on the action
+                    // row beside Ingest (see below), not in this metadata line.
+                    if let head = headVersion, !isPDF,
+                       let label = Self.markdownOriginLabel(for: head.origin) {
+                        metadataSeparator
+                        Text("\(label) \(Self.compactDate(head.createdAt))")
+                    }
+                    // Zotero provenance sits inline on the metadata line rather than
+                    // in its own row — the big title already names the item, so this
+                    // just needs the "Zotero" origin tag + a jump-back link.
+                    // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
+                    // or just "Zotero" when the content type is unknown.
+                    if let key = file.zoteroItemKey, !key.isEmpty {
+                        metadataSeparator
+                        let zoteroLabel = SourceProvenanceLabel.combine(
+                            provider: "Zotero",
+                            ext: file.ext, mimeType: file.mimeType)
+                        if let url = zoteroItemURL(itemKey: key) {
+                            // The "Zotero" tag itself is the link — clicking it jumps
+                            // back to the item in the Zotero app (no separate button).
+                            Button {
+                                NSWorkspace.shared.open(url)
+                            } label: {
+                                Label(zoteroLabel, systemImage: "books.vertical")
+                            }
+                            .buttonStyle(.link)
+                            .help("View in Zotero")
+                        } else {
+                            Label(zoteroLabel, systemImage: "books.vertical")
+                        }
+                    } else if let origin, origin.provider != .legacyImport {
+                        // Phase 3a provider origin: website → clickable link to the
+                        // origin URL; local-file → "File"; markdown-folder → "Folder".
+                        // `provider != .legacyImport` filters the shared
+                        // `legacy-import` agent (the pre-v39 degraded fallback —
+                        // nil satisfies it too, since `SourceProvider(rawValue:nil)`
+                        // is nil).
+                        metadataSeparator
+                        providerOriginTag(origin)
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+                    if isThisFileExtracting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Extracting…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if isRefreshing {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Refreshing…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let refreshError {
+                        Text(refreshError)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+
+            if isHeaderExpanded {
+                sourceActionBar
+                    // Anchor leading: without an alignment the default is
+                    // `.center`, which offsets the whole bar when there's no
+                    // trailing `Spacer` to force full width (e.g. a source
+                    // with no markdown → `isOutlineApplicable` false).
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            }
+        }
+        .padding(PageEditorMetrics.contentInset)
+    }
+
+    // MARK: - Header action bar (full-width toolbar row)
+
+    /// The source detail action toolbar row. Rendered as a sibling of
+    /// `CollapsibleDetailHeader` — NOT inside its expanded content — so
+    /// the trailing `Spacer` + outline toggle reach the view's right edge
+    /// instead of the readable-column edge (mirrors
+    /// `ChatView.chatActionBar` and `PageDetailView.pageActionBar`).
+    @ViewBuilder
+    private var sourceActionBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                HStack(spacing: 10) {
+                    Button("Save Changes", systemImage: "checkmark.circle") {
+                        DebugLog.tabs("SourceDetailView: Save Changes tapped")
+                        commitEdit()
+                    }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || (headVersion?.content == editBuffer))
+
+                    Button("Cancel", systemImage: "xmark.circle") {
+                        DebugLog.tabs("SourceDetailView: Cancel tapped")
+                        isEditing = false
+                    }
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Spacer()
+                }
+            } else {
+                // Row 1 — primary source actions: the extraction chip leads
+                // ("this is the derivation, and here's what you do with it"),
+                // then Ingest, then Extract Markdown when no derivation exists
+                // yet. Above the utility row so the wiki goal reads first.
+                HStack(spacing: 10) {
+                    if hasExtractionChip, let head = headVersion {
+                        extractionProvenanceChip(head: head)
+                    }
+                    if needsExtraction {
+                        // No derivation yet → Extract is the call-to-action:
+                        // prominent and leftmost, with Ingest stepped down to
+                        // secondary until there's markdown worth ingesting.
+                        // Issue #799 PR2: HTML sources dispatch to the inline
+                        // `runHtmlExtraction` path (queue engine is PDF-coupled
+                        // via `ExtractionResolution.pdfData` /
+                        // `convert(pdfData:)` / `seedPdfMarkdown`); PDF sources
+                        // go through the queue as before.
+                        Button(isExtracting ? "Extracting…" : "Extract",
+                               systemImage: "doc.plaintext") {
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(isHTMLSource)")
+                            Task {
+                                if isHTMLSource {
+                                    await runHtmlExtraction()
+                                } else {
+                                    await runExtraction()
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isExtracting
+                                  || isThisFileExtracting
+                                  // Another file currently holds the extraction
+                                  // slot — this extract would await it, so show
+                                  // it as busy rather than letting the tap hang.
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                    if needsTranscription {
+                        // Issue #799 PR4 (podcasts) + PR5 (YouTube): a
+                        // transcribable source with no transcript yet. The
+                        // Transcribe button is the analog of the Extract
+                        // button for PDF/HTML, but its underlying mechanism is
+                        // a network fetch (signed bearer → AMP → TTML → parse
+                        // for podcasts; watch-page scrape → caption track →
+                        // parse for YouTube), NOT a bytes→markdown transform —
+                        // so it dispatches to the queue engine (`runTranscription`).
+                        // Disabled for podcasts when the signing helper binary
+                        // is unavailable (`isTranscribable` mirrors
+                        // `isSourceRefreshable`'s `.applePodcast` runtime guard);
+                        // YouTube needs no signing helper, so it's always
+                        // enabled when the provider matches.
+                        //
+                        // #842 PR2 C5: when a transcription is already in flight
+                        // for this source, the button swaps to "View
+                        // Transcription" (stays enabled) and navigates to the
+                        // running job in the Activity window — mirroring
+                        // PageDetailView's "View Lint" pattern (#837). Reuses
+                        // the existing `pendingSelectionItemID` seam (set it,
+                        // set `pendingSelectionQueue = .extraction`, then
+                        // call `openActivityWindow?(.extraction)`).
+                        Button(isTranscribing ? "View Transcription" : "Transcribe",
+                               systemImage: isTranscribing
+                               ? "checkmark.seal.fill"
+                               : "waveform") {
+                            if isTranscribing {
+                                if let itemID = tracker.transcriptionItemID(for: file.id) {
+                                    tracker.pendingSelectionItemID = itemID
+                                    tracker.pendingSelectionQueue = .extraction
+                                    openActivityWindow?(.extraction)
+                                    DebugLog.extraction("Transcribe button: navigating to transcription job \(itemID) for source \(file.id.rawValue)")
+                                } else {
+                                    openActivityWindow?(.extraction)
+                                    DebugLog.extraction("Transcribe button: transcription in flight for source \(file.id.rawValue) but item not found; opening Activity window")
+                                }
+                            } else {
+                                DebugLog.extraction("SourceDetailView: Transcribe tapped — id=\(file.id.rawValue)")
+                                Task { await runTranscription() }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!isTranscribing
+                                  && (isThisFileExtracting
+                                      || tracker.isSlotBusyForOtherSource(file.id)))
+                        .help(isTranscribing
+                              ? "View the running transcription job in the Activity window"
+                              : (isYouTubeEmbed
+                                 ? "Fetch this video's transcript via YouTube captions"
+                                 : "Fetch this episode's transcript via Apple Podcasts"))
+                    }
+                    ingestButton
+                    // The source's content affordance is one-per-source: an
+                    // unextracted PDF or HTML source shows Extract (above) to
+                    // gain a readable derivation, so Refresh is suppressed
+                    // until it has one. Every other refreshable (live) source
+                    // offers Refresh to re-fetch and append a new version.
+                    if isRefreshable, !needsExtraction {
+                        Button("Refresh", systemImage: "arrow.clockwise") {
+                            DebugLog.extraction("SourceDetailView: Refresh tapped — id=\(file.id.rawValue)")
+                            Task { await runRefresh() }
+                        }
+                        .disabled(isRefreshing)
+                        .help("Re-fetch this source and append a new version")
+                    }
+                }
+                // Row 2 — secondary / utility actions: Edit, Show in List,
+                // Share, Reveal in Finder, Outline.
+                HStack(spacing: 10) {
+                    if isMarkdownEditable {
+                        Button("Edit", systemImage: "pencil") {
+                            DebugLog.tabs("SourceDetailView: Edit tapped — id=\(file.id.rawValue)")
+                            // Source the buffer from the resolved content so
+                            // a native `.mmd` (no processed-markdown head)
+                            // edits its raw diagram source, not an empty
+                            // buffer. `currentMarkdownContent` falls back to
+                            // the raw bytes for native text sources.
+                            editBuffer = currentMarkdownContent ?? ""
+                            isEditing = true
+                            // #211: focus the editor even if the user had
+                            // switched to the PDF, HTML, Media, or Rendered
+                            // tab, where the markdown editor isn't rendered.
+                            // Leave Split alone — the editor is already
+                            // visible there.
+                            if selectedTab == .pdf || selectedTab == .html || selectedTab == .media || selectedTab == .rendered {
+                                selectedTab = .reader
+                            }
+                        }
+                        .keyboardShortcut("e", modifiers: .command)
+                        .disabled(isRunning)
+                    }
+                    // Share — resolves the canonical URL from the daemon
+                    // (like openSource) so the filename is human-readable
+                    // and the URL is guaranteed to resolve.
+                    Button("Show in List", systemImage: "sidebar.left") {
+                        DebugLog.tabs("SourceDetailView: Show in List tapped — id=\(file.id.rawValue)")
+                        store.requestSidebarReveal(.source(file.id))
+                    }
+                    .help("Reveal this source in the sidebar")
+                    if fileProvider.path != nil {
+                        Button("Share", systemImage: "square.and.arrow.up") {
+                            DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
+                            Task {
+                                guard let url = await fileProvider.resolveSourceByNameURL(id: file.id, wikiID: wikiID) else {
+                                    DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID)")
+                                    return
+                                }
+                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
+                                let picker = NSSharingServicePicker(items: [url])
+                                let mouseScreen = NSEvent.mouseLocation
+                                guard let window = NSApplication.shared.keyWindow,
+                                      let contentView = window.contentView else { return }
+                                let windowPoint = window.convertPoint(fromScreen: mouseScreen)
+                                let viewPoint = contentView.convert(windowPoint, from: nil)
+                                picker.show(
+                                    relativeTo: NSRect(origin: viewPoint,
+                                                       size: NSSize(width: 1, height: 1)),
+                                    of: contentView, preferredEdge: .minY)
+                            }
+                        }
+                        .help("Share this source file")
+                        Button("Reveal in Finder", systemImage: "folder") {
+                            DebugLog.fileprovider("SourceDetailView: Reveal in Finder tapped — id=\(file.id.rawValue)")
+                            Task { await fileProvider.revealSourceInFinder(id: file.id, wikiID: wikiID) }
+                        }
+                        .help("Reveal this source file in Finder")
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+
+    // MARK: - Refresh (Phase 3b)
+
+    /// Re-fetch the source via its provider, appending a new version. The
+    /// materialization (network fetch) runs off-main inside the service; the
+    /// store write + `reloadSources` happen on-main inside `refreshSource`.
+    /// On success, reloads the head markdown so the reader updates.
+    private func runRefresh() async {
+        isRefreshing = true
+        refreshError = nil
+        defer { isRefreshing = false }
+        do {
+            _ = try await store.refreshSource(file.id)
+            headVersion = store.processedMarkdownHead(for: file)
+        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
+            refreshError = "This \(agent) source can't be refreshed."
+        } catch SourceRefreshService.RefreshError.snapshotWithImages {
+            refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
+        } catch {
+            refreshError = "Refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Zotero origin
+
+    /// Build a `zotero://select` URI that opens the item directly in the Zotero
+    /// desktop app. The `select/library/items/<key>` path targets "My Library"
+    /// and needs no library ID — perfect for a personal-library workflow.
+    private func zoteroItemURL(itemKey: String) -> URL? {
+        guard !itemKey.isEmpty else { return nil }
+        return URL(string: "zotero://select/library/items/\(itemKey)")
+    }
+
+    // MARK: - Provider origin (Phase 3a)
+
+    /// Inline origin tag for non-Zotero providers, shown on the metadata line:
+    /// website → a clickable link to the origin URL; apple-podcast → a clickable
+    /// link to the episode; markdown-folder → "Folder"; local-file → "File".
+    /// Mirrors the inline Zotero tag's styling.
+    ///
+    /// Two-dimensional labels (issue #644): the File branch becomes
+    /// "File / {content type}" (e.g. "File / Mermaid", "File / PDF") since a
+    /// drag-drop can carry anything. URL/media providers and markdown folders
+    /// imply their content type, so their labels stay single-dimensional.
+    ///
+    /// The per-provider label/icon/helpVerb are sourced from
+    /// `SourceProvider.displayLabel` / `.systemImage` / `.helpVerb` so the
+    /// DetailView and `SourceOrigin.displayLabel` can't drift (#source-
+    /// provider-enum). `mediaProviderInfo`'s former switch table is now
+    /// enum-carried and lives on `SourceProvider` itself.
+    @ViewBuilder
+    private func providerOriginTag(_ origin: SourceOrigin) -> some View {
+        switch origin.provider {
+        case .website, .applePodcast, .podcast, .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia:
+            // URL providers (web pages, podcasts, byteless media embeds) — all
+            // open in the default browser via NSWorkspace.shared.open. They share
+            // one action shape; only the label / icon / help text differ, and
+            // those come from the enum. Force-unwrap is safe — this arm only
+            // matched when `origin.provider` is `.some(…)` (non-nil).
+            let provider = origin.provider!
+            let providerLabel = SourceProvenanceLabel.combine(
+                provider: provider.displayLabel, ext: file.ext, mimeType: file.mimeType)
+            let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if let url = URL(string: urlString), url.scheme != nil {
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label(providerLabel, systemImage: provider.systemImage)
+                }
+                .buttonStyle(.link)
+                .help("\(provider.helpVerb): \(urlString)")
+            } else {
+                Label(providerLabel, systemImage: provider.systemImage)
+            }
+        case .localFile, .markdownFolder, .zotero, .legacyImport, nil:
+            // Local-path reveal (Finder). `.localFile` shows "File" + "doc";
+            // `.markdownFolder` shows "Folder" + "folder" — both via their
+            // own enum values. `.legacyImport` is filtered out at the caller
+            // (the `origin.provider != .legacyImport` gate above), and
+            // `nil` covers any future/unknown provider; both fall back to
+            // `SourceProvider.localFile`'s values ("File" / "doc" /
+            // "Reveal original file"), matching the pre-enum default arm.
+            //
+            // `.zotero` is also handled inline ABOVE the caller's gate (a
+            // dedicated `zotero://select?itemKey=…` button row); reaching
+            // providerOriginTag with a zotero origin is unreachable in
+            // practice but listed here so the switch is exhaustive. The
+            // pre-enum `default:` arm rendered it as "File" — preserved here
+            // via the `.localFile` fallback below.
+            //
+            // Single ternary expression (not a conditional statement) so the
+            // surrounding @ViewBuilder doesn't try to fold this into a view.
+            let effective: SourceProvider = (origin.provider == .localFile || origin.provider == .markdownFolder)
+                ? origin.provider!
+                : .localFile
+            let providerLabel = SourceProvenanceLabel.combine(
+                provider: effective.displayLabel, ext: file.ext, mimeType: file.mimeType)
+            let path = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
+            if !path.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: path)])
+                } label: {
+                    Label(providerLabel, systemImage: effective.systemImage)
+                }
+                .buttonStyle(.link)
+                .help("\(effective.helpVerb): \(path)")
+            } else {
+                Label(providerLabel, systemImage: effective.systemImage)
+            }
+        }
+    }
+
+    // MARK: - Content + Outline
+
+    /// The content area plus the optional outline sidebar. Extracted from
+    /// `body` so the type-checker can resolve each subtree independently.
+    ///
+    /// Uses the shared `DetailInspectorView` (same as `PageDetailView`) so
+    /// sources get the same tabbed inspector (Outline / History). The outline
+    /// tab renders the source's `PageOutlineView`; the History tab renders
+    /// the shared `ProvenancePanel` with the source's provenance.
+    ///
+    /// The explicit `.frame(maxWidth: .infinity, maxHeight: .infinity,
+    /// alignment: .topLeading)` on `contentArea` is load-bearing and mirrors
+    /// `PageDetailView`'s `contentAndOutline` shape. Without it, the inner
+    /// `WikiReaderView` (an `NSViewRepresentable` wrapping a `WKWebView`)
+    /// reports no intrinsic content size and SwiftUI leaves the layout
+    /// indeterminate — for pure Mermaid sources, where PR #648's
+    /// `isOutlineApplicable` guard also removed the always-present
+    /// `PageOutlineView` sibling that previously helped pin the `HStack`'s
+    /// vertical extent, the indeterminate layout leaks into the header area.
+    /// The header's Show in List / Share / Reveal in Finder buttons render
+    /// above, but no longer receive their click. Issue #656.
+    @ViewBuilder
+    private var contentAndOutline: some View {
+        contentArea
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func updateRightSidebarRegistration() {
+        rightInspector.updateRegistration(
+            RightSidebarRegistration(
+                inspectorTab: $inspectorTab,
+                outlineWidth: $outlineWidth,
+                availableTabs: sourceInspectorTabs,
+                metadataState: metadataState,
+                origin: origin?.provenanceEntry,
+                history: editHistory.map(\.provenanceEntry),
+                onOpenChat: { id in store.openTab(.chat(id)) },
+                onCompareVersions: nil,
+                metadataRouter: MetadataActionRouter(
+                    openPage: { id in store.openTab(.page(id)); return true },
+                    openSource: { id in store.openTab(.source(id)); return true },
+                    openChat: { id in store.openTab(.chat(id)); return true },
+                    selectActivity: { _ in false },
+                    comparePageVersions: { _ in false },
+                    compareSourceExtractions: { id in
+                        guard id == file.id else { return false }
+                        openWindow(value: ExtractionCompareContext(
+                            sourceID: id,
+                            filename: file.filename,
+                            wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: "")))
+                        return true
+                    },
+                    copy: MetadataActionRouter.systemClipboardCopy,
+                    openURL: { NSWorkspace.shared.open($0) }),
+                outline: {
+                    AnyView(sourceSidebarOutlineView())
+                }
+            )
+        )
+    }
+
+    private func hydrateMetadata(sourceID: SourceID) async {
+        await MetadataHydrator.hydrate(subject: .source(sourceID), operation: {
+            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
+               let readPool = store.readPool {
+                return try await readPool.asyncRead { database in
+                    try Self.sourceMetadataModel(sourceID: sourceID, store: database)
+                }
+            } else {
+                return try Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
+            }
+        }, publish: { state in
+            metadataState = state
+            updateRightSidebarRegistration()
+        })
+    }
+
+    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {
+        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
+            throw MetadataProjectionError.missingSource(sourceID)
+        }
+        let history = try store.processedMarkdownHistory(sourceID: sourceID)
+        return SourceMetadataProjection.make(input: .init(
+            source: source,
+            markdown: try store.processedMarkdownHead(sourceID: sourceID),
+            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
+            alternativeCount: history.count))
+    }
+
+
+    @ViewBuilder
+    private func sourceSidebarOutlineView() -> some View {
+        if let markdown = currentMarkdownContent, showsSourceOutlineTab {
+            outlineView(markdown: markdown)
+        }
+    }
+
+    private func outlineView(markdown: String) -> some View {
+        PageOutlineView(markdown: markdown,
+                        caretCharIndex: caretCharIndex) { heading in
+            if isEditing {
+                editorScrollRequest = EditorScrollRequest(
+                    charOffset: heading.charOffset,
+                    version: (editorScrollRequest?.version ?? 0) + 1)
+            } else {
+                store.jumpToAnchorInCurrentSelection(heading.id)
+            }
+        }
+    }
+
+    // MARK: - Content area
+
+    @ViewBuilder
+    private var contentArea: some View {
+        if showTabs || isBytelessEmbedWithPlayer {
+            // Video sources (byteless embeds) route through the same tabbed
+            // viewer as PDFs: the transcript renders in the Reader tab, the
+            // player in the Video tab, and Split shows both. A video with no
+            // transcript has only the Video tab and a Reader placeholder.
+            tabbedContent
+        } else if isPDF {
+            pdfOnlyContent
+        } else if isMarkdownNative {
+            markdownContent
+        } else {
+            binaryFallback
+        }
+    }
+
+    // MARK: Video player (Video tab content)
+
+    /// The byteless embed player as a standalone tab content view. Renders in
+    /// the Media tab (and as the player half of Split). Reuses
+    /// `MediaEmbedPlayerView` unchanged. When the embed target can't be
+    /// resolved, a calm placeholder stands in (mirrors the empty-transcript
+    /// copy so the tab is never blank).
+    @ViewBuilder
+    private var videoPlayerContent: some View {
+        if let target = embedTarget {
+            MediaEmbedPlayerView(target: target)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(PageEditorMetrics.contentInset)
+        } else {
+            ContentUnavailableView {
+                Label("Player Unavailable", systemImage: "play.slash")
+            } description: {
+                Text("This media source's embed couldn't be resolved.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Byteless embed placeholder reader
+
+    /// The Reader tab content for a byteless embed with no extracted
+    /// transcript. Kept so the tab picker shows a Reader row whose body is a
+    /// meaningful empty state rather than a blank reader. Issue #575.
+    private var embedEmptyReaderContent: some View {
+        ContentUnavailableView {
+            Label(embedEmptyLabel, systemImage: "waveform")
+        } description: {
+            Text(embedEmptyDescription)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The placeholder copy when a byteless embed has no transcript yet.
+    private var embedEmptyLabel: String {
+        switch origin?.provider {
+        case .youtube?: return "No Transcript Available"
+        default: return "No Transcript"
+        }
+    }
+
+    /// The placeholder description; explains why there's no text and that the
+    /// player above is the source's content.
+    private var embedEmptyDescription: String {
+        if origin?.provider == .youtube {
+            return "This video has no captions, so no transcript was extracted. The player above is the source."
+        }
+        return "This media source has no extracted text yet. The player above is the source."
+    }
+
+    // MARK: View mode picker
+
+    private var tabPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(availableTabs, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Text(tabLabel(for: tab))
+                        .font(.callout)
+                        .fontWeight(selectedTab == tab ? .semibold : .regular)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(selectedTab == tab
+                            ? Color.accentColor.opacity(0.12)
+                            : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, PageEditorMetrics.contentInset)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: Split Markdown ⇄ companion
+
+    /// Split view: the markdown reader on the left, and the source's primary
+    /// visual companion — the PDF for a PDF source, the rendered HTML for an
+    /// HTML source (issue #599), or the media player for a byteless embed
+    /// (video or audio) — on the right. Only callable when there is markdown
+    /// to show on the left (gate by `hasMarkdown` before appending `.split`
+    /// to `availableTabs`).
+    @ViewBuilder
+    private var splitContent: some View {
+        HSplitView {
+            if isMermaidSource {
+                diagramCodeContent
+            } else {
+                markdownContent
+            }
+            if isBytelessEmbedWithPlayer {
+                videoPlayerContent
+            } else if isHTMLSource {
+                htmlSourceView
+            } else if isMermaidSource {
+                renderedMermaidContent
+            } else {
+                pdfView
+            }
+        }
+    }
+
+    // MARK: Content by selected tab
+
+    @ViewBuilder
+    private var tabbedContent: some View {
+        switch selectedTab {
+        case .reader:
+            if isBytelessEmbedWithPlayer, !hasMarkdown {
+                embedEmptyReaderContent
+            } else if isPureMermaidSource {
+                // Diagram source files (`.mmd` / `text/mermaid`) render their
+                // raw DSL as a read-only monospace code block — the markdown
+                // pipeline parses `flowchart LR` as prose, producing confusing
+                // output. The Rendered and Split tabs keep their existing
+                // diagram-rendering behavior (issue #662). Embedded-mermaid
+                // markdown (`.md` with a ```mermaid block) is gated out by
+                // `isPureMermaidSource` so its prose+outline stay intact.
+                // Follow-up: extend to `.excalidraw` / `.canvas` once their
+                // raw bytes are loaded into `currentMarkdownContent`.
+                diagramCodeContent
+            } else {
+                markdownContent
+            }
+        case .pdf:
+            pdfView
+        case .html:
+            htmlSourceView
+        case .rendered:
+            renderedMermaidContent
+        case .media:
+            videoPlayerContent
+        case .split:
+            splitContent
+        }
+    }
+
+    // MARK: HTML source view (issue #599)
+
+    /// The HTML tab (and the right pane of the HTML split view): renders the
+    /// source's original HTML bytes in a WKWebView with JavaScript disabled.
+    /// Mirrors how the PDF tab renders the original PDF in a `PDFView` —
+    /// faithful to the source, no script execution. Falls back to a calm
+    /// placeholder when the bytes can't be decoded.
+    @ViewBuilder
+    private var htmlSourceView: some View {
+        if let html = htmlSourceString {
+            HTMLSourceWebView(html: html)
+        } else {
+            ContentUnavailableView {
+                Label("Cannot Load HTML", systemImage: "globe")
+            } description: {
+                Text("The source bytes for this file couldn't be read or decoded as HTML.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Markdown reader / editor
+
+    @ViewBuilder
+    private var markdownContent: some View {
+        if isEditing {
+            ScrollableTextEditor(
+                text: $editBuffer,
+                font: NSFont.monospacedSystemFont(
+                    ofSize: CGFloat(13 * editorZoom), weight: .regular),
+                scrollRequest: editorScrollRequest,
+                onCaretChange: { caretCharIndex = $0 },
+                sidebarDropBuilder: { payloads in
+                    SidebarDropBuilder.insertionText(for: payloads, store: store)
+                },
+                // Issue #680: wiki-link autocomplete in the source markdown
+                // editor. Same hooks + search backend as the chat composer
+                // (#684) and the page editor (also #680).
+                autocomplete: SidebarDropBuilder.wikiLinkAutocompleteHooks(store: store),
+                autocompletePlacement: .below
+            )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(PageEditorMetrics.contentInset)
+                .zoomShortcuts($editorZoom)
+                .zoomScroll($editorZoom)
+        } else if let head = headVersion {
+            // The web reader is the only reader — it handles all sizes (its
+            // windowed layout is faster than the native reader even on small
+            // docs, so the size threshold that once gated web-vs-native is gone).
+            // Phase 6: when a pinned quote link was clicked, render the pinned
+            // extraction's content (where the quote lives) instead of HEAD.
+            WikiReaderView(markdown: pinnedExtraction?.content ?? head.content,
+                            currentSelection: store.selection,
+                            store: store,
+                            findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else if let content = currentMarkdownContent {
+            // A native text source with no processed-markdown head (e.g. a
+            // `.mmd` Mermaid diagram) renders its raw bytes as readable text —
+            // the source code for a diagram, or the body of a `.txt`. Binary
+            // sources never reach here (they hit `binaryFallback`).
+            WikiReaderView(markdown: content,
+                            currentSelection: store.selection,
+                            store: store,
+                            findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else {
+            ContentUnavailableView {
+                Label("No Processed Markdown", systemImage: "doc.plaintext")
+            } description: {
+                Text("This file has no extracted or processed markdown yet.")
+            }
+        }
+    }
+
+    // MARK: PDF-only (no extraction yet)
+
+    private var pdfOnlyContent: some View {
+        pdfView
+    }
+
+    private var pdfView: some View {
+        Group {
+            if let data = store.sourceBytes(id: file.id) {
+                PDFViewWrapper(data: data, highlightQuote: pdfQuote)
+            } else {
+                ContentUnavailableView {
+                    Label("Cannot Load PDF", systemImage: "doc.richtext")
+                } description: {
+                    Text("The source bytes for this file could not be read.")
+                }
+            }
+        }
+    }
+
+    // MARK: Rendered Mermaid diagram
+
+    /// The "Rendered" tab (and the right pane of the Mermaid split view): draws
+    /// the source's Mermaid diagram as inline SVG. A standalone `.mmd` source is
+    /// wrapped in a ` ```mermaid ` fence by `MermaidSourceDetector.renderableMarkdown`
+    /// so the reader's existing render pipeline (Mermaid 10.9.6 in WKWebView)
+    /// picks it up unchanged — no separate web view or JS wiring. Embedded
+    /// mermaid markdown passes through as-is so surrounding prose stays intact.
+    /// Falls back to a calm placeholder when there's nothing to draw.
+    @ViewBuilder
+    private var renderedMermaidContent: some View {
+        if let content = currentMarkdownContent,
+           let renderable = MermaidSourceDetector.renderableMarkdown(from: content) {
+            WikiReaderView(markdown: renderable,
+                           currentSelection: store.selection,
+                           store: store)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else {
+            ContentUnavailableView {
+                Label("No Diagram", systemImage: "flowchart.fill")
+            } description: {
+                Text("This source has no Mermaid diagram to render yet.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Diagram source code view (Reader tab for diagram sources)
+
+    /// The Reader-tab content for a STANDALONE diagram source (`.mmd` /
+    /// `text/mermaid`): the raw source text rendered as a read-only monospace
+    /// code block instead of through the markdown pipeline. Diagram DSLs
+    /// confuse the markdown reader — mermaid `flowchart LR` becomes a flat
+    /// paragraph, JSON sources flatten to text — so the Reader tab now shows
+    /// them as code (matches the existing `<pre><code>` reader styling). The
+    /// Edit button still switches to the editor for changes; the Rendered and
+    /// Split tabs are unchanged. Issue #662.
+    ///
+    /// Sibling of `renderedMermaidContent`: that view hands the source to
+    /// `MermaidSourceDetector.renderableMarkdown` (a ` ```mermaid ` fence) so
+    /// the reader renders the diagram; this one hands it to
+    /// `MermaidSourceDetector.codeBlockMarkdown` (a plain code fence) so the
+    /// reader displays the source verbatim. Both use `WikiReaderView`, so the
+    /// find bar, zoom, and color-scheme theming come for free.
+    @ViewBuilder
+    private var diagramCodeContent: some View {
+        if let content = currentMarkdownContent,
+           let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: content) {
+            WikiReaderView(markdown: codeBlock,
+                           currentSelection: store.selection,
+                           store: store,
+                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
+                .zoomShortcuts($readerZoom)
+                .zoomScroll($readerZoom)
+        } else {
+            ContentUnavailableView {
+                Label("No Source", systemImage: "curlybraces")
+            } description: {
+                Text("This source's raw content couldn't be loaded.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Extract button
+
+
+    /// Extraction progress is shown in the transcript sidebar's PDF Conversion
+    /// box — the detail view keeps only a minimal Extracting… spinner in the
+    /// header. The queue engine's `.progress` events drive the tracker's log.
+    private func runExtraction() async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+
+        // Route extraction through the queue engine instead of the old
+        // inline slot machinery. The engine handles serialization (local
+        // pdf2md limit 1), readiness checks, and progress reporting.
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                // The worker persisted the markdown; refresh the head version.
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
+            }
+        } catch {
+            // Enqueue error — tracker not updated (no queue event). No-op.
+        }
+    }
+
+    /// HTML extraction trigger (issue #799 PR2). Inline — does NOT route
+    /// through the queue engine (which is PDF-coupled via
+    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
+    /// `seedPdfMarkdown` — generalizing the queue is a deferred sub-project
+    /// per the parent plan's "Out of scope" section). Dispatches to
+    /// `WikiStoreModel.extractHtml(for:backend:)`, which reads the source's
+    /// HTML bytes, runs the chosen extractor (defuddle or
+    /// `TagBasedHtmlExtractor`), and writes the result via
+    /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
+    /// Uses the configured `store.htmlBackend` if set; otherwise defaults to
+    /// `.defuddle` (which degrades to tag-based when the binary is missing).
+    private func runHtmlExtraction() async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+        let backend = store.htmlBackend ?? .defuddle
+        if let head = await store.extractHtml(for: file.id, backend: backend) {
+            headVersion = head
+        }
+    }
+
+    /// HTML re-extraction trigger (issue #799 PR2). Called by the
+    /// "Re-extract with" menu's HTML branch when the user picks a backend
+    /// from `HtmlExtractionBackend.allCases`. Mirrors `runReExtraction(with:)`
+    /// but routes through the inline `extractHtml` path (same module-level
+    /// decision as `runHtmlExtraction`). `appendProcessedMarkdown` always
+    /// appends — first version is HEAD by the default-active rule, later
+    /// versions ride as coexisting alternatives (no clobber), so re-extract
+    /// naturally creates an alternative the provenance chip surfaces.
+    private func runHtmlReExtraction(with backend: HtmlExtractionBackend) async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+        if let head = await store.extractHtml(for: file.id, backend: backend) {
+            headVersion = head
+        }
+    }
+
+    /// Transcription trigger (issue #799 PR4 for podcasts; generalized to
+    /// YouTube in PR5). Inline — does NOT route through the queue engine
+    /// (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
+    /// `convert(pdfData:)` / `seedPdfMarkdown`; transcript "extraction" is a
+    /// NETWORK FETCH with a different input shape — signed bearer → AMP →
+    /// TTML → parse for podcasts; watch-page scrape → caption track → parse
+    /// for YouTube). Mirrors `runHtmlExtraction` (PR2) but calls
+    /// `WikiStoreModel.transcribe(sourceID:podcastFetcher:youtubeFetcher:)`
+    /// (the PR5 unified dispatch that routes per provider — the per-provider
+    /// helpers stay private on the model). Uses the configured
+    /// `store.podcastBackend` when set; otherwise falls back to
+    /// `.appleTranscript` (only backend today) for podcasts. YouTube has no
+    /// backend choice today (only the captions-scrape path).
+    /// On a build without `PODCAST_TRANSCRIPTS`, the predicate
+    /// `needsTranscription` returns `false` for `.applePodcast` (its
+    /// underlying `isTranscribable` returns `false` via
+    /// `isSourceRefreshable`'s phase-out arm), so the podcast path is
+    /// unreachable in production; the YouTube path stays available.
+    /// Run transcription through the queue engine instead of calling
+    /// `store.transcribe(sourceID:)` inline (#842). Enqueues a durable
+    /// `.extraction` queue job (transcription merged into extraction — the
+    /// provider resolves transcript sources to a `transcriptFetch` closure),
+    /// waits for completion, and refreshes the head version on success —
+    /// mirroring `runExtraction()`. Errors land on the queue item's `error`
+    /// field + Activity window (not inline `transcribeError`, which was
+    /// removed). The de-dupe / reveal-job navigation is PR2 (shared with #837).
+    private func runTranscription() async {
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
+            }
+        } catch {
+            DebugLog.extraction("SourceDetailView: transcribe enqueue failed (\(file.id.rawValue)): \(error)")
+        }
+    }
+
+    /// Re-transcription trigger (issue #799 PR4). Now enqueues through the
+    /// queue engine too (#842) — the `backend` parameter rides in
+    /// `payload.stageRouting` (placeholder for future backends; only
+    /// `.appleTranscript` exists today).
+    private func runTranscription(with backend: PodcastTranscriptionBackend) async {
+        DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(sourceIDs: [file.id]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break
+            }
+        } catch {
+            DebugLog.extraction("SourceDetailView: re-transcribe enqueue failed (\(file.id.rawValue)): \(error)")
+        }
+    }
+
+    // MARK: - Extraction alternatives (Phase 2)
+
+    /// The provenance line rendered as the single home for extraction
+    /// management. Its label reports how the active markdown came to exist and
+    /// which backend produced it ("Converted · Claude (Anthropic) ▾"); its menu
+    /// folds in what used to be three separate controls — switch the active
+    /// alternative, Compare Extractions… (the track-C window), and Re-extract
+    /// with another backend. Shown in place of the old inert provenance text.
+    @ViewBuilder
+    private func extractionProvenanceChip(head: SourceMarkdownVersion) -> some View {
+        let names = store.processedMarkdownAgentNames(for: file.id)
+        Menu {
+            Section("Active extraction") {
+                let history = store.processedMarkdownHistory(for: file.id)
+                let headID = headVersion?.id.rawValue
+                ForEach(history) { version in
+                    let agent = names[version.id] ?? version.origin.rawValue
+                    Button {
+                        store.setActiveMarkdown(for: file.id, to: version.id)
+                        headVersion = store.processedMarkdownHead(for: file)
+                    } label: {
+                        Label {
+                            Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, style: .date)")
+                        } icon: {
+                            Image(systemName: version.id.rawValue == headID
+                                  ? "checkmark.circle.fill" : "doc.text")
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("Compare Extractions…", systemImage: "arrow.left.and.right.square") {
+                    openWindow(value: ExtractionCompareContext(
+                        sourceID: file.id,
+                        filename: file.filename,
+                        wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: "")))
+                }
+                .disabled(!hasMultipleExtractions)
+                .help(hasMultipleExtractions
+                      ? "Compare and switch between extraction alternatives"
+                      : "Re-extract with another backend to enable compare")
+            }
+            Section("Re-extract with") {
+                // Content-type-aware: HTML sources list `HtmlExtractionBackend`
+                // (defuddle, tag-based), PDF sources list `ExtractionBackend`
+                // (local pdf2md, ACP, Anthropic, Gemini, Docling Serve),
+                // podcast sources list `PodcastTranscriptionBackend`
+                // (currently just `appleTranscript`; issue #799 PR4) and
+                // route to `runTranscription(with:)`. YouTube sources (PR5,
+                // issue #799 PR5) have a single entry today (the captions
+                // scrape — no `YouTubeTranscriptionBackend` enum added yet;
+                // revisit when the Python-subprocess backend lands, #584)
+                // and route to the parameterless `runTranscription()`. A
+                // source is HTML xor PDF xor podcast xor YouTube xor other —
+                // the four branches are mutually exclusive. The HTML, podcast,
+                // and YouTube branches route through the inline `extractHtml` /
+                // `transcribe` paths (issues #799 PR2 + PR4 + PR5 — the queue
+                // engine is PDF-coupled; generalizing it is a deferred
+                // sub-project per the parent plan's "Out of scope" section).
+                if isHTMLSource {
+                    ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runHtmlReExtraction(with: backend)
+                            }
+                        }
+                        .disabled(isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                } else if isPodcastEmbed {
+                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runTranscription(with: backend)
+                            }
+                        }
+                        .disabled(isTranscribing
+                                  || isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                } else if isYouTubeEmbed {
+                    // Issue #799 PR5: YouTube has a single transcript backend
+                    // today (the pure-Swift watch-page → caption-scrape path in
+                    // `YouTubeTranscriptService`). The menu entry dispatches
+                    // through the parameterless `runTranscription()` (which
+                    // calls `WikiStoreModel.transcribe(sourceID:)`, routing by
+                    // provider → `transcribeYouTube`). When a future backend
+                    // (e.g. a Python `youtube-transcript-api` subprocess, #584)
+                    // lands and we add a `YouTubeTranscriptionBackend` enum,
+                    // this branch mirrors the podcast arm: a `ForEach` over
+                    // `YouTubeTranscriptionBackend.allCases` calling
+                    // `runTranscription(with:)`.
+                    Button("YouTube captions") {
+                        Task { await runTranscription() }
+                    }
+                    .disabled(isTranscribing
+                              || isThisFileExtracting
+                              || tracker.isSlotBusyForOtherSource(file.id))
+                } else {
+                    ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                        Button(backend.displayName) {
+                            Task {
+                                await runReExtraction(with: backend)
+                            }
+                        }
+                        .disabled(isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                    }
+                }
+            }
+        } label: {
+            // Label = the active alternative's producer ("Legacy", "Claude
+            // (Anthropic)", or "Edited"), no origin verb and no manual chevron —
+            // `.borderlessButton` draws its own disclosure arrow.
+            Label(Self.activeAlternativeLabel(head: head, agent: names[head.id]),
+                  systemImage: "doc.on.doc")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Switch the active extraction, compare alternatives, or re-extract")
+    }
+
+    /// Stable, human-facing name for the active markdown alternative. A user
+    /// edit reads "Edited", a revert "Reverted", and an extraction its backend
+    /// display name — so the chip label describes *which alternative is live*,
+    /// not the mutating origin verb.
+    private static func activeAlternativeLabel(head: SourceMarkdownVersion, agent: String?) -> String {
+        switch head.origin {
+        case .user: return "Edited"
+        case .revert: return "Reverted"
+        default:
+            if let agent { return ExtractionAlternative.backendDisplayName(agentName: agent) }
+            return "Extraction"
+        }
+    }
+
+    /// Re-extract the source with a chosen backend, appending a coexisting
+    /// alternative (does not clobber the current head). Mirrors `runExtraction`
+    /// but always appends via `reExtractMarkdown`.
+    private func runReExtraction(with backend: ExtractionBackend) async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+
+        // Route re-extraction through the queue engine with a backend override.
+        // The override is passed via stageRouting so the worker resolves the
+        // chosen backend instead of the configured default.
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(
+                    sourceIDs: [file.id],
+                    stageRouting: [StageRoutingKey.backend.rawValue: backend.rawValue]))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = await queueEngine.waitForCompletion(of: itemID)
+
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
+            }
+        } catch {
+            // Enqueue error — tracker not updated (no queue event). No-op.
+        }
+    }
+
+    /// Resolve a concrete extractor for an arbitrary backend from the shared
+    /// coordinator's config + secrets. Used by the Re-extract menu so the user
+    /// can pick a backend other than the configured default.
+    private func extractorFor(backend: ExtractionBackend, config: ExtractionConfig) -> any MarkdownExtractor {
+        switch backend {
+        case .localPdf2md:
+            return extractionCoordinator.current()
+        case .acp:
+            return extractionCoordinator.current()
+        case .anthropic:
+            let base = config.anthropicBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
+            return AnthropicExtractionClient(
+                model: config.anthropicModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.anthropicAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .gemini:
+            let base = config.geminiBaseURLOverride.flatMap(URL.init(string:))
+                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!
+            return GeminiExtractionClient(
+                model: config.geminiModel,
+                apiKey: extractionCoordinator.credentialStore.secret(.geminiAPIKey) ?? "",
+                baseURL: base, fetcher: extractionCoordinator.fetcher)
+        case .doclingServe:
+            return DoclingServeClient(
+                endpoint: config.doclingServeEndpoint ?? "",
+                apiToken: extractionCoordinator.credentialStore.secret(.doclingServeToken),
+                fetcher: extractionCoordinator.fetcher)
+        }
+    }
+
+    private func modelVersionFor(backend: ExtractionBackend, config: ExtractionConfig) -> String? {
+        switch backend {
+        case .anthropic: return config.anthropicModel
+        case .gemini: return config.geminiModel
+        case .acp, .localPdf2md, .doclingServe: return nil
+        }
+    }
+
+    // MARK: Binary fallback
+
+    private var binaryFallback: some View {
+        ContentUnavailableView {
+            Label("Raw Source", systemImage: symbol)
+        } description: {
+            Text("This file is stored verbatim in the wiki. Ingesting asks the agent to read it, create or update wiki pages, refresh index.md, and append log.md.")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Edit helpers
+
+    private func commitEdit() {
+        let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { isEditing = false; return }
+        if let current = headVersion, trimmed == current.content {
+            isEditing = false
+            return
+        }
+        if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+            headVersion = version
+        }
+        isEditing = false
+    }
+
+    private func flushEditIfDirty() {
+        guard isEditing else { return }
+        let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let current = headVersion, !trimmed.isEmpty, trimmed != current.content {
+            if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+                headVersion = version
+            }
+        }
+        isEditing = false
+    }
+
+    // MARK: - Shared sub-views
+
+    /// The ingest control now carries the source's ingest *state*, so status and
+    /// action are one thing: a not-yet-ingested source shows a prominent
+    /// call-to-action; a processed one reads as a green "Ingested" affordance
+    /// (still clickable to re-ingest, behind the existing confirmation); mid-run
+    /// it shows a spinner. This replaces the separate "Ready to ingest / Processed"
+    /// status tag that used to sit in the metadata row.
+    @ViewBuilder
+    private var ingestButton: some View {
+        let button = Button {
+            DebugLog.ingest("SourceDetailView: Ingest tapped — id=\(file.id.rawValue)")
+            if hasBeenIngested {
+                showReingestConfirmation = true
+            } else {
+                runIngest(file.id)
+            }
+        } label: {
+            if isIngesting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Ingesting…")
+                }
+            } else if hasBeenIngested {
+                Label("Ingested", systemImage: "checkmark.circle.fill")
+            } else {
+                Label("Ingest into Wiki", systemImage: "text.badge.plus")
+            }
+        }
+        .keyboardShortcut(.return, modifiers: .command)
+        // Don't disable during an active ingestion or extraction — the queue
+        // engine serializes both (ingestion maxConcurrent=1 per provider;
+        // extraction limit 1 for local pdf2md). A second tap just appends to
+        // the queue, and `enqueueIngestion` dedupes a source already active.
+        //
+        // #867: before the Phase C4 flip this ALSO gated on
+        // `launcher.isRunning` to avoid a preflight refusal when a lint was
+        // mid-run in-process. After C4, ingest AND lint are enqueued to the
+        // daemon queue — the local `agentLauncher` is no longer on either
+        // path, so its `isRunning` flag is disconnected from ingest/lint state
+        // and must NOT gate the button (a stale/stuck flag permanently wedged
+        // it). The predicate lives in the pure, tested
+        // `ingestButtonDisabled(...)` seam so the regression is pinned.
+        .disabled(Self.ingestButtonDisabled(
+            isEditLockedExternally: isEditLockedExternally,
+            canIngest: canIngest))
+        .confirmationDialog(
+            "Ingest Again?",
+            isPresented: $showReingestConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Ingest Again", role: .destructive) {
+                runIngest(file.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This document has already been ingested. Running ingest again may create duplicate pages.")
+        }
+
+        // Ingested → a calm green "done" affordance. Otherwise prominent when
+        // Ingest is a real next step; a source that can't be ingested at all
+        // (byteless with no processed markdown — e.g. a video whose transcript
+        // never arrived) stays secondary and is disabled above.
+        if hasBeenIngested {
+            button.tint(.green)
+        } else if !canIngest {
+            button
+        } else {
+            button.buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// Matches the sidebar's Sources section icon so each source has one
+    /// consistent icon everywhere in the app.
+    private var symbol: String { ResourceKind.source.systemImageName }
+
+    // MARK: - Find bar
+
+    @ViewBuilder
+    private var findBarOverlay: some View {
+        if findModel.isShowing {
+            VStack(spacing: 0) {
+                FindBarView(model: findModel)
+                Divider()
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private var findShortcutButton: some View {
+        Button("") { findModel.toggle() }
+            .keyboardShortcut("f", modifiers: .command)
+            .opacity(0).allowsHitTesting(false)
+    }
+
+    /// A faint dot separating metadata items, so the row reads as one line of
+    /// distinct facts rather than gap-delimited fragments.
+    private var metadataSeparator: some View {
+        Text("·").foregroundStyle(.tertiary)
+    }
+
+    /// Compact, abbreviated date ("Jun 26, 2026") — no clock time, which was
+    /// noise in the metadata row and caused it to wrap.
+    private static func compactDate(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    private static let sizeFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
+
+    /// Human label for a `SourceMarkdownVersion.origin` value, describing how
+    /// the currently-displayed markdown version came to exist. `nil` for
+    /// "source" (the as-ingested seed version of a native markdown file,
+    /// which the added-date row above already covers) so the row is omitted.
+    private static func markdownOriginLabel(for origin: SourceMarkdownOrigin) -> String? {
+        switch origin {
+        case .extraction: return "Converted"
+        case .user: return "Edited"
+        case .revert: return "Reverted"
+        case .source: return nil
+        case .transcript: return nil
+        }
+    }
+}
+
+/// Keys the PDF-only anchor consume task so it re-fires on repeat quote clicks
+/// to the same un-extracted PDF (same file, bumped anchor version).
+private struct PDFTaskKey: Hashable {
+    let sourceID: SourceID
+    let anchorVersion: Int
+}
+
+// MARK: - PR2 testable seam — Extract / Transcribe affordance (§5.4)
+
+extension SourceDetailView {
+
+    /// The single-affordance decision for a source's content type, computed
+    /// from the registry BEFORE any runtime guard (signing helper present /
+    /// `#if PODCAST_TRANSCRIPTS`). Used by the UI to gate the Extract /
+    /// Transcribe buttons (`isExtractable` / `isTranscribable`) and by tests
+    /// to pin the registry-driven gating without hosting the SwiftUI view.
+    ///
+    /// Mutually exclusive by construction: a `ContentKind.extractionPath` is
+    /// one of four cases or `nil`, so `extract` and `transcribe` never both
+    /// fire for the same (mime, provider, ext) triple. The runtime guard
+    /// (`store.isSourceRefreshable(for:)` for `.applePodcast`) is layered on
+    /// top in `SourceDetailView.isTranscribable`.
+    enum ExtractionAffordance: Sendable, Equatable {
+        /// PDF / HTML — the Extract Markdown button (`runExtraction` /
+        /// `runHtmlExtraction`). `extractionPath == .pdfBackend` or
+        /// `.htmlToMarkdown`.
+        case extract
+        /// Podcast / YouTube — the Transcribe button (`runTranscription`).
+        /// `extractionPath == .podcastTranscript` or `.youtubeTranscript`.
+        case transcribe
+        /// Native markdown / text / image / binary / vimeo / unknown — no
+        /// extraction button; the content either is already markdown or has
+        /// no path to it (the auto-ingest gate also excludes these).
+        case none
+    }
+
+    /// Pure registry-driven decision for the Extract-vs-Transcribe-vs-Neither
+    /// affordance. `internal static` so `@testable import WikiFS` tests can
+    /// reach it without instantiating a `SourceDetailView` (which needs a
+    /// `WikiStoreModel`, `AgentLauncher`, `ExtractionCoordinator`, etc.).
+    /// Mirrors the PR1 `BackgroundIngestCoordinator.ingestionDecision` seam.
+    ///
+    /// `nonisolated` because it's pure (a single `ContentKind.resolve(...)`
+    /// call with no actor dependencies) despite the enclosing SwiftUI `View`
+    /// struct getting implicit `@MainActor` isolation. Tests would otherwise
+    /// need `@MainActor` annotations on the suite, and the in-view call site
+    /// is already on the main actor.
+    ///
+    /// See `plans/content-type-registry.md` §5.4 (PR2).
+    nonisolated static func extractionAffordance(
+        mimeType: String?,
+        provider: SourceProvider?,
+        ext: String?
+    ) -> ExtractionAffordance {
+        let kind = ContentKind.resolve(mimeType: mimeType, provider: provider, ext: ext)
+        switch kind.capabilities.extractionPath {
+        case .pdfBackend, .htmlToMarkdown:             return .extract
+        case .podcastTranscript, .youtubeTranscript:   return .transcribe
+        case nil:                                       return .none
+        }
+    }
+
+    /// The Ingest button's disabled predicate, extracted as a pure,
+    /// `internal static` seam (mirrors `extractionAffordance`) so the
+    /// regression suite can pin it without instantiating a `SourceDetailView`.
+    ///
+    /// #867 (Phase C4): ingest and lint are enqueued to the daemon queue, not
+    /// run through the in-process `agentLauncher`. The button therefore MUST
+    /// NOT consult `launcher.isRunning` — that flag is disconnected from
+    /// ingest/lint state (and a stale/stuck value permanently wedged the
+    /// button). The queue engine serializes ingestion/extraction and
+    /// `enqueueIngestion` dedupes a source already active in the queue, so a
+    /// re-tap is safe and requires no launcher-level gating. The only real
+    /// gates left are "another agent holds the edit lock" and "this source has
+    /// no ingestible content".
+    nonisolated static func ingestButtonDisabled(
+        isEditLockedExternally: Bool,
+        canIngest: Bool
+    ) -> Bool {
+        isEditLockedExternally || !canIngest
+    }
+}

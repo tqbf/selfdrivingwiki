@@ -1,0 +1,47 @@
+[project]
+name = "podcast-transcript"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "requests>=2.31",
+    "webvtt-py>=0.5",
+    "srt>=3.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3",
+    "ruff>=0.11",
+    "pyright>=1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "--ignore=tests/test_integration.py"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingImports = false
+reportMissingModuleSource = false
+reportMissingTypeStubs = false

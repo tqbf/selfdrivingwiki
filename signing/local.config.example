@@ -1,0 +1,59 @@
+# signing/local.config.example — copy to signing/local.config and fill in.
+#
+# Per-developer signing identifiers. The app's bundle ids and App Group are
+# GLOBALLY UNIQUE across App Store Connect — you cannot reuse anyone else's, so
+# every developer building against their own paid Apple Developer account needs
+# their own values here. The committed defaults in build.sh / the Makefile are
+# the upstream author's and will NOT sign with your cert.
+#
+# Two ways to produce this file:
+#   1. Run  ./signing/setup.sh   — discovers your team/cert and provisions the
+#      bundle ids, device, and profiles via the `asc` CLI, then writes this file.
+#   2. Copy this file to signing/local.config and fill each value by hand
+#      (see plans/signing.md for the manual portal checklist).
+#
+# Shell syntax: KEY="value", no spaces around '='.
+
+# Apple Developer team / Seed ID (the "Seed ID" column of `asc bundle-ids list`).
+TEAM_ID="ABCDE12345"
+
+# Codesigning identity — a valid "Apple Development" identity in your login
+# keychain. Copy the quoted name from `security find-identity -v -p codesigning`.
+# Used by `make build` / `make run` (local dev). Falls back to ad-hoc ("-") if
+# the named identity is missing from the keychain.
+DEV_IDENTITY="Apple Development: Your Name (XXXXXXXXXX)"
+
+# Distribution signing identity — a valid "Developer ID Application" identity in
+# your login keychain. REQUIRED for `make dist` / `make release` / `make notarize`
+# (notarytool rejects non-Developer-ID signatures; Gatekeeper rejects Apple
+# Development on other machines). Copy the quoted name from:
+#   security find-identity -v -p codesigning | grep 'Developer ID Application:'
+# Leave empty/uncommented-with-empty-value if you haven't issued one yet — local
+# `make build` / `make run` don't need it, and `make dist` will fail loudly
+# (rather than silently signing with the dev cert, which was #746). See
+# plans/fix-signing-cert.md.
+DIST_IDENTITY="Developer ID Application: Your Name (XXXXXXXXXX)"
+
+# App + File Provider extension bundle ids. Use your own reverse-DNS namespace;
+# the extension id MUST be the app id + ".FileProvider".
+BUNDLE_ID="com.example.WikiFS"
+EXT_BUNDLE_ID="com.example.WikiFS.FileProvider"
+
+# App Group shared by the app and the extension. Must be created in the Apple
+# Developer portal (the App Store Connect API can't) and associated with BOTH
+# bundle ids above.
+APP_GROUP="group.com.example.wiki"
+
+# Shared keychain access group (app + wikid daemon). Derived by default from
+# TEAM_ID + APP_GROUP (the App Group minus its "group." prefix, team-prefixed —
+# Apple requires the Team ID prefix on keychain-access-groups). Normally leave
+# this COMMENTED OUT; set it only to override the derived value. build.sh, the
+# Makefile, and tools/keychaingen all honor an explicit value here. The
+# provisioning profile must authorize the <TEAM_ID>.* keychain wildcard (it does
+# by default). See plans/keychain-sharing.md.
+# KEYCHAIN_ACCESS_GROUP="ABCDE12345.com.example.wiki"
+
+# Optional override for the `make sign` target's codesign identity (defaults to
+# DIST_IDENTITY above). Set this only if you need `make sign` to use a different
+# identity than `make release` / build.sh — normally leave it commented out.
+# CERT_NAME="Developer ID Application: Your Name (XXXXXXXXXX)"

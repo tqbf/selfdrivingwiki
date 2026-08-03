@@ -1,6 +1,21 @@
 import Foundation
 
-/// One git repository this wiki TRACKS — a `tracked_repos` row (schema v6).
+/// Stable identity for a `tracked_repos` row.
+///
+/// Repository rows are neither pages nor sources. Keeping their ULIDs in a
+/// distinct namespace prevents a repository checkout from ever being addressed
+/// by a page/source API merely because both persistence columns are `TEXT`.
+public struct TrackedRepoID: RawRepresentable, Hashable, Codable, Sendable,
+    Comparable, CustomStringConvertible, Identifiable {
+    public let rawValue: String
+
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public var id: String { rawValue }
+    public var description: String { rawValue }
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// One git repository this wiki tracks — a `tracked_repos` row (schema v49).
 ///
 /// **Why this is not an ingested file.** Every other source in this wiki is
 /// *immutable verbatim bytes stored in SQLite* (`ingested_files`): staged once,
@@ -16,17 +31,18 @@ import Foundation
 /// actually wrote pages — the app proposes a commit range, the agent confirms
 /// what it covered. That keeps the watermark honest when a run is interrupted.
 ///
-/// `id` reuses `PageID` (a ULID-string wrapper) exactly as `IngestedFileSummary`
-/// does, so the raw value sorts by tracking order. Identifiable + Hashable so it
-/// drives a SwiftUI `List`/`ForEach` directly.
+/// `id` uses its own `TrackedRepoID` namespace. The raw ULID still sorts by
+/// tracking order, while the type system prevents it from leaking into page or
+/// source boundaries. Identifiable + Hashable so it drives SwiftUI directly.
 public struct TrackedRepo: Identifiable, Hashable, Sendable {
-  public let id: PageID
+  public let id: TrackedRepoID
   /// Display name, `owner/repo`, derived from the remote by `GitRemoteURL`.
   public let name: String
   /// The remote as handed to `git clone` (canonical form, no trailing slash).
   public let remoteURL: String
-  /// The branch being tracked (resolved at add time; never empty).
-  public let branch: String
+  /// The branch being tracked. `nil` until the daemon finishes the initial
+  /// clone and discovers the remote's default branch.
+  public let branch: String?
   /// Upstream tip as of the last successful fetch; nil before the first clone.
   public let headCommit: String?
   /// The commit the WIKI has been brought up to date with, as confirmed by the
@@ -38,10 +54,10 @@ public struct TrackedRepo: Identifiable, Hashable, Sendable {
   public let version: Int
 
   public init(
-    id: PageID,
+    id: TrackedRepoID,
     name: String,
     remoteURL: String,
-    branch: String,
+    branch: String?,
     headCommit: String?,
     lastIngestedCommit: String?,
     lastFetchedAt: Date?,

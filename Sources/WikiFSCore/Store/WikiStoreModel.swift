@@ -1,0 +1,4587 @@
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+import Observation
+#if canImport(UniformTypeIdentifiers)
+import UniformTypeIdentifiers
+#endif
+import WikiFSSearch
+
+/// Progress of the blocking search-index upgrade (see
+/// `WikiStoreModel.searchUpgrade`). Shown in a non-dismissible sheet while the
+/// upgrade runs; `nil`-ing `searchUpgrade` dismisses it.
+public struct SearchUpgradeState: Identifiable {
+    public let id = UUID()
+    public let total: Int
+    public var done: Int
+    public var phase: Phase
+    public enum Phase { case pages, sources, chats }
+
+    public init(total: Int, done: Int, phase: Phase) {
+        self.total = total; self.done = done; self.phase = phase
+    }
+}
+
+/// The app's single source of truth for wiki state and the in-flight editing
+/// session. `@MainActor @Observable` (uses `Observation`, NOT SwiftUI — this
+/// type is UI-framework-agnostic so it can be unit-tested directly).
+///
+/// Design notes mapped to SWIFTUI-RULES:
+/// - `summaries` is ALWAYS rebuilt from `store.listPages()` after a mutation,
+///   never incrementally patched (§3.1 / §3.2).
+/// - The live editing buffers `draftTitle` / `draftBody` live HERE, not in view
+///   `@State`, so a page switch or app-background flush can read the CURRENT
+///   text at the latest possible moment (§3.5 "read state at save time").
+@MainActor
+@Observable
+public final class WikiStoreModel {
+    public private(set) var summaries: [WikiPageSummary] = []
+    /// Durable repository metadata for the Repositories sidebar. Repository
+    /// work itself is queued to `wikid`; this model owns only the GRDB-backed
+    /// projection that SwiftUI observes.
+    public private(set) var trackedRepositories: [TrackedRepo] = []
+    /// Sort order for the sidebar pages list. Changing this triggers a reload.
+    public var pageSortOrder: PageSortOrder = .lastUpdated {
+        didSet {
+            guard pageSortOrder != oldValue else { return }
+            reloadSummaries()
+        }
+    }
+    /// Live search query from the sidebar search bar. Debounced 300ms.
+    public var searchQuery: String = "" {
+        didSet { scheduleSearch() }
+    }
+    /// Results of the last search (empty when searchQuery is empty).
+    public private(set) var searchResults: [WikiPageSummary] = []
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+
+    /// Progress of the one-time, blocking search-index upgrade (nil when idle).
+    /// When non-nil the app shows a non-dismissible sheet that blocks all UX:
+    /// the upgrade is the SOLE owner of the store while it runs (SQLite is never
+    /// touched off-main), so there can be no concurrent-statement race. It only
+    /// runs when MiniLM is the selected embedder AND there is missing content
+    /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
+    /// the common launch is an instant no-op and shows nothing.
+    /// A user-facing error from a store mutation (e.g. a delete that violated a
+    /// foreign-key constraint, or files skipped as duplicates during ingest).
+    /// Surfaced via an alert in `ContentView`, titled per-site so a duplicate
+    /// skip doesn't read as a failed delete; `nil`-ing it dismisses the alert.
+    public struct StoreError: Identifiable {
+        public let id = UUID()
+        public let title: String
+        public let message: String
+    }
+    public private(set) var storeError: StoreError?
+
+    public private(set) var searchUpgrade: SearchUpgradeState?
+    /// Synchronous single-flight guard for ``upgradeSearchIndex``. Set BEFORE any
+    /// `await` (unlike `searchUpgrade`, which is only set after `configure()`),
+    /// so a second trigger that fires during the configure() suspension window
+    /// sees it true and bails. The check-and-set is main-actor and contains no
+    /// suspension, so it is atomic against the scenePhase/activeWikiID hooks.
+    @ObservationIgnored private var isUpgrading = false
+    @ObservationIgnored private var didReconcileLinksInThisSession = false
+
+    /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
+    /// Mirrors the page `searchQuery` (semantic cosine, LIKE fallback).
+    public var sourceSearchQuery: String = "" {
+        didSet { scheduleSourceSearch() }
+    }
+    /// Results of the last sources search (empty when sourceSearchQuery is empty).
+    public private(set) var sourceSearchResults: [SourceSummary] = []
+    @ObservationIgnored private var sourceSearchTask: Task<Void, Never>?
+
+    /// Live search query from the Chats sidebar search bar. Debounced 300ms.
+    /// Mirrors `searchQuery`/`sourceSearchQuery` (hybrid RRF, FTS fallback).
+    public var chatSearchQuery: String = "" {
+        didSet { scheduleChatSearch() }
+    }
+    /// Results of the last chats search (empty when chatSearchQuery is empty).
+    public private(set) var chatSearchResults: [ChatSummary] = []
+    @ObservationIgnored private var chatSearchTask: Task<Void, Never>?
+
+    /// Memoized `WikiRenderContext` (Phase A.1, D1). Lazily rebuilt; invalidated
+    /// by bumping ``renderContextGeneration`` whenever pages or sources change.
+    /// Per-delta renders therefore reuse the snapshot and never touch SQLite.
+    /// `@ObservationIgnored` — the context is consumed off-main by detached
+    /// render tasks, not observed by SwiftUI.
+    @ObservationIgnored private var cachedRenderContext: WikiRenderContext?
+    /// Bumped by `reloadSummaries()` / `reloadSources()` (every page/source
+    /// mutation, local AND external — `reloadFromStore()` calls both). A change
+    /// here means the next `renderContext()` call rebuilds the snapshot. This is
+    /// the `WikiEventBus`-driven invalidation the plan calls for: local writes
+    /// self-manage through these reloads (slice 2a), and `.external` bus events
+    /// route through `reloadFromStore()` → the same reloads. Either way the
+    /// generation bumps.
+    @ObservationIgnored private var renderContextGeneration: UInt64 = 0
+    /// The snapshot captured at ``cachedRenderContext`` build time, so a reload
+    /// that leaves the generation unchanged (e.g. a bookmark-only change) doesn't
+    /// spuriously rebuild. Compared against ``renderContextGeneration``.
+    @ObservationIgnored private var renderContextBuiltAtGeneration: UInt64 = .max
+
+    /// The sidebar selection: a page, the system-prompt document, or nothing.
+    public var selection: WikiSelection?
+
+    /// Whether the trailing change-log sidebar (`log.md`) is shown in this
+    /// wiki's window. Hidden by default; toggled from the window toolbar.
+    /// Lives on the store (not view `@State`) so the sidebar's own close
+    /// button and the toolbar toggle share one source of truth.
+    public var isChangeLogSidebarVisible = false
+    public private(set) var backStack: [WikiSelection] = []
+    public private(set) var forwardStack: [WikiSelection] = []
+
+    public var canNavigateBack: Bool { !backStack.isEmpty }
+    public var canNavigateForward: Bool { !forwardStack.isEmpty }
+
+    // MARK: - Tab management
+
+    /// All open editor tabs, in display order (left to right).
+    public private(set) var tabs: [EditorTab] = []
+    /// The active tab's stable identity — the single source of truth for "which
+    /// tab is focused." `nil` in the empty state (no tabs). All tab operations
+    /// find the active tab by this ID; indices are computed at the view layer
+    /// only (for `ForEach` / keyboard-shortcut numbering).
+    public var activeTabID: UUID?
+    /// Stack of recently-closed tabs for Cmd+Shift+T reopen. Max 10.
+    public private(set) var recentlyClosedTabs: [EditorTab] = []
+    /// Non-nil when a tab close was deferred because the tab is in edit mode.
+    /// The view shows a confirmation alert, then calls `confirmCloseTab()` or
+    /// `cancelCloseTab()`.
+    public private(set) var pendingCloseTabID: UUID? = nil
+
+    /// View-layer convenience: the active tab's position. Computed from
+    /// `activeTabID`, never stored — so it can't go stale on a close/reorder.
+    /// Falls back to 0 in the empty state.
+    public var activeTabIndex: Int {
+        activeTabID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? 0
+    }
+    /// The active tab value, or `nil` in the empty state.
+    public var activeTab: EditorTab? {
+        tabs.first { $0.id == activeTabID }
+    }
+
+    /// `true` when the active tab is showing the markdown editor — a
+    /// `PageDetailView` or `SourceDetailView` in edit mode (the two surfaces
+    /// backed by `DropLinkTextView`; see `Sources/WikiFS/Editor/DropLinkTextView.swift`).
+    /// Both views sync their local `@State isEditing` into `EditorTab.isEditing`
+    /// via `setTabEditing(tabID:isEditing:)`, so reading the tab here is the
+    /// single source of truth.
+    ///
+    /// Used by `WikiDetailView.body` to gate its parent-level `.dropDestination`
+    /// on `wikiSidebarItem`: while editing, the destination is removed so a
+    /// sidebar drag inserts a `[[wikilink]]` at the editor's drop point (issue #616)
+    /// instead of opening a new tab. Other surfaces (`SystemPromptDetailView`,
+    /// `ChatDetailView`, welcome screen, reader mode) never set `isEditing`, so they
+    /// keep the tab-opening drop behavior — matching the original semantics.
+    public var isActiveTabEditing: Bool {
+        activeTab?.isEditing ?? false
+    }
+
+    /// The removable list of ingested files (Phase 5). Like `summaries`, this is
+    /// ALWAYS rebuilt from `store.listSources()` after a change, never
+    /// incrementally patched (§3.1). Most-recent-first.
+    public private(set) var sources: [SourceSummary] = []
+    /// Best-effort UI status for whether a raw source has already been processed
+    /// by an agent Ingest run. The source of truth is the append-only log; agents
+    /// can choose their log title, so matching accepts the filename, id, by-id
+    /// projection leaf, or path in either the log title or note.
+    private var sourceIngestedStatus: [SourceID: Bool] = [:]
+
+    // MARK: - Bookmark nodes (v16 — Bookmarks sidebar tree)
+
+    /// Flat bookmark nodes, rebuilt from store after mutation (§3.1 pattern).
+    public private(set) var bookmarkNodes: [BookmarkNode] = []
+
+    /// Persisted chat summaries (issue #119), most-recently-updated first —
+    /// rebuilt from `store.listChats()` after every mutation (§3.1 pattern),
+    /// like `bookmarkNodes`.
+    public private(set) var chats: [ChatSummary] = []
+
+    /// Monotonic counter bumped on every `reloadChats()`. `ChatSummary` (the
+    /// chat-list model) doesn't carry per-message fields, so a
+    /// `chat_messages.summary` write produces an `==` `chats` array and
+    /// `.onChange(of: chats)` never fires — leaving the outline on a stale nil
+    /// summary (#858). This counter always changes, so views observe it via
+    /// `.onChange(of: messageVersion)` to reload per-message state after any
+    /// store mutation (local writes self-manage through `reloadChats()`;
+    /// external writes arrive via the `WikiEventBus` → `reloadFromStore()` →
+    /// `reloadChats()`).
+    public private(set) var messageVersion: Int = 0
+
+    /// A pending question to pre-fill the chat composer, set by the omnibox
+    /// "Ask" action (#288). Consumed by `ChatDetailView` on first appearance, then
+    /// cleared. `nil` means no pre-fill is waiting.
+    public var pendingChatQuestion: String?
+
+    /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
+    /// degrading to empty on a store hiccup must never crash the sidebar.
+    public func reloadChats() {
+        chats = DebugLog.trying("listChats", operation: { try store.listChats() }) ?? []
+        messageVersion &+= 1
+    }
+
+    /// Computed tree for the Bookmarks section.
+    public var bookmarkTree: [BookmarkTreeItem] {
+        let t0 = DispatchTime.now()
+        let tree = buildBookmarkTree(nodes: bookmarkNodes)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+        if ms > 5 {
+            DebugLog.tabs("bookmarkTree: built in \(String(format: "%.1f", ms)) ms (\(bookmarkNodes.count) nodes)")
+        }
+        return tree
+    }
+
+    /// Live editing buffers — the single source of in-flight text.
+    public var draftTitle: String = "" {
+        didSet { if draftTitle != oldValue { isDraftDirty = true } }
+    }
+    public var draftBody: String = "" {
+        didSet { if draftBody != oldValue { isDraftDirty = true } }
+    }
+
+    /// Live chat composer buffer — the single source of in-flight chat text.
+    /// Stashed per-tab via `EditorTab.pendingChatDraft` (like draftTitle/draftBody
+    /// for pages) so switching tabs and back preserves unsent composer text
+    /// (issue #430). ChatDetailView binds ComposerTextView to `$store.draftChatMessage`
+    /// instead of local @State, which would be lost on view recreation.
+    public var draftChatMessage: String = ""
+
+    /// Number of concurrent agent runs (interactive sessions or one-shot
+    /// one-shot agent operations) currently writing to THIS wiki. When the LAST
+    /// run ends, the model reloads from the store so the sidebar reflects the
+    /// agent's writes. No longer a mutex — CAS (page versions, W0) prevents
+    /// data races so concurrent edits are fine; `save()` catches
+    /// `PageConflictError` and surfaces a "Page Was Updated" dialog.
+    public private(set) var agentRunCount = 0
+
+    /// True while an ingest is in progress — covers BOTH the pdf2md extraction
+    /// phase AND the agent run. Set at the top of `runMultiIngest` BEFORE
+    /// extraction begins, so the Edit preflight blocks during the extraction
+    /// window too (issue #235). The ingest's own `run()` preflight does NOT
+    /// check this flag, so there is no self-deadlock. Cleared on early exit or
+    /// process termination.
+    public private(set) var isIngestInProgress = false
+
+    /// Phase 7: capability flag for workspace-isolated ingestion. When true,
+    /// `AgentOperationRunner.runMultiIngest` creates a workspace, passes the
+    /// workspace ID to the launcher (which injects `WIKI_WORKSPACE` into the
+    /// child process's per-spawn environment — NOT process-global `setenv`),
+    /// and auto-merges on completion. Defaults to `false` — existing behavior
+    /// is unchanged when the flag is off.
+    public var workspacesEnabled: Bool = false
+
+    // MARK: - Workspace facades (Phase 7)
+
+    /// Create a workspace (delegates to the store). Used by
+    /// `AgentOperationRunner` when `workspacesEnabled` is on.
+    @discardableResult
+    public func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID {
+        try store.createWorkspace(name: name, activityID: activityID)
+    }
+
+    /// Merge a workspace into main (delegates to the store). Used by
+    /// `AgentOperationRunner` to auto-merge after an isolated ingest.
+    @discardableResult
+    public func workspaceMerge(workspaceID: WorkspaceID) throws -> [String] {
+        try store.workspaceMerge(workspaceID: workspaceID)
+    }
+
+    /// Reap stale open workspaces (delegates to the store).
+    @discardableResult
+    public func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int {
+        try store.reapStaleWorkspaces(ttl: ttl)
+    }
+
+    private let store: WikiStore
+
+    /// The underlying concrete `WikiStore` (concretely `GRDBWikiStore` in
+    /// production). Exposed so the reader can hand it to off-main read helpers
+    /// (`TransclusionEmbedder.renderEmbedBody`) for the no-`readPool` fallback
+    /// (in-memory tests; rare in production — `WikiSession.init` always sets
+    /// `readPool` for file-backed wikis). Cast to `GRDBWikiStore` at the call
+    /// site; that is the only concrete conformer today.
+    public var internalStore: WikiStore { store }
+    /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
+    /// Injected by `WikiSession.init` for file-backed wikis; `nil` for
+    /// in-memory stores (a separate connection to `:memory:` would see a
+    /// different, empty database) and in tests — callers fall back to the
+    /// main-actor store. See `WikiReadPool` for the safety argument.
+    @ObservationIgnored public var readPool: WikiReadPool?
+
+    /// Phase 2 Tantivy BM25 search service (plans/tantivy-search-sidecar.md §4.4).
+    /// Injected by `WikiSession` after init (the service is built from the same
+    /// store + bus the model wraps, but construction happens post-init so this is
+    /// set rather than a constructor param — same lifecycle as `readPool`).
+    /// `nil` when Tantivy construction failed (the session never breaks over a
+    /// derived index) — search then runs without a BM25 leg (cosine-only when
+    /// semantic search is available).
+    #if os(macOS)
+    @ObservationIgnored public var tantivySearch: TantivySearchService?
+    #else
+    // Linux: Tantivy is unavailable — the search path uses `nil` `bm25Leg`
+    // (no lexical BM25 leg on this branch).
+    @ObservationIgnored public var tantivySearch: Any?
+    #endif
+    /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
+    /// `WikiSession` → `SessionManager` → `WikiFSApp`. `nil` means fall back to
+    /// the tag-based `HTMLToMarkdown` path (CI, clean dev before `make build`).
+    @ObservationIgnored public var htmlMarkdownExtractor: (any HtmlMarkdownExtractor)?
+
+    /// The configured HTML extraction backend (issue #799 PR2). Set at app
+    /// wiring time from `ExtractionConfig.htmlBackend` so the Extract button
+    /// and the "Re-extract with" menu have a default to use when the user
+    /// taps Extract without picking a backend explicitly. `nil` = no default
+    /// chosen (a fresh install, or a config file written before this field
+    /// shipped) — the menu then lists `HtmlExtractionBackend.allCases` so the
+    /// user picks one. Mirrors the injection pattern of
+    /// `htmlMarkdownExtractor` above (the model is deliberately NOT
+    /// config-aware; config is read by `ExtractionCoordinator` in
+    /// `WikiFSEngine`).
+    @ObservationIgnored public var htmlBackend: HtmlExtractionBackend?
+
+    /// The configured podcast transcription backend (issue #799 PR4). Set at
+    /// app wiring time from `ExtractionConfig.podcastBackend` so the
+    /// Transcribe button and the "Re-transcribe with" menu have a default
+    /// when the user taps Transcribe without picking a backend explicitly.
+    /// `nil` = no default chosen (a fresh install, or a config file written
+    /// before this field shipped); the View-level `runTranscription` falls
+    /// back to `.appleTranscript` directly (the only backend today). Mirrors
+    /// the `htmlBackend` injection pattern (the model is deliberately NOT
+    /// config-aware; config is read by `ExtractionCoordinator` in
+    /// `WikiFSEngine`).
+    @ObservationIgnored public var podcastBackend: PodcastTranscriptionBackend?
+    private var autosaveTask: Task<Void, Never>?
+
+    deinit {
+        // Cancel pending debounced search tasks so they don't fire after the
+        // model is deallocated — a leaked Task's dbQueue.read would crash with
+        // "Database methods are not reentrant" if a subsequent test's write
+        // is in progress on the same DatabaseQueue.
+        MainActor.assumeIsolated {
+            searchTask?.cancel()
+            sourceSearchTask?.cancel()
+            chatSearchTask?.cancel()
+            autosaveTask?.cancel()
+        }
+    }
+    /// The page whose text currently lives in the draft buffers.
+    private var loadedPage: PageID?
+    /// The page-content version id captured when the page was loaded into the
+    /// editor. Used as the CAS expectation when saving (W0, PR #312): if another
+    /// writer committed a new version after the editor loaded, the save throws
+    /// `PageConflictError` instead of silently clobbering.
+    private var loadedPageHeadVersionID: PageVersionID?
+    /// What the drafts currently hold, so a flush saves the RIGHT document even
+    /// after `selection` has advanced (§3.5 read-state-at-save-time).
+    private var loadedSelection: WikiSelection?
+    private var isApplyingHistorySelection = false
+    /// Debug timing: when the latest user-initiated navigation began (set in
+    /// `openTab`). The reader's `Coordinator` reads this to log the synchronous
+    /// click→startLoad window and the full click→painted latency. `internal` so
+    /// the app module can read it; `nil` until the first navigation.
+    public var clickStartedAt: DispatchTime?
+    /// True when the page drafts differ from the last persisted state. Cleared on
+    /// save and on load. Prevents `flushPendingSaves()` from bumping `updated_at`
+    /// on a tab switch when the user only viewed a page without editing.
+    private var isDraftDirty = false
+    /// Suppresses double-processing in `handleSelectionChange` while a tab switch
+    /// is mid-flight (`setActiveTab` assigns `selection`, which fires the view's
+    /// `onChange(of: selection)` bridge). Set in exactly one place —
+    /// `setActiveTab(_:)`. Follows the same pattern as `isApplyingHistorySelection`.
+    @ObservationIgnored private var isApplyingTabSelection = false
+    private static let navigationHistoryLimit = 100
+    private static let maxRecentlyClosedTabs = 10
+    /// Technique label for synthetic byteless-source markdown written from oEmbed
+    /// metadata + URL (no transcript). Issue #646.
+    private static let bytelessMetadataTechnique = "byteless-oembed-synthetic"
+    /// Technique label for synthetic byteless-source markdown written from oEmbed
+    /// metadata + URL + a transcript (e.g. YouTube captions). Issue #646.
+    private static let bytelessTranscriptTechnique = "byteless-oembed-transcript"
+    /// Technique label for the Apple Podcasts TTML-derived transcript markdown
+    /// written by `transcribePodcast(sourceID:origin:fetcher:)` (issue #799 PR4).
+    /// Stamped on the `source_markdown_versions` row so the provenance chip's
+    /// alternatives UI surfaces the producer alongside `byteless-oembed-synthetic`
+    /// (for the byteless-media sources) and `defuddle` / `html-to-markdown` /
+    /// `pdf2md` / etc. (for the PDF/HTML sources).
+    private static let podcastTtmlTechnique = "apple-ttml"
+    /// Technique label for the YouTube caption-track-derived transcript markdown
+    /// written by `transcribeYouTube(sourceID:origin:fetcher:)` (issue #799 PR5,
+    /// generalizing the PR4 on-demand model to YouTube). Mirrors the
+    /// `podcastTtmlTechnique` shape: stamped on the `source_markdown_versions`
+    /// row so the provenance chip reports the producer. The literal string
+    /// is byte-identical to the one the pre-PR5 ingest-time auto-fetch wrote
+    /// (`youtubeEmbedAndTranscriptOutcome` used `"youtube-captions"`), so a
+    /// pre-existing YouTube transcript source from an older build keeps the
+    /// same provenance label.
+    private static let youtubeCaptionsTechnique = "youtube-captions"
+    /// Technique label for the generic RSS-feed podcast transcript markdown
+    /// written by `transcribeRSSPodcast(sourceID:origin:fetcher:)` (issue
+    /// podcast-generalize). Mirrors the `podcastTtmlTechnique` shape: stamped
+    /// on the `source_markdown_versions` row so the provenance chip reports the
+    /// producer. The generic path fetches the `<podcast:transcript>` tag via
+    /// the `podcast-transcript` `uv` script (no FairPlay helper).
+    private static let rssPodcastTranscriptTechnique = "rss-podcast-transcript"
+
+    private static func transcriptTool(for technique: String) -> ExtractionTool {
+        switch technique {
+        case youtubeCaptionsTechnique: return .youtubeCaptions
+        case rssPodcastTranscriptTechnique: return .rssPodcastTranscript
+        case podcastTtmlTechnique: return .appleTTML
+        case ExtractionTool.vimeoTranscript.rawValue: return .vimeoTranscript
+        default: return .transcript
+        }
+    }
+    /// The synthetic MIME for a byteless Apple Podcasts embed source (issue
+    /// #799 PR4). `ExternalEmbed.target(for:)` dispatches on the provider's
+    /// `agentName == "apple-podcast"` (NOT the MIME — see the dispatch table
+    /// in `ExternalEmbed.swift`), so this label is near-cosmetic: it persists
+    /// the source's content-type taxonomy alongside the byteless-media
+    /// convention (`video/youtube`, `audio/spotify`, …) and keeps
+    /// `isMarkdownNative` from misclassifying a byteless podcast source as
+    /// text-native (which would skip the embed-player render path).
+    private static let podcastEmbedMIME = "audio/apple-podcast"
+
+    public init(store: WikiStore) {
+        self.store = store
+        reloadSummaries()
+        reloadTrackedRepositories()
+        reloadSources()
+        reloadBookmarkNodes()
+        reloadChats()
+        subscribeToChanges()
+    }
+
+    /// The per-wiki resource-change bus of the backing store (exposed so the app
+    /// layer — the File Provider signaler and the change bridge — can subscribe
+    /// to the same mechanism the store emits into).
+    public var eventBus: WikiEventBus? { store.eventBus }
+
+    /// Subscribe to the store's bus for **all** changes — both in-app writes
+    /// (the model's own saves, agent runs) and cross-process writes (`wikictl`
+    /// surfaced by the Darwin-notification bridge) — and rebuild the list
+    /// projections via `reloadFromStore()`. Phase E: the model is a pure
+    /// reload subscriber; the per-call `reload*()` sites are removed and the
+    /// `origin` field is gone. The reload only refreshes list projections
+    /// (sidebar, sources, chats, bookmarks) — it never touches the editor
+    /// draft or selection, so there is no focus/flicker risk.
+    @ObservationIgnored private var changeToken: SubscriptionToken?
+    private func subscribeToChanges() {
+        changeToken = store.eventBus?.subscribe(nil) { [weak self] _ in
+            self?.reloadFromStore()
+        }
+    }
+
+    // MARK: - Selection / loading
+
+    /// Switch the selection programmatically. Flushes any pending save
+    /// SYNCHRONOUSLY first (§3.5 immediate-on-switch) so the outgoing document
+    /// can't lose buffered edits, then loads the new selection's text.
+    /// Updates the active tab's metadata to stay in sync.
+    public func select(_ newValue: WikiSelection?) {
+        guard newValue != selection else { return }
+        flushPendingSaves()
+        recordHistoryTransition(from: loadedSelection, to: newValue)
+        selection = newValue
+        loadDrafts(for: newValue)
+        syncActiveTabMetadata(to: newValue)
+    }
+
+    /// Bridge for SwiftUI's `List(selection:)`, which writes `selection`
+    /// DIRECTLY (bypassing `select(_:)`). The view observes the property with
+    /// `.onChange(of:)` and calls this. Flushing reads the drafts, which still
+    /// belong to `loadedSelection`, so the outgoing document's edits are
+    /// persisted before we load the incoming one (§3.5).
+    public func handleSelectionChange(to newValue: WikiSelection?) {
+        // Skip if triggered programmatically by a tab switch.
+        guard !isApplyingTabSelection, newValue != loadedSelection else { return }
+        flushPendingSaves()     // persists drafts to loadedSelection
+        recordHistoryTransition(from: loadedSelection, to: newValue)
+        loadDrafts(for: newValue)
+
+        // Keep the active tab's metadata in sync after a sidebar-driven change
+        // (in-tab navigation). If no tabs exist yet, create the initial tab.
+        if tabs.isEmpty, let newValue {
+            let tab = EditorTab(selection: newValue, title: tabTitle(for: newValue))
+            tabs.append(tab)
+            activeTabID = tab.id
+        } else {
+            syncActiveTabMetadata(to: newValue)
+        }
+    }
+
+    public func navigateBack() {
+        guard let destination = backStack.popLast() else { return }
+        if let current = loadedSelection {
+            forwardStack.append(current)
+        }
+        applyHistorySelection(destination)
+    }
+
+    public func navigateForward() {
+        guard let destination = forwardStack.popLast() else { return }
+        if let current = loadedSelection {
+            backStack.append(current)
+        }
+        trimBackStackIfNeeded()
+        applyHistorySelection(destination)
+    }
+
+    /// True if `title` resolves to an existing page. Drives the in-app preview's
+    /// resolved-vs-unresolved `[[wiki-link]]` styling (a missing target renders
+    /// dimmed + inert). Duplicate titles resolve to the lowest-ULID page, same as
+    /// the link graph (`replaceLinks`).
+    public func pageExists(title: String) -> Bool {
+        DebugLog.trying("resolveTitleToID", operation: { try store.resolveTitleToID(title) }) != nil
+    }
+
+    /// Navigate to the page with `title` from a clicked `[[wiki-link]]` in the
+    /// preview. Resolves title → id (lowest-ULID on a duplicate-title collision,
+    /// matching the link graph) and records the jump in navigation history first
+    /// (so back/forward works). Returns whether navigation happened, so the click
+    /// handler can report `.handled`. A no-op (`false`) if the title has no page.
+    ///
+    /// Navigation target depends on the click's modifier (browser convention):
+    /// - **Plain click** (`openInNewTab: false`, the default) → navigate the
+    ///   active tab in place (`navigateCurrentTab`): focus an already-open tab
+    ///   for the target if one exists, otherwise replace the active tab's
+    ///   selection. Never spawns a duplicate tab.
+    /// - **⌘-click** (`openInNewTab: true`) → `openTab`, which focuses an
+    ///   existing tab for the target or appends a new one (current behavior).
+    ///
+    /// - Parameter anchor: optional `#fragment` from a `[[Page#Section]]` link;
+    ///   the destination `WikiReaderView` scrolls to it after load.
+    @discardableResult
+    public func selectPage(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard let id = DebugLog.trying("resolveTitleToID", operation: { try store.resolveTitleToID(title) }) else { return false }
+        let target = WikiSelection.page(id)
+        // Stash the anchor so the destination WikiReaderView can scroll to it
+        // after render. Tagged with the target selection so a stale anchor can't
+        // misfire on the wrong page.
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        // Record history while `loadedSelection` still points at the outgoing
+        // page (openTab/setActiveTab/navigateCurrentTab don't record history
+        // themselves).
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    /// Navigate to the page with `id` from a clicked canonical
+    /// `wiki://page?id=<ULID>` link (Phase 5). A direct selection — no title
+    /// resolution, so it is stable across renames (the §6.5 click-time row
+    /// fetch). Returns `false` when the id names no loaded page (a deleted
+    /// target), so the caller can fall back to title-based selection.
+    @discardableResult
+    public func selectPage(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard summaries.contains(where: { $0.id == id }) else { return false }
+        let target = WikiSelection.page(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    // MARK: - Source link resolution
+
+    /// Existence check for `[[source:…]]` linkification: returns `true` when a
+    /// source with the given display name (or filename fallback) exists.
+    public func sourceExists(displayName: String) -> Bool {
+        DebugLog.trying("resolveSourceByName", operation: { try store.resolveSourceByName(displayName) }) != nil
+    }
+
+    /// `(bytes, mimeType)` for the blob scheme handler (`wiki-blob://`). `nil` =
+    /// unknown id (→ 404); empty `Data` = byteless source (→ 200 empty body);
+    /// else the blob bytes + MIME. Used by `BlobSchemeHandler` to serve source
+    /// content to the WKWebView for `![[source:…]]` embeds. Looks up the MIME
+    /// type from the loaded `sources` list (which mirrors `store.listSources()`)
+    /// rather than calling the store directly, since `getSource(id:)` is concrete
+    /// on `GRDBWikiStore`, not on the `WikiStore` protocol.
+    @MainActor public func sourceContentAndMIME(id: SourceID) -> (data: Data, mimeType: String?)? {
+        guard let summary = sources.first(where: { $0.id == id }) else { return nil }
+        let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) }) ?? Data()
+        return (data, summary.mimeType)
+    }
+
+    /// Semantic search for pages matching `query`. Delegates to the store's
+    /// hybrid search (FTS5 bm25 always; +MiniLM cosine fused via RRF when the
+    /// model is available). Runs the query embedding + SQLite on the main actor
+    /// — fine for the one-shot callers (the "Find Similar…" link menu builds its
+    /// submenu once per right-click, not per render). The old per-row sidebar
+    /// caller that froze the UI was removed; MiniLM inference is now ms, not the
+    /// ~5 s/100k chars NLEmbedding cliff that motivated disabling this.
+    ///
+    /// Routes through the no-BM25-leg path (`bm25Leg: nil`) — post-#634 this
+    /// means cosine-only (the FTS5 fallback it used to surface was dropped). Kept
+    /// as-is for one-shot callers that don't want the Tantivy index dependency
+    /// (the omnibox is debounced via a `Task` and benefits from the existing
+    /// path). The "Find Similar…" right-click menu should call
+    /// ``searchSimilarResolvingTantivy(query:limit:)`` instead — it resolves
+    /// the Tantivy BM25 leg (#637) so the menu surfaces fuzzy (edit-distance 1)
+    /// matches without regressing post-#634 (no FTS5).
+    public func searchSimilar(query: String, limit: Int = 8) -> [WikiPageSummary] {
+        DebugLog.trying("searchSimilar", operation: { try store.searchSimilar(query: query, limit: limit, bm25Leg: nil) }) ?? []
+    }
+
+    /// #637: one-shot page search that resolves a Tantivy BM25 leg before
+    /// calling the store's 3-arg `searchSimilar` — mirrors `scheduleSearch()`
+    /// without the debounce, for callers that search once per user gesture
+    /// rather than per keystroke (the "Suggest…" / "Find Similar…" link
+    /// submenu, via `WikiLinkMenuNSItems`).
+    ///
+    /// #925: this used to bridge the actor-isolated Tantivy query back to a
+    /// synchronous main-actor call with a blocking semaphore. That parked the
+    /// main thread *and* a cooperative-pool thread on every right-click, which
+    /// is one of the four starvation sites the issue tracks; the awaited leg
+    /// below is the whole fix. Callers that need a menu item synchronously must
+    /// render a placeholder and fill it in when this returns — see
+    /// `SimilarPagesMenuLoader`.
+    ///
+    /// Returns cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable
+    /// or returns no hits — post-#634 that's the documented contract (FTS5 was
+    /// dropped; nil leg = no BM25 leg, cosine still answers when
+    /// NLEmbedding/MLX are loaded).
+    public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) async -> [WikiPageSummary] {
+        guard !query.isEmpty else { return [] }
+        let leg = await resolveTantivyLeg(
+            query: query, kind: .page, limit: limit, catalog: summaries,
+            id: PageID.init(rawValue:))
+        do {
+            return try store.searchSimilar(query: query, limit: limit, bm25Leg: leg)
+        } catch {
+            DebugLog.store("WikiStoreModel.searchSimilarResolvingTantivy: store hit failed for query=\"\(query)\": \(error)")
+            return []
+        }
+    }
+
+    /// Semantic source search wrapper — same hybrid store search as
+    /// `searchSimilar`, over sources.
+    public func searchSimilarSources(query: String, limit: Int = 20) -> [SourceSummary] {
+        DebugLog.trying("searchSimilarSources", operation: { try store.searchSimilarSources(query: query, limit: limit, bm25Leg: nil) }) ?? []
+    }
+
+    /// Hybrid chat search wrapper — same hybrid store search as
+    /// `searchSimilar`, over chats. Used by the Chats sidebar search field.
+    public func searchSimilarChats(query: String, limit: Int = 20) -> [ChatSummary] {
+        DebugLog.trying("searchSimilarChats", operation: { try store.searchSimilarChats(query: query, limit: limit, bm25Leg: nil) }) ?? []
+    }
+
+    /// Unified omnibox search across all resource types (#288). Returns a
+    /// ranked, deduplicated `[OmniboxResult]` that mixes pages, sources, chats,
+    /// and bookmark nodes. The result always starts with an `.ask(question:)`
+    /// action row (so the user can send the query straight to chat), followed by
+    /// up to 3 pages, 2 sources, 2 chats, and 3 bookmark matches.
+    public func searchOmnibox(query: String) async -> [OmniboxResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var results: [OmniboxResult] = []
+
+        // 1. The "Ask" action row — always first, so Enter sends to chat.
+        results.append(.ask(question: trimmed))
+
+        // 2. Pages (semantic + FTS).
+        let pageLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .page, limit: 3, catalog: summaries,
+            id: PageID.init(rawValue:))
+        let pages = (DebugLog.trying("searchOmniboxPages", operation: {
+            try store.searchSimilar(query: trimmed, limit: 3, bm25Leg: pageLeg)
+        }) ?? [])
+        results.append(contentsOf: pages.map { .page($0) })
+
+        // 3. Sources (semantic + FTS).
+        let sourceLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .source, limit: 2, catalog: sources,
+            id: SourceID.init(rawValue:))
+        let sources = (DebugLog.trying("searchOmniboxSources", operation: {
+            try store.searchSimilarSources(query: trimmed, limit: 2, bm25Leg: sourceLeg)
+        }) ?? [])
+        results.append(contentsOf: sources.map { .source($0) })
+
+        // 4. Chats (semantic + FTS).
+        let chatLeg = await resolveTantivyLeg(
+            query: trimmed, kind: .chat, limit: 2, catalog: chats,
+            id: ChatID.init(rawValue:))
+        let chats = (DebugLog.trying("searchOmniboxChats", operation: {
+            try store.searchSimilarChats(query: trimmed, limit: 2, bm25Leg: chatLeg)
+        }) ?? [])
+        results.append(contentsOf: chats.map { .chat($0) })
+
+        // 5. Bookmarks (plain substring over folder labels + resolved ref titles).
+        let matchingBookmarks = searchBookmarks(query: trimmed).prefix(3).map { node in
+            OmniboxResult.bookmark(node: node, resolvedTitle: resolveBookmarkTitle(node))
+        }
+        results.append(contentsOf: matchingBookmarks)
+
+        return results
+    }
+
+    /// Substring search over bookmark nodes — matches folder labels and the
+    /// resolved title of page/source/chat refs. Returns matching nodes plus
+    /// their ancestor folders (so a hit inside a collapsed folder is visible).
+    /// Inlined here (in WikiFSCore) so the omnibox search can use it without
+    /// crossing into the WikiFS UI module (#288, mirrors #240's logic).
+    private func searchBookmarks(query: String) -> [BookmarkNode] {
+        guard !query.isEmpty else { return bookmarkNodes }
+        let byID = Dictionary(uniqueKeysWithValues: bookmarkNodes.map { ($0.id, $0) })
+
+        var matchingIDs = Set<BookmarkID>()
+        for node in bookmarkNodes {
+            let title = resolveBookmarkTitle(node)
+            if title.localizedCaseInsensitiveContains(query) {
+                matchingIDs.insert(node.id)
+            }
+        }
+
+        var visibleIDs = Set<BookmarkID>()
+        for id in matchingIDs {
+            var current: BookmarkID? = id
+            while let cid = current, let node = byID[cid] {
+                visibleIDs.insert(cid)
+                current = node.parentID
+            }
+        }
+        return bookmarkNodes.filter { visibleIDs.contains($0.id) }
+    }
+
+    /// Resolves the display title for a bookmark node: folder label, or for
+    /// refs, the title/name of the target page/source/chat (#240 / #288).
+    private func resolveBookmarkTitle(_ node: BookmarkNode) -> String {
+        switch node.content {
+        case .folder(let label): return label
+        case .page(let id): return summaries.first { $0.id == id }?.title ?? ""
+        case .source(let id): return sources.first { $0.id == id }?.effectiveName ?? ""
+        case .chat(let id): return chats.first { $0.id == id }?.title ?? ""
+        }
+    }
+
+    /// Resolve a sidebar drag payload to a human-readable name for display
+    /// in the chat attachment chips (issue #385). Mirrors the bookmark title
+    /// resolution, but works off `SidebarDragPayload` directly.
+    public func resolveAttachmentName(for payload: SidebarDragPayload) -> String? {
+        let pageID = PageID(rawValue: payload.id)
+        switch payload.kind {
+        case .page:
+            return summaries.first { $0.id == pageID }?.title
+        case .source:
+            return sources.first { $0.id.rawValue == pageID.rawValue }?.effectiveName
+        case .chat:
+            return chats.first { $0.id.rawValue == pageID.rawValue }?.title
+        }
+    }
+
+    /// Resolve a page title to its id (lowest-ULID on a duplicate-title
+    /// collision, matching the link graph). Best-effort: `nil` on any error or
+    /// when no page matches. Used by "Copy File Path" to build the mount path.
+    public func pageID(forTitle title: String) -> PageID? {
+        do { return try store.resolveTitleToID(title) } catch { return nil }
+    }
+
+    /// Resolve a source display name (or filename fallback) to its id
+    /// (most-recently-updated on collision). Best-effort: `nil` on any error or
+    /// no match. Used by "Copy File Path" to build the source's mount path.
+    public func sourceID(forDisplayName displayName: String) -> SourceID? {
+        do { return try store.resolveSourceByName(displayName) } catch { return nil }
+    }
+
+    /// Resolve a chat title to its id (lowest-ULID on a duplicate-title
+    /// collision). Best-effort: `nil` on any error or when no chat matches.
+    public func chatID(forTitle title: String) -> ChatID? {
+        do { return try store.resolveChatByTitle(title) } catch { return nil }
+    }
+
+    /// Navigate to the source with `displayName` from a clicked
+    /// `[[source:display-name]]` link in the preview. Resolves display name → id
+    /// (most-recently-updated on collision) and records navigation history. A
+    /// plain click (`openInNewTab: false`) navigates the active tab in place
+    /// (`navigateCurrentTab`); a ⌘-click (`openInNewTab: true`) opens a new tab
+    /// via `openTab`. Returns whether navigation happened.
+    ///
+    /// - Parameter anchor: optional `#fragment` from a `[[source:Name#"quote"]]`
+    ///   link; the destination `WikiReaderView` scrolls to it after load.
+    @discardableResult
+    public func selectSource(byDisplayName displayName: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard let id = DebugLog.trying("resolveSourceByName", operation: { try store.resolveSourceByName(displayName) }) else { return false }
+        let target = WikiSelection.source(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    /// Navigate to the source with `id` from a clicked canonical
+    /// `wiki://source?id=<ULID>` link (Phase 5). A direct selection — no
+    /// display-name resolution, so it is stable across renames. Returns `false`
+    /// when the id names no loaded source (a deleted target), so the caller can
+    /// fall back to display-name-based selection.
+    ///
+    /// - Parameter pinnedExtractionID: Phase 6 — when non-nil (a pinned quote
+    ///   link carrying `&pin=<smvID>`), the destination `SourceDetailView` loads
+    ///   *that* extraction so the quote is present in the rendered DOM. Nil
+    ///   (no pin, or a non-quote pin) opens HEAD.
+    @discardableResult
+    public func selectSource(byID id: SourceID, anchor: String? = nil,
+                             openInNewTab: Bool = false,
+                             pinnedExtractionID: SourceMarkdownVersionID? = nil) -> Bool {
+        guard sources.contains(where: { $0.id == id }) else { return false }
+        let target = WikiSelection.source(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        // Phase 6: stash the pinned-extraction id alongside the anchor (same
+        // counter — the pin travels with its anchor). Set-once/consume-once.
+        pendingPinnedExtraction = pinnedExtractionID.map { (selection: target, versionID: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    // MARK: - Chat link resolution
+
+    /// Clears the active chat tab's composer draft — both the live
+    /// `draftChatMessage` buffer and the stashed `pendingChatDraft`. Called by
+    /// `ChatDetailView.sendMessage` after a message is sent so the text doesn't
+    /// reappear on tab switch-back (issue #430).
+    public func clearActiveChatDraft() {
+        draftChatMessage = ""
+        if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
+            tabs[i].pendingChatDraft = nil
+        }
+    }
+
+    /// Navigate to the chat with `id` from a clicked canonical
+    /// `wiki://chat?id=<ULID>` link. A direct selection — no title resolution,
+    /// so it is stable across renames. Returns `false` when the id names no
+    /// loaded chat (a deleted target), so the caller can fall back to
+    /// title-based selection.
+    ///
+    /// - Parameter anchor: optional `#"quote"` fragment from a
+    ///   `[[chat:Title#"quote"]]` link (issue #281); the destination `ChatDetailView`
+    ///   resolves it to a message, scrolls it into view, and highlights the
+    ///   passage — the chat analogue of `selectSource(anchor:)`. Mirrors the
+    ///   page/source anchor seam: tagged with `.chat(id)` + versioned.
+    @discardableResult
+    public func selectChat(byID id: ChatID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard chats.contains(where: { $0.id == id }) else { return false }
+        let target = WikiSelection.chat(id)
+        pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
+        pendingScrollAnchorVersion += 1
+        recordHistoryTransition(from: loadedSelection, to: target)
+        if openInNewTab {
+            openTab(target)
+        } else {
+            navigateCurrentTab(to: target)
+        }
+        return true
+    }
+
+    /// Navigate to the chat with `title` from a clicked `[[chat:Title]]` link.
+    /// Resolves title → id via `resolveChatByTitle` (lowest-ULID on a duplicate-
+    /// title collision) and records navigation history. Returns whether
+    /// navigation happened. `anchor` carries an optional `#"quote"` fragment
+    /// (issue #281); see `selectChat(byID:anchor:)`.
+    @discardableResult
+    public func selectChat(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
+        guard let id = DebugLog.trying("resolveChatByTitle", operation: { try store.resolveChatByTitle(title) }) else { return false }
+        return selectChat(byID: id, anchor: anchor, openInNewTab: openInNewTab)
+    }
+
+    /// The pending scroll/highlight target set by `selectPage`/`selectSource` and
+    /// consumed by the destination reader's `Coordinator` (see
+    /// `WikiReaderView.consumeAndApplyPendingAnchor`). Tagged with the target
+    /// `WikiSelection` so a stale anchor can't misfire on the wrong page.
+    public private(set) var pendingScrollAnchor: (selection: WikiSelection, fragment: String)?
+
+    /// Monotonic counter bumped each time `pendingScrollAnchor` is assigned. The
+    /// reader's `Coordinator` keys its "have I applied this anchor yet?" check off
+    /// this value (not off view `@State`), so re-clicking a quote link to an
+    /// already-open document re-fires scroll + highlight even though the view
+    /// itself may be re-created mid-navigation.
+    public private(set) var pendingScrollAnchorVersion: Int = 0
+
+    /// Sets an anchor to scroll to within the currently selected page or source.
+    public func jumpToAnchorInCurrentSelection(_ anchor: String) {
+        guard let current = selection else { return }
+        pendingScrollAnchor = (selection: current, fragment: anchor)
+        pendingScrollAnchorVersion += 1
+    }
+
+    /// Atomically consume the pending scroll anchor if `selection` matches.
+    /// Returns the fragment to resolve and clears the anchor; nil if the
+    /// selection doesn't match or there is no pending anchor. Only the reader
+    /// `Coordinator` consumes — and only once the page has painted (see
+    /// `WikiReaderView.ConsumeAndApplyPendingAnchor`) — so a view that is
+    /// discarded before painting never clears an anchor it never applied.
+    public func consumePendingScrollAnchor(for selection: WikiSelection?) -> String? {
+        guard let pending = pendingScrollAnchor,
+              let sel = selection,
+              pending.selection == sel else { return nil }
+        pendingScrollAnchor = nil
+        return pending.fragment
+    }
+
+    /// Phase 6: the pending pinned-extraction id set by
+    /// `selectSource(byID:pinnedExtractionID:)` and consumed by the destination
+    /// `SourceDetailView` so it loads the pinned extraction the quote was written
+    /// against. Tagged with the target `WikiSelection` and set-once/consume-once
+    /// — mirrors `pendingScrollAnchor`.
+    public private(set) var pendingPinnedExtraction: (selection: WikiSelection, versionID: SourceMarkdownVersionID)?
+
+    /// Atomically consume the pending pinned-extraction id if `selection`
+    /// matches. Returns the smv id once and clears the state; nil if the
+    /// selection doesn't match or there is no pending pin. Mirrors
+    /// `consumePendingScrollAnchor`.
+    public func consumePendingPinnedExtraction(for selection: WikiSelection?) -> SourceMarkdownVersionID? {
+        guard let pending = pendingPinnedExtraction,
+              let sel = selection,
+              pending.selection == sel else { return nil }
+        pendingPinnedExtraction = nil
+        return pending.versionID
+    }
+
+    // MARK: - Sidebar reveal ("Show In List")
+
+    /// The pending "Show In List" reveal target set by a detail view's button
+    /// (`requestSidebarReveal(_:)`) and consumed by the sidebar list view once it
+    /// has scrolled to + selected the row. Follows the same "set once, consume
+    /// once" producer/consumer discipline as `pendingScrollAnchor` (issue #183).
+    public private(set) var pendingSidebarReveal: WikiSelection?
+
+    /// Monotonic counter bumped each time `pendingSidebarReveal` is assigned. The
+    /// sidebar host (`SidebarView`) and `ContentView` observe it via `.onChange`
+    /// so a repeat request for an already-mounted section still fires the switch
+    /// / un-collapse / scroll path (the value itself may be identical to the
+    /// previous one).
+    public private(set) var pendingSidebarRevealVersion: Int = 0
+
+    /// Request that the sidebar reveal `selection` in its list: open the sidebar
+    /// if collapsed, switch to the matching section (Pages vs. Sources), clear any
+    /// active search that would hide the target, then scroll to + select the row.
+    public func requestSidebarReveal(_ selection: WikiSelection) {
+        pendingSidebarReveal = selection
+        pendingSidebarRevealVersion += 1
+    }
+
+    /// Called by the sidebar list view AFTER it has scrolled to + selected the
+    /// target row, so the reveal fires exactly once. Clears the pending target.
+    public func consumePendingSidebarReveal() {
+        pendingSidebarReveal = nil
+    }
+
+    // MARK: - Tab operations
+
+    /// The single seam every tab switch routes through: flush the outgoing tab's
+    /// drafts, set the active ID, mirror the tab's selection into `selection`, and
+    /// load the incoming drafts — all under one re-entrancy guard so the view's
+    /// `onChange(of: selection)` bridge no-ops while the switch is mid-flight.
+    /// Pass `nil` to enter the empty state.
+    private func setActiveTab(_ id: UUID?) {
+        // Stash the outgoing tab's draft rather than auto-saving to DB.
+        if let outgoingID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == outgoingID }),
+           tabs[i].isEditing {
+            tabs[i].pendingDraftTitle = draftTitle
+            tabs[i].pendingDraftBody = draftBody
+        }
+        // Stash the outgoing chat tab's composer draft so it survives the
+        // switch-back (issue #430). Unconditional — the composer is always
+        // "drafting"; there's no edit-mode gate like the page editor.
+        if let outgoingID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == outgoingID }) {
+            switch tabs[i].selection {
+            case .newChat, .chat:
+                tabs[i].pendingChatDraft = draftChatMessage
+            default:
+                break
+            }
+        }
+        isApplyingTabSelection = true
+        activeTabID = id
+        let sel = tabs.first { $0.id == id }?.selection
+        selection = sel
+        loadDrafts(for: sel)
+        isApplyingTabSelection = false
+    }
+
+    /// Keep the active tab's metadata in sync with an in-tab navigation (sidebar
+    /// single-click within the active tab, `[[wiki-link]]` click, history). A
+    /// no-op in the empty state or when `newValue` is `nil`.
+    private func syncActiveTabMetadata(to newValue: WikiSelection?) {
+        guard let activeID = activeTabID,
+              let i = tabs.firstIndex(where: { $0.id == activeID }),
+              let newValue else { return }
+        tabs[i].selection = newValue
+        tabs[i].title = tabTitle(for: newValue)
+    }
+
+    /// Navigate the **active tab in place** to `target` — the plain-click
+    /// (`[[wiki-link]]`) path, matching the macOS browser convention where a
+    /// plain click navigates the current tab rather than spawning a new one.
+    ///
+    /// Resolution order (history is recorded by the caller):
+    /// 1. A tab for `target` is already open → focus it (reuse, never duplicate),
+    ///    via `setActiveTab` (same as `openTab`'s reuse branch).
+    /// 2. No active tab (empty state) → fall back to `openTab` so the first tab
+    ///    is created and focused.
+    /// 3. Otherwise → mutate the active tab's selection/title in place: flush the
+    ///    outgoing selection's pending edits (so nothing in-flight is lost — the
+    ///    reader is read-only in practice, but this keeps the edit path safe),
+    ///    swap the tab's selection, mirror it into `selection`, and reload drafts.
+    ///    The `isApplyingTabSelection` guard mirrors `setActiveTab` so the view's
+    ///    `onChange(of: selection)` bridge no-ops mid-swap.
+    private func navigateCurrentTab(to target: WikiSelection) {
+        if let existing = tabs.first(where: { $0.selection == target }) {
+            setActiveTab(existing.id)
+            return
+        }
+        guard let activeID = activeTabID,
+              let i = tabs.firstIndex(where: { $0.id == activeID }) else {
+            openTab(target)
+            return
+        }
+        if tabs[i].isPinned {
+            openTab(target)
+            return
+        }
+        flushPendingSaves()
+        isApplyingTabSelection = true
+        tabs[i].selection = target
+        tabs[i].title = tabTitle(for: target)
+        selection = target
+        loadDrafts(for: target)
+        isApplyingTabSelection = false
+        DebugLog.store("[tabs] navigateCurrentTab: in-place to \(target) (id=\(activeID)), \(tabs.count) tabs total")
+    }
+
+    /// Open the tab for `selection`: if one is already open, focus it (reuse,
+    /// never duplicate); otherwise create a new tab and focus it. This holds for
+    /// every selection type — pages and files reuse just like the singletons
+    /// (.newChat, .changeLog) — so clicking a page or a
+    /// `[[wiki-link]]` that's already open returns to its tab instead of spawning
+    /// a copy.
+    public func openTab(_ selection: WikiSelection, title: String? = nil) {
+        clickStartedAt = DispatchTime.now()
+        // Don't reuse draft-state tabs (.newChat) — multiple drafts are valid (#348).
+        if selection != .newChat, let existing = tabs.first(where: { $0.selection == selection }) {
+            DebugLog.store("[tabs] openTab: focus existing tab for \(selection) (id=\(existing.id))")
+            setActiveTab(existing.id)
+            return
+        }
+        let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
+        tabs.append(tab)
+        DebugLog.store("[tabs] openTab: new tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
+        setActiveTab(tab.id)
+    }
+
+    /// Open a tab for `selection` without switching focus to it. If a tab for
+    /// `selection` is already open, this is a no-op (avoid duplicates). The
+    /// active tab remains unchanged; the new tab appears at the end of the bar.
+    ///
+    /// When the tab bar is empty there is nothing to keep focused, so "background"
+    /// would leave the user on a dead surface with no signal the action fired.
+    /// Fall back to the foreground path (`openTab`) so the first tab is opened
+    /// and focused like a normal Open.
+    public func openTabInBackground(_ selection: WikiSelection, title: String? = nil) {
+        if tabs.isEmpty {
+            openTab(selection, title: title)
+            return
+        }
+        // Don't dedup draft-state tabs (.newChat) — multiple drafts are valid (#348).
+        if selection != .newChat, tabs.contains(where: { $0.selection == selection }) { return }
+        let tab = EditorTab(selection: selection, title: title ?? tabTitle(for: selection))
+        tabs.append(tab)
+        DebugLog.store("[tabs] openTabInBackground: new background tab for \(selection) (id=\(tab.id)), \(tabs.count) tabs total")
+    }
+
+    /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
+    /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
+    /// Used for the draft-state morph (.newChat → .chat(id) on first send) and
+    /// the startNewChat retarget-back (.chat(id) → .newChat). If no tab
+    /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
+    /// that tab is focused instead (tab-reuse, same as `openTab`).
+    public func retargetTab(id: UUID, to selection: WikiSelection) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            DebugLog.tabs("[tabs] retargetTab: tab \(id) not found — no-op")
+            return
+        }
+        // If another tab already displays this selection, reuse it (focus, don't
+        // duplicate) — mirrors openTab's dedup. This handles e.g. re-clicking a
+        // chat that's already open in another tab.
+        // Exception: .newChat is a draft state, not a unique resource — don't
+        // reuse an existing draft tab when retargeting to .newChat (#348).
+        if selection != .newChat, let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
+            selectTab(id: existing.id)
+            return
+        }
+        tabs[index].selection = selection
+        tabs[index].title = tabTitle(for: selection)
+        // If this is the active tab, sync selection + drafts so the view updates.
+        if activeTabID == id {
+            isApplyingTabSelection = true
+            self.selection = selection
+            loadDrafts(for: selection)
+            isApplyingTabSelection = false
+        }
+        DebugLog.tabs("[tabs] retargetTab: tab \(id) → \(selection)")
+    }
+
+    /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
+    /// draft-state morph on first send (the active tab is .newChat → .chat).
+    /// No-op if there is no active tab.
+    public func retargetActiveTabToChat(chatID: ChatID) {
+        guard let activeID = activeTabID else { return }
+        retargetTab(id: activeID, to: .chat(chatID))
+    }
+
+    /// Switch the active tab by ID. No-op if the ID is unknown or already active.
+    public func selectTab(id: UUID) {
+        guard tabs.contains(where: { $0.id == id }), id != activeTabID else { return }
+        setActiveTab(id)
+    }
+
+    /// Persist the editor's edit-mode state to the given tab so that
+    /// switching back to it can restore the mode.
+    public func setTabEditing(tabID: UUID, isEditing: Bool) {
+        guard let i = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[i].isEditing = isEditing
+    }
+
+    /// Toggle whether a tab keeps its current selection during ordinary
+    /// navigation. Unknown tab IDs are ignored so context-menu actions remain
+    /// safe if the tab closes before the action is delivered.
+    public func toggleTabPin(id: UUID) {
+        guard let i = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[i].isPinned.toggle()
+    }
+
+    /// Close one tab by ID. Preserves it in `recentlyClosedTabs` for Cmd+Shift+T.
+    /// If the closed tab is the active tab AND is in edit mode, the close is
+    /// deferred: `pendingCloseTabID` is set and the view shows a confirmation
+    /// alert before calling `confirmCloseTab()` or `cancelCloseTab()`.
+    /// If the closed tab was active (and confirmed), activates the tab now at
+    /// the same position (right neighbor), or the last tab. Closing the final
+    /// tab → empty state. Closing a non-active tab leaves the active tab untouched.
+    public func closeTab(id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if tabs[index].isEditing {
+            pendingCloseTabID = id
+            return
+        }
+        applyCloseTab(id: id, at: index)
+    }
+
+    /// Apply the deferred tab close after the user confirms. Unsaved drafts are
+    /// discarded — the user chose "Close & Discard."
+    public func confirmCloseTab() {
+        guard let id = pendingCloseTabID,
+              let index = tabs.firstIndex(where: { $0.id == id }) else {
+            pendingCloseTabID = nil
+            return
+        }
+        // Discard any stashed draft (user chose to close without saving).
+        tabs[index].pendingDraftTitle = nil
+        tabs[index].pendingDraftBody = nil
+        tabs[index].pendingChatDraft = nil
+        pendingCloseTabID = nil
+        applyCloseTab(id: id, at: index)
+    }
+
+    /// Cancel the deferred close — user chose to keep editing.
+    public func cancelCloseTab() {
+        pendingCloseTabID = nil
+    }
+
+    /// Discard the stashed draft for `tabID` and reload the page from the
+    /// database. Called when the user cancels an in-progress edit.
+    public func discardPendingDraft(tabID: UUID) {
+        guard let i = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[i].pendingDraftTitle = nil
+        tabs[i].pendingDraftBody = nil
+        tabs[i].pendingChatDraft = nil
+        loadDrafts(for: selection)
+    }
+
+    private func applyCloseTab(id: UUID, at index: Int) {
+        let closed = tabs.remove(at: index)
+        pushRecentlyClosed(closed)
+        if tabs.isEmpty {
+            setActiveTab(nil)
+        } else if closed.id == activeTabID {
+            let neighborIndex = min(index, tabs.count - 1)
+            setActiveTab(tabs[neighborIndex].id)
+        }
+        // else: active tab unchanged (it wasn't the closed one).
+    }
+
+    /// Close every tab except the one with `id`, which becomes active.
+    public func closeOtherTabs(id: UUID) {
+        guard let kept = tabs.first(where: { $0.id == id }) else { return }
+        let toClose = tabs.filter { $0.id != id }
+        guard !toClose.isEmpty else { return }
+        toClose.reversed().forEach { pushRecentlyClosed($0) }
+        tabs = [kept]
+        setActiveTab(kept.id)
+    }
+
+    /// Close every tab to the right of `id`. The anchor and tabs to its left
+    /// remain. If the active tab was among those closed, activates the anchor.
+    public func closeTabsAfter(id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let toClose = Array(tabs.dropFirst(index + 1))
+        guard !toClose.isEmpty else { return }
+        toClose.reversed().forEach { pushRecentlyClosed($0) }
+        tabs = Array(tabs.prefix(index + 1))
+        if let active = activeTabID, !tabs.contains(where: { $0.id == active }) {
+            setActiveTab(tabs[index].id)
+        }
+    }
+
+    /// Close all tabs and enter the empty state.
+    public func closeAllTabs() {
+        guard !tabs.isEmpty else { return }
+        tabs.reversed().forEach { pushRecentlyClosed($0) }
+        tabs = []
+        setActiveTab(nil)
+    }
+
+    /// Reopen the last closed tab.
+    public func reopenLastClosedTab() {
+        guard let lastClosed = recentlyClosedTabs.popLast() else { return }
+        if lastClosed.selection != .newChat,
+           let existing = tabs.first(where: { $0.selection == lastClosed.selection }) {
+            setActiveTab(existing.id)
+            return
+        }
+        tabs.append(lastClosed)
+        setActiveTab(lastClosed.id)
+    }
+
+    /// Push a closed tab onto the reopen stack, capping at `maxRecentlyClosedTabs`.
+    private func pushRecentlyClosed(_ tab: EditorTab) {
+        recentlyClosedTabs.append(tab)
+        if recentlyClosedTabs.count > Self.maxRecentlyClosedTabs {
+            recentlyClosedTabs.removeFirst()
+        }
+    }
+
+    /// Date formatter for default untitled page titles, so rapid page
+    /// creation doesn't collide or look identical in the sidebar.
+    private static let untitledDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// The default title for a new page: "Untitled" + a timestamp so multiple
+    /// new pages are distinguishable and unlikely to collide.
+    public static func defaultUntitledTitle() -> String {
+        "Untitled \(untitledDateFormatter.string(from: Date()))"
+    }
+
+    /// Create a new page and open it in a new tab.
+    public func newPageInNewTab(title: String = WikiStoreModel.defaultUntitledTitle()) {
+        flushPendingSaves()
+        do {
+            let page = try store.createPage(title: title, createdBy: "user")
+            try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The title is passed to openTab explicitly, so tabTitle
+            // (which reads `summaries`) is never called and needs no synchronous freshness.
+            openTab(.page(page.id), title: title)
+            // New pages start in the editor so the user lands on the source view,
+            // not an empty rendered page. Per-tab (not global): navigation-opened
+            // pages keep their own mode. `PageDetailView.onAppear` seeds from this
+            // and its `.onChange(of: isEditing)` expands the header for free.
+            if let id = activeTabID {
+                setTabEditing(tabID: id, isEditing: true)
+            }
+        } catch {
+            DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
+        }
+    }
+
+    private func loadDrafts(for newValue: WikiSelection?) {
+        loadedSelection = newValue
+        // A page switch invalidates the prior page's mermaid warning so a stale
+        // banner doesn't bleed onto an unrelated page (it's recomputed on save).
+        mermaidSaveWarning = nil
+        var restoredFromPendingDraft = false
+        switch newValue {
+        case .newChat, .bookmark, .chat:
+            draftTitle = ""
+            draftBody = ""
+            loadedPage = nil
+            loadedPageHeadVersionID = nil
+        case .page(let id):
+            guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: id) }) else {
+                draftTitle = ""
+                draftBody = ""
+                loadedPage = nil
+                loadedPageHeadVersionID = nil
+                loadedSelection = nil
+                return
+            }
+            draftTitle = page.title
+            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            loadedPage = id
+            // Capture the current head version id for CAS on save (W0, PR #312).
+            loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try store.pageHeadVersionID(pageID: id) })
+            // Restore stashed draft when returning to an editing tab.
+            if let tabID = activeTabID,
+               let i = tabs.firstIndex(where: { $0.id == tabID }),
+               let pendingTitle = tabs[i].pendingDraftTitle,
+                let pendingBody = tabs[i].pendingDraftBody {
+                draftTitle = pendingTitle
+                draftBody = pendingBody
+                restoredFromPendingDraft = true
+            }
+        case .changeLog:
+            draftTitle = ""
+            draftBody = ""
+            loadedPage = nil
+            loadedPageHeadVersionID = nil
+        case .source:
+            draftTitle = ""
+            draftBody = ""
+            loadedPage = nil
+            loadedPageHeadVersionID = nil
+        case nil:
+            draftTitle = ""
+            draftBody = ""
+            loadedPage = nil
+            loadedPageHeadVersionID = nil
+        }
+        // Restore the incoming tab's stashed chat composer draft (issue #430).
+        // For chat tabs (.newChat/.chat) this restores unsent text; for all
+        // other tab types pendingChatDraft is nil, so the composer is cleared.
+        if let tabID = activeTabID,
+           let i = tabs.firstIndex(where: { $0.id == tabID }),
+           let pending = tabs[i].pendingChatDraft {
+            draftChatMessage = pending
+        } else {
+            draftChatMessage = ""
+        }
+        isDraftDirty = restoredFromPendingDraft
+    }
+
+    private func recordHistoryTransition(from oldValue: WikiSelection?, to newValue: WikiSelection?) {
+        guard !isApplyingHistorySelection, oldValue != newValue else { return }
+        if let oldValue {
+            backStack.append(oldValue)
+            trimBackStackIfNeeded()
+        }
+        forwardStack.removeAll()
+    }
+
+    private func applyHistorySelection(_ newValue: WikiSelection) {
+        guard newValue != selection else { return }
+        flushPendingSaves()
+        isApplyingHistorySelection = true
+        selection = newValue
+        loadDrafts(for: newValue)
+        isApplyingHistorySelection = false
+        // Update the active tab's metadata so the tab bar stays in sync.
+        syncActiveTabMetadata(to: newValue)
+    }
+
+    private func trimBackStackIfNeeded() {
+        let overflow = backStack.count - Self.navigationHistoryLimit
+        if overflow > 0 {
+            backStack.removeFirst(overflow)
+        }
+    }
+
+    private func removeFromHistory(_ value: WikiSelection) {
+        backStack.removeAll { $0 == value }
+        forwardStack.removeAll { $0 == value }
+    }
+
+    // MARK: - Editing / autosave
+
+    /// Called on each keystroke in the title or body. Cancels and restarts a
+    /// 500ms debounce; when it fires it reads the live drafts and saves.
+    public func bodyChanged() { isDraftDirty = true }
+    public func titleChanged() { isDraftDirty = true }
+
+    private func scheduleAutosave() {
+        // No edit-lock pause — CAS (page versions, W0) prevents data races. If
+        // another writer committed a new version, `save()` throws
+        // `PageConflictError` and surfaces a "Page Was Updated" dialog.
+        autosaveTask?.cancel()
+        autosaveTask = Task { [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            self?.save()
+        }
+    }
+
+    /// Persist the current drafts. Reads `loadedPage` (the page the drafts
+    /// belong to) + `draftTitle` + `draftBody` AT CALL TIME (§3.5 live read) so
+    /// a debounce that fires after further typing — or a flush triggered once
+    /// `selection` has already advanced to the next page — still writes the
+    /// freshest text to the RIGHT page. No-op when nothing is loaded.
+    /// Always rebuilds `summaries` from source on success.
+    public func save() {
+        guard let id = loadedPage else { return }
+        do {
+            // The shared upsert+reparse seam (Phase A): persist the body AND
+            // re-resolve this page's `[[wiki-links]]` in one operation. `wikictl`
+            // calls the SAME `PageUpsert.upsert`, so an in-app edit and a CLI
+            // edit leave byte-identical `page_links` rows (no drift). v0
+            // limitation: a *rename* does NOT re-walk the whole graph, so links
+            // that targeted the old title go stale until the linking page is next
+            // saved (they self-heal then).
+            //
+            // W0 (PR #312): the CAS expectation (`loadedPageHeadVersionID`) makes
+            // conflicts visible — if another writer committed a new version after
+            // the editor loaded, this throws `PageConflictError` instead of
+            // silently clobbering.
+            try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
+                                  expectedHeadVersionID: loadedPageHeadVersionID,
+                                  author: "user")
+            isDraftDirty = false
+            // After a successful versioned save, refresh the head version id so
+            // the next save CAS-expects the version we just wrote.
+            loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try store.pageHeadVersionID(pageID: id) })
+            // No manual reload — the bus fires reloadFromStore() async after the upsert.
+            // Non-blocking mermaid lint: the in-app save still succeeds (the
+            // editor is the human escape from wikictl's hard block), but a broken
+            // diagram is flagged so the author can fix it.
+            updateMermaidWarning(for: draftBody)
+            // Non-blocking markdown lint: same pattern — save succeeds with the
+            // original text, cosmetic issues are flagged as informational.
+            updateMarkdownWarning(for: draftBody)
+        } catch let error as PageConflictError {
+            // W0 (PR #312): a concurrent writer committed a new version. Surface
+            // it so the user knows to re-load and merge their changes.
+            DebugLog.store("WikiStoreModel.save: PageConflictError — pageID=\(error.pageID.rawValue) expected=\(error.expectedVersionID) actual=\(error.actualVersionID?.rawValue ?? "nil")")
+            storeError = StoreError(
+                title: "Page Was Updated",
+                message: "Another writer updated this page since you started editing. Re-load the page and merge your changes.")
+        } catch {
+            // Phase 1: log to console; a save-error surface lands later.
+            DebugLog.store("WikiStoreModel.save failed: \(error)")
+        }
+    }
+
+    /// The last mermaid validation warning for the saved draft, or `nil`. Surfaced
+    /// in the page editor as a non-blocking hint. Set on save (debounced), so it
+    /// refreshes shortly after the author stops typing and re-saves.
+    public var mermaidSaveWarning: String?
+
+    /// The Mermaid validator used for the non-blocking save warning. Defaults to
+    /// the process-wide bundled validator; injectable (e.g. from a repo bundle)
+    /// so the warning path is testable without a bundle. `@ObservationIgnored` —
+    /// it's plumbing, not UI state.
+    @ObservationIgnored var mermaidValidator: MermaidValidator? = MermaidValidator.shared
+
+    /// Validate ```mermaid blocks in `body` and set `mermaidSaveWarning`. Uses
+    /// the extractor as the source of truth (so it agrees with `wikictl`'s
+    /// hard block on `~~~mermaid`/any case, not just ```mermaid). Non-mermaid
+    /// pages pay only a cheap line scan.
+    private func updateMermaidWarning(for body: String) {
+        guard let validator = mermaidValidator else {
+            mermaidSaveWarning = nil
+            return
+        }
+        let bad = validator.invalidBlocks(markdown: body)
+        mermaidSaveWarning = bad.isEmpty ? nil : MermaidValidator.describe(bad)
+    }
+
+    /// The last markdown lint warning for the saved draft, or `nil`. Surfaced in
+    /// the page editor as a non-blocking informational hint (the save still
+    /// succeeds with the original text — the editor is the human escape hatch).
+    public var markdownSaveWarning: String?
+
+    /// The Markdown linter used for the non-blocking save warning. Defaults to the
+    /// process-wide bundled linter; injectable so the warning path is testable
+    /// without a bundle. `@ObservationIgnored` — it's plumbing, not UI state.
+    @ObservationIgnored var markdownLinter: MarkdownLinter? = MarkdownLinter.shared
+
+    /// Apply the markdown linter's auto-fix to the current draft body and save.
+    /// Replaces cosmetic issues (trailing whitespace, blank-line spacing, etc.)
+    /// in-place — the same normalization `wikictl page add` applies, but
+    /// triggered manually from the in-app editor. No-op when the linter is
+    /// unavailable or the body is already clean.
+    public func fixMarkdownInDraft() {
+        guard let linter = markdownLinter else { return }
+        let outcome = linter.fix(markdown: draftBody)
+        guard outcome.fixed != draftBody else { return }
+        draftBody = outcome.fixed
+        save()
+    }
+
+    /// The in-flight markdown warning Task (if any). Cancelled before starting a
+    /// new one, so rapid re-saves don't complete out of order and leave a stale
+    /// `markdownSaveWarning` that doesn't match the just-saved body.
+    @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
+
+    /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
+    /// Unlike the mermaid scan (a cheap fence line-scan), markdownlint runs all
+    /// ~20 cosmetic rules over the whole body — so the computation runs on a
+    /// background `Task` (the linter's `NSLock` makes it thread-safe) and the
+    /// result is set via a `@MainActor` hop to avoid UI jank on large pages.
+    /// Non-blocking: the save already succeeded with the original text.
+    private func updateMarkdownWarning(for body: String) {
+        guard let linter = markdownLinter else {
+            DebugLog.store("MarkdownLinter: linter unavailable (bundle not loaded) — skipping markdown warning")
+            markdownWarningTask?.cancel()
+            markdownWarningTask = nil
+            markdownSaveWarning = nil
+            return
+        }
+        markdownWarningTask?.cancel()
+        // The outer Task inherits @MainActor isolation (WikiStoreModel is
+        // @MainActor), so self access stays on the main actor. Only the lint
+        // computation runs detached (background) — it captures only `linter`
+        // (Sendable) and `body` (String), never `self`.
+        markdownWarningTask = Task { [linter, weak self] in
+            let findings = await Task.detached(priority: .utility) {
+                linter.lint(markdown: body)
+            }.value
+            guard !Task.isCancelled else { return }
+            let warning = findings.isEmpty ? nil : MarkdownLinter.describe(findings)
+            if warning != nil {
+                DebugLog.store("MarkdownLinter: \(findings.count) finding(s) for saved body")
+            }
+            self?.markdownSaveWarning = warning
+        }
+    }
+
+    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
+    /// detect broken `[[wiki links]]`. Reads fresh from the store so it works for any
+    /// page, not just the loaded draft. If the current page is loaded, also syncs the
+    /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
+    public struct LintPreflight: Sendable {
+        /// `true` when `WikiLinkFixer.applyFixes` rewrote one or more `\]]` brackets.
+        public let didFixLinks: Bool
+        /// Page titles referenced by `[[wiki links]]` in the page that do not resolve
+        /// to an existing page.
+        public let brokenPageLinks: [String]
+        /// Source display names referenced by `[[source:…]]` in the page that do not
+        /// resolve to an existing source.
+        public let brokenSourceLinks: [String]
+        /// Chat titles referenced by `[[chat:…]]` in the page that do not resolve
+        /// to an existing chat.
+        public let brokenChatLinks: [String]
+    }
+
+    public func preflightLint(pageID: PageID) -> LintPreflight? {
+        guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: pageID) }) else { return nil }
+
+        // Apply WikiLinkFixer and persist if anything changed.
+        let original = page.bodyMarkdown
+        let fixedBody = WikiLinkFixer.applyFixes(to: original)
+        let didFix = fixedBody != original
+        if didFix {
+            do {
+                // #797: pre-fix this passed no `author:`, defaulting to nil,
+                // which mapped to the shared `legacy-import` agent and erased
+                // the prior `chat:<id>` / `agent:<kind>` provenance on the
+                // HEAD row. The lint auto-fix is an explicit action by the
+                // "lint" one-shot executor, NOT an unknown editor — stamp
+                // `agent:lint` so the activity carries the real identity.
+                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody,
+                                      author: PageAuthor.agent("lint").rawValue)
+                // No manual reload — the bus fires reloadFromStore() async after the upsert.
+                if loadedPage == pageID {
+                    draftBody = fixedBody
+                    isDraftDirty = false
+                }
+            } catch {
+                DebugLog.store("WikiStoreModel.preflightLint fix failed: \(error)")
+            }
+        }
+
+        // Detect broken wiki links across all three namespaces.
+        let body = didFix ? fixedBody : original
+        let ns = body as NSString
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
+        let matches = WikiLinkSpan.matches(in: body)
+        let knownTitles = Set(summaries.map { $0.title })
+        let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
+        let allChats = DebugLog.trying("listAllChatsOrderedByID", operation: { try store.listAllChatsOrderedByID() }) ?? []
+        let knownChatTitles = Set(allChats.map { $0.title })
+        let knownChatIDs = Set(allChats.map { $0.id.rawValue.uppercased() })
+        // Mirror replaceLinks: a link is broken only when NO candidate reading
+        // of its raw target (per WikiLinkResolver — handles `#` in titles)
+        // names an existing resource. Unique the output — two parsed links can
+        // share a base since parse() de-dupes by raw target.
+        var seenBroken = Set<String>()
+        var brokenPages: [String] = []
+        var brokenSources: [String] = []
+        var brokenChats: [String] = []
+        for match in matches {
+            let fullRange = match.range
+            // Skip links inside code spans / fenced blocks — `[[Like This]]`
+            // in backticks is example text, not a real link.
+            guard !WikiLinkSpan.isProtected(fullRange, by: codeRanges) else { continue }
+
+            let rawTarget = ns.substring(with: match.range(at: 1))
+            let aliasRange = match.range(at: 2)
+            let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
+            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
+            let collapsed = WikiText.normalized(fixed.target)
+            guard !collapsed.isEmpty else { continue }
+
+            let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
+            guard !base.isEmpty else { continue }
+            let (bareBase, _) = WikiLinkParser.splitVersionPin(base)
+            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else { continue }
+
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+
+            let known: (String) -> Bool
+            let knownIDs: Set<String>
+            switch kind {
+            case .page:
+                known = { knownTitles.contains($0) }
+                knownIDs = knownPageIDs
+            case .source:
+                // For source links, also check looseMatchKey so a name with a
+                // dash variant still counts as resolved (mirrors the store's
+                // resolveSourceByName pass 3 and the projection's LinkMaps).
+                let sourceIDs = Set(sources.map { $0.id.rawValue.uppercased() })
+                known = { [self, sourceIDs] name in
+                    if let sourceID = WikiLinkResolver.legacySourceProjectionID(from: name),
+                       sourceIDs.contains(sourceID.rawValue.uppercased()) {
+                        return true
+                    }
+                    return self.sources.contains { $0.effectiveName == name }
+                        || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
+                }
+                knownIDs = sourceIDs
+            case .chat:
+                known = { knownChatTitles.contains($0) }
+                knownIDs = knownChatIDs
+            }
+
+            // Canonical ULID links (resolved at save time) are never broken —
+            // the ULID is a stable id, not a title to look up by name.
+            if WikiLinkParser.isCanonicalULID(bareTarget) {
+                guard !knownIDs.contains(bareTarget.uppercased()) else { continue }
+            } else {
+                guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: known) == nil else { continue }
+            }
+
+            let label = fixed.alias.map { WikiText.normalized($0) } ?? bareTarget
+            let dedupLabel = label.isEmpty ? bareTarget : label
+            guard seenBroken.insert("\(kind.rawValue):\(dedupLabel)").inserted else { continue }
+            switch kind {
+            case .page:   brokenPages.append(dedupLabel)
+            case .source: brokenSources.append(dedupLabel)
+            case .chat:   brokenChats.append(dedupLabel)
+            }
+        }
+
+        return LintPreflight(didFixLinks: didFix,
+                             brokenPageLinks: brokenPages,
+                             brokenSourceLinks: brokenSources,
+                             brokenChatLinks: brokenChats)
+    }
+
+    /// Cancel any pending debounce and save synchronously. Called on page
+    /// switch and on app backgrounding (§3.5 immediate-on-background).
+    /// No-op when the draft hasn't been modified since the last load/save
+    /// (prevents bumping `updated_at` on a tab switch for a view-only page).
+    public func flushPendingSave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        guard isDraftDirty else { return }
+        save()
+        // Clear the per-tab stash — content is now committed to the database.
+        if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
+            tabs[i].pendingDraftTitle = nil
+            tabs[i].pendingDraftBody = nil
+        }
+    }
+
+    /// Flush pending page edits. Used on selection switch and app backgrounding.
+    public func flushPendingSaves() {
+        flushPendingSave()
+    }
+
+    // MARK: - Blob GC (#253)
+
+    /// Run a blob-GC pass against the underlying store. `dryRun` true previews
+    /// (read-only count + bytes); false deletes the orphans in one transaction.
+    /// Routes through the @MainActor model per the SQLite write discipline.
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performBlobVacuum(dryRun: Bool) -> BlobVacuumReport? {
+        DebugLog.trying("vacuumBlobs", operation: { try store.vacuumBlobs(dryRun: dryRun) })
+    }
+
+    /// Run the activity-GC sweep against the active store (issue #257).
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performActivityVacuum(dryRun: Bool) -> ActivityVacuumReport? {
+        DebugLog.trying("vacuumActivities", operation: { try store.vacuumActivities(dryRun: dryRun) })
+    }
+
+    /// Run the page-version-GC sweep against the active store (Phase 4).
+    /// Returns nil only if the store call throws.
+    @discardableResult
+    public func performPageVersionVacuum(dryRun: Bool) -> PageVersionVacuumReport? {
+        DebugLog.trying("vacuumPageVersions", operation: { try store.vacuumPageVersions(dryRun: dryRun) })
+    }
+
+    /// Run all GC sweeps (blobs + activities + page versions) in one call. Each
+    /// runs in its own transaction — they are independent and idempotent, so a
+    /// partial failure is safe to retry. Returns nil only if all throw.
+    public func performVacuumAll(dryRun: Bool) -> VacuumReport? {
+        let blobs = performBlobVacuum(dryRun: dryRun)
+        let activities = performActivityVacuum(dryRun: dryRun)
+        let pageVersions = performPageVersionVacuum(dryRun: dryRun)
+        guard let blobs, let activities, let pageVersions else { return nil }
+        return VacuumReport(blobs: blobs, activities: activities, pageVersions: pageVersions)
+    }
+
+    // MARK: - Agent run lock (Phase C, decision #6)
+
+    // MARK: - Agent run lifecycle (ref-counted, no edit lock)
+
+    /// Increment the agent-run counter. Called at spawn commit (spawn success).
+    /// Flushes pending drafts first so an in-flight edit lands in the store
+    /// before the agent starts its own writes.
+    public func agentRunStarted() {
+        flushPendingSaves()
+        agentRunCount += 1
+    }
+
+    /// Decrement the agent-run counter. Called from the process's
+    /// `terminationHandler`. When the last run ends, rebuilds the lists from
+    /// the store so the sidebar reflects everything the agent wrote, and
+    /// reloads the open document's draft from the (possibly agent-rewritten)
+    /// source.
+    public func agentRunEnded() {
+        guard agentRunCount > 0 else { return }
+        agentRunCount -= 1
+        if agentRunCount == 0 {
+            reloadFromStore()
+            loadDrafts(for: loadedSelection)
+        }
+    }
+
+    // MARK: - Ingest progress flag (issue #235)
+
+    /// Mark an ingest as in progress. Called at the top of `runMultiIngest`
+    /// BEFORE extraction begins, so the Edit preflight (`isIngestInProgress`)
+    /// blocks during the extraction window too.
+    public func beginIngest() {
+        isIngestInProgress = true
+    }
+
+    /// Clear the ingest-in-progress flag. Called on every early exit from
+    /// `runMultiIngest` (extraction cancel, no valid sources, spawn failure) and
+    /// from the ingest run's `onUnlock` when the agent process terminates.
+    public func endIngest() {
+        isIngestInProgress = false
+    }
+
+    // MARK: - Mutations
+
+    @discardableResult
+    public func newPage(title: String = WikiStoreModel.defaultUntitledTitle()) -> PageID? {
+        flushPendingSaves()
+        do {
+            let page = try store.createPage(title: title, createdBy: "user")
+            // A fresh page has an empty body, so this resolves to no links — but
+            // run it for uniformity with the save() path (and so a future
+            // create-with-body wouldn't silently skip link indexing).
+            try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The title is passed to openTab explicitly, so tabTitle
+            // (which reads `summaries`) is never called and needs no synchronous freshness.
+            let newSelection = WikiSelection.page(page.id)
+            recordHistoryTransition(from: loadedSelection, to: newSelection)
+            openTab(newSelection, title: title)
+            return page.id
+        } catch {
+            DebugLog.store("WikiStoreModel.newPage failed: \(error)")
+            return nil
+        }
+    }
+
+    /// When non-nil, the last rename was blocked because another page already
+    /// has that title. Views observe this to show an alert, then call
+    /// `clearRenameConflict()` to dismiss.
+    public private(set) var renameConflictingTitle: String?
+
+    public func clearRenameConflict() {
+        renameConflictingTitle = nil
+    }
+
+    public func rename(_ id: PageID, to newTitle: String) {
+        // Persist any pending edits to whatever's open first, then rename.
+        flushPendingSave()
+        renameConflictingTitle = nil
+        let sanitizedTitle = WikiNameRules.sanitized(newTitle)
+        do {
+            // Block rename if another page already has this title (case-
+            // insensitive, matching wiki-link resolution). The user gets an
+            // alert via `renameConflictingTitle` instead of a silent revert.
+            if let existingID = try store.resolveTitleToID(sanitizedTitle),
+               existingID != id {
+                renameConflictingTitle = sanitizedTitle
+                DebugLog.store("WikiStoreModel.rename blocked: '\(sanitizedTitle)' already exists (page \(existingID.rawValue))")
+                return
+            }
+            let page = try store.getPage(id: id)
+            let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            // #797: route through `PageAuthor.user` instead of `nil`. The
+            // pre-fix nil passed into `ensurePageAuthorAgent` mapped to the
+            // shared `legacy-import` agent, which silently erased the prior
+            // `chat:<id>` / `agent:<kind>` provenance on the HEAD row (a page
+            // a chat wrote, once renamed in-app, would have flipped its author
+            // identity to `legacy-import`). A rename is an explicit user
+            // action — stamp `user`.
+            try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody,
+                                 lastEditedBy: PageAuthor.user.rawValue)
+            // No manual reload — the bus fires reloadFromStore() async after the update.
+            if selection == .page(id) { draftTitle = sanitizedTitle }
+            // Update any tab showing this renamed page.
+            for i in tabs.indices where tabs[i].selection == .page(id) {
+                tabs[i].title = sanitizedTitle
+            }
+        } catch {
+            DebugLog.store("WikiStoreModel.rename failed: \(error)")
+        }
+    }
+
+    /// Rename a source's display name. Rewrites `[[source:<old>…]]` links in
+    /// every page that references it (fragment + alias preserved), then refreshes
+    /// the sidebar, open tabs, and File Provider mount.
+    public func renameSource(id: SourceID, to newDisplayName: String) {
+        do {
+            try store.renameSource(id: id, to: newDisplayName)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // rename, which reloads BOTH `sources` (display name in sidebar/detail)
+            // and `summaries` (the rename rewrites inbound `[[source:…]]` links).
+            for i in tabs.indices where tabs[i].selection == .source(id) {
+                tabs[i].title = newDisplayName
+            }
+        } catch {
+            DebugLog.store("WikiStoreModel.renameSource failed: \(error)")
+        }
+    }
+
+    public func delete(_ id: PageID) {
+        do {
+            try store.deletePage(id: id)
+            removeFromHistory(.page(id))
+            // Close any tab showing this deleted page.
+            if let tab = tabs.first(where: { $0.selection == .page(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
+        } catch {
+            DebugLog.store("WikiStoreModel.delete failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Page",
+                message: "Could not delete the page: \(error.localizedDescription)")
+        }
+    }
+
+    /// What references `id` right now — pages that link to it and bookmarks that
+    /// point at it (issue #219). The UI shows this before deleting so the user
+    /// can decide whether to convert the incoming links to plain text.
+    public func deletionImpact(forPage id: PageID) -> DeletionImpact {
+        let linkingIDs = (DebugLog.trying("pageLinkingPages", operation: {
+            try store.pageLinkingPages(to: id)
+        }) ?? []).filter { $0 != id }
+        return DeletionImpact(
+            linkingPageIDs: linkingIDs,
+            bookmarkLabels: bookmarkLabelsReferencing { content in
+                if case .page(let pid) = content { return pid == id }
+                return false
+            })
+    }
+
+    /// Delete a page, optionally converting every incoming `[[link]]` in other
+    /// pages to plain text first. Bookmarks pointing at the page are ALWAYS
+    /// removed — a bookmark to a missing page is invalid (issue #219). Use this
+    /// path when `deletionImpact(forPage:)` reported references; use
+    /// ``delete(_:)`` for the no-ceremony immediate delete.
+    public func delete(_ id: PageID, unlinkIncomingLinks: Bool) {
+        do {
+            if unlinkIncomingLinks {
+                try unlinkIncomingLinksTo(pageIDs: [id], sourceIDs: [])
+            }
+            removeBookmarksReferencingPage(id)
+            try store.deletePage(id: id)
+            removeFromHistory(.page(id))
+            if let tab = tabs.first(where: { $0.selection == .page(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete + bookmark removals + (optional) linking-page rewrites.
+        } catch {
+            DebugLog.store("WikiStoreModel.delete(unlink:) failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Page",
+                message: "Could not delete the page: \(error.localizedDescription)")
+        }
+    }
+
+    /// Dismiss the current store error (called when the user taps OK on the alert).
+    public func dismissStoreError() {
+        storeError = nil
+    }
+
+    // MARK: - File ingestion (Phase 5)
+
+    /// Route dropped URLs to the correct **add-source** path (#163). (This adds
+    /// a source — fetches/stores bytes so it appears under Sources — it does *not*
+    /// run the agent "ingestion" that reads a source and generates pages; that is
+    /// a separate `AgentLauncher` phase.)
+    /// - An `http(s)` URL (a link dragged from a browser) **or** a `.webloc`
+    ///   shortcut that resolves to one → `addURL` — the fetch + HTML→Markdown
+    ///   "Add from URL" path. This avoids reading a `.webloc` plist's raw bytes,
+    ///   which would capture the wrapper XML rather than the linked page.
+    /// - Any other `file://` URL → `addFiles` (raw bytes, as before).
+    ///
+    /// Several links / `.webloc` files dropped together are each added as their
+    /// own source. A `.webloc` whose `URL` key can't be parsed is skipped (its
+    /// bytes aren't useful as a source). `fetcher` is injectable for tests; the
+    /// default performs a real network GET.
+    public func addDroppedURLs(
+        _ droppedURLs: [URL],
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async {
+        var remoteInputs: [String] = []
+        var localFiles: [URL] = []
+        for url in droppedURLs {
+            if let scheme = url.scheme, scheme == "http" || scheme == "https" {
+                remoteInputs.append(url.absoluteString)
+            } else if url.isFileURL, url.pathExtension.lowercased() == "webloc" {
+                if let resolved = await Self.resolveWeblocURL(url) {
+                    remoteInputs.append(resolved)
+                } else {
+                    DebugLog.store("WikiStoreModel.addDroppedURLs could not resolve .webloc: \(url.lastPathComponent)")
+                }
+            } else {
+                localFiles.append(url)
+            }
+        }
+        for input in remoteInputs {
+            do {
+                _ = try await addURL(input, fetcher: fetcher)
+            } catch {
+                DebugLog.store("WikiStoreModel.addDroppedURLs URL ingest failed for \(input): \(error)")
+            }
+        }
+        if !localFiles.isEmpty {
+            await addFiles(localFiles)
+        }
+    }
+
+    /// Read a `.webloc` property list (XML or binary) off the main actor and
+    /// return its `URL` string, or `nil` if the file isn't a valid webloc. (#163)
+    private static func resolveWeblocURL(_ fileURL: URL) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = DebugLog.trying("weblocData", operation: { try Data(contentsOf: fileURL) }),
+                  let plist = DebugLog.trying("weblocPlist", operation: { try PropertyListSerialization.propertyList(from: data, options: [], format: nil) }),
+                  let urlString = (plist as? [String: Any])?["URL"] as? String,
+                  !urlString.isEmpty
+            else { return nil }
+            return urlString
+        }.value
+    }
+
+    // MARK: - Provider-backed ingest seam (Phase 3a)
+
+    /// Pre-resolve a source's display name off the main actor. Only PDFs
+    /// trigger the expensive PDFKit whole-file parse, so this is a no-op
+    /// (returns `nil` → ``GRDBWikiStore/addSource`` resolves inline) for all
+    /// other types whose metadata parsing is fast. For PDFs, the result is
+    /// computed on a detached task and handed to ``storeMaterialized`` via
+    /// ``resolvedDisplayName``, keeping the PDFKit work off the main actor and
+    /// out of the store's locked write path (issue #229).
+    ///
+    /// Returns `String??`:
+    /// - `nil` → "resolve in-method" (non-PDF or caller chose not to pre-resolve)
+    /// - `.some(result)` → use `result` as the ``DisplayNameResolver`` output
+    private func preResolveDisplayName(
+        filename: String, data: Data, mimeType: String?, zoteroItemTitle: String?
+    ) async -> String?? {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let isPDF = ext == "pdf" || MimeType.isPDF(mimeType)
+        guard isPDF else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            DisplayNameResolver.resolve(
+                filename: filename, data: data, mimeType: mimeType,
+                zoteroItemTitle: zoteroItemTitle)
+        }.value
+    }
+
+    /// The single store-write seam every provider-backed ingest flows through.
+    /// Materialization (bytes + provenance) happens off-main inside the provider;
+    /// this does the main-actor `store.addSource` write, threading the
+    /// `MaterializedSource`'s provenance + retained Zotero columns through. Each
+    /// caller wraps its OWN duplicate/error handling around this throw.
+    ///
+    /// Issue #599: when `m.extractedMarkdown` is non-nil (HTML sources), the
+    /// markdown is stored as a `SourceMarkdownOrigin.extraction` processed-markdown
+    /// version — mirroring PDF → pdf2md extraction. The original bytes live as the
+    /// source blob; the markdown is the derived artifact. Best-effort: a write
+    /// failure is logged, never thrown (the source itself already landed).
+    @discardableResult
+    func storeMaterialized(
+        _ m: MaterializedSource,
+        resolvedDisplayName: String?? = nil
+    ) throws -> SourceSummary {
+        let summary = try store.addSource(
+            filename: m.filename, data: m.data,
+            zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
+            mimeType: m.mimeType, provenance: m.provenance, role: .primary,
+            originalPath: nil, activityID: nil,
+            resolvedDisplayName: resolvedDisplayName)
+        appendExtractedMarkdown(to: summary, from: m)
+        return summary
+    }
+
+    /// Writes a materializer's `extractedMarkdown` sidecar (if present and
+    /// non-empty) as a `.extraction`-origin processed-markdown version. Mirrors
+    /// `seedPdfMarkdown`'s typed derived-markdown path so an HTML source's
+    /// derived markdown lands on the same chain as a PDF's extracted markdown
+    /// (issue #599 — HTML sources are treated like PDF sources). Best-effort:
+    /// the source itself already committed; an extraction-write failure is
+    /// logged via `DebugLog.store`, never thrown.
+    private func appendExtractedMarkdown(to summary: SourceSummary, from m: MaterializedSource) {
+        guard let markdown = m.extractedMarkdown,
+              !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        do {
+            try store.appendDerivedMarkdown(
+                sourceID: summary.id, content: markdown, origin: .extraction,
+                producer: .tool(.materializerSidecar), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: m.extractionTechnique)
+        } catch {
+            DebugLog.store("WikiStoreModel.appendExtractedMarkdown failed (source=\(summary.id.rawValue)): \(error)")
+        }
+    }
+
+    /// Technique tag stamped on an HTML source's extracted-markdown version
+    /// (`appendDerivedMarkdown(producer:)`). Mirrors the PDF extraction
+    /// technique tags (e.g. `"pdf2md"`) so the "Converted" provenance row
+    /// surfaces the producer in the alternatives UI.
+    private static let htmlToMarkdownTechnique = "html-to-markdown"
+
+    /// Technique tag stamped on an HTML source's defuddle-extraction version
+    /// (issue #799 PR2: the Extract button / Re-extract menu picks the
+    /// defuddle backend). Mirrors the PDF extraction technique tags so the
+    /// provenance chip surfaces the producer. Matches the technique
+    /// `FormatMaterializer.enrich` returns for a successful defuddle run.
+    private static let defuddleTechnique = "defuddle"
+
+    /// Best-effort: if the materialized source is HTML (has an extracted-markdown
+    /// sidecar from `FormatMaterializer.dispatch`), run the defuddle extractor to
+    /// obtain site-specific markdown + metadata. On any failure, keep the
+    /// tag-based markdown. Sets `extractionTechnique` on the returned source so
+    /// `appendExtractedMarkdown` stamps the right technique column.
+    ///
+    /// Does NOT run for website snapshots (those use `WebsiteSnapshotExtractor`
+    /// which does image-aware extraction — defuddle can't replace that without
+    /// losing image src rewriting).
+    ///
+    /// Issue #799 PR3: the three ingest callers (`addFiles`,
+    /// `addURLViaWebsite` no-images branch, `ingestFromZotero`) NO LONGER call
+    /// this — non-snapshot HTML stops auto-extracting at ingest; the user
+    /// triggers extraction via the Extract button (PR2). Retained as a private
+    /// building block for any future ingest-side defuddle enrichment and to
+    /// preserve the comment chain to the active trigger path
+    /// (`extractHtml(for:backend:)` + its `extractHtml(html:backend:using:)`
+    /// static helper below). The active HTML extraction dispatch is
+    /// `extractHtml(html:backend:using:)`, NOT this method.
+    private func enrichWithDefuddle(_ m: MaterializedSource) async -> MaterializedSource {
+        // Only HTML sources have a non-nil extractedMarkdown sidecar (issue #599
+        // two-layer model). Non-HTML sources skip enrichment entirely.
+        guard m.extractedMarkdown != nil else { return m }
+        // Reconstruct a FormatPlan to reuse the shared enrich helper.
+        let plan = FormatPlan(
+            filename: m.filename, data: m.data, format: .html,
+            extractedMarkdown: m.extractedMarkdown)
+        let (enriched, technique) = await FormatMaterializer.enrich(
+            plan, using: htmlMarkdownExtractor)
+        return MaterializedSource(
+            filename: enriched.filename,
+            data: enriched.data,
+            mimeType: m.mimeType,
+            zoteroItemKey: m.zoteroItemKey,
+            zoteroItemTitle: m.zoteroItemTitle,
+            provenance: m.provenance,
+            extractedMarkdown: enriched.extractedMarkdown,
+            extractionTechnique: technique)
+    }
+
+    /// Ingest dropped files. For each URL: reject directories (a recursive
+    /// directory ingest is out of scope), read the bytes OFF the main thread
+    /// (big files shouldn't stall the UI), then hop back to the main actor to
+    /// store + reload. Per-file failures are logged and skipped so one bad drop
+    /// doesn't abort the batch. Each stored source emits a `source` change event
+    /// at the store seam; the File Provider subscriber debounces the whole batch
+    /// into one signal so the daemon re-enumerates `sources/` exactly once.
+    ///
+    /// Named `addFiles` (not `ingest`) because it only adds sources — it does NOT
+    /// run the agent "Ingest into wiki" phase (see `AgentLauncher` /
+    /// `ingestingSourceIDs`). Issue #178.
+    public func addFiles(_ fileURLs: [URL]) async {
+        var lastSourceID: SourceID?
+        var lastSourceName: String?
+        var duplicateNames: [String] = []
+        for url in fileURLs {
+            // Skip directories — only flat files are ingested.
+            let isDir = DebugLog.trying("resourceValues", operation: { try url.resourceValues(forKeys: [.isDirectoryKey]) })?.isDirectory ?? false
+            if isDir {
+                DebugLog.store("WikiStoreModel.addFiles skipping directory: \(url.lastPathComponent)")
+                continue
+            }
+            // Materialize off-main (read + dispatch), store on the main actor.
+            let provider = LocalFileMaterializer(fileURL: url)
+            let materialized: MaterializedSource
+            do {
+                materialized = try await provider.materialize()
+            } catch {
+                DebugLog.store("WikiStoreModel.addFiles read failed for \(url.lastPathComponent): \(error)")
+                continue
+            }
+
+            // Issue #799 PR3: HTML no longer auto-extracts at ingest — store
+            // the raw bytes only; the user triggers extraction via the Extract
+            // button (PR2). The `FormatMaterializer.dispatch` HTML branch returns
+            // `extractedMarkdown: nil`, so `appendExtractedMarkdown` (called by
+            // `storeMaterialized`) writes no markdown version for HTML sources.
+
+            // Pre-resolve display name off-main for PDFs (issue #229).
+            let resolvedDisplayName = await preResolveDisplayName(
+                filename: materialized.filename, data: materialized.data,
+                mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+
+            do {
+                let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
+                lastSourceID = summary.id
+                lastSourceName = summary.effectiveName
+            } catch WikiStoreError.duplicateContent(let existing) {
+                // Byte-identical to an already-stored source — skip rather than
+                // abort the rest of the drop batch; report it so the user isn't
+                // left wondering why the file didn't show up.
+                duplicateNames.append("\(url.lastPathComponent) (already added as \(existing.effectiveName))")
+            } catch {
+                DebugLog.store("WikiStoreModel.addFiles store failed for \(url.lastPathComponent): \(error)")
+            }
+        }
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store writes. The tab title is passed explicitly to openTab so it
+        // doesn't read the stale `sources` array via tabTitle.
+        if let sourceID = lastSourceID, let name = lastSourceName {
+            openTab(.source(sourceID), title: name)
+        } else if let sourceID = lastSourceID {
+            openTab(.source(sourceID))
+        }
+        if !duplicateNames.isEmpty {
+            storeError = StoreError(
+                title: duplicateNames.count == 1 ? "Duplicate File Skipped" : "Duplicate Files Skipped",
+                message: "These files have the exact same content as a source you already added, "
+                    + "so they weren't added again:\n"
+                    + duplicateNames.map { "• \($0)" }.joined(separator: "\n"))
+        }
+    }
+
+    /// Add a resource by URL as a source: fetch it, convert HTML→Markdown (or
+    /// store a PDF / text / binary verbatim), and land it as a source file —
+    /// exactly like a drag-dropped file, so the existing **"Ingest into wiki"**
+    /// agent operation can summarize it afterward. Lands through the SAME
+    /// `store.addSource` path as `addFiles`, so it appears under Sources +
+    /// `sources/by-{id,name}` immediately and is pickable in Operations → Ingest.
+    /// Returns the outcome on success; throws a user-readable
+    /// `URLFetchService.FetchError` on a bad URL, non-2xx, empty body, or store
+    /// failure (the caller surfaces it in the sheet). The store write hops to the
+    /// main actor (this type is `@MainActor`); the fetch runs off it.
+    ///
+    /// Named `addURL` (not `ingestURL`) because it only adds a source — the agent
+    /// "Ingest into wiki" phase is a separate, later step. Issue #178.
+    ///
+    /// Issue #799 PR5: the `youtubeFetcher` parameter is a back-compat no-op at
+    /// ingest — kept for source compatibility with callers that inject a fetcher
+    /// (mirrors the podcast PR4 contract). YouTube ingestion now creates a
+    /// byteless embed source + synthetic metadata page with NO transcript at
+    /// ingest; the user clicks Transcribe in `SourceDetailView` to trigger the
+    /// caption fetch explicitly via `transcribe(sourceID:youtubeFetcher:)`.
+    @discardableResult
+    public func addURL(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
+        youtubeFetcher: (any YouTubeTranscriptFetching)?? = nil,
+        allowDuplicateURL: Bool = false
+    ) async throws -> URLFetchService.FetchOutcome {
+        try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
+        #if PODCAST_TRANSCRIPTS
+        // Delegate to the podcast-aware overload so routing is in one place.
+        return try await addURL(
+            rawInput, fetcher: fetcher,
+            podcastFetcher: ApplePodcastTranscriptService.bundled(),
+            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(),
+            allowDuplicateURL: true)
+        #else
+        // Phase 5b: byteless external-embed media (YouTube/Vimeo/Spotify/
+        // SoundCloud/remote-media) routes uniformly through `bytelessMediaOutcome`,
+        // which creates the byteless embed source + synthetic metadata page (NO
+        // transcript at ingest — mirrors the podcast PR4 contract). The Transcribe
+        // button (PR5) is the sole affordance to surface a transcript for YouTube.
+        // The `youtubeFetcher` parameter is intentionally NOT consulted at ingest;
+        // it lives on as a back-compat no-op (its seam is `transcribe`).
+        if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
+            return outcome
+        }
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+        #endif
+    }
+
+    #if PODCAST_TRANSCRIPTS
+    /// The podcast-aware `addURL`: recognizes an Apple Podcasts episode link and
+    /// routes to the byteless-embed pipeline instead of the HTML fetcher. The
+    /// `podcastFetcher` seam lets CI inject a fake `PodcastTranscriptFetching`
+    /// for the **transcribe** step (the bundled service returns nil without the
+    /// signing helper). It is intentionally NOT consulted at ingest time in PR4
+    /// — per #799, no auto-transcription at ingest; the user clicks Transcribe
+    /// in `SourceDetailView` to trigger the network fetch explicitly. The
+    /// parameter stays on the signature for back-compat with the existing tests
+    /// that assert the routing contract, and so the same call site can opt a
+    /// fake fetcher back in for the (now-separate) `transcribePodcast(sourceID:)`
+    /// step.
+    @discardableResult
+    public func addURL(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher,
+        podcastFetcher: (any PodcastTranscriptFetching)?,
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = nil,
+        allowDuplicateURL: Bool = false
+    ) async throws -> URLFetchService.FetchOutcome {
+        try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
+        // An Apple Podcasts EPISODE link is recognized before the generic web
+        // fetch: its HTML is the useless player page, so we route to the
+        // byteless-embed pipeline instead. The pageURL is re-normalized from
+        // the raw input so the Origin row surfaces the canonical
+        // `podcasts.apple.com` URL the user pasted (the episode ID alone
+        // isn't a clickable link).
+        if let episode = PodcastEpisodeURL.parse(rawInput) {
+            // Issue #799 PR4: stop auto-transcribing at ingest. The episode
+            // URL creates a byteless embed source (like YouTube/Vimeo/Spotify/
+            // SoundCloud/remote-media) with NO transcript. The user clicks
+            // "Transcribe" in `SourceDetailView` to trigger the network fetch
+            // (signed bearer → AMP → TTML → parse → markdown) explicitly via
+            // `transcribePodcast(sourceID:)`. Same provenance shape as before
+            // (agentName = apple-podcast, plan/externalRef = pasted page URL,
+            // externalIdentity = the numeric episode ID) so ExternalEmbed
+            // continues to host-swap planURL → embed.podcasts.apple.com.
+            let pageURL = URLFetchService.normalizeURL(rawInput)
+                ?? URL(string: "https://podcasts.apple.com")!
+            let summary = try store.addBytelessSource(
+                filename: Self.podcastEmbedFilename(for: episode),
+                mimeType: Self.podcastEmbedMIME,
+                provenance: SourceProvenance(
+                    agentName: SourceProvider.applePodcast.rawValue,
+                    activityKind: "fetch",
+                    plan: pageURL.absoluteString,
+                    externalRef: pageURL.absoluteString,
+                    externalIdentity: episode.id),
+                role: .primary)
+            // Issue #621: resolve a human-readable display name from the
+            // episode slug so the source list shows the episode title instead
+            // of the slugified filename. Mirrors the byteless oEmbed title
+            // step (YouTube/Vimeo/Spotify/SoundCloud) — does NOT block ingest;
+            // a nil title leaves the synthetic filename display name in place.
+            // The slug is the episode title as Apple generates it for an
+            // episode link, so un-sluggifying is offline and dependency-free.
+            let resolvedTitle = PodcastEpisodeURL.displayTitle(from: episode.slug)
+                .map { WikiNameRules.sanitized($0) }
+            if let title = resolvedTitle {
+                do {
+                    try store.setSourceDisplayName(id: summary.id, displayName: title)
+                } catch {
+                    DebugLog.store("apple-podcast slug title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+                }
+            }
+            // No transcript markdown is written — the source's
+            // `source_markdown_versions` stays empty until the user transcribes.
+            // Mirrors the post-PR3 HTML invariant and the YouTube-without-
+            // captions path BEFORE the #646 synthetic-page work. The reader
+            // shows the embed player (the source has an `embedTarget`); the
+            // Transcribe button is the sole affordance to surface a transcript.
+            // No manual reload — the bus fires reloadFromStore() async after
+            // the store writes. The tab title is passed explicitly so tabTitle
+            // (which reads `sources`) needs no synchronous freshness.
+            openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
+            return URLFetchService.FetchOutcome(
+                filename: summary.filename,
+                byteSize: 0,
+                kind: .audioEmbed)
+        }
+        // Phase 5b: byteless external-embed media (provider iframes + direct-
+        // remote). YouTube now routes uniformly through `bytelessMediaOutcome`
+        // (creates the byteless embed source + synthetic metadata page, NO
+        // transcript at ingest — mirrors the podcast PR4 contract above). The
+        // user clicks Transcribe in `SourceDetailView` to trigger the network
+        // fetch explicitly via `transcribe(sourceID:)`. The `youtubeFetcher`
+        // parameter stays for back-compat (mirrors `podcastFetcher`); it is
+        // intentionally NOT consulted at ingest.
+        if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
+            return outcome
+        }
+        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+    }
+    #endif
+
+    /// Guard URL intake before any provider routing or network work. Invalid
+    /// input remains the fetch service's responsibility so callers retain its
+    /// existing user-facing validation error.
+    private func rejectExistingURL(_ rawInput: String, allowDuplicateURL: Bool) throws {
+        guard !allowDuplicateURL,
+              let identity = URLFetchService.urlIdentity(rawInput),
+              let existing = try store.sourceMatchingURLIdentity(identity)
+        else { return }
+        throw WikiStoreError.duplicateURL(existing: existing)
+    }
+
+    /// **Generic RSS-feed podcast intake** (podcast-generalize, M3): a dedicated
+    /// entry point for pasting a direct RSS feed URL. Bypasses the generic
+    /// website/byteless-embed fetch chain (the "ambiguity problem" — a feed URL
+    /// can't be distinguished from a webpage by URL sniffing alone). The caller
+    /// invokes this explicitly from an "Add podcast feed" affordance, declaring
+    /// intent, so routing is by caller intent, not content sniffing.
+    ///
+    /// Creates a byteless `.podcast` source (no bytes fetched) with
+    /// `agentName = "podcast"`, `plan` = feed URL. No transcript is written at
+    /// ingest — the user clicks Transcribe in `SourceDetailView` to trigger the
+    /// `podcast-transcript` script fetch (mirrors the Apple PR4 + YouTube PR5
+    /// contract). Always compiled (no `#if PODCAST_TRANSCRIPTS` guard) — the
+    /// generic `.podcast` path needs no FairPlay signing helper.
+    ///
+    /// - Parameter rawInput: the raw RSS feed URL (e.g.
+    ///   `https://feeds.example.com/show.xml`).
+    /// - Returns: the `FetchOutcome` for the created byteless source.
+    /// - Throws: `WikiStoreError` on a store failure (e.g. `.duplicateContent`
+    ///   for a re-paste of the same feed URL).
+    @discardableResult
+    public func addPodcastFeedURL(_ rawInput: String) async throws -> URLFetchService.FetchOutcome {
+        guard let ref = RSSFeedEpisodeURL.parse(rawInput) else {
+            throw WikiStoreError.unexpected("Not a valid podcast feed URL: \(rawInput)")
+        }
+        let feedURLString = ref.feedURL.absoluteString
+        let summary = try store.addBytelessSource(
+            filename: Self.rssPodcastEmbedFilename(for: ref),
+            mimeType: Self.rssPodcastEmbedMIME,
+            provenance: SourceProvenance(
+                agentName: SourceProvider.podcast.rawValue,
+                activityKind: "fetch",
+                plan: feedURLString,
+                externalRef: feedURLString,
+                externalIdentity: ref.episodeGUID ?? feedURLString),
+            role: .primary)
+        // No transcript markdown is written — the source's
+        // `source_markdown_versions` stays empty until the user transcribes.
+        // Mirrors the Apple PR4 + YouTube PR5 byteless-only ingest contract.
+        openTab(.source(summary.id), title: summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: summary.filename,
+            byteSize: 0,
+            kind: .audioEmbed)
+    }
+
+    /// Build the byteless-source filename for a generic RSS podcast feed
+    /// (podcast-generalize). Derives a readable stem from the feed URL's host +
+    /// last path component, prefixed with `podcast-`. Mirrors the YouTube/Vimeo
+    /// `youtube-<id>` / `vimeo-<id>` byteless-source filename convention.
+    private static func rssPodcastEmbedFilename(for ref: RSSFeedEpisodeRef) -> String {
+        let host = (ref.feedURL.host ?? "feed").replacingOccurrences(of: "www.", with: "")
+        let last = ref.feedURL.lastPathComponent.isEmpty
+            ? "feed"
+            : (ref.feedURL.lastPathComponent as NSString).deletingPathExtension
+        let stem = "\(host)-\(last)"
+            .lowercased()
+            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
+            .joined()
+            .repeatingHyphensCollapsed()
+        return FilenameEscaping.escapeTitle("podcast-\(stem)")
+    }
+
+    /// The synthetic MIME for a byteless generic RSS podcast feed source
+    /// (podcast-generalize). `ExternalEmbed.target(for:)` dispatches on
+    /// `agentName == "podcast"` is NOT wired (there's no universal podcast web
+    /// player), so this source is byteless with no embed target — the Transcribe
+    /// button is the sole affordance. The `audio/*` prefix keeps the MIME
+    /// taxonomy consistent with the other byteless audio providers.
+    private static let rssPodcastEmbedMIME = "audio/podcast"
+
+    /// Phase 4b: try the byteless external-embed recognizers in fixed precedence
+    /// order — provider iframes (YouTube → Vimeo → Spotify → SoundCloud) then
+    /// direct-remote media. On a match, create a **byteless** source (no bytes
+    /// fetched) and return its outcome; on no match, return `nil` so the caller
+    /// falls through to the website fetch. Pure URL parsing — no network. Throws
+    /// only on a store failure (e.g. `.duplicateContent` for a re-paste).
+    ///
+    /// `role: .primary` (not `.media`): these are first-class, user-created,
+    /// referenceable sources — visible, searchable, and citable in the Sources
+    /// list — matching the byteless-podcast precedent.
+    private func bytelessMediaOutcome(
+        _ rawInput: String,
+        urlFetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> URLFetchService.FetchOutcome? {
+        let match: MediaEmbedMatch
+        let kind: URLFetchService.FetchOutcome.Kind
+        if let m = MediaEmbedURL.youtube(rawInput) { match = m; kind = .videoEmbed }
+        else if let m = MediaEmbedURL.vimeo(rawInput) { match = m; kind = .videoEmbed }
+        else if let m = MediaEmbedURL.spotify(rawInput) { match = m; kind = .audioEmbed }
+        else if let m = MediaEmbedURL.soundcloud(rawInput) { match = m; kind = .audioEmbed }
+        else if let m = MediaEmbedURL.remoteMedia(rawInput) { match = m; kind = .remoteMedia }
+        else { return nil }
+
+        let summary = try store.addBytelessSource(
+            filename: match.filename,
+            mimeType: match.mimeType,
+            provenance: SourceProvenance(
+                agentName: match.agentName,
+                activityKind: match.activityKind,
+                plan: match.planURL,
+                externalRef: match.planURL,
+                externalIdentity: match.externalIdentity),
+            role: .primary)
+        // Best-effort provider oEmbed metadata (YouTube/Vimeo/Spotify/
+        // SoundCloud). Runs off-main, never blocks the embed; a nil blob
+        // leaves the synthetic `youtube-<id>` name + a minimal markdown page
+        // in place. Issue #572 (display title); #646 extends to full metadata.
+        let metadata = await fetchMediaMetadata(for: match, urlFetcher: urlFetcher)
+        if let title = metadata?.title {
+            do {
+                try store.setSourceDisplayName(id: summary.id, displayName: title)
+            } catch {
+                DebugLog.store("byteless oEmbed title setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+            }
+        }
+        // Issue #646: synthesize a readable markdown page from the URL + oEmbed
+        // metadata so the reader, File Provider `.md` sibling, and Tantivy all
+        // see real content for this byteless source. Best-effort: a write
+        // failure is logged, not thrown (the embed itself already landed).
+        writeSyntheticBytelessMarkdown(
+            sourceID: summary.id,
+            url: match.planURL,
+            metadata: metadata,
+            fallbackTitle: summary.effectiveName,
+            transcript: nil,
+            technique: Self.bytelessMetadataTechnique)
+        // No manual reload — the bus fires reloadFromStore() async after each
+        // store write (addBytelessSource + setSourceDisplayName +
+        // appendDerivedMarkdown). The tab title is passed explicitly (the
+        // resolved title when available) so it needs no synchronous freshness.
+        openTab(.source(summary.id), title: metadata?.title ?? summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: match.filename, byteSize: 0, kind: kind)
+    }
+
+    /// Off-main oEmbed metadata fetch for a byteless media match. The GET
+    /// itself runs in a detached `Task` so it can't stall the `@MainActor`
+    /// model; a `nil` leaves the synthetic name + minimal synthetic markdown
+    /// in place. Used by `bytelessMediaOutcome` for every byteless provider
+    /// (YouTube / Vimeo / Spotify / SoundCloud / remote-media). Issue #572;
+    /// extended by #646 to surface the full metadata blob (author / provider /
+    /// description / duration).
+    private func fetchMediaMetadata(
+        for match: MediaEmbedMatch,
+        urlFetcher: any URLFetchService.URLResourceFetcher
+    ) async -> MediaTitleFetcher.MediaOEmbedMetadata? {
+        let matchCopy = match
+        let fetcherCopy = urlFetcher
+        return await Task.detached(priority: .userInitiated) {
+            await MediaTitleFetcher.metadata(for: matchCopy, fetcher: fetcherCopy)
+        }.value
+    }
+
+    /// Best-effort synthetic markdown write for a byteless source. Renders via
+    /// `MediaMarkdownSynthesizer` and stores through `appendDerivedMarkdown`
+    /// so the reader + File Provider `.md` sibling + Tantivy all see it. Never
+    /// throws — the embed has already landed; a markdown failure is a partial-
+    /// failure log, not a throw (#475 discipline). Issue #646.
+    private func writeSyntheticBytelessMarkdown(
+        sourceID: SourceID,
+        url: String,
+        metadata: MediaTitleFetcher.MediaOEmbedMetadata?,
+        fallbackTitle: String,
+        transcript: String?,
+        technique: String
+    ) {
+        let markdown = MediaMarkdownSynthesizer.synthesize(
+            url: url, metadata: metadata,
+            fallbackTitle: fallbackTitle, transcript: transcript)
+        do {
+            try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .transcript,
+                producer: .tool(Self.syntheticMarkdownTool(for: technique)), providerID: nil,
+                modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
+        } catch {
+            // #475: never silently swallow — log to Console.app so a partial
+            // failure is traceable. The source itself was already saved.
+            DebugLog.store("synthetic byteless markdown write failed (source=\(sourceID.rawValue), technique=\(technique)): \(error)")
+        }
+    }
+
+    private static func syntheticMarkdownTool(for technique: String) -> ExtractionTool {
+        switch technique {
+        case bytelessMetadataTechnique: return .bytelessOEmbedSynthetic
+        default: return transcriptTool(for: technique)
+        }
+    }
+
+    /// The web-fetch ingest path (HTML→md / PDF / text / binary), shared by both
+    /// the feature-on and feature-off `addURL` overloads. Validate + fetch OFF the
+    /// main actor (the GET shouldn't stall the UI); the WebsiteMaterializer owns
+    /// normalize→fetch→dispatch (materialization). Then store the result HERE on
+    /// the main actor, where we own `store`.
+    ///
+    /// Phase 4: HTML pages with images are stored as a **website snapshot** —
+    /// the page plus its image siblings under one shared fetch activity. Non-HTML
+    /// and image-less HTML stay single-source.
+    private func addURLViaWebsite(
+        _ rawInput: String,
+        fetcher: any URLFetchService.URLResourceFetcher
+    ) async throws -> URLFetchService.FetchOutcome {
+        let provider = WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
+        let snapshot = try await provider.materializeSnapshot()
+        // Issue #799 PR3: non-snapshot HTML no longer auto-extracts at ingest —
+        // the no-images branch below passes `snapshot.page` straight through
+        // (its `extractedMarkdown` sidecar is `nil` post-PR3 because
+        // `FormatMaterializer.dispatch` no longer computes it for HTML). The
+        // snapshot-with-images path is a SEPARATE code path: `storeSnapshot`
+        // runs `WebsiteSnapshotExtractor`'s image-aware extraction (image-src
+        // rewriting is inseparable from extraction) and writes the result via
+        // `appendExtractedMarkdown(to:from:)`. That path STAYS auto-extracting
+        // — see AC.12 in `plans/extraction-framework-pr3.md`.
+        let page = snapshot.page
+        // Pre-resolve the page's display name off the main actor so a PDF
+        // source's PDFKit parse doesn't block the UI or delay the store write
+        // (issue #229). Non-PDFs are unaffected (helper returns nil → inline).
+        let resolvedDisplayName = await preResolveDisplayName(
+            filename: page.filename, data: page.data,
+            mimeType: page.mimeType, zoteroItemTitle: page.zoteroItemTitle)
+        var summary: SourceSummary
+        if snapshot.plan.format == .html && !snapshot.images.isEmpty {
+            summary = try storeSnapshot(snapshot)
+        } else {
+            summary = try storeMaterialized(page, resolvedDisplayName: resolvedDisplayName)
+        }
+        // HTML sources have ".html" appended to the storage filename (issue #599:
+        // the original HTML bytes are now the source blob, not the converted
+        // markdown). Set a clean display name (the page title without the
+        // extension) so the UI shows "How to Do Thing" instead of
+        // "How to Do Thing.html".
+        if snapshot.plan.format == .html {
+            let cleanTitle = (snapshot.page.filename as NSString).deletingPathExtension
+            do {
+                try store.setSourceDisplayName(id: summary.id, displayName: cleanTitle)
+            } catch {
+                // #475/#492: don't silently swallow — the display name would silently
+                // revert to "Foo.html" with no Console.app trace of why.
+                DebugLog.store("WikiStoreModel.importURLSource setSourceDisplayName failed (source=\(summary.id.rawValue)): \(error)")
+            }
+        }
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write. The tab title is passed explicitly so tabTitle (which
+        // reads `sources`) needs no synchronous freshness.
+        openTab(.source(summary.id), title: summary.effectiveName)
+        return URLFetchService.FetchOutcome(
+            filename: snapshot.plan.filename, byteSize: snapshot.plan.data.count,
+            kind: URLFetchService.mapFormat(snapshot.plan.format))
+    }
+
+    /// Phase 4 — store a website snapshot: one shared fetch activity (committed
+    /// FIRST so the version FK is satisfied), then the page source via `addSource`
+    /// (with source-level content-hash dedup intact), then each image as a
+    /// per-snapshot `.media` source via `addSnapshotImage` (no source dedup; blob
+    /// still deduped). Three independent method-atomic commits (§8: the model has
+    /// no `withTransaction` access and needs none).
+    ///
+    /// The snapshot is intentionally non-atomic across siblings: a mid-snapshot
+    /// failure leaves the page + already-stored images committed and degrades
+    /// gracefully (un-stored images simply don't resolve at render). The page's
+    /// own `.duplicateContent` (a re-paste of the same page) propagates as today.
+    private func storeSnapshot(_ snapshot: WebsiteSnapshot) throws -> SourceSummary {
+        guard let prov = snapshot.page.provenance else {
+            return try storeMaterialized(snapshot.page)
+        }
+        // 1. Commit the shared activity FIRST so source_versions.activity_id FK
+        //    is satisfied before any version is written.
+        let activityID = try store.ensureFetchActivity(provenance: prov)
+        // 2. Store the page (source-level dedup intact; shares the activity).
+        let pageSummary = try store.addSource(
+            filename: snapshot.page.filename, data: snapshot.page.data,
+            zoteroItemKey: nil, zoteroItemTitle: nil,
+            mimeType: snapshot.page.mimeType, provenance: prov, role: .primary,
+            originalPath: nil, activityID: activityID)
+        // 3. Store each image as a per-snapshot .media source.
+        for image in snapshot.images {
+            DebugLog.trying("addSnapshotImage", operation: {
+                try store.addSnapshotImage(
+                    filename: image.filename, data: image.data, mimeType: image.mimeType,
+                    originalPath: image.originalPath, sourceURL: image.sourceURL,
+                    activityID: activityID, role: .media)
+            })
+        }
+        // 4. Issue #599: write the snapshot markdown (image srcs rewritten to
+        //    stored siblings) as a `.extraction`-origin processed-markdown
+        //    version, so the reader tab shows rendered content with inlined
+        //    images alongside the original-HTML HTML tab.
+        appendExtractedMarkdown(to: pageSummary, from: snapshot.page)
+        return pageSummary
+    }
+
+    // MARK: - Source refresh (Phase 3b)
+
+    /// Refresh a source: re-fetch it via its provider (reconstructed from the
+    /// stored origin), appending a new version instead of overwriting. Website
+    /// sources append a content version; podcast (byteless) sources append a
+    /// derived markdown version. Import-only sources (local-file, Zotero,
+    /// folder) throw `.notRefreshable`. Materialization runs off-main (the
+    /// provider's network fetch); the store write happens HERE on the main
+    /// actor, exactly like `addURL`.
+    ///
+    /// Returns a human-readable description for UI surfacing.
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func refreshSource(
+        _ id: SourceID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
+        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
+    ) async throws -> String {
+        let service = SourceRefreshService(
+            fetcher: fetcher, podcastFetcher: podcastFetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #else
+    @discardableResult
+    public func refreshSource(
+        _ id: SourceID,
+        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
+    ) async throws -> String {
+        let service = SourceRefreshService(fetcher: fetcher)
+        return try await performRefresh(id: id, service: service)
+    }
+    #endif
+
+    /// Shared refresh body: materialize off-main, append the version on-main,
+    /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
+    /// duplicate the store-write logic.
+    private func performRefresh(
+        id: SourceID, service: SourceRefreshService
+    ) async throws -> String {
+        guard let origin = try store.sourceOrigin(sourceID: id) else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        // Phase 4 refresh guard (D3): a snapshot source with image siblings
+        // cannot be refreshed by the single-source path — a new activity would
+        // orphan its images (the resolver joins on the active activity). Guard
+        // BEFORE materialize so no version is appended. Snapshot-aware refresh
+        // (re-snapshotting images) is a named follow-on.
+        if try store.hasImageSiblings(sourceID: id) {
+            throw SourceRefreshService.RefreshError.snapshotWithImages
+        }
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let prov):
+            _ = try store.appendContentVersion(
+                sourceID: id, data: data, mimeType: nil, provenance: prov)
+        case .derivedMarkdown(let content):
+            try store.appendDerivedMarkdown(
+                sourceID: id, content: content, origin: .transcript,
+                producer: .tool(.transcript), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
+        }
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // version append.
+        return "Refreshed \(origin.displayLabel) source."
+    }
+
+    /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
+    /// the bytes, rebuilds the list, and signals the daemon.
+    public func addSource(filename: String, data: Data) {
+        do {
+            _ = try store.addSource(
+                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
+                mimeType: nil, provenance: nil, role: .primary,
+                originalPath: nil, activityID: nil)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+        } catch WikiStoreError.duplicateContent(let existing) {
+            storeError = StoreError(
+                title: "Duplicate File Skipped",
+                message: "\(filename) has the exact same content as \(existing.effectiveName), so it wasn't added again.")
+        } catch {
+            DebugLog.store("WikiStoreModel.addSource failed: \(error)")
+        }
+    }
+
+    /// Ingest one Zotero attachment by reading its local file and storing the
+    /// verbatim bytes — exactly like a drag-dropped file, but threading the
+    /// parent item's key + title into the row as provenance so the detail view
+    /// can show "From Zotero" and link back. We already know the filename and
+    /// bytes from Zotero's metadata, so this goes straight to the
+    /// `addSource(filename:data:)` seam rather than `URLFetchService`'s
+    /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
+    /// URL case, which doesn't apply here). No network fallback in v1: an
+    /// attachment that isn't synced to `~/Zotero/storage` yet throws
+    /// `ZoteroFetchError.unavailable` rather than downloading it.
+    public func ingestFromZotero(
+        _ attachment: ZoteroAttachment,
+        parentItem: ZoteroItem,
+        zoteroDir: URL
+    ) async throws {
+        let provider = ZoteroMaterializer(
+            attachment: attachment, parentItem: parentItem, zoteroDir: zoteroDir)
+        // Resolve + read off the main actor (the provider materializes, throwing
+        // ZoteroFetchError.unavailable when the attachment isn't local).
+        let materialized = try await provider.materialize()
+        // Issue #799 PR3: HTML no longer auto-extracts at ingest — store the
+        // raw bytes only; the user triggers extraction via the Extract button
+        // (PR2). The `FormatMaterializer.dispatch` HTML branch returns
+        // `extractedMarkdown: nil`, so `appendExtractedMarkdown` (called by
+        // `storeMaterialized`) writes no markdown version for HTML sources.
+        // Pre-resolve display name off-main for PDFs (issue #229).
+        let resolvedDisplayName = await preResolveDisplayName(
+            filename: materialized.filename, data: materialized.data,
+            mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+        do {
+            let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write. The tab title is passed explicitly so tabTitle (which
+            // reads `sources`) needs no synchronous freshness.
+            openTab(.source(summary.id), title: summary.effectiveName)
+        } catch {
+            DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
+            throw error
+        }
+    }
+
+    /// Import every `.md` / `.markdown` file in `directory` (recursively) as an
+    /// ingested file — a one-shot migration of an Obsidian vault, LogSeq graph, or
+    /// any folder of Markdown notes. Hidden files/directories are skipped.
+    /// Duplicate FILENAMES get a disambiguating suffix (`Note.md`, `Note-1.md`, …);
+    /// duplicate CONTENT (byte-identical to a file already in the store, from this
+    /// import or an earlier one) is skipped and folded into `errors` rather than
+    /// blocking the rest of the batch — a folder import is often large, so a
+    /// modal-per-duplicate would be disruptive (issue #126).
+    ///
+    /// All files land via the shared `store.addSource(filename:data:)` seam —
+    /// exactly the same path as drag-drop, URL fetch, and Zotero ingest.
+    ///
+    /// - Returns: `(imported: count, errors: [localized messages])`.
+    public func importFromMarkdownFolder(directory: URL) async -> (imported: Int, errors: [String]) {
+        let result = await Task.detached(priority: .userInitiated) {
+            MarkdownFolderReader.walk(
+                directory: directory,
+                fileOps: MarkdownFolderReader.FileManagerFileOperations()
+            )
+        }.value
+
+        var imported = 0
+        var errorMessages: [String] = []
+
+        var firstSourceID: SourceID?
+        var firstSourceName: String?
+        for file in result.files {
+            let ext = (file.filename as NSString).pathExtension.lowercased()
+            #if canImport(UniformTypeIdentifiers)
+            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            let mimeType: String? = nil
+            #endif
+            let provider = MarkdownFolderMaterializer(
+                filename: file.filename, data: file.data, mimeType: mimeType,
+                directoryURL: directory)
+            do {
+                let materialized = try await provider.materialize()
+                let summary = try storeMaterialized(materialized)
+                if firstSourceID == nil { firstSourceID = summary.id; firstSourceName = summary.effectiveName }
+                imported += 1
+            } catch WikiStoreError.duplicateContent(let existing) {
+                errorMessages.append("\(file.filename): duplicate of \(existing.effectiveName), skipped")
+            } catch {
+                errorMessages.append("\(file.filename): \(error.localizedDescription)")
+            }
+        }
+        for walkError in result.errors {
+            errorMessages.append(walkError.errorDescription
+                ?? "\(walkError.path): unknown error")
+        }
+
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store writes. The tab title is passed explicitly so tabTitle (which
+        // reads `sources`) needs no synchronous freshness.
+        if let sourceID = firstSourceID, let name = firstSourceName {
+            openTab(.source(sourceID), title: name)
+        } else if let sourceID = firstSourceID {
+            openTab(.source(sourceID))
+        }
+        return (imported: imported, errors: errorMessages)
+    }
+
+    /// Remove an ingested file from the list and the store, then signal so the
+    /// `sources/` tree drops it.
+    public func deleteSource(_ id: SourceID) {
+        do {
+            try store.deleteSource(id: id)
+            removeFromHistory(.source(id))
+            // Close any tab showing this deleted file.
+            if let tab = tabs.first(where: { $0.selection == .source(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteSource failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Source",
+                message: "Could not delete the source: \(error.localizedDescription)")
+        }
+    }
+
+    /// What references `id` right now — pages that cite it and bookmarks that
+    /// point at it (issue #219). The UI shows this before deleting so the user
+    /// can decide whether to convert the incoming citations to plain text.
+    public func deletionImpact(forSource id: SourceID) -> DeletionImpact {
+        let linkingIDs = (DebugLog.trying("sourceLinkingPages", operation: {
+            try store.sourceLinkingPages(to: id)
+        }) ?? [])
+        let blockers = DebugLog.trying("sourceProvenanceBlockers", operation: {
+            try store.sourceProvenanceBlockers(sourceID: id)
+        }) ?? []
+        return DeletionImpact(
+            linkingPageIDs: linkingIDs,
+            bookmarkLabels: bookmarkLabelsReferencing { content in
+                if case .source(let sid) = content { return sid == id }
+                return false
+            },
+            provenanceBlockers: blockers)
+    }
+
+    /// Delete a source, optionally converting every incoming `[[source:…]]`
+    /// citation in other pages to plain text first. Bookmarks pointing at the
+    /// source are ALWAYS removed — a bookmark to a missing source is invalid
+    /// (issue #219). Use this path when `deletionImpact(forSource:)` reported
+    /// references; use ``deleteSource(_:)`` for the no-ceremony immediate
+    /// delete.
+    public func deleteSource(_ id: SourceID, unlinkIncomingLinks: Bool) {
+        // A provenance blocker makes deletion impossible (the store throws).
+        // Bail BEFORE any destructive cleanup so we don't unlink citations or
+        // remove bookmarks for a source that stays in place (issue #219).
+        let blockers = DebugLog.trying("sourceProvenanceBlockers", operation: {
+            try store.sourceProvenanceBlockers(sourceID: id)
+        }) ?? []
+        if !blockers.isEmpty {
+            let titles = Set(blockers.map(\.pageID)).compactMap { pid in
+                summaries.first { $0.id == pid }?.title
+            }.sorted()
+            let noun = blockers.count == 1 ? "page version" : "page versions"
+            var message = "This source is referenced as evidence by \(blockers.count) \(noun)"
+            if !titles.isEmpty {
+                message += " (\(titles.joined(separator: ", ")))"
+            }
+            message += ". Remove those references first."
+            storeError = StoreError(title: "Can't Delete Source", message: message)
+            return
+        }
+        do {
+            if unlinkIncomingLinks {
+                try unlinkIncomingLinksTo(pageIDs: [], sourceIDs: [id])
+            }
+            removeBookmarksReferencingSource(id)
+            try store.deleteSource(id: id)
+            removeFromHistory(.source(id))
+            if let tab = tabs.first(where: { $0.selection == .source(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete + bookmark removals + (optional) linking-page rewrites.
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteSource(unlink:) failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Source",
+                message: "Could not delete the source: \(error.localizedDescription)")
+        }
+    }
+
+    /// The current `system_prompt` singleton body — the agent run passes this
+    /// verbatim via `--append-system-prompt`. The system prompt is now read-only,
+    /// always sourced from the compiled `SystemPrompt.defaultBody`.
+    public func currentSystemPromptBody() -> String {
+        SystemPrompt.defaultBody
+    }
+
+    /// A LIVE snapshot of THIS wiki's current state — page titles, the `index.md`
+    /// body, and a recent-log tail — gathered fresh from the store at agent-run
+    /// click time (§3.5 read-state-at-the-latest-moment). Injected into the
+    /// operation `-p` prompt's `CURRENT WIKI STATE` block so the agent skips the
+    /// orientation turns (`page list`, re-reading `index.md`/`log.md`, pulling a
+    /// sample page) it would otherwise spend rediscovering what the app already
+    /// knows. Read directly from the store (not the cached `summaries`) so it can't
+    /// lag a concurrent external write. All reads are `try?`-guarded so a transient
+    /// read failure degrades to an emptier-but-valid snapshot rather than blocking
+    /// the run.
+    public func currentStateSnapshot() -> WikiStateSnapshot {
+        let titles = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .lastUpdated) }) ?? []).map(\.title)
+        let indexBody = DebugLog.trying("getWikiIndex", operation: { try store.getWikiIndex() })?.body ?? WikiIndex.defaultBody
+        let logEntries = DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) }) ?? []
+        // Render each tail entry with the SAME formatter the `log.md` projection
+        // uses, so the snapshot lines are byte-identical to what `tail log.md`
+        // shows (no second, drifting log format).
+        let logLines = logEntries.map { LogRenderer.line(for: $0) }
+        // Include the bookmark tree so the agent can see the user's organization (#239).
+        let bookmarks = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) ?? []
+        return WikiStateSnapshot.make(
+            allTitles: titles, indexBody: indexBody, logLines: logLines,
+            bookmarkNodes: bookmarks
+        )
+    }
+
+    /// Render the operation log exactly as the File Provider's `log.md` does, so
+    /// the in-app document and filesystem projection show the same query/ingest/
+    /// lint history. Bounded generously for UI responsiveness; entries remain in
+    /// chronological order so newest activity sits at the bottom.
+    public func currentLogMarkdown(limit: Int = 10_000) -> String {
+        let entries = DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: limit) }) ?? []
+        return LogRenderer.render(entries)
+    }
+
+    /// The verbatim bytes of one ingested source, read from SQLite at click time so
+    /// the agent run can STAGE it onto reliable local disk (`source.<ext>`) rather
+    /// than reading from the ~5s-laggy read-only mount. `nil` if the read fails;
+    /// the caller surfaces that as a preflight error instead of launching a run that
+    /// would fall back to probing the mount.
+    public func sourceBytes(id: SourceID) -> Data? {
+        DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) })
+    }
+
+    public func isSourceIngested(_ file: SourceSummary) -> Bool {
+        sourceIngestedStatus[file.id] ?? false
+    }
+
+    /// The origin provenance of a source (provider agent + the activity that
+    /// fetched/imported it). `nil` when the read fails or no version exists.
+    /// Drives the "Origin" row in `SourceDetailView`.
+    public func sourceOrigin(for id: SourceID) -> SourceOrigin? {
+        DebugLog.trying("sourceOrigin", operation: { try store.sourceOrigin(sourceID: id) })
+    }
+
+    /// The full edit history for a source — every `source_versions` row joined
+    /// to its activity + agent, newest-first. `nil`/empty when the read fails
+    /// or the source has no versions. Drives the History tab in
+    /// `SourceDetailView`'s inspector (the source-side mirror of
+    /// `pageEditHistory`).
+    public func sourceEditHistory(for id: SourceID) -> [SourceOrigin] {
+        DebugLog.trying("sourceEditHistory", operation: { try store.sourceEditHistory(sourceID: id) }) ?? []
+    }
+
+    /// The origin provenance of a page's HEAD — the agent + activity that last
+    /// created/edited it (page provenance, #page-provenance). `nil` when the
+    /// read fails (unknown id, no version rows). Drives the "Provenance" row
+    /// in `PageDetailView`. Off-main-safe when the read pool is configured
+    /// (the call routes through `WikiStore.pageOrigin`'s `dbWriter.read`); on
+    /// the main actor for the simple in-memory case. Threads via the public
+    /// `WikiStore` protocol so the model's `store: WikiStore` indirection
+    /// doesn't need a downcast.
+    public func pageOrigin(for id: PageID) -> PageOrigin? {
+        DebugLog.trying("pageOrigin", operation: { try store.pageOrigin(pageID: id) })
+    }
+
+    /// The full edit history for a page — every `page_versions` row joined to
+    /// its activity + agent, oldest-first. `nil`/empty when the read fails or
+    /// the page has no versions. Drives the expandable "Edit history" list in
+    /// `PageDetailView`.
+    public func pageEditHistory(for id: PageID) -> [PageOrigin] {
+        DebugLog.trying("pageEditHistory", operation: { try store.pageEditHistory(pageID: id) }) ?? []
+    }
+
+    /// The full blob-decoded body of an arbitrary page version by id, or `nil`
+    /// when no version matches (or the read fails). READ-ONLY — emits nothing.
+    /// Used by the Versions window to view/diff a historical version without
+    /// restoring it (the read-side counterpart of the `revertPage` body join).
+    public func pageVersionBody(for versionID: PageVersionID) -> String? {
+        DebugLog.trying("pageVersionBody", operation: { try store.pageVersionBody(versionID: versionID) })
+    }
+
+    /// Restore a page to a previous version (append-only, #817). Wraps
+    /// `store.restorePage`: appends a NEW `page_versions` node reusing the
+    /// target's blob, records a `'restore'` PROV activity (auditable in
+    /// history), and repoints HEAD to the new node. History is never mutated.
+    /// The store routes the write through `mutate()` so a `.page .updated`
+    /// `ResourceChangeEvent` fires (File Provider + this model's `.external`
+    /// reload subscribe). Throws are swallowed (the Versions UI calls this from
+    /// a button; a failure is non-fatal) — matches the `setActiveMarkdown`
+    /// wrapper posture. Returns the new version id, or `nil` on failure.
+    @discardableResult
+    public func restorePage(for id: PageID, to versionID: PageVersionID) -> PageVersionID? {
+        DebugLog.trying("restorePage", operation: { try store.restorePage(pageID: id, to: versionID) })
+    }
+
+    /// `true` iff `refreshSource(_:)` would actually succeed for this source —
+    /// the single source of truth the detail view gates the Refresh button on.
+    /// Mirrors `SourceRefreshService.materialize` + the `performRefresh` snapshot
+    /// guard so the UI only offers Refresh when it can work:
+    /// - `"website"` → refreshable, unless it's a snapshot with image siblings
+    ///   (the single-source refresh guard, D3, would orphan them).
+    /// - `"apple-podcast"` → refreshable only when this build compiled podcast
+    ///   support AND the `podcast-token-helper` binary is present at runtime.
+    /// - Everything else (local-file, Zotero, folder, unknown, missing origin)
+    ///   is import-only and not refreshable.
+    public func isSourceRefreshable(for id: SourceID) -> Bool {
+        guard let origin = sourceOrigin(for: id), origin.plan != nil else { return false }
+        // Delegate the baseline to `provider.supportsRefresh`, then layer the
+        // runtime guards on top (snapshot image siblings for websites; the
+        // bundled signing helper for podcasts). See `plans/source-provider-enum.md`
+        // §supportsRefresh — this is the full predicate; the enum property is
+        // baseline-only.
+        guard let provider = origin.provider, provider.supportsRefresh else { return false }
+        switch provider {
+        case .website:
+            return !(DebugLog.trying("hasImageSiblings", operation: { try store.hasImageSiblings(sourceID: id) }) ?? false)
+        case .applePodcast:
+            #if PODCAST_TRANSCRIPTS
+            return ApplePodcastTranscriptService.bundled() != nil
+            #else
+            return false
+            #endif
+        case .podcast:
+            // Generic RSS-feed podcast: always refreshable on every build —
+            // the `podcast-transcript` script needs only `uv` (no signing
+            // helper). Mirrors YouTube's "no runtime guard" shape but unlike
+            // YouTube the refresh DOES re-fetch a fresh transcript.
+            return true
+        // Exhaustive over the non-refreshable providers — `supportsRefresh`
+        // returned false above, so these are unreachable; the compiler still
+        // enforces exhaustiveness if a new provider is ever added (it has to
+        // be added here, to `supportsRefresh`, or the build fails).
+        case .localFile, .zotero, .markdownFolder,
+             .youtube, .vimeo, .spotify, .soundcloud, .remoteMedia, .legacyImport:
+            return false
+        }
+    }
+
+    // MARK: - Processed markdown versions (v8)
+
+    /// The latest (HEAD) processed markdown version for a file. Every source has a
+    /// chain: PDFs are seeded from extraction, markdown-native sources self-seed
+    /// v1 from their verbatim bytes (origin `"source"`). After seeding, new
+    /// versions are appended by edits (`"user"`) or re-extraction (`"extraction"`).
+    public func processedMarkdownHead(for file: SourceSummary) -> SourceMarkdownVersion? {
+        if let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: file.id) }) {
+            return head
+        }
+        // Seed v1 from verbatim bytes for markdown-native sources (MIME-keyed).
+        guard MimeType.isText(file.mimeType) else { return nil }
+        guard let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: file.id) }),
+              let text = String(data: bytes, encoding: .utf8) else { return nil }
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: file.id, content: text, origin: .source, note: nil, technique: nil)
+        } catch {
+            // #475/#492: seeding v1 from verbatim bytes is a persistence write;
+            // swallowing the throw silently drops the first version with no trace.
+            DebugLog.store("WikiStoreModel.processedMarkdownHead appendProcessedMarkdown (seed v1) failed (source=\(file.id.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// True when at least one processed-markdown version exists for this source.
+    public func hasProcessedMarkdown(for sourceID: SourceID) -> Bool {
+        DebugLog.trying("hasProcessedMarkdown", operation: { try store.hasProcessedMarkdown(sourceID: sourceID) }) ?? false
+    }
+
+    /// The single predicate naming the "can this source be ingested?" rule.
+    /// A source is ingestible iff it has content the staging path can hand the
+    /// agent — either a processed-markdown version (extracted PDF, transcript,
+    /// edited text) that `processedMarkdownHead` resolves, **or** raw bytes
+    /// (`byteSize > 0`) that the staging reads directly for native markdown /
+    /// images / PDFs / … A **byteless** source with no processed markdown —
+    /// e.g. a YouTube video whose transcript never arrived — has neither and
+    /// returns `false`: there is nothing to stage, so ingestion must not run.
+    /// Enforcement of the drop lives in `enqueueIngestion`; the UI gates
+    /// (`SourceDetailView`, `SourcesListView`) consult this so the affordance
+    /// reflects the truth.
+    public func canIngest(_ source: SourceSummary) -> Bool {
+        hasProcessedMarkdown(for: source.id) || source.byteSize > 0
+    }
+
+    /// Whether this source's content TYPE has ANY path to markdown — the
+    /// **auto-ingest eligibility** gate. Distinct from `canIngest(_:)`:
+    /// `canIngest` asks "is there content to stage?" (bytes or processed
+    /// markdown); `shouldAutoIngest` asks "is the content TYPE one we can
+    /// summarize / extract / transcribe into markdown at all?".
+    ///
+    /// A PNG (`image/png` → `.image`) and an XML (`application/xml` →
+    /// `.binary`) return `false` here — they have bytes (so `canIngest` is
+    /// `true`) but no markdown-extraction path, so the continuous-ingest
+    /// coordinator must NOT enqueue them. The bug (PR1): the coordinator
+    /// previously consulted `canIngest` alone, so PNG/XML sources passed
+    /// and got enqueued for wasted agent runs.
+    ///
+    /// # Provider-aware (PR2 chokepoint-safe)
+    ///
+    /// Resolves via `ContentKind.resolve(mimeType:provider:ext:)` — the
+    /// origin lookup is done internally so byteless `.youtube` / `.podcast`
+    /// sources WITH transcripts return `true` (their synthetic MIME
+    /// `video/youtube` would otherwise classify as `.binary`). The PR2
+    /// chokepoint migration (`QueueIngestionHelper.enqueueIngestion`) can
+    /// safely call this without re-introducing the §11-C1 YouTube/podcast
+    /// regression the original §5.2 `fromMIME`-only wrapper had.
+    ///
+    /// # Coordinator use
+    ///
+    /// The coordinator's `scanWiki` does NOT call this directly — it
+    /// consults `BackgroundIngestCoordinator.ingestionDecision(for:store:)`
+    /// (the testable seam), which calls `ContentKind.resolve` directly so
+    /// the per-source decision returns the resolved `ContentKind` (for
+    /// logging / tests) without re-wrapping into a `Bool`. This wrapper is
+    /// future infrastructure for the PR2 chokepoint + (optionally) the UI
+    /// gates — see `plans/content-type-registry.md` §5.2.
+    public func shouldAutoIngest(_ source: SourceSummary) -> Bool {
+        let origin = sourceOrigin(for: source.id)
+        let kind = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: origin?.provider,
+            ext: source.ext)
+        return kind.capabilities.shouldAutoIngest
+    }
+
+    /// All versions for a source, newest first. Empty if none.
+    public func processedMarkdownHistory(for sourceID: SourceID) -> [SourceMarkdownVersion] {
+        DebugLog.trying("processedMarkdownHistory", operation: { try store.processedMarkdownHistory(sourceID: sourceID) }) ?? []
+    }
+
+    /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
+    /// the blob-decoded version, or `nil` when no row matches. Used by the
+    /// pinned-extraction viewer to load the exact extraction a quote was written
+    /// against.
+    public func processedMarkdownVersion(for id: SourceMarkdownVersionID) -> SourceMarkdownVersion? {
+        DebugLog.trying("processedMarkdownVersion", operation: { try store.processedMarkdownVersion(id: id) }) ?? nil
+    }
+
+    /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
+    /// per source. Phase 6: the render precompute builds the `sourceID → [smvID]`
+    /// map so `linkified` can resolve `@vN` per occurrence.
+    public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]] {
+        DebugLog.trying("sourceDerivedChains", operation: { try store.sourceDerivedChains() }) ?? [:]
+    }
+
+    /// The embed descriptors for every byteless source, batched in one query.
+    /// Phase 4b: the render precompute builds this once (main-actor read) and
+    /// feeds `ExternalEmbed.target(for:)` to widen `![[source:…]]` embeds to
+    /// external media. Returns `{}` on any query failure.
+    public func embedDescriptors() -> [SourceID: SourceEmbedDescriptor] {
+        DebugLog.trying("embedDescriptors", operation: { try store.embedDescriptors() }) ?? [:]
+    }
+
+    /// Phase 4: batched sibling-image resolver maps for the render precompute.
+    /// Per source, `[original_path → sibling sourceID]`. Returns `{}` on
+    /// failure (images simply won't resolve — degraded, not fatal).
+    public func siblingImageResolvers() -> [SourceID: [String: SourceID]] {
+        DebugLog.trying("siblingImageResolvers", operation: { try store.siblingImageResolvers() }) ?? [:]
+    }
+
+    /// A memoized ``WikiRenderContext`` (Phase A.1, D1) — the pure-data snapshot
+    /// of everything a markdown render needs from the store (existence/display/
+    /// loose-match sets, `embedMap` incl. external `EmbedTarget`s,
+    /// `sourceDerivedChain`, `siblingMaps`).
+    ///
+    /// Built lazily on first access and rebuilt only when pages or sources
+    /// change — `reloadSummaries()` / `reloadSources()` bump
+    /// ``renderContextGeneration`` (every local mutation routes through them, and
+    /// `.external` `WikiEventBus` events route through `reloadFromStore()` → the
+    /// same reloads). So per-delta renders reuse the snapshot and never touch
+    /// SQLite. The returned value is `Sendable` and safe to hand to a detached
+    /// render task; its closures are pure (no store access at render time).
+    public func renderContext() -> WikiRenderContext {
+        if let cached = cachedRenderContext,
+           renderContextBuiltAtGeneration == renderContextGeneration {
+            return cached
+        }
+        let built = WikiRenderContext.build(from: self)
+        cachedRenderContext = built
+        renderContextBuiltAtGeneration = renderContextGeneration
+        return built
+    }
+
+    /// Save an edit as a new version in the chain. Only called when the text
+    /// genuinely differs from the current head — meaningful history, not
+    /// keystroke spam.
+    @discardableResult
+    public func saveProcessedMarkdown(for sourceID: SourceID, content: String) -> SourceMarkdownVersion? {
+        do {
+            return try store.appendProcessedMarkdown(
+                sourceID: sourceID, content: content, origin: .user, note: nil, technique: nil)
+        } catch {
+            // #475/#492: the user's source-markdown edit is lost if this write
+            // throws; log so it's visible in Console.app instead of vanishing.
+            DebugLog.store("WikiStoreModel.saveProcessedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Seed the first processed-markdown version for a PDF from extraction
+    /// output, recording full provenance (backend agent + extract activity). The
+    /// `source_version_id` is resolved from the source's active content version.
+    /// Double-seed guard: if a head already exists, returns it instead.
+    @discardableResult
+    public func seedPdfMarkdown(
+        for sourceID: SourceID, content: String,
+        backend: ExtractionBackend, modelVersion: String? = nil
+    ) -> SourceMarkdownVersion? {
+        if let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: sourceID) }) {
+            return head
+        }
+        do {
+            return try store.recordMarkdownExtraction(
+                sourceID: sourceID, content: content, backend: backend,
+                sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+        } catch {
+            // #475/#492: PDF extraction output (expensive) is lost if this write
+            // throws; log so it's visible in Console.app instead of vanishing.
+            DebugLog.store("WikiStoreModel.seedPdfMarkdown recordMarkdownExtraction failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Append a transcript markdown version (origin `.transcript`) to the
+    /// processed-markdown chain for `sourceID`. Used by the queued transcription
+    /// worker's `persistTranscription` path (#842). Thin pass-through to
+    /// `store.appendDerivedMarkdown` — the store-level `mutate()` emission +
+    /// `ResourceChangeEvent` fire inside the store, so no model-level work is
+    /// needed. Mirrors `seedPdfMarkdown`'s shape for extraction.
+    @discardableResult
+    public func appendTranscriptMarkdown(
+        for sourceID: SourceID, content: String, technique: String
+    ) -> SourceMarkdownVersion? {
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: content, origin: .transcript,
+                producer: .tool(Self.transcriptTool(for: technique)), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
+        } catch {
+            DebugLog.store("WikiStoreModel.appendTranscriptMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Re-extract a source's content with a given extractor + backend, appending
+    /// a COEXISTING alternative (never clobbers the existing head). Resolves the
+    /// source bytes + active content version from the store, runs the extractor,
+    /// then records the provenance-carrying extraction. Returns the new
+    /// alternative, or nil if the bytes can't be read or conversion fails.
+    @discardableResult
+    public func reExtractMarkdown(
+        for sourceID: SourceID, filename: String,
+        using extractor: any MarkdownExtractor,
+        backend: ExtractionBackend, modelVersion: String? = nil,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async -> SourceMarkdownVersion? {
+        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else { return nil }
+        guard let markdown = await DebugLog.trying("extractorConvert", operation: { try await extractor.convert(pdfData: data, filename: filename, onProgress: onProgress) }) else {
+            return nil
+        }
+        do {
+            return try store.recordMarkdownExtraction(
+                sourceID: sourceID, content: markdown, backend: backend,
+                sourceVersionID: nil, note: "re-extract via \(backend.agentName)",
+                modelVersion: modelVersion)
+        } catch {
+            // #475/#492: re-extraction is seconds-minutes of MLX/PDF compute;
+            // swallowing the throw silently discards it with no trace.
+            DebugLog.store("WikiStoreModel.reExtractMarkdown recordMarkdownExtraction failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Extract markdown from an HTML source's verbatim bytes using the chosen
+    /// backend (issue #799 PR2). Inline — does NOT route through the queue
+    /// engine (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
+    /// `convert(pdfData:)` / `seedPdfMarkdown`; generalizing it is a deferred
+    /// sub-project per the parent plan's "Out of scope" section). The write
+    /// path mirrors what `enrichWithDefuddle` → `appendExtractedMarkdown`
+    /// USED to do at ingest time pre-PR3: reads source bytes, runs the chosen
+    /// extractor, writes the result through `appendDerivedMarkdown` with
+    /// the matching technique tag. Post-PR3 this is the CANONICAL way to
+    /// extract HTML — non-snapshot HTML sources no longer auto-extract at
+    /// ingest, so a fresh HTML source has zero `source_markdown_versions`
+    /// rows until the user clicks Extract (which routes here).
+    ///
+    /// `appendDerivedMarkdown` always appends a new version — the FIRST
+    /// version becomes HEAD by the default-active rule; subsequent calls
+    /// append coexisting alternatives (no clobber). So the initial Extract
+    /// and a later Re-extract with a different backend both flow through
+    /// this method — provenance is differentiated by the `technique` column
+    /// (`"defuddle"` vs `"html-to-markdown"`) and the version id, surfaced
+    /// in the alternatives UI.
+    ///
+    /// `backend == .defuddle` resolves the injected `htmlMarkdownExtractor`
+    /// (the AppKit-coupled `LocalDefuddleExtractor` in the WikiFS target). On
+    /// any failure (extractor nil, defuddle subprocess missing, empty body),
+    /// the call degrades to `TagBasedHtmlExtractor` (same fallback semantics
+    /// `FormatMaterializer.enrich` USED to provide at ingest pre-PR3) rather
+    /// than silently returning nil — so the user always gets a markdown
+    /// version on Extract. `backend == .tagBased` skips the defuddle path
+    /// entirely.
+    ///
+    /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
+    ///   bytes couldn't be read, the extractor returned empty markdown, or
+    ///   the store write threw.
+    @discardableResult
+    public func extractHtml(
+        for sourceID: SourceID,
+        backend: HtmlExtractionBackend
+    ) async -> SourceMarkdownVersion? {
+        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
+            DebugLog.store("WikiStoreModel.extractHtml: source bytes unreadable (source=\(sourceID.rawValue))")
+            return nil
+        }
+        let html = String(data: data, encoding: .utf8)
+            ?? String(decoding: data, as: UTF8.self)
+        guard !html.isEmpty else {
+            DebugLog.store("WikiStoreModel.extractHtml: source HTML is empty (source=\(sourceID.rawValue))")
+            return nil
+        }
+        let (markdown, technique) = await Self.extractHtml(
+            html: html, backend: backend, using: htmlMarkdownExtractor)
+        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DebugLog.store("WikiStoreModel.extractHtml: extractor returned empty markdown (source=\(sourceID.rawValue), backend=\(backend.rawValue))")
+            return nil
+        }
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .extraction,
+                producer: .tool(.html), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: "extract via \(backend.displayName): \(technique)")
+        } catch {
+            // #475/#492: never silently swallow — extraction output is
+            // user-triggered (a button tap or Re-extract menu click), so a
+            // swallowed throw would silently lose the result with no trace.
+            DebugLog.store("WikiStoreModel.extractHtml appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// **On-demand transcript dispatch** (issue #799 PR5): the unified entry
+    /// point for the byteless-embed transcript pipeline. Routes by
+    /// `origin.provider` to per-provider helpers; the user clicks Transcribe in
+    /// `SourceDetailView` to trigger this explicitly (no auto-transcription at
+    /// ingest — mirrors the podcast PR4 contract, now generalized to YouTube).
+    ///
+    /// Dispatch table (per `SourceProvider.supportsTranscription`):
+    /// - `.applePodcast` → `transcribePodcast(sourceID:origin:fetcher:)` (PR4):
+    ///   reconstructs the episode URL from `origin.plan`, calls
+    ///   `ApplePodcastMaterializer.materialize()` (signed bearer → AMP → TTML →
+    ///   parse → markdown), writes via `appendDerivedMarkdown` using the
+    ///   `.appleTTML` transcript tool. Behind `#if PODCAST_TRANSCRIPTS`.
+    /// - `.youtube` → `transcribeYouTube(sourceID:origin:fetcher:)` (PR5, NEW):
+    ///   reads `origin.externalIdentity` (the 11-char video ID), calls
+    ///   `YouTubeTranscriptService.transcript(forVideoID:)` (pure-Swift watch-
+    ///   page → caption-track scrape → markdown), writes via
+    ///   `appendDerivedMarkdown` using the `.youtubeCaptions` transcript tool.
+    ///   Always compiled (no signing helper).
+    /// - every other provider → throws `.notRefreshable` (no transcript pipeline
+    ///   today; Vimeo is a future extension that needs OAuth — #564 Phase 4).
+    ///
+    /// Inline — does NOT route through the queue engine (the queue is PDF-coupled
+    /// via `ExtractionResolution.pdfData` / `convert(pdfData:)` /
+    /// `seedPdfMarkdown`; transcript "extraction" is a NETWORK FETCH with a
+    /// different input shape — there are no stored bytes to convert, the
+    /// "backend" picks the network pipeline). Generalizing the queue is a
+    /// deferred sub-project per the parent plan's "Out of scope" section.
+    ///
+    /// Throws `.notRefreshable("unknown")` when the source has no origin or the
+    /// provider is missing (e.g. a legacy / nil-origin row), and
+    /// `.notRefreshable(origin.agentName)` for unsupported providers. Each
+    /// per-provider helper adds its own throws for its specific failures
+    /// (`PodcastTranscriptError.signatureUnavailable`,
+    /// `SourceRefreshService.RefreshError.missingPlan`, `YouTubeTranscriptError.*`).
+    ///
+    /// `appendDerivedMarkdown` always appends — the FIRST call creates the
+    /// HEAD; subsequent calls (re-transcribe) append coexisting alternatives
+    /// (no clobber). So the initial Transcribe and a later Re-transcribe both
+    /// flow through this method — provenance is differentiated by the version id
+    /// and the technique column. Mirrors the HTML `extractHtml(for:backend:)`
+    /// lifecycle in PR2.
+    ///
+    /// - Parameters:
+    ///   - sourceID: the byteless embed source to transcribe (Apple Podcasts or
+    ///     YouTube).
+    ///   - podcastFetcher: the `PodcastTranscriptFetching` to use for the
+    ///     podcast arm; defaults to `ApplePodcastTranscriptService.bundled()`
+    ///     (the bundled signing helper). Tests inject a fake. `nil` on a build
+    ///     without the helper → throws `.signatureUnavailable`. NOT consulted
+    ///     for the YouTube arm. On a build without `PODCAST_TRANSCRIPTS` the
+    ///     parameter is a back-compat `Any? = nil` placeholder (the podcast arm
+    ///     throws `.notRefreshable` regardless).
+    ///   - youtubeFetcher: the `YouTubeTranscriptFetching` to use for the
+    ///     YouTube arm; defaults to `YouTubeTranscriptService(fetcher:
+    ///     URLSessionFetcher())` (pure-Swift scrape). Tests inject a fake. NOT
+    ///     consulted for the podcast arm. Always compiled (no signing helper).
+    /// - Returns: the new `SourceMarkdownVersion`, or nil on a store write
+    ///   failure (the `appendDerivedMarkdown` throw is logged via `DebugLog`,
+    ///   mirroring `extractHtml`'s discipline).
+    #if PODCAST_TRANSCRIPTS
+    @discardableResult
+    public func transcribe(
+        sourceID: SourceID,
+        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
+        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
+    ) async throws -> SourceMarkdownVersion? {
+        guard let origin = sourceOrigin(for: sourceID),
+              let provider = origin.provider else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        switch provider {
+        case .applePodcast:
+            return try await transcribePodcast(
+                sourceID: sourceID, origin: origin, fetcher: podcastFetcher)
+        case .podcast:
+            return try await transcribeRSSPodcast(
+                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
+        case .youtube:
+            return try await transcribeYouTube(
+                sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
+        case .vimeo, .spotify, .soundcloud, .remoteMedia,
+             .localFile, .website, .zotero, .markdownFolder, .legacyImport:
+            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+        }
+    }
+    #else
+    @discardableResult
+    public func transcribe(
+        sourceID: SourceID,
+        podcastFetcher: Any? = nil,
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
+        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
+    ) async throws -> SourceMarkdownVersion? {
+        guard let origin = sourceOrigin(for: sourceID),
+              let provider = origin.provider else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        switch provider {
+        case .applePodcast:
+            // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
+            // The View-level `isTranscribable` predicate returns `false` for
+            // `.applePodcast` outside this flag, so the Transcribe button doesn't
+            // render and this path is unreachable in production; the throw keeps
+            // the model honest for callers that bypass the predicate (headless
+            // API, tests). The shape matches the private
+            // `transcribePodcast(sourceID:origin:fetcher:)` phase-out arm below.
+            _ = podcastFetcher  // unused on the phase-out build
+            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+        case .podcast:
+            // Generic RSS-feed podcast: ALWAYS compiled (no FairPlay dependency).
+            // Works on WIKIFS_APP_STORE=1 builds — the transcript fetch needs
+            // only the `podcast-transcript` `uv` script.
+            return try await transcribeRSSPodcast(
+                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
+        case .youtube:
+            return try await transcribeYouTube(
+                sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
+        case .vimeo, .spotify, .soundcloud, .remoteMedia,
+             .localFile, .website, .zotero, .markdownFolder, .legacyImport:
+            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+        }
+    }
+    #endif
+
+    // MARK: - Per-provider transcription helpers
+
+    /// Podcast arm of the unified dispatch (PR4 logic, moved from the public
+    /// entry point to a private helper in PR5). Reconstructs the episode URL
+    /// from `origin.plan` (the page URL recorded at ingest —
+    /// `PodcastEpisodeURL.parse(_:)` recovers the numeric episode ID + the
+    /// slug), re-injects the fetcher (passed through from the dispatch entry
+    /// point — mirrors `refreshSource`'s injection point), calls
+    /// `ApplePodcastMaterializer.materialize()` (which runs the full token →
+    /// AMP → TTML → parse → markdown pipeline off-main in a detached `Task`),
+    /// and writes the transcript markdown via `appendDerivedMarkdown` with
+    /// the `.appleTTML` tool.
+    ///
+    /// Throws `PodcastTranscriptError.signatureUnavailable` when the helper
+    /// binary isn't present (mirroring the same throw at ingest pre-PR4 and
+    /// `SourceRefreshService.materializePodcast`'s shape), and
+    /// `SourceRefreshService.RefreshError.missingPlan` when the origin has no
+    /// `plan` URL (data-integrity edge case — podcast ingests always record the
+    /// page URL at ingest). The `origin.provider == .applePodcast` guard lives
+    /// at the dispatch entry point (the `switch`), so this helper trusts the
+    /// caller has already verified the provider.
+    #if PODCAST_TRANSCRIPTS
+    private func transcribePodcast(
+        sourceID: SourceID, origin: SourceOrigin,
+        fetcher: (any PodcastTranscriptFetching)?
+    ) async throws -> SourceMarkdownVersion? {
+        guard let planURLString = origin.plan,
+              let pageURL = URL(string: planURLString),
+              let episode = PodcastEpisodeURL.parse(planURLString) else {
+            throw SourceRefreshService.RefreshError.missingPlan
+        }
+        // Prefer the injected fetcher (FairPlay path when the signing helper is
+        // available). Fall back to the RSS subprocess service — it needs only
+        // `uv` (no macOS signing helper), so podcast transcripts work even in
+        // builds where `podcast-token-helper` is absent. Issue #812.
+        let svc = fetcher ?? RSSPodcastTranscriptService(sourceURL: pageURL)
+        // The materializer runs the transcript fetch (helper subprocess + two
+        // HTTP round-trips + TTML parse) off-main in a detached Task; the
+        // model never touches the store inside this `await`.
+        let provider = ApplePodcastMaterializer(
+            episode: episode, pageURL: pageURL, fetcher: svc)
+        let transcript = try await provider.materialize()
+        let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: markdown, origin: .transcript,
+                producer: .tool(.appleTTML), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
+        } catch {
+            // #475/#492: never silently swallow — a transcription failure
+            // (after network round-trips) must leave a Console.app trace.
+            DebugLog.store("WikiStoreModel.transcribe (applePodcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+    #else
+    private func transcribePodcast(
+        sourceID: SourceID, origin: SourceOrigin,
+        fetcher: Any?
+    ) async throws -> SourceMarkdownVersion? {
+        // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
+        // The View-level `isTranscribable` predicate returns `false` for
+        // `.applePodcast` outside this flag, so the Transcribe button doesn't
+        // render and this path is unreachable in production; the throw keeps
+        // the model honest for callers that bypass the predicate (headless
+        // API, tests). The shape matches `SourceRefreshService.materializePodcast`'s
+        // phase-out arm, which also throws `.notRefreshable` here.
+        _ = fetcher  // unused on the phase-out build
+        _ = sourceID
+        throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
+    }
+    #endif
+
+    /// YouTube arm of the unified dispatch (PR5, NEW). Reads
+    /// `origin.externalIdentity` (the 11-char video ID — `MediaEmbedURL.youtube`
+    /// stores it directly at ingest), calls
+    /// `YouTubeTranscriptService.transcript(forVideoID:)` (pure-Swift watch-page
+    /// → caption-track scrape → markdown), and writes via
+    /// `appendDerivedMarkdown` using the `.youtubeCaptions` tool.
+    ///
+    /// Unlike the podcast arm, YouTube needs no signing helper — the fetch is
+    /// always runnable when a fetcher is present and the video ID is valid. The
+    /// `plan` URL is a fallback for legacy rows that lack `externalIdentity`
+    /// (rare; pre-typing rows that may exist in old DBs) — it re-parses the
+    /// pasted watch/embed/shorts URL via `MediaEmbedURL.youtube` to recover the
+    /// canonical ID.
+    ///
+    /// Throws `SourceRefreshService.RefreshError.missingPlan` when neither
+    /// `externalIdentity` nor a re-parse of `origin.plan` yields a video ID,
+    /// `SourceRefreshService.RefreshError.notRefreshable` when the fetcher is
+    /// absent (e.g. a test passing nil — production always has the default), and
+    /// propagates `YouTubeTranscriptError.*` from the scrape. Always appends —
+    /// see the dispatch entry point's docstring.
+    private func transcribeYouTube(
+        sourceID: SourceID, origin: SourceOrigin,
+        fetcher: (any YouTubeTranscriptFetching)?
+    ) async throws -> SourceMarkdownVersion? {
+        // externalIdentity IS the 11-char video ID (MediaEmbedURL.youtube
+        // stores it directly at ingest). Fall back to re-parsing plan if a
+        // legacy row lacks it (pre-typing data — the typed MediaEmbedMatch
+        // always sets externalIdentity on the post-typing ingest path).
+        let videoID = origin.externalIdentity
+            ?? MediaEmbedURL.youtube(origin.plan ?? "")?.externalIdentity
+        guard let videoID else {
+            throw SourceRefreshService.RefreshError.missingPlan
+        }
+        guard let fetcher else {
+            // No fetcher: a test injected nil explicitly. Production's default
+            // (constructed at the dispatch entry point) is a real
+            // YouTubeTranscriptService instance, so this branch is unreachable
+            // in production UI; the throw keeps the model honest.
+            throw SourceRefreshService.RefreshError.notRefreshable("youtube")
+        }
+        // The transcript fetch (watch page + caption download + parse) runs
+        // off-main in a detached Task (mirrors `ApplePodcastMaterializer`'s
+        // shape); the model never touches the store inside this `await`.
+        let videoIDCopy = videoID
+        let fetcherCopy = fetcher
+        let transcript = try await Task.detached(priority: .userInitiated) {
+            try await fetcherCopy.transcript(forVideoID: videoIDCopy)
+        }.value
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: transcript.markdown, origin: .transcript,
+                producer: .tool(.youtubeCaptions), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
+        } catch {
+            // #475/#492: never silently swallow — a transcription failure
+            // (after network round-trips) must leave a Console.app trace.
+            DebugLog.store("WikiStoreModel.transcribe (youtube) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Generic RSS-feed podcast arm of the unified dispatch (podcast-generalize).
+    /// Reads `origin.plan` (the feed URL recorded at ingest by
+    /// `addPodcastFeedURL`), calls `RSSPodcastTranscriptService.transcript(forFeedURL:)`
+    /// (spawns the `podcast-transcript` `uv` script → fetches the feed → parses
+    /// `<podcast:transcript>`), and writes via `appendDerivedMarkdown` with
+    /// the `.rssPodcastTranscript` tool.
+    ///
+    /// **Always compiled** (outside `#if PODCAST_TRANSCRIPTS`) — the generic
+    /// `.podcast` path needs no FairPlay signing helper, only `uv`. So it works
+    /// on `WIKIFS_APP_STORE=1` builds, mirroring how `transcribeYouTube` is
+    /// always compiled.
+    ///
+    /// The injected `fetcher` (H2) lets tests fake the subprocess: pass an
+    /// `RSSFeedTranscriptFetching` conformer returning canned markdown and assert
+    /// the dispatch + append without spawning `uv`. Production defaults to
+    /// `RSSPodcastTranscriptService()` (constructed at the dispatch entry point).
+    ///
+    /// Mirrors `transcribeYouTube`'s error discipline: on a fetch failure the
+    /// error propagates (so `SourceDetailView.runTranscription` surfaces it);
+    /// on a store-write failure, logs + returns nil (the fetch succeeded but
+    /// the write didn't — a Console.app trace is left per #475/#492).
+    private func transcribeRSSPodcast(
+        sourceID: SourceID, origin: SourceOrigin,
+        fetcher: (any RSSFeedTranscriptFetching)?
+    ) async throws -> SourceMarkdownVersion? {
+        guard let planURLString = origin.plan,
+              let sourceURL = URL(string: planURLString) else {
+            throw SourceRefreshService.RefreshError.missingPlan
+        }
+        guard let fetcher else {
+            // No fetcher: a test injected nil explicitly. Production's default
+            // (constructed at the dispatch entry point) is a real
+            // RSSPodcastTranscriptService instance, so this branch is unreachable
+            // in production UI; the throw keeps the model honest.
+            throw SourceRefreshService.RefreshError.notRefreshable("podcast")
+        }
+        // The transcript fetch (feed download + <podcast:transcript> parse) runs
+        // off-main via the subprocess; the model never touches the store inside
+        // this `await`.
+        let fetcherCopy = fetcher
+        let urlCopy = sourceURL
+        let transcript = try await Task.detached(priority: .userInitiated) {
+            try await fetcherCopy.transcript(forFeedURL: urlCopy)
+        }.value
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: transcript.markdown, origin: .transcript,
+                producer: .tool(.rssPodcastTranscript), providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: nil)
+        } catch {
+            // #475/#492: never silently swallow — a transcription failure
+            // (after a network round-trip) must leave a Console.app trace.
+            DebugLog.store("WikiStoreModel.transcribe (podcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// Pure dispatch from a `HtmlExtractionBackend` value to a concrete
+    /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
+    /// stamp the right technique on the processed-markdown version row
+    /// (the technique is how the alternatives UI surfaces the producer).
+    /// `defuddle` prefers the injected `htmlMarkdownExtractor`; on any
+    /// failure (extractor nil OR returns nil OR returns empty), falls back
+    /// to `TagBasedHtmlExtractor` (mirrors `FormatMaterializer.enrich`'s
+    /// degradation). `tagBased` skips the defuddle path entirely.
+    private static func extractHtml(
+        html: String,
+        backend: HtmlExtractionBackend,
+        using injectedExtractor: (any HtmlMarkdownExtractor)?
+    ) async -> (markdown: String, technique: String) {
+        let tagBased = TagBasedHtmlExtractor()
+        if backend == .defuddle,
+           let injected = injectedExtractor,
+           let result = await injected.extract(html: html),
+           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (result.markdown, Self.defuddleTechnique)
+        }
+        if let result = await tagBased.extract(html: html),
+           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (result.markdown, Self.htmlToMarkdownTechnique)
+        }
+        return ("", Self.htmlToMarkdownTechnique)
+    }
+
+    /// Build the byteless-source filename for an Apple Podcasts episode
+    /// (issue #799 PR4): `<slug>-<id>` when the URL carried a slug, else
+    /// `podcast-<id>`. Mirrors the YouTube/Vimeo `youtube-<id>` /
+    /// `vimeo-<id>` byteless-source filename convention. The `-transcript.md`
+    /// suffix is deliberately NOT used — that's reserved for the transcript
+    /// **markdown version**'s filename (written by the Transcribe trigger
+    /// through `ApplePodcastMaterializer.materialize()`, not by the ingest
+    /// path). The episode ID segment alone wouldn't survive
+    /// `FilenameEscaping.escapeTitle`'s spaces-as-underscores rule applied to
+    /// a slug, so we escape the joined stem.
+    private static func podcastEmbedFilename(for episode: PodcastEpisodeURL.EpisodeRef) -> String {
+        let stem = episode.slug.map { "\($0)-\(episode.id)" } ?? "podcast-\(episode.id)"
+        return FilenameEscaping.escapeTitle(stem)
+    }
+
+    /// Nominate an existing processed-markdown row as the active HEAD for a
+    /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
+    public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID) {
+        DebugLog.trying("setActiveMarkdown", operation: { try store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
+    }
+
+    /// The producing agent name for each of a source's markdown versions
+    /// (smv.id → agents.name), for the alternatives UI labels.
+    public func processedMarkdownAgentNames(for sourceID: SourceID) -> [SourceMarkdownVersionID: String] {
+        DebugLog.trying("processedMarkdownAgentNames", operation: { try store.processedMarkdownAgentNames(sourceID: sourceID) }) ?? [:]
+    }
+
+    /// All extraction alternatives for a source with provenance + active flag,
+    /// for the compare/nominate sheet (track C). Empty if none.
+    public func processedMarkdownAlternatives(for sourceID: SourceID) -> [ExtractionAlternative] {
+        DebugLog.trying("processedMarkdownAlternatives", operation: { try store.processedMarkdownAlternatives(sourceID: sourceID) }) ?? []
+    }
+
+    // MARK: - Source-of-truth rebuild
+
+    /// Rebuild the sidebar lists from the store — used by the Phase A change
+    /// bridge after an EXTERNAL write (a `wikictl` call) lands in this wiki's DB,
+    /// so the on-screen sidebar reflects pages/files the CLI wrote. Always a full
+    /// rebuild from source, never an incremental patch (§3.1 / §3.2).
+    ///
+    /// Also refreshes the currently-displayed page's draft when the draft is
+    /// clean (no unsaved user edits) so content written by the agent — which
+    /// goes through the store directly, bypassing the model's draft system —
+    /// appears in the reader/editor immediately (issue: stale UI after agent
+    /// page write). When the draft IS dirty, the user's in-flight edits win.
+    public func reloadFromStore() {
+        reloadSummaries()
+        reloadTrackedRepositories()
+        reloadSources()
+        reloadChats()
+        reloadBookmarkNodes()
+        pruneHistoryToCurrentStore()
+        reloadCurrentDraftIfClean()
+    }
+
+    /// Re-read the current page's draft (title + body) from the store when the
+    /// draft is clean (`!isDraftDirty`). This lets external writes (agent runs,
+    /// `wikictl`) refresh the on-screen content. When the user has unsaved
+    /// edits, those are preserved — the guard skips the reload entirely.
+    private func reloadCurrentDraftIfClean() {
+        guard !isDraftDirty else { return }
+        if case .page(let id) = selection, loadedPage == id,
+           let page = DebugLog.trying("getPage", operation: { try store.getPage(id: id) }) {
+            draftTitle = page.title
+            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            // The didSets on draftTitle/draftBody set isDraftDirty = true when
+            // the value changes; reset since this is a clean reload from the
+            // store (the draft now matches persisted state again).
+            isDraftDirty = false
+        }
+    }
+
+    /// Rebuild the sidebar page list from the store using the current sort order.
+    /// Public so `SidebarView` can trigger a reload when the sort picker changes
+    /// (via the `pageSortOrder` didSet), and so the Phase A change bridge can
+    /// refresh after an external write.
+    public func reloadSummaries() {
+        summaries = DebugLog.trying("listPages", operation: { try store.listPages(sortBy: pageSortOrder) }) ?? []
+        // Phase A.1: any page mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
+    }
+
+    /// Rebuild the repository sidebar projection from the store. This is
+    /// intentionally separate from source reloads: a repository is mutable
+    /// remote state, not an immutable ingested source.
+    public func reloadTrackedRepositories() {
+        trackedRepositories = DebugLog.trying("listRepos", operation: { try store.listRepos() }) ?? []
+    }
+
+    /// Persist a validated repository descriptor before the app enqueues its
+    /// daemon-owned clone. No git process is ever started from the app.
+    @discardableResult
+    public func addTrackedRepository(remoteInput: String) -> TrackedRepo? {
+        guard let remote = GitRemoteURL.parse(remoteInput) else {
+            storeError = StoreError(
+                title: "Invalid repository address",
+                message: "Enter an HTTPS, SSH, Git, or supported scp-style repository address.")
+            return nil
+        }
+        do {
+            let repository = try store.addRepo(name: remote.name, remoteURL: remote.remote, branch: nil)
+            reloadTrackedRepositories()
+            return repository
+        } catch {
+            DebugLog.store("WikiStoreModel.addTrackedRepository failed: \(error)")
+            storeError = StoreError(title: "Could not add repository", message: error.localizedDescription)
+            return nil
+        }
+    }
+
+    // MARK: - Search
+
+    /// One-time, blocking search-index upgrade. Replaces the old detached
+    /// background backfill, which raced the main thread on the store's cached,
+    /// non-thread-safe prepared statements (the launch `EXC_BREAKPOINT` in
+    /// `String(cString:)`).
+    ///
+    /// Invariant: **SQLite is never touched off-main.** All store reads/writes
+    /// happen here on the main actor; only the MLX/Metal inference hops to a
+    /// detached task (pure compute, no SQLite). While `searchUpgrade != nil` the
+    /// UI shows a non-dismissible sheet, so the upgrade is the sole owner of the
+    /// store — there is no second thread and no race.
+    ///
+    /// Only runs when MiniLM is the selected embedder (fast, ~ms/sentence) AND
+    /// there is missing content. On builds without the bundled model
+    /// (`selectedEmbedderIdentifier()` ≠ MiniLM) it is a no-op so we never block
+    /// launch on the slow NLEmbedder path; search falls back to FTS. The common
+    /// warm-DB launch has no missing work → no sheet, instant.
+    public func upgradeSearchIndex() async {
+        // Single-flight: set BEFORE any `await`. The scenePhase `.active` and
+        // `activeWikiID` hooks can both fire at launch; without this synchronous
+        // guard a second call enters during the configure() suspension and the
+        // upgrade runs twice (harmless to data, wasteful, and it confuses the
+        // progress counter). `searchUpgrade` itself is set too late to gate on.
+        guard !isUpgrading else { return }
+        isUpgrading = true
+        defer { isUpgrading = false }
+
+        // Link-graph self-heal, once per model lifetime, BEFORE the embedder
+        // gates below (it must run even on FTS-only builds). Main-actor SQLite
+        // like everything else here; re-resolves every page's `[[links]]` so
+        // citations that only resolve under newer rules (lookup-driven `#`
+        // splitting, lenient source-name matching) — or whose target was
+        // ingested after the page was last saved — get their link rows without
+        // waiting for the page's next edit.
+        if !didReconcileLinksInThisSession {
+            didReconcileLinksInThisSession = true
+
+            // Persist the flag in `wiki_metadata` (v37, issue #477) so it
+            // survives model recreation between launches. Previously an
+            // in-memory boolean that reset every open, causing 600+ SQLite
+            // ops on every launch for 300+ page wikis.
+            let reconcileKey = "link_reconcile_version"
+            let currentReconcileVersion = "1"
+            let alreadyReconciled = DebugLog.trying("getMetadata", operation: { try store.getMetadata(reconcileKey) }) ?? ""
+            if alreadyReconciled != currentReconcileVersion {
+                let start = DispatchTime.now()
+                let count = await DebugLog.trying("reconcileAllLinks", operation: { try await LinkReconciler.reconcileAll(in: store) }) ?? 0
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+                DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
+                DebugLog.trying("setMetadata", operation: { try store.setMetadata(reconcileKey, value: currentReconcileVersion) })
+            }
+        }
+
+        guard EmbeddingService.selectedEmbedderIdentifier() == EmbeddingService.miniLMIdentifier else {
+            return                                            // no MiniLM model → FTS-only
+        }
+        await EmbeddingService.configure()
+        guard EmbeddingService.isAvailable else { return }
+
+        let pageWork   = store.missingPageEmbeddingWork()     // main-thread SQLite read
+        let sourceWork = store.missingSourceEmbeddingWork()   // main-thread SQLite read
+        let chatWork   = store.missingChatEmbeddingWork()     // main-thread SQLite read
+        let total = pageWork.count + sourceWork.count + chatWork.count
+        guard total > 0 else { return }                       // nothing missing → no sheet
+
+        searchUpgrade = SearchUpgradeState(total: total, done: 0, phase: .pages)
+        DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s), \(chatWork.count) chat(s)")
+
+        var done = 0
+        done = await embedAndStore(pageWork, into: { id, chunks in DebugLog.trying("storePageChunks", operation: { try store.storePageChunks(id: id, chunks: chunks) }) }, running: done)
+        searchUpgrade?.phase = .sources
+        done = await embedAndStore(sourceWork, into: { id, chunks in DebugLog.trying("storeSourceChunks", operation: { try store.storeSourceChunks(id: id, chunks: chunks) }) }, running: done)
+        searchUpgrade?.phase = .chats
+        done = await embedAndStore(chatWork, into: { id, chunks in DebugLog.trying("storeChatChunks", operation: { try store.storeChatChunks(id: id, chunks: chunks) }) }, running: done)
+
+        DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
+        searchUpgrade = nil                                   // dismisses the sheet
+    }
+
+    /// Shared body of the page + source embed loops. **Stays on `@MainActor`**:
+    /// only the `await embedChunksOffMain` suspension hops off-main (pure MLX,
+    /// no SQLite); the `store` closure runs the SQLite write on the main actor.
+    /// Do NOT parallelize this — two threads on the store's cached statements is
+    /// the race that crashed launch (`docs/skills/sqlite-concurrency/SKILL.md`).
+    /// Returns the updated running count (for `searchUpgrade.done`).
+    private func embedAndStore<ID: Hashable & Sendable>(
+        _ work: [(id: ID, text: String)],
+        into store: (ID, [Data]) throws -> Void,
+        running done: Int
+    ) async -> Int {
+        var done = done
+        for (id, text) in work {
+            let blobs = await embedChunksOffMain(text)
+            if !blobs.isEmpty { DebugLog.trying("embedStoreWrite", operation: { try store(id, blobs) }) }       // main-thread SQLite write
+            done += 1
+            searchUpgrade?.done = done
+            await Task.yield()                                // keep the sheet's spinner animating
+        }
+        return done
+    }
+
+    /// Chunk + embed a document's text on a background thread (MLX/Metal is
+    /// safe off-main and is pure compute — it touches NO SQLite). Returns one
+    /// Float32 BLOB per chunk. The surrounding `upgradeSearchIndex` does all
+    /// SQLite I/O on the main actor.
+    private nonisolated func embedChunksOffMain(_ text: String) async -> [Data] {
+        await Task.detached(priority: .utility) {
+            EmbeddingService.chunkedEmbeddings(for: text)
+        }.value
+    }
+
+    // MARK: - Phase 2: Tantivy BM25 leg (cutover)
+    //
+    // Tantivy is now the PRIMARY lexical/BM25 leg of the hybrid search
+    // (plans/tantivy-search-sidecar.md §4.4). Flow:
+    //   1. `resolveTantivyLeg(...)` queries the Tantivy index (async, actor) and
+    //      maps hits to full typed summaries via the cached catalog, preserving
+    //      Tantivy's best-first rank order.
+    //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
+    //      The store uses the leg INSTEAD of FTS5, then fuses it with the
+    //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
+    //   3. `nil` leg → the store runs without a BM25 leg (Tantivy unavailable,
+    //      empty, or all hits resolved to nothing). wikictl/tests always pass
+    //      `nil`.
+    //
+    // FTS5 was retired in #634, so there is no lexical fallback path here.
+
+    #if os(macOS)
+    /// Resolve Tantivy BM25 hits into full typed summaries from a cached
+    /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
+    /// Tantivy is unavailable, the index returned nothing, or every hit was
+    /// missing from the catalog (e.g. a resource deleted since the last Tantivy
+    /// sync). A `nil` return means "no BM25 leg" at the store call site.
+    ///
+    /// `catalog` is a value-type copy captured at the call site, so a main-actor
+    /// mutation during the `await svc.search` suspension can't race the lookup.
+    private func resolveTantivyLeg<T: Identifiable & Sendable>(
+        query: String,
+        kind: TantivyDocumentKind,
+        limit: Int,
+        catalog: [T],
+        id: (String) -> T.ID
+    ) async -> [T]? where T.ID: Hashable {
+        guard let svc = tantivySearch else { return nil }
+        let hits = await svc.search(query: query, kinds: [kind], limit: limit)
+        guard !hits.isEmpty else { return nil }
+        let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let resolved = hits.compactMap { hit -> T? in
+            return byID[id(hit.ulid)]
+        }
+        return resolved.isEmpty ? nil : resolved
+    }
+
+    #else
+    // Linux: Tantivy is unavailable — the BM25 leg is always nil (no lexical
+    // fallback path on this branch).
+    private func resolveTantivyLeg<T: Identifiable & Sendable>(
+        query: String,
+        kind: TantivyDocumentKind,
+        limit: Int,
+        catalog: [T],
+        id: (String) -> T.ID
+    ) async -> [T]? where T.ID: Hashable { nil }
+    #endif
+
+    /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
+    /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of
+    /// the Tantivy BM25 hits fed into RRF, how many survive into the final fused
+    /// output (a high overlap means Tantivy's lexical signal is well-represented;
+    /// a low overlap means the semantic leg dominated). Latency is total hybrid
+    /// time (Tantivy query + store semantic + RRF). Raw FTS5-vs-Tantivy BM25
+    /// parity was already validated in Phase 1 shadow tests
+    /// (`TantivyShadowIndexTests`).
+    private func logShadowComparison<T: Identifiable & Hashable & Sendable>(
+        kind: String,
+        query: String,
+        leg: [T]?,
+        fused: [T],
+        t0: DispatchTime
+    ) where T.ID: Hashable {
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+        let legIDs = Set((leg ?? []).map { $0.id })
+        let fusedIDs = Set(fused.map { $0.id })
+        let overlap = legIDs.intersection(fusedIDs).count
+        DebugLog.store("search[\(kind)]: query=\"\(query)\" Tantivy-BM25=\(leg?.count ?? 0) fused=\(fused.count) overlap=\(overlap) ms=\(String(format: "%.1f", ms))")
+    }
+
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        guard !searchQuery.isEmpty else {
+            searchResults = []
+            return
+        }
+        searchTask = Task { [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            // Prefer an off-main snapshot read (Phase 0 reader pool) so typing
+            // never contends with the main-actor write store; fall back to the
+            // main store when no pool exists (in-memory wiki, tests).
+            let query = self.searchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .page, limit: 20, catalog: self.summaries,
+                id: PageID.init(rawValue:))
+            let results: [WikiPageSummary]
+            if let pool = self.readPool {
+                let fetched = await DebugLog.trying("searchSimilarPages", operation: { try await pool.asyncRead { reader in
+                    try reader.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg)
+                } })
+                results = fetched ?? []
+            } else {
+                results = (DebugLog.trying("searchSimilarPages", operation: { try self.store.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+            }
+            guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "pages", query: query, leg: bm25Leg, fused: results, t0: t0)
+            self.searchResults = results
+        }
+    }
+
+    private func scheduleSourceSearch() {
+        sourceSearchTask?.cancel()
+        guard !sourceSearchQuery.isEmpty else {
+            sourceSearchResults = []
+            return
+        }
+        sourceSearchTask = Task { [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let query = self.sourceSearchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .source, limit: 20, catalog: self.sources,
+                id: SourceID.init(rawValue:))
+            let results: [SourceSummary]
+            if let pool = self.readPool {
+                let fetched = await DebugLog.trying("searchSimilarSources", operation: { try await pool.asyncRead { reader in
+                    try reader.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg)
+                } })
+                results = fetched ?? []
+            } else {
+                results = (DebugLog.trying("searchSimilarSources", operation: { try self.store.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+            }
+            guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "sources", query: query, leg: bm25Leg, fused: results, t0: t0)
+            self.sourceSearchResults = results
+        }
+    }
+
+    private func scheduleChatSearch() {
+        chatSearchTask?.cancel()
+        guard !chatSearchQuery.isEmpty else {
+            chatSearchResults = []
+            return
+        }
+        chatSearchTask = Task { [weak self] in
+            // Task.sleep only throws CancellationError — expected, not actionable.
+            // swiftlint:disable:next silent_try_optional
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let query = self.chatSearchQuery
+            let t0 = DispatchTime.now()
+            let bm25Leg = await self.resolveTantivyLeg(
+                query: query, kind: .chat, limit: 20, catalog: self.chats,
+                id: ChatID.init(rawValue:))
+            // Use the main store (same connection as chatMessages load) so the
+            // search results and the body load see the same WAL snapshot —
+            // eliminates cross-connection staleness where the read pool could
+            // return a chat_id that's been renamed/reordered since the last
+            // checkpoint (issue #383).
+            let results = (DebugLog.trying("searchSimilarChats", operation: { try self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+            guard !Task.isCancelled else { return }
+            self.logShadowComparison(kind: "chats", query: query, leg: bm25Leg, fused: results, t0: t0)
+            self.chatSearchResults = results
+        }
+    }
+
+    private func reloadSources() {
+        sources = DebugLog.trying("listSources", operation: { try store.listSources() }) ?? []
+        // Authoritative source: the flag the agent stamps via
+        // `wikictl log append --kind ingest --source <id>` on success.
+        let markedIDs = DebugLog.trying("markedSourceIDs", operation: { try store.markedSourceIDs() }) ?? []
+
+        // Legacy fallback: wikis ingested before the flag existed only have the
+        // free-text log entry, so keep the old best-effort title/path match —
+        // BUT only for sources that are NOT already marked (issue #477: avoid
+        // loading 10K log rows when every source is already flagged).
+        let unmarkedSources = sources.filter { !markedIDs.contains($0.id.rawValue) }
+        let ingestTexts: [String] = unmarkedSources.isEmpty
+            ? []
+            : (DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: 10_000) }) ?? [])
+                .filter { $0.kind == .ingest }
+                .map { "\($0.title) \($0.note ?? "")".lowercased() }
+
+        sourceIngestedStatus = Dictionary(uniqueKeysWithValues: sources.map { file in
+            if markedIDs.contains(file.id.rawValue) {
+                return (file.id, true)
+            }
+            let filename = file.filename.lowercased()
+            let byIDLeaf = FilenameEscaping
+                .byIDSourceFilename(sourceID: file.id, ext: file.ext)
+                .lowercased()
+            let path = "sources/by-id/\(byIDLeaf)"
+            let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
+                .filter { !$0.isEmpty }
+            let hasLogEntry = ingestTexts.contains { text in
+                matchers.contains { text.contains($0) }
+            }
+            return (file.id, hasLogEntry)
+        })
+        // Phase A.1: any source mutation invalidates the memoized render context.
+        renderContextGeneration &+= 1
+    }
+
+    // MARK: - Bookmark nodes (v16)
+
+    /// Reload all bookmark nodes from the store.
+    /// Called on init and after every bookmark-node mutation (§3.1 rebuild-from-source).
+    public func reloadBookmarkNodes() {
+        bookmarkNodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) ?? []
+    }
+
+    // MARK: - Bookmark node mutations
+
+    /// Create a folder at root or inside another folder. Returns the new node id,
+    /// or `nil` on failure.
+    @discardableResult
+    public func createFolder(parentID: BookmarkID?, name: String) -> BookmarkID? {
+        // Determine the position (append at end of siblings).
+        let position = bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            let node = try store.createBookmarkNode(
+                parentID: parentID, position: position, content: .folder(label: name))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+            return node.id
+        } catch {
+            DebugLog.store("WikiStoreModel.createFolder failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Add a page reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addPageRef(parentID: BookmarkID?, pageID: PageID, position: Int? = nil) {
+        let t0 = DispatchTime.now()
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: pos, content: .page(pageID))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
+            DebugLog.tabs("addPageRef: done in \(String(format: "%.1f", ms)) ms")
+        } catch {
+            DebugLog.store("WikiStoreModel.addPageRef failed: \(error)")
+        }
+    }
+
+    /// Add a source reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addSourceRef(parentID: BookmarkID?, sourceID: SourceID, position: Int? = nil) {
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: pos, content: .source(sourceID))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+        } catch {
+            DebugLog.store("WikiStoreModel.addSourceRef failed: \(error)")
+        }
+    }
+
+    /// Add a chat reference to a folder. Pass `position` to insert at a specific
+    /// sibling index (the store shifts later siblings down); omit it to append.
+    public func addChatRef(parentID: BookmarkID?, chatID: ChatID, position: Int? = nil) {
+        let pos = position ?? bookmarkNodes.filter { $0.parentID == parentID }.count
+        do {
+            _ = try store.createBookmarkNode(
+                parentID: parentID, position: pos, content: .chat(chatID))
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+        } catch {
+            DebugLog.store("WikiStoreModel.addChatRef failed: \(error)")
+        }
+    }
+
+    /// Rename a folder.
+    public func renameBookmarkNode(id: BookmarkID, to label: String) throws {
+        try store.renameBookmarkFolder(id: id, to: label)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
+    }
+
+    /// Retarget a bookmark reference to a new page/source/chat target.
+    public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws {
+        try store.retargetBookmarkNode(id: id, to: content)
+        // No manual reload — the bus fires reloadFromStore() async after the
+        // store write.
+    }
+
+    /// Delete a bookmark node (cascade-deletes children for folders).
+    public func deleteBookmarkNode(id: BookmarkID) {
+        do {
+            try store.deleteBookmarkNode(id: id)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteBookmarkNode failed: \(error)")
+        }
+    }
+
+    /// Move a node to a new parent and/or position. Returns `false` (and logs)
+    /// if the store rejects the move — e.g. it would create a parent cycle.
+    @discardableResult
+    public func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) -> Bool {
+        do {
+            try store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write.
+            return true
+        } catch {
+            DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Deletion-impact helpers (issue #219)
+
+    /// Folder display paths for bookmarks whose content satisfies `matches`.
+    /// A root-level node is reported as `"Bookmarks"`.
+    private func bookmarkLabelsReferencing(
+        matches: (BookmarkNode.Content) -> Bool
+    ) -> [String] {
+        bookmarkNodes
+            .filter { matches($0.content) }
+            .map { bookmarkDisplayPath(for: $0) }
+    }
+
+    private func bookmarkDisplayPath(for node: BookmarkNode) -> String {
+        guard let parentID = node.parentID else { return "Bookmarks" }
+        let path = BookmarkNode.displayPath(id: parentID, in: bookmarkNodes)
+        return path.isEmpty ? "Bookmarks" : path
+    }
+
+    /// Remove every bookmark leaf pointing at `id`. Called on every page delete
+    /// that goes through the confirmation path — a bookmark to a missing page is
+    /// invalid (issue #219).
+    private func removeBookmarksReferencingPage(_ id: PageID) {
+        let nodes = bookmarkNodes.filter { node in
+            if case .page(let pid) = node.content { return pid == id }
+            return false
+        }
+        for node in nodes { deleteBookmarkNode(id: node.id) }
+    }
+
+    /// Remove every bookmark leaf pointing at `id` (the source-side mirror).
+    private func removeBookmarksReferencingSource(_ id: SourceID) {
+        let nodes = bookmarkNodes.filter { node in
+            if case .source(let sid) = node.content { return sid == id }
+            return false
+        }
+        for node in nodes { deleteBookmarkNode(id: node.id) }
+    }
+
+    /// Rewrite the bodies of every page that links to one of `pageIDs` /
+    /// `sourceIDs`, converting the matching `[[…]]` spans to plain text. Runs
+    /// BEFORE the target rows are deleted so name-based links still resolve to
+    /// the about-to-be-deleted id. Each rewrite routes through `PageUpsert` so
+    /// the link graph (`page_links` / `source_links`) drops the now-removed
+    /// edge in the same write the app and `wikictl` share.
+    private func unlinkIncomingLinksTo(pageIDs: Set<PageID>, sourceIDs: Set<SourceID>) throws {
+        guard !pageIDs.isEmpty || !sourceIDs.isEmpty else { return }
+        var linkingPageIDs = Set<PageID>()
+        for id in pageIDs { linkingPageIDs.formUnion(try store.pageLinkingPages(to: id)) }
+        for id in sourceIDs { linkingPageIDs.formUnion(try store.sourceLinkingPages(to: id)) }
+        // Never rewrite a page that is itself being deleted.
+        linkingPageIDs.subtract(pageIDs)
+        for linkingID in linkingPageIDs {
+            try rewritePageBodyUnlinkingTargets(
+                pageID: linkingID, pageIDs: pageIDs, sourceIDs: sourceIDs)
+        }
+    }
+
+    private func rewritePageBodyUnlinkingTargets(
+        pageID: PageID, pageIDs: Set<PageID>, sourceIDs: Set<SourceID>
+    ) throws {
+        let page = try store.getPage(id: pageID)
+        guard let rewritten = try LinkUnlinker.unlink(
+            in: page.bodyMarkdown,
+            unlinkPageIDs: pageIDs,
+            unlinkSourceIDs: sourceIDs,
+            resolvePageName: { name in try self.store.resolveTitleToID(name) },
+            resolveSourceName: { name in try self.store.resolveSourceByName(name) }
+        ) else { return }
+        try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: rewritten,
+                              author: PageAuthor.agent("unlink").rawValue)
+    }
+
+    private func pruneHistoryToCurrentStore() {
+        let pageIDs = Set(summaries.map(\.id))
+        let sourceIDs = Set(sources.map(\.id))
+        let chatIDs = Set(chats.map(\.id))
+        backStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
+        forwardStack.removeAll { !isAvailableHistorySelection($0, pageIDs: pageIDs, sourceIDs: sourceIDs, chatIDs: chatIDs) }
+    }
+
+    private func isAvailableHistorySelection(
+        _ value: WikiSelection,
+        pageIDs: Set<PageID>,
+        sourceIDs: Set<SourceID>,
+        chatIDs: Set<ChatID>
+    ) -> Bool {
+        switch value {
+        case .page(let id):
+            pageIDs.contains(id)
+        case .source(let id):
+            sourceIDs.contains(id)
+        case .chat(let id):
+            chatIDs.contains(id)
+        case .newChat, .changeLog, .bookmark:
+            true
+        }
+    }
+
+    // MARK: - Persisted chats (issue #119)
+
+    /// Create a persisted chat, titled from the first user message. Returns nil
+    /// (logging via DebugLog.store) on store failure — persistence must never
+    /// block a chat from starting.
+    @discardableResult
+    public func startChat(kind: ChatKind, firstMessage: String) -> ChatSummary? {
+        do {
+            let title = ChatSummary.title(fromFirstMessage: firstMessage)
+            let chat = try store.createChat(kind: kind, title: title)
+            // Seed the first user message immediately (seq 0) so a chat is never
+            // titled-but-empty — even if the agent session dies before its first
+            // turn produces any events (the orphan-chat bug: a `chats` row with a
+            // title but zero `chat_messages`). The launcher is told the message is
+            // already persisted (firstMessagePrePersisted) so it marks the event as
+            // flushed and does NOT double-insert it on the first transcript flush.
+            try store.appendChatMessages(chatID: chat.id, events: [.userText(firstMessage)])
+            // Insert the single new chat into the local array instead of a full
+            // reloadChats(). The bus fires reloadFromStore() async after the store
+            // write, but the immediate caller (retargetActiveTabToChat →
+            // retargetTab → tabTitle) reads `chats` synchronously, so the row
+            // must be present NOW.
+            chats.insert(chat, at: 0)
+            return chat
+        } catch {
+            DebugLog.store("WikiStoreModel.startChat failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Roll back a chat created by `startChat` when its session never started
+    /// (preflight/spawn failure in `startChat`). Deletes the row
+    /// (and its seeded first message, via `ON DELETE CASCADE`) and reverts the
+    /// tab that was retargeted to it back to the draft composer — so the user
+    /// isn't left on a dead `.chat` selection. Best-effort: a store failure is
+    /// logged, never thrown.
+    public func rollbackChatCreation(id: ChatID, toDraft draft: WikiSelection) {
+        do {
+            try store.deleteChat(id: id)
+        } catch {
+            DebugLog.store("WikiStoreModel.rollbackChatCreation failed: \(error)")
+        }
+        // No manual reloadChats — the bus fires reloadFromStore() async after the
+        // delete. The tab retarget below doesn't depend on the chats array.
+        // Revert the tab we retargeted to `.chat(id)` back to the draft composer.
+        if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
+            retargetTab(id: tab.id, to: draft)
+        }
+    }
+
+    /// Append the persistable subset of `events` to a chat. Non-persistable
+    /// events (deltas, messageStop, raw) are filtered here as defense in depth.
+    public func appendChatEvents(chatID: ChatID, events: [AgentEvent]) {
+        let persistable = events.filter(\.isPersistable)
+        guard !persistable.isEmpty else { return }
+        do {
+            try store.appendChatMessages(chatID: chatID, events: persistable)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // store write (keeps updated_at ordering + counts live).
+        } catch {
+            DebugLog.store("WikiStoreModel.appendChatEvents failed: \(error)")
+        }
+    }
+
+    /// Checkpoint a streaming assistant row to the store via the draft-handle
+    /// upsert (#826, C2). Returns `true` on success so the launcher can advance
+    /// its cursor only when the row was actually persisted — on failure the
+    /// dirty flag stays set so the next checkpoint retries (no silent data
+    /// loss). Routes through the store's `mutate()` + emits (C6: draft
+    /// checkpoints skip `updated_at`; only finalize bumps it).
+    @discardableResult
+    public func checkpointStreamingMessage(
+        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
+    ) -> Bool {
+        do {
+            try store.checkpointStreamingMessage(
+                chatID: chatID, handle: handle, event: event, isDraft: isDraft)
+            return true
+        } catch {
+            DebugLog.store("WikiStoreModel.checkpointStreamingMessage failed: \(error)")
+            return false
+        }
+    }
+
+    /// Finalize stale drafts for a chat on reopen (C8). Cheap single UPDATE.
+    public func finalizeStaleDrafts(forChat chatID: ChatID) {
+        do {
+            try store.finalizeStaleDrafts(forChat: chatID)
+        } catch {
+            DebugLog.store("WikiStoreModel.finalizeStaleDrafts failed: \(error)")
+        }
+    }
+
+    public func chatMessages(chatID: ChatID) -> [ChatMessage] {
+        DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chatID) }) ?? []
+    }
+
+    public func readChatTranscriptPage(
+        chatID: ChatID,
+        after cursor: ChatTranscriptCursor?,
+        limit: Int
+    ) -> ChatTranscriptPage {
+        DebugLog.trying("readChatTranscriptPage", operation: {
+            try store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: limit)
+        }) ?? ChatTranscriptPage(
+            items: [],
+            checkpoint: cursor ?? .zero,
+            nextCursor: nil
+        )
+    }
+
+    public func chatTranscriptCheckpoint(chatID: ChatID) -> ChatTranscriptCursor {
+        DebugLog.trying("chatTranscriptCheckpoint", operation: {
+            try store.chatTranscriptCheckpoint(chatID: chatID)
+        }) ?? .zero
+    }
+
+    public func renameChat(id: ChatID, to title: String) {
+        do {
+            try store.renameChat(id: id, to: title)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // rename.
+        } catch {
+            DebugLog.store("WikiStoreModel.renameChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Rename Chat",
+                message: "Could not rename the chat: \(error.localizedDescription)")
+        }
+    }
+
+    public func updateChatSummary(chatID: ChatID, summary: String) {
+        do {
+            try store.updateChatSummary(chatID: chatID, summary: summary)
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // update.
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatSummary failed: \(error)")
+        }
+    }
+
+    /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
+    /// at spawn time (persist) and on resume failure (clear). No manual reload
+    /// — the bus fires `reloadFromStore()` async after the store write.
+    public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) {
+        do {
+            try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: acpSessionId)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatAcpSessionId failed: \(error)")
+        }
+    }
+
+    /// `@MainActor` wrapper for `getChat(id:)` (#830). Returns `nil` if the
+    /// chat doesn't exist or the read fails.
+    public func getChat(id: ChatID) -> ChatSummary? {
+        DebugLog.trying("getChat", operation: { try store.getChat(id: id) })
+    }
+
+    /// `@MainActor` wrapper for the per-chat model override write/clear (the
+    /// composer's `ProviderSelector` picking a model for THIS chat). No
+    /// manual reload — the bus fires `reloadFromStore()` async after the
+    /// `.chat .updated` emit, same as `renameChat`.
+    public func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) {
+        do {
+            try store.updateChatModelOverride(id: id, providerId: providerId, modelId: modelId)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatModelOverride failed: \(error)")
+        }
+    }
+
+    /// `@MainActor` wrapper for the per-message summary write (chat-summary
+    /// plan §3.5). The summarizer's off-main compute marshals back here for the
+    /// DB write (no inference inside a transaction). No manual reload — the bus
+    /// fires `reloadFromStore()` async after the `.chat .updated` emit.
+    public func updateMessageSummary(
+        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+    ) {
+        do {
+            try store.updateMessageSummary(
+                chatID: chatID, messageID: messageID, summary: summary, kind: kind)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateMessageSummary failed: \(error)")
+        }
+    }
+
+    public func deleteChat(id: ChatID) {
+        do {
+            try store.deleteChat(id: id)
+            removeFromHistory(.chat(id))
+            // Close any tab showing this deleted chat.
+            if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
+                closeTab(id: tab.id)
+            }
+            // No manual reload — the bus fires reloadFromStore() async after the
+            // delete. History and tab cleanup happen explicitly above.
+        } catch {
+            DebugLog.store("WikiStoreModel.deleteChat failed: \(error)")
+            storeError = StoreError(
+                title: "Couldn't Delete Chat",
+                message: "Could not delete the chat: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Thrown by `WikiStoreModel.ingestFromZotero` when an attachment can't be
+/// ingested — currently just the "not synced locally yet" case, since v1 has no
+/// network-download fallback (see `ZoteroLocalStorage`).
+public enum ZoteroFetchError: LocalizedError, Equatable {
+    case unavailable(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable(let reason): return reason
+        }
+    }
+}

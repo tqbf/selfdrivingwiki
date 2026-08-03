@@ -5,11 +5,11 @@ import Testing
 @MainActor
 struct NavigationHistoryTests {
 
-    private func tempModel() throws -> (WikiStoreModel, SQLiteWikiStore) {
+    private func tempModel() throws -> (WikiStoreModel, GRDBWikiStore) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-history-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let store = try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         return (WikiStoreModel(store: store), store)
     }
 
@@ -76,13 +76,13 @@ struct NavigationHistoryTests {
         model.reloadFromStore()
 
         model.select(.page(page.id))
-        model.select(.query)
+        model.select(.newChat)
 
-        #expect(model.selection == .query)
+        #expect(model.selection == .newChat)
         model.navigateBack()
         #expect(model.selection == .page(page.id))
         model.navigateForward()
-        #expect(model.selection == .query)
+        #expect(model.selection == .newChat)
     }
 
     @Test func historyNavigationFlushesOutgoingDraft() throws {
@@ -143,5 +143,48 @@ struct NavigationHistoryTests {
         model.reloadFromStore()
 
         #expect(!model.canNavigateBack)
+    }
+
+    // MARK: - Sort order integration
+
+    @Test func changingSortOrderReloadsSummaries() async throws {
+        let (model, store) = try tempModel()
+        _ = try store.createPage(title: "Banana")
+        // Use Task.sleep to avoid blocking the cooperative thread pool (#732).
+        try await Task.sleep(for: .milliseconds(2))
+        _ = try store.createPage(title: "apple")
+        model.reloadFromStore()
+
+        // Default: lastUpdated — both pages have the same updated_at,
+        // so we just verify two pages are loaded.
+        #expect(model.summaries.count == 2)
+
+        // Switch to title A–Z: "apple" then "Banana" (case-insensitive).
+        model.pageSortOrder = .titleAZ
+        #expect(model.summaries.map(\.title) == ["apple", "Banana"])
+
+        // Switch back to lastUpdated.
+        model.pageSortOrder = .lastUpdated
+        #expect(model.summaries.count == 2)
+    }
+
+    @Test func snapshotIgnoresSortPreference() async throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        // Use Task.sleep to avoid blocking the cooperative thread pool (#732).
+        try await Task.sleep(for: .milliseconds(2))
+        _ = try store.createPage(title: "B")
+        // Touch A so it becomes most-recently-edited under lastUpdated.
+        try store.updatePage(id: a.id, title: "A", body: "edited")
+        model.reloadFromStore()
+
+        // User sorts by title A–Z in the sidebar.
+        model.pageSortOrder = .titleAZ
+
+        // Snapshot must still report titles most-recently-edited first.
+        let snapshot = model.currentStateSnapshot()
+        // A was edited last, so it should sort first in the snapshot
+        // regardless of the sidebar's titleAZ preference.
+        #expect(snapshot.pageTitles.first == "A")
     }
 }

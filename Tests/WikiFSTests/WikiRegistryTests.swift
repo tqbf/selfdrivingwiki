@@ -77,8 +77,8 @@ struct WikiRegistryTests {
 
     @Test func dbFileNameAndDomainDeriveFromULIDNeverDisplayName() {
         let wiki = WikiDescriptor.make(displayName: "Has Spaces & Symbols!")
-        #expect(wiki.dbFileName == "\(wiki.id).sqlite")
-        #expect(wiki.domainIdentifier == wiki.id)
+        #expect(wiki.dbFileName == "\(wiki.id.rawValue).sqlite")
+        #expect(wiki.domainIdentifier == wiki.id.rawValue)
         // Display name characters never leak into the on-disk identity.
         #expect(!wiki.dbFileName.contains(" "))
         #expect(!wiki.dbFileName.contains("!"))
@@ -91,5 +91,49 @@ struct WikiRegistryTests {
         registry.remove(id: wiki.id)
         #expect(registry.isEmpty)
         #expect(registry.descriptor(id: wiki.id) == nil)
+    }
+
+    // MARK: - Home page (issue #280)
+
+    @Test func setHomePageStoresAndClears() {
+        var registry = WikiRegistry()
+        let wiki = WikiDescriptor.make(displayName: "Home Test")
+        registry.add(wiki)
+        #expect(registry.descriptor(id: wiki.id)?.homePageID == nil)
+
+        let pageID = PageID(rawValue: "page-1")
+        registry.setHomePage(id: wiki.id, pageID: pageID)
+        #expect(registry.descriptor(id: wiki.id)?.homePageID == pageID)
+
+        registry.setHomePage(id: wiki.id, pageID: nil)
+        #expect(registry.descriptor(id: wiki.id)?.homePageID == nil)
+    }
+
+    @Test func setHomePageNoOpForUnknownID() {
+        var registry = WikiRegistry()
+        registry.setHomePage(id: WikiID(rawValue: "unknown"), pageID: PageID(rawValue: "page-1"))
+        #expect(registry.isEmpty)
+    }
+
+    @Test func decodesLegacyRegistryMissingHomePageIDAsNil() throws {
+        let dir = tempDirectory()
+        let legacyJSON = """
+        {"wikis":[{"id":"01ABC","displayName":"Legacy","createdAt":"2024-01-01T00:00:00Z","lastUsedAt":"2024-01-01T00:00:00Z"}]}
+        """
+        try Data(legacyJSON.utf8).write(to: dir.appendingPathComponent(WikiRegistry.fileName))
+        let loaded = WikiRegistry.load(from: dir)
+        #expect(loaded.descriptor(id: WikiID(rawValue: "01ABC"))?.homePageID == nil)
+    }
+
+    @Test func homePageSurvivesRoundTrip() throws {
+        let dir = tempDirectory()
+        var registry = WikiRegistry()
+        let wiki = WikiDescriptor.make(displayName: "Persisted")
+        registry.add(wiki)
+        registry.setHomePage(id: wiki.id, pageID: PageID(rawValue: "page-1"))
+        try registry.save(to: dir)
+
+        let loaded = WikiRegistry.load(from: dir)
+        #expect(loaded.descriptor(id: wiki.id)?.homePageID == PageID(rawValue: "page-1"))
     }
 }

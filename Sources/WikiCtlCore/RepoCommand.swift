@@ -52,7 +52,7 @@ public enum RepoCommand {
     // TSV: name <tab> branch <tab> head <tab> last-ingested, one repo per line.
     // `-` for a commit the repo doesn't have yet, so the columns always line up.
     let lines = repos.map { repo in
-      [repo.name, repo.branch, repo.headCommit ?? "-", repo.lastIngestedCommit ?? "-"]
+      [repo.name, repo.branch ?? "-", repo.headCommit ?? "-", repo.lastIngestedCommit ?? "-"]
         .joined(separator: "\t")
     }
     return PageCommand.Result(output: lines.joined(separator: "\n"), didCommit: false)
@@ -62,7 +62,7 @@ public enum RepoCommand {
   private struct JSONRow: Encodable {
     let name: String
     let remote: String
-    let branch: String
+    let branch: String?
     let head: String?
     let lastIngested: String?
 
@@ -84,7 +84,7 @@ public enum RepoCommand {
     var lines = [
       "name\t\(repo.name)",
       "remote\t\(repo.remoteURL)",
-      "branch\t\(repo.branch)",
+      "branch\t\(repo.branch ?? "-")",
       "head\t\(repo.headCommit ?? "-")",
       "last_ingested\t\(repo.lastIngestedCommit ?? "-")",
     ]

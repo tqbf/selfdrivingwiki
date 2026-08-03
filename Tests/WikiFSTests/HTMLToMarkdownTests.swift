@@ -167,6 +167,14 @@ struct HTMLToMarkdownTests {
         #expect(md(html) == "visible")
     }
 
+    /// HTML5 makes `</head>` optional; Bikeshed/W3C documents omit it, relying on the
+    /// `<body>` start tag to implicitly close the head. The head-skip must end there
+    /// rather than swallowing the entire document (which yielded an empty file).
+    @Test func unclosedHeadImplicitlyClosedByBody() {
+        let html = "<html><head><meta charset=\"utf-8\"><title>T</title><body><main><p>visible</p></main>"
+        #expect(md(html) == "visible")
+    }
+
     @Test func articlePreferredOverSurroundingChrome() {
         let html = """
         <body><nav>nav</nav><article><h1>Real</h1><p>Body</p></article><aside>ad</aside></body>

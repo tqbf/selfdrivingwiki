@@ -1,0 +1,310 @@
+import Foundation
+
+/// Graph-model Phase 1 value types: the immutable, content-addressed **blob**,
+/// the PROV-DM **agent** / **activity** provenance substrate, and the append-only
+/// **source version** chain. See `plans/graph-model-and-versioning.md` §4.1–4.3.
+
+/// An immutable, content-addressed object (git's "blob"). The bytes are NOT
+/// held here — they live in the `blobs` table and are read on demand via the
+/// hash. The value type carries only the identity (hash) and the size (a
+/// denormalized convenience that mirrors `blobs.byte_size`).
+///
+/// Identical bytes hash to one row, ever (`INSERT OR IGNORE`): re-ingesting an
+/// unchanged source adds zero blob bytes. See §4.1.
+public struct Blob: Equatable, Sendable {
+    /// Lowercase hex SHA-256 of the content — the primary key of `blobs`.
+    public let hash: String
+    /// `blobs.byte_size` (content length in bytes).
+    public let byteSize: Int
+
+    public init(hash: String, byteSize: Int) {
+        self.hash = hash
+        self.byteSize = byteSize
+    }
+}
+
+/// A PROV-DM **Agent** (§4.7) — the responsible party behind an activity.
+/// `kind ∈ {software, person, organization}`. An extraction names its backend
+/// here (`pdf2md`, `claude-opus-4-8`, …) so "everything this agent produced" is
+/// a join, not a string scan.
+public struct ProvenanceAgent: Equatable, Sendable {
+    public let id: String
+    public let kind: String
+    public let name: String
+    /// Tool/model version (`0.3.1`, a model-card id), if known.
+    public let version: String?
+    /// Provider identity, model-card URL, … (PROV `external_ref`).
+    public let externalRef: String?
+
+    public init(id: String, kind: String, name: String,
+                version: String? = nil, externalRef: String? = nil) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.version = version
+        self.externalRef = externalRef
+    }
+}
+
+/// A PROV-DM **Activity** (§4.7) — something that happened: a fetch, an
+/// extraction, an edit, an import. `wasAssociatedWith` the agent via
+/// `agentID`. `wasGeneratedBy` lives on the version row.
+public struct ProvenanceActivity: Equatable, Sendable {
+    public let id: String
+    public let kind: String
+    /// `wasAssociatedWith` — the agent responsible for this activity.
+    public let agentID: String
+    public let externalRef: String?
+    public let startedAt: Date
+    /// PROV `endTime`; a single-shot fetch sets it equal to `startedAt`.
+    public let endedAt: Date?
+
+    public init(id: String, kind: String, agentID: String,
+                externalRef: String? = nil, startedAt: Date, endedAt: Date? = nil) {
+        self.id = id
+        self.kind = kind
+        self.agentID = agentID
+        self.externalRef = externalRef
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
+/// One version in the append-only **content** version chain for a source
+/// (§4.2). ULID-sorted: the active version is the `source-content` ref target
+/// (or `MAX(id)` when no ref row exists — the default-active rule, §4.3).
+///
+/// `blobHash == nil` marks a **byteless** source (e.g. a YouTube video whose
+/// working material is a derived transcript); `sourceContent` returns empty
+/// `Data()` for those and never throws.
+public struct SourceVersion: Equatable, Sendable {
+    public let id: SourceVersionID
+    public let sourceID: SourceID
+    /// `wasDerivedFrom` — the previous version's id; nil for v1.
+    public let parentID: SourceVersionID?
+    /// The content blob's hash; nil = byteless/external.
+    public let blobHash: String?
+    public let mimeType: String?
+    /// `wasGeneratedBy` — the activity that produced this version.
+    public let activityID: String?
+    /// The canonical external identity (e.g. a YouTube video id).
+    public let externalIdentity: String?
+    /// Generation time (PROV `generatedAtTime`).
+    public let fetchedAt: Date
+
+    public init(id: SourceVersionID, sourceID: SourceID, parentID: SourceVersionID?,
+                blobHash: String?, mimeType: String?, activityID: String?,
+                externalIdentity: String?, fetchedAt: Date) {
+        self.id = id
+        self.sourceID = sourceID
+        self.parentID = parentID
+        self.blobHash = blobHash
+        self.mimeType = mimeType
+        self.activityID = activityID
+        self.externalIdentity = externalIdentity
+        self.fetchedAt = fetchedAt
+    }
+}
+
+/// The kind of pointer a `refs` row holds (§4.3). Phase 1 ships `sourceContent`;
+/// Phase 2 adds `sourceDerived` (the active extraction alternative). The
+/// `version_id` a ref points at is polymorphic on `kind` and therefore carries no
+/// FK (single-writer invariant: only `recordMarkdownExtraction`,
+/// `setActiveMarkdown`, and `revertProcessedMarkdown` write `source-derived`).
+public enum RefKind: String, Sendable {
+    /// Active content version (`source_versions.id`).
+    case sourceContent = "source-content"
+    /// Active extraction alternative (`source_markdown_versions.id`).
+    case sourceDerived = "source-derived"
+    /// Active page-content version (`page_versions.id`). W0 (PR #312).
+    case pageContent = "page-content"
+}
+
+/// A summary of one page version in the append-only chain (W0, PR #312).
+/// Mirrors `SourceVersion` but for page bodies.
+public struct PageVersionSummary: Equatable, Sendable {
+    public let id: PageVersionID
+    public let pageID: PageID
+    /// The previous version's id; nil for the root version.
+    public let parentID: PageVersionID?
+    /// Non-nil when this version is a merge commit (W2+; nil in W0).
+    public let mergeParentID: PageVersionID?
+    public let blobHash: String
+    public let title: String
+    public let activityID: String?
+    public let savedAt: Date
+
+    public init(id: PageVersionID, pageID: PageID, parentID: PageVersionID?,
+                mergeParentID: PageVersionID?, blobHash: String, title: String,
+                activityID: String?, savedAt: Date) {
+        self.id = id
+        self.pageID = pageID
+        self.parentID = parentID
+        self.mergeParentID = mergeParentID
+        self.blobHash = blobHash
+        self.title = title
+        self.activityID = activityID
+        self.savedAt = savedAt
+    }
+}
+
+/// Thrown by `appendPageVersion` when a CAS check fails: another writer
+/// committed a new version after the caller loaded the page, so the caller's
+/// `expectedHeadVersionID` is stale. Carries the actual current head so the
+/// caller can re-load and retry (W0, PR #312).
+public struct PageConflictError: Error, Equatable {
+    public let pageID: PageID
+    public let expectedVersionID: PageVersionID
+    public let actualVersionID: PageVersionID?
+
+    public init(pageID: PageID, expectedVersionID: PageVersionID, actualVersionID: PageVersionID?) {
+        self.pageID = pageID
+        self.expectedVersionID = expectedVersionID
+        self.actualVersionID = actualVersionID
+    }
+}
+
+// MARK: - Workspaces (W1, PR #312)
+
+/// The lifecycle state of a workspace. Transitions: `open` → `merging` →
+/// `merged` (success) or `conflicted` (merge parked). `abandoned` is terminal
+/// (the workspace is GC'd — its `workspace_refs` are deleted).
+///
+/// Legal transitions are declared by `allowedTargets` and enforced centrally by
+/// `GRDBWikiStore.transitionWorkspace(on:id:to:allowedFrom:)` — the single
+/// write seam for the `workspaces.status` column (see
+/// `plans/workspace-status-fsm.md`). Every UPDATE to that column routes through
+/// it; raw `UPDATE workspaces SET status = …` writes must not be reintroduced.
+public enum WorkspaceStatus: String, Sendable, CaseIterable, Codable, Equatable {
+    case open
+    case merging
+    case merged
+    case conflicted
+    case abandoned
+
+    /// Legal target states reachable from this state in a single transition.
+    /// Terminal states (`merged`, `abandoned`) return an empty set. This is the
+    /// spec the validator consults; the per-call `allowedFrom` sets at each
+    /// write site are subsets of these (narrowed by what's actually reachable
+    /// at that site — e.g. the merge catch block always runs from `.open`
+    /// because `mutate()`'s savepoint rolled the step-1 `'merging'` write back).
+    public var allowedTargets: Set<WorkspaceStatus> {
+        switch self {
+        case .open:        return [.merging, .abandoned]
+        case .merging:     return [.merged, .conflicted, .abandoned]
+        case .merged:      return []
+        case .conflicted:  return [.open, .abandoned]
+        case .abandoned:   return []
+        }
+    }
+}
+
+/// Thrown by `GRDBWikiStore.transitionWorkspace` when a workspace row is
+/// missing (`.notFound`) or its current status is not in the call's
+/// `allowedFrom` set (`.invalidStateTransition`). Mirrors
+/// `QueueStoreError.invalidStateTransition`; keeps the workspace domain's
+/// errors with the workspace types rather than overloading `WikiStoreError`.
+/// `from` is `nil` only when the row exists but its `status` column holds a
+/// value outside the `WorkspaceStatus` domain — unreachable given the closed
+/// write seam, but surfaced (not silently coerced) for a corrupt DB.
+public enum WorkspaceError: Error, Equatable, CustomStringConvertible, LocalizedError {
+    case notFound(String)
+    case invalidStateTransition(from: WorkspaceStatus?, to: WorkspaceStatus)
+
+    public var description: String {
+        switch self {
+        case .notFound(let id):
+            return "Workspace not found: \(id)"
+        case .invalidStateTransition(let from, let to):
+            return "Invalid workspace status transition: \(from?.rawValue ?? "unknown") → \(to.rawValue)"
+        }
+    }
+
+    public var errorDescription: String? { description }
+}
+
+/// A summary of one workspace (W1, PR #312).
+public struct WorkspaceSummary: Equatable, Sendable {
+    public let id: WorkspaceID
+    public let name: String?
+    public let status: WorkspaceStatus
+    public let activityID: String?
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    public init(id: WorkspaceID, name: String?, status: WorkspaceStatus,
+                activityID: String?, createdAt: Date, updatedAt: Date) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.activityID = activityID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// A single page overlay row in `workspace_refs` (W1, PR #312). The
+/// `baseVersionID` is the main head observed at the workspace's first write
+/// to this page (the three-way-merge base); nil means the page was created
+/// in this workspace (doesn't exist on main yet).
+///
+/// Two staging shapes coexist (v35):
+/// - **Existing page**: `versionID` is set (a `page_versions` row), `blobHash`
+///   and `title` are nil — content lives in the version's blob.
+/// - **Created page**: `versionID` is nil (no `pages` row on main yet), and
+///   `blobHash` + `title` carry the staged content. The page is minted at merge.
+public struct WorkspaceRef: Equatable, Sendable {
+    public let workspaceID: WorkspaceID
+    public let ownerID: PageID
+    public let baseVersionID: PageVersionID?
+    public let versionID: PageVersionID?
+    public let blobHash: String?
+    public let title: String?
+    public let updatedAt: Date
+
+    public init(workspaceID: WorkspaceID, ownerID: PageID, baseVersionID: PageVersionID?,
+                versionID: PageVersionID?, blobHash: String?, title: String?,
+                updatedAt: Date) {
+        self.workspaceID = workspaceID
+        self.ownerID = ownerID
+        self.baseVersionID = baseVersionID
+        self.versionID = versionID
+        self.blobHash = blobHash
+        self.title = title
+        self.updatedAt = updatedAt
+    }
+}
+
+/// A per-page conflict detail persisted when a workspace is parked as
+/// `conflicted` (W3, PR #312). Carries the three version ids needed for
+/// review (base/ours=main/theirs=workspace) and resolution.
+public struct WorkspaceConflict: Equatable, Sendable {
+    public enum Target: Equatable, Sendable {
+        case pageVersion(PageVersionID)
+        case stagedBlob(String)
+
+        public var rawValue: String {
+            switch self {
+            case .pageVersion(let id): id.rawValue
+            case .stagedBlob(let hash): hash
+            }
+        }
+    }
+
+    public let workspaceID: WorkspaceID
+    public let pageID: PageID
+    public let baseVersionID: PageVersionID?
+    public let mainVersionID: PageVersionID?
+    public let workspaceTarget: Target
+    public let createdAt: Date
+
+    public init(workspaceID: WorkspaceID, pageID: PageID, baseVersionID: PageVersionID?,
+                mainVersionID: PageVersionID?, workspaceTarget: Target, createdAt: Date) {
+        self.workspaceID = workspaceID
+        self.pageID = pageID
+        self.baseVersionID = baseVersionID
+        self.mainVersionID = mainVersionID
+        self.workspaceTarget = workspaceTarget
+        self.createdAt = createdAt
+    }
+}

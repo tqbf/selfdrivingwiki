@@ -1,0 +1,60 @@
+# swift-mutation-testing configuration
+# All settings are optional. CLI flags override file values.
+#
+# Viable mutants require `__swiftMutationTestingID` to be in scope in every
+# mutated module — see Sources/WikiFSTypes/MutationTestingSupport.swift for why
+# the tool's own injected copy never is (#823, #860). Do not delete that file.
+
+# Available test targets: WikiFSCoreTests, WikiFSAppTests
+# Limit test execution to a specific target
+test-target: WikiFSCoreTests
+
+# Per-mutant test timeout in seconds (default: 30 for SPM).
+#
+# This is ALSO the timeout for the one-time sandbox build, which is why it is
+# not tuned down to the suite's real runtime: the tool copies the repo without
+# .build, so it recompiles the whole dependency graph (MLX, NIO, swift-syntax)
+# from cold — ~10 min on an M-series laptop. WikiFSCoreTests itself runs 2438
+# tests in ~9s, so a mutant that gets anywhere near this limit is an infinite
+# loop, not a slow test.
+timeout: 900
+
+# Disable result cache (re-runs all mutants on every execution)
+# no-cache: true
+
+# Report output paths
+output: mutation-report.json
+# html-output: mutation-report.html
+# sonar-output: sonar-mutation-report.json
+
+# Source file glob patterns to exclude from mutation.
+#
+# Matched with String.contains against the absolute path (not a glob), so a bare
+# filename is the idiomatic form. /Tests/, /Mocks/, /Stubs/, /Fakes/,
+# /TestHelpers/, /TestSupport/, *Tests.swift, *Mock.swift, *Spec.swift, /.build/
+# and the cache dir are already excluded by the tool itself.
+exclude:
+  # Read-only source enumeration — no behaviour worth mutating.
+  - "SourceProvider.swift"
+  # Pure os_log wrappers. Nothing asserts on unified-logging output, so every
+  # RemoveSideEffects mutant here is unkillable by construction: 16 immortal
+  # survivors that dragged the WikiFSTypes score from 87% to 71% while pointing
+  # at no real test gap. Excluded so the score tracks testable behaviour.
+  - "DebugLog.swift"
+
+# Mutation operators
+mutators:
+  - name: RelationalOperatorReplacement
+    active: true
+  - name: BooleanLiteralReplacement
+    active: true
+  - name: LogicalOperatorReplacement
+    active: true
+  - name: ArithmeticOperatorReplacement
+    active: true
+  - name: NegateConditional
+    active: true
+  - name: SwapTernary
+    active: true
+  - name: RemoveSideEffects
+    active: true

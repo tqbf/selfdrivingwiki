@@ -3,6 +3,35 @@
 Running list of known limitations / rough edges. Not bugs to fix right now —
 things we've decided to live with, with enough context to revisit later.
 
+## `[[wiki-link]]` delimiter collisions (residual edges)
+
+The link grammar reserves `#`, `|`, `]`, and the `source:`/`page:` prefixes,
+with no escape syntax. As of 2026-07-04 (v18) this is handled by two
+mechanisms — `WikiLinkResolver` (lookup-driven splitting: every `#` reading of
+a target is tried against the real namespace, longest name first, exact match
+wins) and `WikiNameRules` (names that can NEVER be linked — `|`, `[`/`]`,
+leading `#` — are sanitized at every write boundary and were swept once by the
+v17→18 migration). So `#` anywhere inside a name now just works, including
+with a real anchor after it. What remains:
+
+- ~~Reserved characters inside a QUOTED PASSAGE~~ — fixed 2026-07-04.
+  `WikiLinkSpan.pattern`/`WikiLinkParser.pattern` now treat a `"…"` run as one
+  opaque unit (`(?:[^\]\|"]|"[^"]*")+`), so a `]` (GH #118) or a `|` inside the
+  quote no longer terminates the match early or gets misread as the alias
+  delimiter — the quoted alternative absorbs both. Likewise, backtick-formatted
+  code nested inside a quoted anchor — e.g.
+  `` [[source:X#"the `.foo` behavior"]] `` — no longer suppresses the whole
+  link: the code-span/link overlap check now requires the code span to fully
+  CONTAIN the link, not merely intersect it (GH #117).
+- **Inherent `#` ambiguity when both readings exist:** if pages "C" AND
+  "C# Guide" both exist, `[[C# Guide]]` links "C# Guide" (longest name wins);
+  there is no way to express "page C, anchor ' Guide'". Contrived, and the
+  longest-name tiebreak is the intended reading in practice.
+- **Ghost links keep the heuristic split:** a target that resolves to nothing
+  renders via the old first-`#`/`#"` split (there's no namespace to consult),
+  so an unresolved `#`-name displays truncated until its page/source exists.
+  Cosmetic only.
+
 ## Read-after-write latency: ~5s replica-invalidation window
 
 **Symptom.** After an in-app edit (page body, system prompt, ingest/remove), a
@@ -40,7 +69,7 @@ we remember the option exists.
 means abandoning the replicated model, which is the whole point of this POC.
 
 Recorded 2026-06-15 (system-prompt live-mount gate). Originally observed in the
-Phase 2/3 caveats in `PROGRESS.md`.
+Phase 2/3 caveats in `progress/`.
 
 ## Heavily-churned File Provider domain replica can wedge
 

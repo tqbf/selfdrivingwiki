@@ -1,0 +1,29 @@
+#!/bin/sh
+# Validate the first non-comment line of every manually written commit message.
+# Git-generated merge and revert messages keep their normal workflow.
+# Bypass for a genuine emergency: git commit --no-verify.
+
+message_file=$1
+first_line=$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$message_file" | sed -n '1p')
+
+case "$first_line" in
+  Merge\ *|Revert\ *)
+    exit 0
+    ;;
+esac
+
+if printf '%s\n' "$first_line" | grep -Eq '^(feat|fix|refactor|perf|docs|test|build|ci|chore)(\([[:alnum:]][[:alnum:]./_-]*\))?!?: [^[:space:]].*'; then
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+✗ invalid commit message
+
+Use: <type>[optional scope][!]: <description>
+
+Allowed types: feat, fix, refactor, perf, docs, test, build, ci, chore
+Examples:
+  feat(search): add source title matching
+  fix!: preserve page identifiers during migration
+EOF
+exit 1

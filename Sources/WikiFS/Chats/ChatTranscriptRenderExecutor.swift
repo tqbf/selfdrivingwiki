@@ -1,0 +1,314 @@
+// pattern: Imperative Shell
+
+import Foundation
+import WebKit
+import WikiFSCore
+
+struct ChatTranscriptRenderRevision: Hashable, Sendable {
+    let rawValue: Int
+}
+
+enum ChatTranscriptRenderAcknowledgementOutcome: String, Hashable, Sendable {
+    case success
+    case missingRow
+    case error
+    case undefined
+    case javaScriptException
+    case timeout
+}
+
+struct ChatTranscriptRenderAcknowledgement: Hashable, Sendable {
+    let kind: ChatTranscriptRenderCommandKind
+    let revision: ChatTranscriptRenderRevision
+    let rowID: ChatDisplayRowID?
+    let outcome: ChatTranscriptRenderAcknowledgementOutcome
+}
+
+enum ChatTranscriptRendererAnomaly: Hashable, Sendable {
+    case invalidAcknowledgement(expected: ChatTranscriptRenderCommandKind, received: ChatTranscriptRenderCommandKind)
+    case staleAcknowledgement(expected: ChatTranscriptRenderRevision, received: ChatTranscriptRenderRevision)
+    case rowMismatch(expected: ChatDisplayRowID?, received: ChatDisplayRowID?)
+    case failedAcknowledgement(ChatTranscriptRenderAcknowledgementOutcome)
+}
+
+/// Serializes typed DOM mutations. A command changes the acknowledged snapshot
+/// only after WebKit returns the matching acknowledgement.
+@MainActor
+final class ChatTranscriptRenderExecutor {
+    enum State: Hashable, Sendable {
+        case idle
+        case applying(ChatTranscriptRenderCommand, ChatTranscriptRenderRevision)
+        case awaitingReload
+    }
+
+    typealias Mutation = @MainActor (
+        ChatTranscriptRenderCommand,
+        ChatTranscriptRenderRevision,
+        @escaping @MainActor (ChatTranscriptRenderAcknowledgement) -> Void
+    ) -> Void
+
+    private let mutate: Mutation
+    private let reportAnomaly: @MainActor (ChatTranscriptRendererAnomaly) -> Void
+    private let diagnosticTrace: ChatDiagnosticTrace
+    private var acknowledgedSnapshot: ChatTranscriptRenderSnapshot?
+    private var desiredSnapshot: ChatTranscriptRenderSnapshot?
+    private var reloadSnapshot: ChatTranscriptRenderSnapshot?
+    private var nextRevision = 0
+    private var reloadRevision: ChatTranscriptRenderRevision?
+    private var inFlightDiagnosticCorrelation: ChatDiagnosticCorrelation?
+    private var recoveryReloadAttempted = false
+    private var requiresRecoveryReload = false
+
+    private(set) var state: State = .idle
+
+    init(
+        mutate: @escaping Mutation,
+        reportAnomaly: @escaping @MainActor (ChatTranscriptRendererAnomaly) -> Void,
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
+    ) {
+        self.mutate = mutate
+        self.reportAnomaly = reportAnomaly
+        self.diagnosticTrace = diagnosticTrace
+    }
+
+    func submit(_ snapshot: ChatTranscriptRenderSnapshot) {
+        desiredSnapshot = snapshot
+        drain()
+    }
+
+    /// Called by the WebKit navigation delegate only after a controlled shell
+    /// reload has finished. The returned snapshot is frozen for that mutation.
+    func beginReloadMutation() -> (snapshot: ChatTranscriptRenderSnapshot, revision: ChatTranscriptRenderRevision)? {
+        guard case .awaitingReload = state,
+              let desiredSnapshot,
+              let reloadRevision
+        else { return nil }
+        reloadSnapshot = desiredSnapshot
+        state = .applying(.reload(desiredSnapshot), reloadRevision)
+        return (desiredSnapshot, reloadRevision)
+    }
+
+    func acknowledge(_ acknowledgement: ChatTranscriptRenderAcknowledgement) {
+        let expected: (command: ChatTranscriptRenderCommand, revision: ChatTranscriptRenderRevision)?
+        switch state {
+        case .idle:
+            return
+        case .applying(let command, let revision):
+            expected = (command, revision)
+        case .awaitingReload:
+            guard let reloadRevision else { return }
+            expected = (.reload(reloadSnapshot ?? desiredSnapshot ?? ChatTranscriptRenderSnapshot(
+                context: .init(transcriptID: nil), rows: []
+            )), reloadRevision)
+        }
+        guard let expected else { return }
+        let correlation = inFlightDiagnosticCorrelation ?? diagnosticCorrelation(
+            snapshot: desiredSnapshot,
+            revision: acknowledgement.revision,
+            rowID: acknowledgement.rowID
+        )
+        guard acknowledgement.revision == expected.revision else {
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
+            reportAnomaly(.staleAcknowledgement(expected: expected.revision, received: acknowledgement.revision))
+            return
+        }
+        guard acknowledgement.kind == expected.command.kind else {
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
+            reportAnomaly(.invalidAcknowledgement(expected: expected.command.kind, received: acknowledgement.kind))
+            scheduleRecovery(after: expected.command, correlation: correlation)
+            return
+        }
+        guard acknowledgement.rowID == expected.command.rowID else {
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
+            reportAnomaly(.rowMismatch(expected: expected.command.rowID, received: acknowledgement.rowID))
+            scheduleRecovery(after: expected.command, correlation: correlation)
+            return
+        }
+        guard acknowledgement.outcome == .success else {
+            observe(stage: .domFailure, outcome: .failed, correlation: correlation)
+            reportAnomaly(.failedAcknowledgement(acknowledgement.outcome))
+            scheduleRecovery(after: expected.command, correlation: correlation)
+            return
+        }
+
+        switch expected.command {
+        case .reload(let snapshot):
+            acknowledgedSnapshot = reloadSnapshot ?? snapshot
+            reloadSnapshot = nil
+        default:
+            acknowledgedSnapshot = applying(expected.command, to: acknowledgedSnapshot)
+        }
+        state = .idle
+        observe(stage: .domAcknowledgement, outcome: .accepted, correlation: correlation)
+        inFlightDiagnosticCorrelation = nil
+        reloadRevision = nil
+        recoveryReloadAttempted = false
+        drain()
+    }
+
+    private func drain() {
+        guard case .idle = state, let desiredSnapshot else { return }
+        let command: ChatTranscriptRenderCommand
+        if requiresRecoveryReload {
+            requiresRecoveryReload = false
+            recoveryReloadAttempted = true
+            command = .reload(desiredSnapshot)
+        } else {
+            guard let first = ChatTranscriptRenderPlanner.commands(
+                previous: acknowledgedSnapshot,
+                desired: desiredSnapshot
+            ).first else { return }
+            command = first
+        }
+        let revision = makeRevision()
+        let correlation = diagnosticCorrelation(snapshot: desiredSnapshot, revision: revision, rowID: command.rowID)
+        observe(stage: .renderPlanning, outcome: .accepted, correlation: correlation)
+        inFlightDiagnosticCorrelation = correlation
+        if case .reload = command {
+            state = .awaitingReload
+            reloadRevision = revision
+        } else {
+            state = .applying(command, revision)
+        }
+        mutate(command, revision) { [weak self] acknowledgement in
+            self?.acknowledge(acknowledgement)
+        }
+    }
+
+    private func scheduleRecovery(
+        after command: ChatTranscriptRenderCommand,
+        correlation: ChatDiagnosticCorrelation
+    ) {
+        state = .idle
+        reloadRevision = nil
+        reloadSnapshot = nil
+        inFlightDiagnosticCorrelation = nil
+        guard case .reload = command else {
+            if !recoveryReloadAttempted {
+                observe(stage: .recoveryReload, outcome: .recovered, correlation: correlation)
+                requiresRecoveryReload = true
+                drain()
+            }
+            return
+        }
+        // One controlled reload already ran. Keep the latest desired snapshot
+        // for a future explicit update, but do not enter a reload loop.
+    }
+
+    private func makeRevision() -> ChatTranscriptRenderRevision {
+        nextRevision += 1
+        return ChatTranscriptRenderRevision(rawValue: nextRevision)
+    }
+
+    private func observe(
+        stage: ChatDiagnosticStage,
+        outcome: ChatDiagnosticOutcome,
+        correlation: ChatDiagnosticCorrelation
+    ) {
+        _ = diagnosticTrace.record(
+            stage: stage,
+            outcome: outcome,
+            payload: .init(correlation: correlation, detail: "renderer")
+        )
+    }
+
+    private func diagnosticCorrelation(
+        snapshot: ChatTranscriptRenderSnapshot?,
+        revision: ChatTranscriptRenderRevision?,
+        rowID: ChatDisplayRowID?
+    ) -> ChatDiagnosticCorrelation {
+        let chat: ChatDiagnosticCorrelation.Value?
+        if case .chat(let chatID)? = snapshot?.context.transcriptID {
+            chat = .init(rawValue: chatID.rawValue)
+        } else {
+            chat = nil
+        }
+        return .init(
+            chat: chat,
+            displayRow: rowID.map { .init(rawValue: $0.domValue) },
+            rendererRevision: revision.map { .init(UInt64($0.rawValue)) }
+        )
+    }
+
+    private func applying(
+        _ command: ChatTranscriptRenderCommand,
+        to snapshot: ChatTranscriptRenderSnapshot?
+    ) -> ChatTranscriptRenderSnapshot? {
+        guard let snapshot else { return nil }
+        var updatedRows = snapshot.rows
+        switch command {
+        case .reload(let replacement):
+            return replacement
+        case .append(let rows):
+            updatedRows.append(contentsOf: rows)
+        case .insert(let row, let before):
+            guard let index = updatedRows.firstIndex(where: { $0.id == before }) else { return nil }
+            updatedRows.insert(row, at: index)
+        case .replace(let row):
+            guard let index = updatedRows.firstIndex(where: { $0.id == row.id }) else { return nil }
+            updatedRows[index] = row
+        case .remove(let rowID):
+            guard let index = updatedRows.firstIndex(where: { $0.id == rowID }) else { return nil }
+            updatedRows.remove(at: index)
+        }
+        return ChatTranscriptRenderSnapshot(context: snapshot.context, rows: updatedRows)
+    }
+}
+
+/// Result of one bounded WebKit evaluation. `undefined` is distinct from a
+/// JavaScript exception because mutation functions must return an acknowledgement.
+@MainActor
+enum ChatTranscriptJavaScriptResult {
+    case success(Any)
+    case undefined
+    case javaScriptException(String)
+    case timeout
+}
+
+@MainActor
+private final class ChatTranscriptJavaScriptCompletion {
+    private var continuation: CheckedContinuation<ChatTranscriptJavaScriptResult, Never>?
+
+    init(_ continuation: CheckedContinuation<ChatTranscriptJavaScriptResult, Never>) {
+        self.continuation = continuation
+    }
+
+    func resolve(_ result: ChatTranscriptJavaScriptResult) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(returning: result)
+    }
+}
+
+@MainActor
+extension WKWebView {
+    func chatTranscriptJavaScriptResult(
+        _ script: String,
+        timeout: Duration = ChatTranscriptRenderMetrics.javaScriptTimeout
+    ) async -> ChatTranscriptJavaScriptResult {
+        await withCheckedContinuation { continuation in
+            let completion = ChatTranscriptJavaScriptCompletion(continuation)
+            evaluateJavaScript(script) { result, error in
+                if let error {
+                    completion.resolve(.javaScriptException(error.localizedDescription))
+                } else if let result {
+                    completion.resolve(.success(result))
+                } else {
+                    completion.resolve(.undefined)
+                }
+            }
+            Task { @MainActor in
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                completion.resolve(.timeout)
+            }
+        }
+    }
+}
+
+enum ChatTranscriptRenderMetrics {
+    static let javaScriptTimeout: Duration = .seconds(15)
+}

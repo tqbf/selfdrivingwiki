@@ -1,4 +1,6 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
+import WikiFSTypes
 
 /// The replicated File Provider extension principal class. Read-only: it serves
 /// metadata, enumerates containers, and materializes file content on demand;
@@ -17,7 +19,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     private let projection: Projection
 
     required init(domain: NSFileProviderDomain) {
-        projection = Projection(wikiID: domain.identifier.rawValue)
+        projection = Projection(wikiID: WikiID(rawValue: domain.identifier.rawValue))
         super.init()
     }
 
@@ -99,3 +101,5 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 userInfo: [NSLocalizedDescriptionKey: "Self Driving Wiki is read-only"])
     }
 }
+#endif  // os(macOS)
+

@@ -7,11 +7,11 @@ import Testing
 /// guarantee lives here.
 struct PageUpsertTests {
 
-    private func tempStore() throws -> SQLiteWikiStore {
+    private func tempStore() throws -> GRDBWikiStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-upsert-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try SQLiteWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     }
 
     // MARK: - create vs update
@@ -33,7 +33,7 @@ struct PageUpsertTests {
         // Same page resolved by title, not a second one.
         #expect(updated.id == created.id)
         #expect(try store.getPage(id: created.id).bodyMarkdown == "v2")
-        #expect(try store.listPages().count == 1)
+        #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
     }
 
     @Test func upsertByExplicitIDUpdatesThatPage() throws {
@@ -51,9 +51,9 @@ struct PageUpsertTests {
         let store = try tempStore()
         let a = try store.createPage(title: "Dup")
         let b = try store.createPage(title: "Dup")
-        // `ULID.generate()` is NOT monotonic within a millisecond (80 independent
-        // random bits), so creation order does not guarantee ULID order — pick the
-        // actually-lowest ULID to assert against rather than assuming `a` < `b`.
+        // ULIDs are monotonic within a millisecond, but `a` and `b` may span
+        // a millisecond boundary depending on scheduling, so pick the actually-
+        // lowest ULID rather than assuming `a` < `b`.
         let lowest = a.id.rawValue < b.id.rawValue ? a.id : b.id
         let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Dup", body: "edited")
         #expect(outcome.id == lowest)

@@ -5,27 +5,33 @@ import Testing
 /// Tests for `DomainRegistrationPolicy` — the pure decision logic behind robust
 /// File Provider domain registration (verify + bounded retry). The side effects
 /// (`NSFileProviderManager.add`/`.domains()`/`signalEnumerator`) live in the app
-/// layer's `FileProviderSpike`, which can't be unit-tested; THIS arithmetic
+/// layer's `FileProviderFacade`, which can't be unit-tested; THIS arithmetic
 /// (registered? / retry? / failed?) is the extracted, tested seam.
 struct DomainRegistrationPolicyTests {
 
     // MARK: - isRegistered
 
     @Test func registeredWhenIDPresent() {
-        #expect(DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "B", "C"], wikiID: "B"))
+        #expect(DomainRegistrationPolicy.isRegistered(
+            domainIDs: [WikiID(rawValue: "A"), WikiID(rawValue: "B"), WikiID(rawValue: "C")],
+            wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func notRegisteredWhenIDAbsent() {
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["A", "C"], wikiID: "B"))
+        #expect(!DomainRegistrationPolicy.isRegistered(
+            domainIDs: [WikiID(rawValue: "A"), WikiID(rawValue: "C")],
+            wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func notRegisteredAgainstEmptyList() {
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: [], wikiID: "B"))
+        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: [], wikiID: WikiID(rawValue: "B")))
     }
 
     @Test func matchIsExactNotPrefix() {
         // ULIDs share prefixes; a partial match must NOT count as registered.
-        #expect(!DomainRegistrationPolicy.isRegistered(domainIDs: ["01ABCDEF"], wikiID: "01AB"))
+        #expect(!DomainRegistrationPolicy.isRegistered(
+            domainIDs: [WikiID(rawValue: "01ABCDEF")],
+            wikiID: WikiID(rawValue: "01AB")))
     }
 
     // MARK: - decide
@@ -49,7 +55,7 @@ struct DomainRegistrationPolicyTests {
         )
     }
 
-    /// Drive the same loop `FileProviderSpike.registerDomain` runs — a domain that
+    /// Drive the same loop `FileProviderFacade.registerDomain` runs — a domain that
     /// only appears on the LAST allowed attempt must still resolve to `.registered`
     /// (the busy-daemon-self-heals case), never `.failed`.
     @Test func resolvesRegisteredOnFinalAttempt() {

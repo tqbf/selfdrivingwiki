@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Enforces the AGENTS.md "no bare try?" rule via a SwiftLint custom rule.
+  # Deliberately standalone: it needs no Swift build, no codegen and no cache,
+  # so it reports in ~1 min in parallel with the (much slower) test jobs.
+  #
+  # Pre-existing violations are grandfathered in .swiftlint-baseline.json —
+  # only NEW ones fail. Regenerate with `make lint-baseline` after fixing some.
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SwiftLint
+        # Poured from a bottle (prebuilt), so this is seconds, not a source build.
+        run: brew install swiftlint
+      - name: Lint (new bare try? fails the build)
+        # github-actions-logging surfaces each violation as an inline
+        # annotation on the PR diff instead of burying it in the log.
+        run: swiftlint lint --strict --reporter github-actions-logging
+
+  skills:
+    # Validate skill metadata independently from the Swift and Python jobs.
+    # The script declares its PyYAML dependency with PEP 723 inline metadata.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Validate skill metadata
+        run: uv run tools/validate_skills.py
+
+  swift:
+    # Full `swift test` — no skip, no tier split. The in-memory SQLite
+    # fixtures (#658) reduced the full suite from 30+ min to ~1.5 min, so the
+    # fast/integration tier split and `.integration` tags are no longer needed.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode (mlx-swift needs Swift 6.3)
+        run: |
+          # macos-latest may default the `swift` command to the CLT toolchain
+          # (Swift 6.1), but mlx-swift 0.31.x requires 6.3. Force Xcode.
+          ls /Applications/Xcode*.app 2>/dev/null
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)" || true
+          swift --version || xcrun swift --version
+      - name: Environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          xcrun --show-sdk-path
+          which swift || echo "swift not in PATH"
+          swift --version || xcrun swift --version
+      - name: Generate codegen files (version + prompts + keychain)
+        run: make version prompts keychain
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          # Key on Package.resolved ONLY. The previous key also hashed
+          # `Sources/**/*.swift`, producing one cache entry per commit and
+          # blowing past GitHub's 10 GB/repo LRU — every run evicted and
+          # cold-built MLX C++ (~1374 units, ~15 min). One entry per dep set
+          # stops the eviction; warm build is ~2 min.
+          key: ${{ runner.os }}-swift-v3-${{ hashFiles('Package.resolved', 'Package.swift') }}
+      - name: Build
+        # The "Select Xcode" step above ran `sudo xcode-select -s`, so one
+        # toolchain works directly. The previous `if xcrun swift build
+        # 2>/dev/null; else swift build` probe swallowed failure reasons and
+        # the `else` branch could trigger a second full recompile.
+        run: xcrun swift build
+      - name: Test (full suite minus blocking suites — in-memory fixtures, #658)
+        # The full suite runs in ~1.5 min via in-memory SQLite fixtures (#658).
+        # HOWEVER: a set of suites block the cooperative thread pool on CI's
+        # 3-vCPU runner, causing a deadlock that .timeLimit cannot interrupt
+        # (DispatchSemaphore.wait in production code, Process.waitUntilExit,
+        # WKWebView/NSWindow on @MainActor). These suites pass locally (8+ vCPU)
+        # and are covered by `make test` before every PR — CI skips them to
+        # avoid the 30-min timeout. See plans/ci-speedup.md, #732, #448.
+        #
+        # Keep SwiftPM's worker count at one (#1003, #1021): the core suite
+        # otherwise intermittently crashes its shared test helper under load.
+        # timeout-minutes: 30 is a safety net for a cache-miss full rebuild.
+        timeout-minutes: 30
+        env:
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
+        run: xcrun swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
+      - name: Test opt-in chat lifecycle suites
+        # This opt-in app target contains source-contract and daemon lifecycle
+        # tests only. It does not host AppKit or WebKit views, so it avoids the
+        # known aggregate SwiftPM helper wedge while keeping the Phase 7
+        # compatibility guard and persisted chat lifecycle coverage live.
+        timeout-minutes: 15
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests'
+
+  # Linux Swift CI (#754) — builds and tests the portable target
+  # (WikiFSCoreTests) on ubuntu-latest. Validates the macOS/Linux
+  # portability split: catches unguarded macOS-only imports, missing
+  # `#if os(macOS)` / `#if canImport(...)` guards, and Linux-only build
+  # breaks early. WikiFSAppTests compiles to an empty module on Linux
+  # (every file is `#if os(macOS)`-guarded), so only WikiFSCoreTests runs.
+  linux-swift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+      - name: Install Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          # mlx-swift (a transitive dep of mlx-swift-lm) declares
+          # swift-tools-version: 6.3.0 in its Package.swift. SwiftPM
+          # resolves ALL package deps even if unused on this platform,
+          # so we need Swift 6.3+ to parse the manifest. macOS CI uses
+          # Xcode (Swift 6.3+); Linux needs to match.
+          swift-version: "6.3"
+      - name: Swift version
+        run: swift --version
+      - name: Generate codegen files (version + prompts + keychain)
+        run: make version prompts keychain
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/swiftpm
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved', 'Package.swift') }}
+      - name: Build portable targets
+        run: swift build --target WikiFSCoreTests
+      - name: Test portable suite
+        # Same skip list as the macOS `swift` job. On Linux, WikiFSAppTests
+        # compiles to an empty module (all source #if os(macOS)-guarded),
+        # so only WikiFSCoreTests tests are discovered. The skip list
+        # excludes suites that block the cooperative thread pool on CI's
+        # limited vCPUs (DispatchSemaphore, Process.waitUntilExit, etc.).
+        #
+        # --filter WikiFSCoreTests (matches the macOS job): without this,
+        # `swift test` builds every target in the package, including Cmlx
+        # (transitive via mlx-swift-lm → mlx-swift), which fails on the
+        # CUDA-less ubuntu-latest runner:
+        #
+        #   mlx/backend/cuda/cuda_utils.h:5:10: fatal error:
+        #     'cublasLt.h' file not found
+        #
+        # Scoping with --filter causes SwiftPM to build only the targets in
+        # WikiFSCoreTests's transitive build graph — none of which require
+        # Metal/GPU/CUDA (WikiFSMLX is conditionally excluded via
+        # .when(platforms: [.macOS]) in Package.swift; ACP-backed source is
+        # guarded with #if os(macOS)).
+        timeout-minutes: 15
+        env:
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests|MermaidValidatorTests|MarkdownLinterTests|MarkdownEditorWarningTests|MermaidEditorWarningTests|WikiStoreModelMarkdownImportTests|SandboxProfileTests|WikiCtlCommandTests|ChatStoreTests'
+        run: swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/pdf2md
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Lint
+        run: uv run ruff check pdf2md tests/
+      - name: Type check
+        run: uv run pyright pdf2md tests/
+      - name: Unit tests
+        run: uv run pytest tests/test_pdf2md.py -v

@@ -1,0 +1,19 @@
+# Chat-domain API signature manifest
+#
+# Format: <repository-relative Swift path><TAB><required signature fragment>
+#
+# These entries protect the reviewed Phase 0/1 typed conversation domain.
+Sources/WikiFSTypes/ChatModeID.swift	public struct ChatModeID: Hashable, Codable, RawRepresentable, Sendable
+Sources/WikiFSTypes/ChatConfigurationOptionID.swift	public struct ChatConfigurationOptionID: Hashable, Codable, RawRepresentable, Sendable
+Sources/WikiFSTypes/ChatConfigurationValueID.swift	public struct ChatConfigurationValueID: Hashable, Codable, RawRepresentable, Sendable
+Sources/WikiFSTypes/ChatConversationTypes.swift	public init( commandID: ChatCommandID, turnID: ChatTurnID, userText: String, contextReferences: [ChatContextReference], submittedAt: Date )
+Sources/WikiFSTypes/ChatConversationTypes.swift	public init( messageID: ChatMessageID, turnID: ChatTurnID, role: ChatTranscriptMessageRole, text: String, createdAt: Date )
+Sources/WikiFSTypes/ChatConversationTypes.swift	public init( toolCallID: ToolCallID, turnID: ChatTurnID, toolName: String, status: ChatToolCallStatus, detail: String?, output: String? = nil, permissionRequestID: PermissionRequestID?, updatedAt: Date )
+Sources/WikiFSEngine/ChatAgentRuntime.swift	public init(optionID: ChatConfigurationOptionID, valueID: ChatConfigurationValueID)
+Sources/WikiFSEngine/ChatAgentRuntime.swift	func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope>
+Sources/WikiFSEngine/ChatAgentRuntime.swift	func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws
+Sources/WikiFSEngine/ChatDomain.swift	public init( id: ChatConfigurationOptionID, label: String, currentValueID: ChatConfigurationValueID?, valueOptions: [ChatConfigurationValueOption] )
+Sources/WikiFSEngine/ChatDomain.swift	public init( supportsResume: Bool, supportsClose: Bool, availableModes: [ChatModeID] = [], availableModels: [ModelID] = [], configurationOptions: [ChatConfigurationOption] = [], supportsReasoning: Bool, supportsToolCalls: Bool, supportsPermissions: Bool )
+Sources/WikiFSEngine/ChatDomain.swift	public init( chatID: ChatID, generation: ChatSessionGenerationID, lifecycle: ChatSessionLifecycle, activeTurn: ChatTurnSnapshot?, queuedTurns: [ChatQueuedTurn], attention: ChatAttentionState, capabilities: ChatCapabilitySet, providerState: ChatProviderState, usage: SessionUsage?, diagnostics: ChatDiagnosticsState, transientTranscriptOverlay: [ChatTranscriptItem], lastIncludedSequence: ChatUpdateSequence )
+Sources/WikiFSEngine/ChatDomain.swift	public enum ChatSessionMachineApplyResult: Sendable, Codable, Equatable { case applied(ChatRuntimeSnapshot) case rejected(ChatSessionMachineRejection) }
+Sources/WikiFSEngine/ChatDomain.swift	public init( chatID: ChatID, generation: ChatSessionGenerationID, sequence: ChatUpdateSequence, payload: ChatSessionEventPayload )

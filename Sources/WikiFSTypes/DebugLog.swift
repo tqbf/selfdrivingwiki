@@ -1,0 +1,205 @@
+import Foundation
+#if canImport(os)
+import os
+#endif
+
+/// Lightweight structured logging routed to the **unified logging system**
+/// (Console.app / `log show`), visible everywhere the core is linked — both the
+/// app (`WikiFS`) and the core (`WikiFSCore`) use it.
+///
+/// To read it back:
+///
+///   log show --predicate 'subsystem == "com.selfdrivingwiki.debug"' \
+///            --style compact --info --debug --last 30m
+///
+/// or in Console.app, filter the subsystem to `com.selfdrivingwiki.debug`.
+/// Values are logged `.public` (diagnostics — pids, exit codes, counts, flags —
+/// not user secrets) so they aren't redacted as `<private>`.
+public enum DebugLog {
+    public static func agent(_ message: @autoclosure () -> String) { emit("agent", message()) }
+    public static func ingest(_ message: @autoclosure () -> String) { emit("ingest", message()) }
+    public static func extraction(_ message: @autoclosure () -> String) { emit("extraction", message()) }
+    public static func tabs(_ message: @autoclosure () -> String) { emit("tabs", message()) }
+    public static func store(_ message: @autoclosure () -> String) { emit("store", message()) }
+    public static func config(_ message: @autoclosure () -> String) { emit("config", message()) }
+    public static func fileprovider(_ message: @autoclosure () -> String) { emit("fileprovider", message()) }
+    public static func reader(_ message: @autoclosure () -> String) { emit("reader", message()) }
+    /// Page/source markdown editor surface (drop-insert, dirty-buffer, agent-
+    /// edit-guard events). Distinct from `tabs` (sidebar/tab/open) so editor
+    /// events surface cleanly in Console.app.
+    public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
+    /// The chat run-state → sidebar "responding…" badge pipeline, end to end:
+    /// a typed `ChatSyncUpdate`, `ChatDaemonCoordinator` state derivation,
+    /// `generatingChatIDs` membership + `runningStateToken` bump, and the sidebar
+    /// table's re-render path. Its own category keeps this trace separate from
+    /// `agent` (runtime events) and `store` (persistence).
+    ///
+    ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatlive"' \
+    ///              --style compact --info --last 10m
+    public static func chatLive(_ message: @autoclosure () -> String) { emit("chatlive", message()) }
+    /// Stable redacted chat diagnostic predicate:
+    ///
+    ///     log show --predicate 'subsystem == "com.selfdrivingwiki.debug" AND category == "chatdiagnostics"' --style compact --info --debug --last 10m
+    public static func chatDiagnostics(_ message: @autoclosure () -> String, verbose: Bool) {
+        if verbose {
+            guard verboseLogging else { return }
+            #if canImport(os)
+            emit("chatdiagnostics", message(), level: .debug)
+            #else
+            emit("chatdiagnostics", message())
+            #endif
+        } else {
+            emit("chatdiagnostics", message())
+        }
+    }
+
+    // MARK: - try? replacement
+
+    /// Visible alternative to bare `try?`: runs a throwing closure, and on
+    /// failure logs via `.store` so the error is visible in Console.app before
+    /// returning `nil`. Use in place of `try?` to satisfy the
+    /// `silent_try_optional` SwiftLint rule without a full `do/catch` block.
+    ///
+    ///     // Before (rule violation):
+    ///     let pages = (try? store.listPages()) ?? []
+    ///     // After:
+    ///     let pages = DebugLog.trying("listPages", operation: { try store.listPages() }) ?? []
+    ///
+    /// `@discardableResult` so fire-and-forget calls (`try? store.vacuum()`)
+    /// become `DebugLog.trying("vacuum", operation: { try store.vacuum() })` without a `_ =`.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure () -> String,
+        operation: () throws -> T
+    ) -> T? {
+        do { return try operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Async variant for `try? await`.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure @Sendable () -> String,
+        operation: @Sendable () async throws -> T
+    ) async -> T? {
+        do { return try await operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Optional-returning overload — flattens `T??` to `T?` to match `try?`
+    /// semantics. When the operation returns an optional, Swift prefers this
+    /// overload (the generic `T` binds to the wrapped type), avoiding the
+    /// double-optional that the base overload would produce.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure () -> String,
+        operation: () throws -> T?
+    ) -> T? {
+        do { return try operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// Async + optional-returning overload.
+    @discardableResult
+    public static func trying<T>(
+        _ description: @autoclosure @Sendable () -> String,
+        operation: @Sendable () async throws -> T?
+    ) async -> T? {
+        do { return try await operation() }
+        catch { store("\(description()): \(error)"); return nil }
+    }
+
+    /// When true, high-frequency diagnostic logs (per-event `pushQueueEvent`/
+    /// `pushChatEnvelope`, etc.) are emitted. Off by default to avoid flooding
+    /// Console.app during active extraction/ingestion — the daemon pushes one
+    /// event per queue/chat transition, which is hundreds of lines per ingest
+    /// run (#872). Toggle at runtime via
+    /// `defaults write com.willsargent.WikiFS debugVerboseLogging -bool YES`,
+    /// or set `DebugLog.verboseLogging = true` directly from a debug menu/test.
+    ///
+    /// `nonisolated(unsafe)` matches the codebase convention for mutable
+    /// test-injectable statics (see `DisplayNameResolver.pdfTitleExtractor`,
+    /// `EmbeddingService.miniLMFactory`): a simple Bool read on the verbose
+    /// path and written rarely, so a torn read at worst yields one stale
+    /// emit/skip — never a correctness issue (it only gates a log line).
+    public nonisolated(unsafe) static var verboseLogging: Bool = {
+        UserDefaults.standard.bool(forKey: "debugVerboseLogging")
+    }()
+
+    /// Like the category helpers but only emits when ``verboseLogging`` is true.
+    /// Use for high-frequency per-event traces (e.g. every `pushQueueEvent`/
+    /// `pushChatEnvelope` success) that would flood Console.app during active
+    /// ingestion. Routed through the `store` category so it groups with the
+    /// existing daemon diagnostics in Console.app. Signal-worthy events
+    /// (errors, empty-sinks drops) should still use `store`/`debug` directly.
+    public static func verbose(_ message: @autoclosure () -> String) {
+        guard verboseLogging else { return }
+        emit("store", message())
+    }
+
+    private static let subsystem = "com.selfdrivingwiki.debug"
+
+    #if canImport(os)
+    /// Shared signposter for low-overhead interval timing visible in Instruments
+    /// (near-free when no recorder is attached). Prefer this over `.notice` text
+    /// logs for per-call perf measurement — it costs nothing in production but
+    /// lights up under the Points-of-Interest instrument when profiling.
+    public static let signposter = OSSignposter(subsystem: subsystem, category: "perf")
+
+    private static let loggers: [String: Logger] = [
+        "agent": Logger(subsystem: subsystem, category: "agent"),
+        "ingest": Logger(subsystem: subsystem, category: "ingest"),
+        "extraction": Logger(subsystem: subsystem, category: "extraction"),
+        "tabs": Logger(subsystem: subsystem, category: "tabs"),
+        "store": Logger(subsystem: subsystem, category: "store"),
+        "config": Logger(subsystem: subsystem, category: "config"),
+        "fileprovider": Logger(subsystem: subsystem, category: "fileprovider"),
+        "reader": Logger(subsystem: subsystem, category: "reader"),
+        "editor": Logger(subsystem: subsystem, category: "editor"),
+        "chatlive": Logger(subsystem: subsystem, category: "chatlive"),
+        "chatdiagnostics": Logger(subsystem: subsystem, category: "chatdiagnostics"),
+    ]
+
+    // `.default` is the "notice" level (persisted by `log show`); `.debug` is
+    // captured only with `--debug`. Existing category helpers default to
+    // `.default` (= `.notice`), matching the prior `logger.notice` behavior.
+    private static func emit(_ category: String, _ message: String, level: OSLogType = .default) {
+        loggers[category]?.log(level: level, "\(message, privacy: .public)")
+    }
+
+    /// Chatty diagnostic that should NOT clutter the persisted production log.
+    /// Emits at `.debug` — captured only with `log show --debug` (or Console's
+    /// "Include Debug Messages"). Use for per-call / per-iteration traces (e.g.
+    /// every `NLEmbedding` inference, cache hits, availability checks); reserve
+    /// the category helpers above (`store`, `tabs`, …) — which emit at `.default`
+    /// (notice) — for signal-worthy events that must survive in `log show`.
+    public static func debug(_ message: @autoclosure () -> String) {
+        emit("store", message(), level: .debug)
+    }
+    #else
+    // Linux fallback: no unified logging system. Route to stderr so diagnostics
+    // are still visible in CI logs. This is a dev/CI-only path — the app itself
+    // runs on macOS and always hits the os.log branch above.
+    private static func emit(_ category: String, _ message: String) {
+        FileHandle.standardError.write(Data("[\(subsystem):\(category)] \(message)\n".utf8))
+    }
+
+    public static func debug(_ message: @autoclosure () -> String) {
+        emit("store", message())
+    }
+
+    /// No-op signposter for Linux (OSSignposter is macOS-only). Returns a
+    /// dummy state so call sites compile without #if guards.
+    public static let signposter = NoOpSignposter()
+
+    /// A no-op replacement for OSSignposter on platforms without the `os`
+    /// module. `beginInterval`/`endInterval` are no-ops. The state type is
+    /// a singleton — matching the "near-free when no recorder is attached"
+    /// semantics of the real OSSignposter.
+    public struct NoOpSignposter: Sendable {
+        public struct State: Sendable {}
+        public func beginInterval(_ name: String) -> State { State() }
+        public func endInterval(_ name: String, _ state: State) { }
+    }
+    #endif
+}

@@ -1,0 +1,358 @@
+#if os(macOS)
+import Foundation
+import WikiFSEngine
+import Testing
+import WikiFSEngine
+@testable import WikiFS
+@testable import WikiFSEngine
+@testable import WikiFSCore
+
+/// Tests for Phase D2 — the unified `ChatDetailView` surface (pillar 2).
+///
+/// Covers four gate points:
+///   (a) source-of-truth rule: `activeChatID == chatID` → live events; else
+///       persisted `chatMessages`. Plus the flip-timing gate: `activeChatID` is
+///       cleared in `finish()` AFTER `flushTranscript()` commits the tail.
+///   (b) `retargetTab` preserves the tab UUID while changing its selection.
+///   (c) draft-state morph: the runner retargets the active tab from .newChat
+///       to .chat(id) on first send (via `retargetActiveTabToChat`).
+///   (d) `startNewChat` clears `activeChatID`.
+@MainActor
+struct ChatViewD2Tests {
+
+    private func tempModel() throws -> (WikiStoreModel, GRDBWikiStore) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-d2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        return (WikiStoreModel(store: store), store)
+    }
+
+    private func makeLauncher() -> AgentLauncher {
+        let launcher = AgentLauncher()
+        launcher.resolveClaude = { .found(path: "/usr/bin/true") }
+        return launcher
+    }
+
+    private func makeTempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-chat-view-d2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dummy = dir.appendingPathComponent("fake-agent")
+        let script = "#!/bin/sh\nexit 0\n"
+        try script.write(to: dummy, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dummy.path)
+        return dir
+    }
+
+    private func makeInteractiveLauncher(
+        backend: FakeAgentBackend, dummyPath: String, tempDir: URL
+    ) throws -> AgentLauncher {
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "test-chat-view"),
+            label: "Test Chat View",
+            command: [dummyPath],
+            env: [:],
+            enabled: true,
+            isDefault: true
+        )
+        let launcher = AgentLauncher()
+        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.acpCredentialStore = InMemoryACPCredentialStore()
+        launcher.resolveSelectedProvider = { provider }
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "fake-model")]
+        )
+        try config.save(to: tempDir)
+        launcher.resolveProvidersContainerDirectory = { tempDir }
+        launcher.containerDirectory = tempDir
+        return launcher
+    }
+
+    // MARK: - (a) Source-of-truth rule + flip timing
+
+    @Test func activeChatID_isNil_byDefault() {
+        let launcher = makeLauncher()
+        #expect(launcher.activeChatID == nil)
+    }
+
+    @Test func activeChatID_isSetByStartInteractiveQuery() async throws {
+        let tempDir = try makeTempDir()
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tempDir)
+            } catch {
+                Issue.record("failed to remove ChatViewD2 test temp dir: \(error)")
+            }
+        }
+        let dummyPath = tempDir.appendingPathComponent("fake-agent").path
+        let backend = FakeAgentBackend(behaviors: [FakeSessionBehavior(neverFinish: true)])
+        let launcher = try makeInteractiveLauncher(
+            backend: backend, dummyPath: dummyPath, tempDir: tempDir)
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
+
+        await launcher.startInteractiveQuery(
+            firstMessage: "hello",
+            stateMarkdown: "",
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: tempDir.path,
+            systemPrompt: "",
+            wikictlDirectory: tempDir.path,
+            chatID: chatID,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        #expect(launcher.preflightError == nil)
+        #expect(launcher.activeChatID == chatID)
+        launcher.startNewChat()
+    }
+
+    @Test func sourceOfTruth_liveChat_matchesActiveChatID() {
+        let launcher = makeLauncher()
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
+        launcher.activeChatID = chatID
+        // The view's isLiveChat predicate:
+        let isLive = launcher.activeChatID == chatID
+        #expect(isLive)
+    }
+
+    @Test func sourceOfTruth_persistedChat_doesNotMatchActiveChatID() {
+        let launcher = makeLauncher()
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "A", count: 22))
+        // activeChatID is nil (no live session) → persisted path.
+        let isLive = launcher.activeChatID == chatID
+        #expect(!isLive)
+    }
+
+    @Test func startNewChat_clearsActiveChatID() {
+        let launcher = makeLauncher()
+        launcher.activeChatID = ChatID(rawValue: "some-chat-id")
+        // Pre-seed idle state so the guard passes.
+        launcher.events = [.userText("hello")]
+        launcher.isRunning = false
+
+        launcher.startNewChat()
+
+        #expect(launcher.activeChatID == nil)
+        #expect(launcher.events.isEmpty)
+    }
+
+    // MARK: - (b) retargetTab preserves UUID, changes selection
+
+    @Test func retargetTab_preservesUUID_changesSelection() throws {
+        let (model, store) = try tempModel()
+        let chat = try store.createChat(kind: .edit, title: "Chat")
+        model.reloadFromStore()
+        model.openTab(.newChat)
+        let askTabID = model.tabs[0].id
+        #expect(model.tabs[0].selection == .newChat)
+
+        // Morph the tab in place: .newChat → .chat(id)
+        let chatID = chat.id
+        model.retargetTab(id: askTabID, to: .chat(chatID))
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].id == askTabID)  // UUID preserved
+        #expect(model.tabs[0].selection == .chat(chatID))
+    }
+
+    @Test func retargetTab_preservesTabOrder() throws {
+        let (model, store) = try tempModel()
+        let pageA = try store.createPage(title: "A")
+        let pageB = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(pageA.id))
+        model.openTab(.newChat)
+        model.openTab(.page(pageB.id))
+        #expect(model.tabs.count == 3)
+        let askTabID = model.tabs[1].id
+        let orderBefore = model.tabs.map(\.id)
+
+        // Retarget the middle tab (.newChat → .chat).
+        let chat = try store.createChat(kind: .edit, title: "Chat")
+        model.retargetTab(id: askTabID, to: .chat(chat.id))
+
+        let orderAfter = model.tabs.map(\.id)
+        #expect(orderBefore == orderAfter)  // order preserved
+        #expect(model.tabs[1].selection == .chat(chat.id))
+    }
+
+    @Test func retargetTab_updatesActiveTabSelection() throws {
+        let (model, _) = try tempModel()
+        model.openTab(.newChat)
+        let askTabID = model.tabs[0].id
+        #expect(model.selection == .newChat)
+
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "B", count: 22))
+        model.retargetTab(id: askTabID, to: .chat(chatID))
+
+        #expect(model.selection == .chat(chatID))
+    }
+
+    @Test func retargetTab_unknownID_isNoOp() throws {
+        let (model, _) = try tempModel()
+        model.openTab(.newChat)
+        #expect(model.tabs.count == 1)
+
+        model.retargetTab(id: UUID(), to: .newChat)
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].selection == .newChat)
+    }
+
+    @Test func retargetActiveTabToChat_morphsActiveTab() throws {
+        let (model, store) = try tempModel()
+        let chat = try store.createChat(kind: .edit, title: "Chat")
+        model.reloadFromStore()
+        model.openTab(.newChat)
+        let askTabID = model.tabs[0].id
+
+        model.retargetActiveTabToChat(chatID: chat.id)
+
+        #expect(model.tabs[0].id == askTabID)  // same tab
+        #expect(model.tabs[0].selection == .chat(chat.id))
+        #expect(model.selection == .chat(chat.id))
+    }
+
+    @Test func retargetActiveTabToChat_noActiveTab_isNoOp() throws {
+        let (model, _) = try tempModel()
+        #expect(model.activeTabID == nil)
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
+        model.retargetActiveTabToChat(chatID: chatID)
+        #expect(model.tabs.isEmpty)
+    }
+
+    // MARK: - (c) Draft-state morph (.newChat → .chat(id))
+
+    @Test func draftMorph_askToChat_preservesTab() throws {
+        let (model, _) = try tempModel()
+        model.openTab(.newChat)
+        let askTabID = model.tabs[0].id
+
+        // Simulate the first send: runner creates chat row and retargets.
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "D", count: 22))
+        model.retargetActiveTabToChat(chatID: chatID)
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].id == askTabID)
+        #expect(model.tabs[0].selection == .chat(chatID))
+        // The tab title should update to the chat title (or "Chat" fallback).
+        #expect(model.tabs[0].title == "Chat")
+    }
+
+    @Test func draftMorph_editToChat_preservesTab() throws {
+        let (model, _) = try tempModel()
+        model.openTab(.newChat)
+        let editTabID = model.tabs[0].id
+
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "E", count: 22))
+        model.retargetActiveTabToChat(chatID: chatID)
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].id == editTabID)
+        #expect(model.tabs[0].selection == .chat(chatID))
+    }
+
+    // MARK: - (d) startNewChat retarget-back
+
+    @Test func startNewChat_clearsActiveChatIDAndEvents() {
+        let launcher = makeLauncher()
+        launcher.activeChatID = ChatID(rawValue: "live-chat-id")
+        launcher.events = [.userText("hello"), .assistantText("world")]
+        launcher.isRunning = false
+
+        launcher.startNewChat()
+
+        #expect(launcher.activeChatID == nil)
+        #expect(launcher.events.isEmpty)
+    }
+
+    @Test func startNewChat_retargetBackToDraft_preservesTab() throws {
+        let (model, _) = try tempModel()
+        // Start in .chat(id) state (post-morph).
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "F", count: 22))
+        model.openTab(.chat(chatID))
+        let chatTabID = model.tabs[0].id
+        #expect(model.tabs[0].selection == .chat(chatID))
+
+        // Simulate "New Chat": clear launcher state + retarget back to .newChat.
+        model.retargetTab(id: chatTabID, to: .newChat)
+
+        #expect(model.tabs.count == 1)
+        #expect(model.tabs[0].id == chatTabID)  // same tab UUID
+        #expect(model.tabs[0].selection == .newChat)
+        #expect(model.selection == .newChat)
+    }
+
+    // MARK: - Integration: persisted chat renders through ChatDetailView path
+
+    @Test func persistedChat_hasMessages_readFromStore() throws {
+        let (model, store) = try tempModel()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        _ = try store.appendChatMessages(chatID: chat.id, events: [
+            .userText("hello"), .assistantText("hi there")
+        ])
+        model.reloadChats()
+
+        let messages = model.chatMessages(chatID: chat.id)
+        #expect(messages.count == 2)
+        #expect(messages[0].event == .userText("hello"))
+        #expect(messages[1].event == .assistantText("hi there"))
+
+    }
+
+
+    // MARK: - canSendPredicate (issue #441: mount guard removed)
+
+    /// `canSendPredicate` returns true when the agent is idle and there's draft
+    /// text — regardless of whether the mount is available. The mount guard was
+    /// removed because the agent reads via wikictl (DB-direct), not the mount.
+    @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
+        #expect(ChatDetailView.canSendPredicate(
+            hasMount: true,
+            runState: .idle,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
+    }
+
+    /// `canSendPredicate` returns true even when the mount is NOT available —
+    /// the mount guard was removed (issue #441).
+    @Test func canSendPredicateTrueWithoutMount() {
+        #expect(ChatDetailView.canSendPredicate(
+            hasMount: false,
+            runState: .idle,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == true)
+    }
+
+    /// `canSendPredicate` returns false when generating (can't send mid-response).
+    @Test func canSendPredicateFalseWhileGenerating() {
+        #expect(ChatDetailView.canSendPredicate(
+            hasMount: true,
+            runState: .answering,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
+    }
+
+    /// `canSendPredicate` returns false while a turn is queued for the
+    /// generation gate.
+    @Test func canSendPredicateFalseWhileQueued() {
+        #expect(ChatDetailView.canSendPredicate(
+            hasMount: true,
+            runState: .queued,
+            hasDraftText: true,
+            isChatOperationConfigured: true) == false)
+    }
+
+    /// `canSendPredicate` returns false with no draft text.
+    @Test func canSendPredicateFalseWithNoDraftText() {
+        #expect(ChatDetailView.canSendPredicate(
+            hasMount: true,
+            runState: .idle,
+            hasDraftText: false,
+            isChatOperationConfigured: true) == false)
+    }
+
+}#endif

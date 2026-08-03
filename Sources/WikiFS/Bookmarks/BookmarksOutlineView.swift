@@ -1,0 +1,952 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+import WikiFSCore
+
+// MARK: - SwiftUI bridge
+
+/// SwiftUI wrapper for the bookmarks `NSOutlineView`. Replaces the slow
+/// SwiftUI `List`/`OutlineGroup` which has severe selection-update latency
+/// on macOS (see plans/bookmark-drag-drop-performance.md).
+struct BookmarksOutlineView: NSViewControllerRepresentable {
+    let store: WikiStoreModel
+    /// The live bookmark-node snapshot. Passed explicitly (rather than read
+    /// inside `updateNSViewController`) so that the **parent** view
+    /// (`BookmarksContainerView`) accesses `store.bookmarkNodes` during its
+    /// `body` evaluation — establishing the `@Observable` dependency that
+    /// triggers a re-render when bookmarks change. Without this, mutations from
+    /// the omnibox "+", context menus, etc. update the database but the outline
+    /// never refreshes (no SwiftUI state change to force `updateNSViewController`).
+    let nodes: [BookmarkNode]
+    /// When true, all folders are force-expanded (used during search so hits
+    /// inside collapsed folders are immediately visible).
+    var forceExpandAll: Bool = false
+    let fileProvider: FileProviderFacade
+    // All callbacks are main-actor-isolated: they touch the @MainActor
+    // WikiStoreModel or present UI. @Sendable so they can be captured by the
+    // NSViewControllerRepresentable bridge without losing isolation.
+    var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
+    var onEdit: (@MainActor @Sendable (BookmarkID) -> Void)
+    var onDelete: (@MainActor @Sendable ([BookmarkID]) -> Void)
+    var onAddPage: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onAddSource: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onNewFolder: (@MainActor @Sendable () -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (BookmarkID) -> Void)
+
+    func makeNSViewController(context: Context) -> BookmarksOutlineViewController {
+        let vc = BookmarksOutlineViewController()
+        vc.store = store
+        vc.fileProvider = fileProvider
+        vc.callbacks = .init(
+            onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onGoToOriginal: onGoToOriginal,
+            onEdit: onEdit, onDelete: onDelete,
+            onAddPage: onAddPage, onAddSource: onAddSource,
+            onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
+        )
+        // Don't call reloadData here — loadView hasn't run yet.
+        // Initial data load happens in viewDidLoad.
+        return vc
+    }
+
+    func updateNSViewController(_ vc: BookmarksOutlineViewController, context: Context) {
+        vc.store = store
+        vc.fileProvider = fileProvider
+        vc.callbacks = .init(
+            onOpen: onOpen, onOpenBackground: onOpenBackground,
+            onGoToOriginal: onGoToOriginal,
+            onEdit: onEdit, onDelete: onDelete,
+            onAddPage: onAddPage, onAddSource: onAddSource,
+            onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
+        )
+        let needs = vc.needsReload(nodes: nodes) || vc.forceExpandAll != forceExpandAll
+        vc.forceExpandAll = forceExpandAll
+        DebugLog.tabs("BookmarksOutlineView.updateNSVC: nodes=\(nodes.count) needsReload=\(needs)")
+        if needs {
+            vc.reloadData(from: nodes)
+        }
+    }
+}
+
+// MARK: - Callbacks
+
+struct BookmarksCallbacks {
+    var onOpen: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onOpenBackground: (@MainActor @Sendable ([WikiSelection]) -> Void)
+    var onGoToOriginal: (@MainActor @Sendable (WikiSelection) -> Void)
+    var onEdit: (@MainActor @Sendable (BookmarkID) -> Void)
+    var onDelete: (@MainActor @Sendable ([BookmarkID]) -> Void)
+    var onAddPage: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onAddSource: (@MainActor @Sendable (BookmarkID?) -> Void)
+    var onNewFolder: (@MainActor @Sendable () -> Void)
+    var onNewSubfolder: (@MainActor @Sendable (BookmarkID) -> Void)
+}
+
+/// Carries the right-clicked node + the effective selection (all selected if
+/// the right-click is inside the selection, otherwise just the clicked node)
+/// to the `@objc` menu handlers. Mirrors `PagesMenuPayload`.
+private struct BookmarksMenuPayload {
+    let clicked: BookmarkNode
+    let effectiveNodes: [BookmarkNode]
+}
+
+/// Payload for "Open With" app items on a bookmark row. Carries the chosen app
+/// URL (or `nil` for "Other…") and the bookmark node. A class so it round-trips
+/// through `NSMenuItem.representedObject`.
+final class OpenWithBookmarkRef {
+    let appURL: URL?
+    let node: BookmarkNode
+    init(appURL: URL?, node: BookmarkNode) {
+        self.appURL = appURL
+        self.node = node
+    }
+}
+
+// MARK: - View controller
+
+final class BookmarksOutlineViewController: NSViewController {
+    var scrollView: NSScrollView!
+    var outlineView: NSOutlineView!
+    var store: WikiStoreModel?
+    var fileProvider: FileProviderFacade?
+    var callbacks: BookmarksCallbacks?
+
+    /// Snapshot for change detection — covers all fields that affect rendering
+    /// (id, parentID, position, kind, label, targetID), so renames, reorders,
+    /// and reparents all trigger a reload.
+    private var lastNodeCount = -1
+    private var lastNodeSignature = ""
+
+    /// Cached parent→children map (key `nil` = root). Rebuilt once per reload
+    /// so data-source callbacks are O(1) lookups instead of O(n) filters.
+    private var childrenMap: [BookmarkID?: [BookmarkNode]] = [:]
+
+    /// Tracks whether the initial expand-all has run. After that, reloads
+    /// preserve the user's expand/collapse choices instead of force-expanding.
+    private var hasPerformedInitialLoad = false
+
+    /// When true, all folders are force-expanded on reload (search mode).
+    var forceExpandAll = false
+
+    override func loadView() {
+        scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.drawsBackground = false
+
+        outlineView = BookmarksNSOutlineView()
+        outlineView.dataSource = self
+        outlineView.delegate = self
+        // Required for the outline view to act as a drop target at all — without
+        // this, validateDrop/acceptDrop are never called and no highlight shows.
+        // The private bookmark-node-id type powers intra-tree reorder (a node id);
+        // `.url` lets a `wiki://` link dragged out of a page/source body land
+        // here (issue #169); the sidebar-item type lets the omnibox icon (and
+        // sidebar rows via SwiftUI .draggable) drop a page/source/chat here to
+        // create a bookmark. The bookmark-node-id type is a private UTType (not
+        // `.string`) so WKWebView doesn't intercept bookmark drags (issue #385).
+        let sidebarItemType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+        let bookmarkNodeType = NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+        outlineView.registerForDraggedTypes([bookmarkNodeType, .init("public.url"), sidebarItemType])
+        // NSTableView/NSOutlineView is its own NSDraggingSource; there is no
+        // delegate callback for this — the mask is configured imperatively.
+        // Without it, the default local-drag mask is a multi-bit value that
+        // never satisfies validateDrop's `.move` check below.
+        outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
+        outlineView.headerView = nil
+        outlineView.floatsGroupRows = false
+        outlineView.indentationPerLevel = 14
+        outlineView.rowHeight = 24
+        outlineView.doubleAction = #selector(onDoubleClick)
+        outlineView.target = self
+        outlineView.allowsEmptySelection = true
+        outlineView.allowsMultipleSelection = true
+        outlineView.backgroundColor = .clear
+
+        let column = NSTableColumn(identifier: .init("bookmark"))
+        outlineView.addTableColumn(column)
+        outlineView.outlineTableColumn = column
+
+        scrollView.documentView = outlineView
+        scrollView.contentView.automaticallyAdjustsContentInsets = false
+        view = scrollView
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // Initial data load — outlineView is now available.
+        reloadData()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: - Data reload
+
+    func needsReload(nodes: [BookmarkNode]) -> Bool {
+        guard nodes.count == lastNodeCount else { return true }
+        return nodeSignature(nodes) != lastNodeSignature
+    }
+
+    func reloadData(from nodes: [BookmarkNode]? = nil) {
+        let nodes = nodes ?? (store?.bookmarkNodes ?? [])
+        lastNodeCount = nodes.count
+        lastNodeSignature = nodeSignature(nodes)
+
+        // Rebuild the parent→children map once (M2: avoids O(n) filter per row).
+        childrenMap.removeAll(keepingCapacity: true)
+        for node in nodes {
+            childrenMap[node.parentID, default: []].append(node)
+        }
+        // Sort each group by position.
+        for key in childrenMap.keys {
+            childrenMap[key]?.sort { $0.position < $1.position }
+        }
+
+        if !hasPerformedInitialLoad {
+            // First load: expand all folders so the tree is fully visible.
+            outlineView.reloadData()
+            for node in nodes where node.kind == .folder {
+                outlineView.expandItem(node)
+            }
+            hasPerformedInitialLoad = true
+        } else if forceExpandAll {
+            // Search mode: force-expand all folders so hits inside collapsed
+            // folders are immediately visible.
+            outlineView.reloadData()
+            for node in nodes where node.kind == .folder {
+                outlineView.expandItem(node)
+            }
+        } else {
+            // Subsequent reloads: snapshot expanded state, reload, restore.
+            let expandedIDs = Set(
+                nodes.filter { outlineView.isItemExpanded($0) }.map(\.id)
+            )
+            outlineView.reloadData()
+            for node in nodes where node.kind == .folder && expandedIDs.contains(node.id) {
+                outlineView.expandItem(node)
+            }
+        }
+    }
+
+    /// Compact per-node signature covering all rendering-relevant fields.
+    private func nodeSignature(_ nodes: [BookmarkNode]) -> String {
+        nodes.map { "\($0.id)|\($0.parentID?.rawValue ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetRawValue ?? "")" }
+            .joined(separator: "\n")
+    }
+
+    // MARK: - Helpers
+
+    private func children(of parentID: BookmarkID?) -> [BookmarkNode] {
+        childrenMap[parentID] ?? []
+    }
+
+    private func title(for node: BookmarkNode) -> String {
+        guard let store else { return node.label ?? "(missing)" }
+        switch node.content {
+        case .folder(let label): return label
+        case .page(let id): return store.summaries.first { $0.id == id }?.title ?? "(missing)"
+        case .source(let id): return store.sources.first { $0.id == id }?.effectiveName ?? "(missing)"
+        case .chat(let id): return store.chats.first { $0.id == id }?.title ?? "(missing)"
+        }
+    }
+
+    private func iconName(for node: BookmarkNode) -> String {
+        switch node.content {
+        case .folder: return "folder"
+        case .page(let id):
+            let isStale = store?.summaries.first { $0.id == id } == nil
+            return isStale ? "exclamationmark.triangle" : ResourceKind.page.systemImageName
+        case .source(let id):
+            let isStale = store?.sources.first { $0.id == id } == nil
+            return isStale ? "exclamationmark.triangle" : ResourceKind.source.systemImageName
+        case .chat(let id):
+            let isStale = store?.chats.first { $0.id == id } == nil
+            return isStale ? "exclamationmark.triangle" : ResourceKind.chat.systemImageName
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc private func onDoubleClick() {
+        guard let item = outlineView.item(atRow: outlineView.clickedRow) as? BookmarkNode else { return }
+        if item.kind == .folder {
+            if outlineView.isItemExpanded(item) {
+                outlineView.collapseItem(item)
+            } else {
+                outlineView.expandItem(item)
+            }
+            return
+        }
+        if let selection = revealSelection(for: item) {
+            callbacks?.onOpen([selection])
+        }
+    }
+}
+
+// MARK: - Data source
+
+extension BookmarksOutlineViewController: NSOutlineViewDataSource {
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        if item == nil {
+            return children(of: nil).count
+        }
+        guard let node = item as? BookmarkNode else { return 0 }
+        return children(of: node.id).count
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        let parentID = (item as? BookmarkNode)?.id
+        return children(of: parentID)[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        guard let node = item as? BookmarkNode else { return false }
+        // All folders are expandable — even empty ones (matching the tree
+        // builder's `children: []` contract for empty folders).
+        return node.kind == .folder
+    }
+
+    // Drag and drop.
+    // The writer carries TWO representations so one drag can serve two drop
+    // targets: the private `com.selfdrivingwiki.bookmark-node-id` type powers
+    // intra-tree reorder, and the resolved-target payload list lets the row be
+    // dropped onto the welcome screen to open whatever the bookmark points at
+    // (issue #133). A folder's payload list is every page/source reachable
+    // underneath it, so dropping a folder opens its full contents as tabs
+    // (issue #150).
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard let node = item as? BookmarkNode else { return nil }
+        let payloads: [SidebarDragPayload]
+        switch node.content {
+        case .folder:
+            payloads = leafPayloads(under: node.id)
+        case .page(let id):
+            payloads = [SidebarDragPayload(kind: .page, id: id.rawValue)]
+        case .source(let id):
+            payloads = [SidebarDragPayload(kind: .source, id: id.rawValue)]
+        case .chat(let id):
+            payloads = [SidebarDragPayload(kind: .chat, id: id.rawValue)]
+        }
+        DebugLog.tabs("[drag] bookmark pasteboardWriterForItem node=\(node.id) kind=\(node.kind) payloadCount=\(payloads.count)")
+        return SidebarDragPasteboardItem(payloads: payloads, bookmarkNodeID: node.id.rawValue)
+    }
+
+    /// Recursively collects the resolved page/source/chat target for every leaf
+    /// reachable under `folderID`, walking into nested subfolders too.
+    private func leafPayloads(under folderID: BookmarkID) -> [SidebarDragPayload] {
+        children(of: folderID).flatMap { child -> [SidebarDragPayload] in
+            switch child.content {
+            case .folder: return leafPayloads(under: child.id)
+            case .page(let id): return [SidebarDragPayload(kind: .page, id: id.rawValue)]
+            case .source(let id): return [SidebarDragPayload(kind: .source, id: id.rawValue)]
+            case .chat(let id): return [SidebarDragPayload(kind: .chat, id: id.rawValue)]
+            }
+        }
+    }
+
+    /// Maps a leaf `BookmarkNodeKind` to its `SidebarDragPayload.Kind`; `nil`
+    /// for `.folder` (folders have no target of their own to drag).
+    private func dragKind(for kind: BookmarkNodeKind) -> SidebarDragPayload.Kind? {
+        switch kind {
+        case .pageRef: return .page
+        case .sourceRef: return .source
+        case .chatRef: return .chat
+        case .folder: return nil
+        }
+    }
+
+    // MARK: - Wiki-link drop (issue #169)
+
+    /// Read the first `wiki://…` href from a drag pasteboard. WebKit's default
+    /// link drag may offer the href under `.url`, `.string`, or both, so check
+    /// each. Returns nil for an intra-tree bookmark reorder (which now uses a
+    /// private `com.selfdrivingwiki.bookmark-node-id` type, not `.string`).
+    private static func firstWikiLinkURL(from pb: NSPasteboard) -> URL? {
+        let schemePrefix = "\(WikiLinkMarkdown.scheme)://"
+        for type in [NSPasteboard.PasteboardType("public.url"), NSPasteboard.PasteboardType.string] {
+            guard let raw = pb.string(forType: type),
+                  raw.hasPrefix(schemePrefix),
+                  let url = URL(string: raw) else { continue }
+            return url
+        }
+        return nil
+    }
+
+    /// Read the first `SidebarDragPayloadList` from a drag pasteboard. The
+    /// omnibox icon (and sidebar rows via SwiftUI `.draggable`) write payload
+    /// JSON under the `wikiSidebarItem` UTType. Returns nil for non-sidebar
+    /// drags (wiki-link drops, intra-tree reorders).
+    private static func firstSidebarPayload(from pb: NSPasteboard) -> SidebarDragPayloadList? {
+        let sidebarType = NSPasteboard.PasteboardType(UTType.wikiSidebarItem.identifier)
+        guard let data = pb.data(forType: sidebarType),
+              let list = DebugLog.trying("decode bookmark drag payload", operation: { try JSONDecoder().decode(SidebarDragPayloadList.self, from: data) }) else {
+            return nil
+        }
+        return list
+    }
+
+    /// The private `com.selfdrivingwiki.bookmark-node-id` pasteboard type that
+    /// identifies a drag as originating from THIS bookmarks outline (intra-tree
+    /// reorder / move). Only `SidebarDragPasteboardItem` for a bookmark row
+    /// carries it; external sidebar drags (omnibox icon, SwiftUI `.draggable`
+    /// rows) and wiki-link drags do not.
+    private static let bookmarkNodeType =
+        NSPasteboard.PasteboardType("com.selfdrivingwiki.bookmark-node-id")
+
+    /// True when the drag originated from this outline — i.e. the pasteboard
+    /// carries the private `bookmark-node-id` type. This is the signal that
+    /// distinguishes an intra-outline folder move (issue #743) from an external
+    /// `SidebarDragPayloadList` drop that should create bookmarks (the #150
+    /// welcome-screen feature). A folder's pasteboard writer always carries
+    /// BOTH representations, so we must check this BEFORE
+    /// `firstSidebarPayload` — otherwise a folder dragged within the outline
+    /// is misread as a sidebar-payload drop and copy-by-contents the leaves.
+    private static func isOutlineInternalDrag(_ pb: NSPasteboard) -> Bool {
+        (pb.pasteboardItems ?? []).contains { $0.string(forType: bookmarkNodeType) != nil }
+    }
+
+    /// Reads the bookmark node ids off an intra-outline drag's pasteboard
+    /// (one per dragged row — multi-selection is allowed). Empty for external
+    /// / wiki-link drags.
+    private static func draggedBookmarkNodeIDs(from pb: NSPasteboard) -> [String] {
+        (pb.pasteboardItems ?? [])
+            .compactMap { $0.string(forType: bookmarkNodeType) }
+    }
+
+    /// True when `ancestorID` is `id` or lies anywhere on `id`'s descendant
+    /// chain — used to refuse moving a folder into itself or one of its own
+    /// descendants (would create a cycle). Walks the in-memory children map
+    /// (already built for the outline), so it reflects the visible tree.
+    private func isDescendant(_ ancestorID: BookmarkID, of id: BookmarkID) -> Bool {
+        if ancestorID == id { return true }
+        return children(of: id).contains { isDescendant(ancestorID, of: $0.id) }
+    }
+
+    /// Resolve a dropped sidebar-item payload and insert a bookmark node for
+    /// each target (page/source/chat) at the drop position. Mirrors the
+    /// wiki-link drop's parent/position resolution.
+    @discardableResult
+    private func acceptSidebarPayloadDrop(_ list: SidebarDragPayloadList,
+                                          onto item: Any?, atIndex index: Int,
+                                          store: WikiStoreModel) -> Bool {
+        let parentID: BookmarkID?
+        let basePosition: Int
+        if let folder = item as? BookmarkNode, folder.kind == .folder {
+            parentID = folder.id
+            basePosition = index >= 0 ? index : children(of: folder.id).count
+        } else if let leaf = item as? BookmarkNode {
+            parentID = leaf.parentID
+            basePosition = index >= 0 ? index : leaf.position
+        } else {
+            parentID = nil
+            basePosition = index >= 0 ? index : children(of: nil).count
+        }
+        var position = basePosition
+        for payload in list.items {
+            switch payload.kind {
+            case .page:
+                store.addPageRef(parentID: parentID, pageID: PageID(rawValue: payload.id), position: position)
+            case .source:
+                store.addSourceRef(parentID: parentID, sourceID: SourceID(rawValue: payload.id), position: position)
+            case .chat:
+                store.addChatRef(parentID: parentID, chatID: ChatID(rawValue: payload.id), position: position)
+            }
+            DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID?.rawValue ?? "root") position=\(position)")
+            position += 1
+        }
+        return true
+    }
+
+    /// Resolve a dropped `wiki://` link to a page/source and insert a bookmark
+    /// node for it at the drop position. Mirrors `WikiReaderView.linkRoute(for:)`'s
+    /// resolution: title from `WikiLinkMarkdown.target`, kind from `resolvedKind`,
+    /// then the same `pageID(forTitle:)` / `sourceID(forDisplayName:)` lookups the
+    /// click handler uses. The insertion position follows the same rules as the
+    /// intra-tree reorder: a precise `index >= 0` lands between siblings (the
+    /// store shifts later siblings down); `-1` (drop *on* an item) appends.
+    @discardableResult
+    private func acceptWikiLinkDrop(url: URL, onto item: Any?, atIndex index: Int,
+                                    store: WikiStoreModel) -> Bool {
+        guard let title = WikiLinkMarkdown.target(from: url),
+              let kind = WikiLinkMarkdown.resolvedKind(from: url) else {
+            DebugLog.tabs("[drop] wiki-link bookmark drop: not a resolvable wiki URL \(url.absoluteString)")
+            return false
+        }
+        // Chat links are not bookmarkable yet — reject the drop.
+        guard kind != .chat else { return false }
+        // Phase 5: prefer the canonical `?id=<ULID>` when present (a direct id —
+        // no name resolution, stable across renames); validate it names a real
+        // row so a bookmark to a since-deleted target falls back to title-based
+        // resolution instead of storing a dead id. Legacy `?title=`-only URLs
+        // resolve by name as before.
+        let pageID: PageID?
+        let sourceID: SourceID?
+        if let id = WikiLinkMarkdown.id(from: url) {
+            pageID = kind == .page && store.summaries.contains { $0.id == id } ? id : nil
+            sourceID = kind == .source && store.sources.contains { $0.id == SourceID(rawValue: id.rawValue) }
+                ? SourceID(rawValue: id.rawValue) : nil
+        } else {
+            pageID = kind == .page ? store.pageID(forTitle: title) : nil
+            sourceID = kind == .source ? store.sourceID(forDisplayName: title) : nil
+        }
+        guard pageID != nil || sourceID != nil else {
+            DebugLog.tabs("[drop] wiki-link bookmark drop: title \"\(title)\" did not resolve to a \(kind) id")
+            return false
+        }
+        // Resolve parent + insertion index. `index == -1` (NSOutlineViewDropOnItemIndex)
+        // means "drop on the item", so append inside it (or, for a leaf, at the
+        // leaf's own slot); `index >= 0` means "insert between siblings".
+        let parentID: BookmarkID?
+        let position: Int
+        if let folder = item as? BookmarkNode, folder.kind == .folder {
+            parentID = folder.id
+            position = index >= 0 ? index : children(of: folder.id).count
+        } else if let leaf = item as? BookmarkNode {
+            parentID = leaf.parentID
+            position = index >= 0 ? index : leaf.position
+        } else {
+            // Root.
+            parentID = nil
+            position = index >= 0 ? index : children(of: nil).count
+        }
+        switch kind {
+        case .page:
+            guard let pageID else { return false }
+            store.addPageRef(parentID: parentID, pageID: pageID, position: position)
+        case .source:
+            guard let sourceID else { return false }
+            store.addSourceRef(parentID: parentID, sourceID: sourceID, position: position)
+        case .chat:
+            // Chat refs aren't a bookmark target yet (no `addChatRef`); reject
+            // the drop so a chat wiki-link drag is a no-op rather than a crash.
+            return false
+        }
+        DebugLog.tabs("[drop] wiki-link bookmark created: kind=\(kind) title=\"\(title)\" parentID=\(parentID?.rawValue ?? "root") position=\(position)")
+        return true
+    }
+
+    func outlineView(_ outlineView: NSOutlineView,
+                     validateDrop info: NSDraggingInfo,
+                     proposedItem item: Any?,
+                     proposedChildIndex index: Int) -> NSDragOperation {
+        DebugLog.tabs("BookmarksOutlineView.validateDrop: mask=\(info.draggingSourceOperationMask.rawValue) item=\((item as? BookmarkNode)?.id.rawValue ?? "root") index=\(index)")
+        // Wiki-link drop: a `wiki://page?title=…` / `wiki://source?title=…`
+        // anchor dragged out of rendered page/source content (issue #169). The
+        // default WKWebView link drag vends the href as `.url`/`.string`; accept
+        // it as `.copy` so `acceptDrop` creates a bookmark at the target.
+        if Self.firstWikiLinkURL(from: info.draggingPasteboard) != nil {
+            if item == nil { return .copy }                       // root
+            if (item as? BookmarkNode)?.kind == .folder { return .copy }
+            if item is BookmarkNode { return .copy }              // leaf → sibling
+            return []
+        }
+        // Intra-outline move/reorder: the drag originated from THIS outline
+        // (pasteboard carries the private `bookmark-node-id` type). This MUST
+        // be checked BEFORE the sidebar-payload branch: a folder's writer
+        // carries BOTH the node id and a `SidebarDragPayloadList` (the latter
+        // for the #150 welcome-screen drop), so checking the payload first
+        // misreads an intra-outline folder drag as a "create bookmarks for the
+        // leaves" copy — issue #743. Only external sidebar drags (omnibox
+        // icon, SwiftUI `.draggable` rows, which have no bookmark-node-id type)
+        // fall through to the sidebar-payload branch.
+        if Self.isOutlineInternalDrag(info.draggingPasteboard) {
+            guard info.draggingSourceOperationMask.contains(.move) else { return [] }
+            // Refuse to move a folder into itself or one of its own
+            // descendants (cycle). The store guards this too, but advertising
+            // [] here gives the right no-drop cursor affordance.
+            if let folder = item as? BookmarkNode, folder.kind == .folder {
+                for id in Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard) {
+                    if isDescendant(folder.id, of: BookmarkID(rawValue: id)) { return [] }
+                }
+                return .move
+            }
+            if item == nil {
+                return .move
+            }
+            // Allow reorder between siblings.
+            if item is BookmarkNode {
+                return .move
+            }
+            return []
+        }
+        // Sidebar-item drop: a page/source/chat dragged from the omnibox icon
+        // or a sidebar row via SwiftUI .draggable. Accept as `.copy` so
+        // `acceptDrop` creates a bookmark node for the payload's target.
+        if Self.firstSidebarPayload(from: info.draggingPasteboard) != nil {
+            if item == nil { return .copy }                       // root
+            if (item as? BookmarkNode)?.kind == .folder { return .copy }
+            if item is BookmarkNode { return .copy }              // leaf → sibling
+            return []
+        }
+        return []
+    }
+
+    func outlineView(_ outlineView: NSOutlineView,
+                     acceptDrop info: NSDraggingInfo,
+                     item: Any?,
+                     childIndex index: Int) -> Bool {
+        DebugLog.tabs("BookmarksOutlineView.acceptDrop: item=\((item as? BookmarkNode)?.id.rawValue ?? "root") index=\(index)")
+        guard let store else { return false }
+
+        // Wiki-link drop → create a bookmark pointing at the link's target
+        // (issue #169). Resolved before the intra-tree reorder path, which reads
+        // the private bookmark-node-id type (not `.string`).
+        if let url = Self.firstWikiLinkURL(from: info.draggingPasteboard) {
+            return acceptWikiLinkDrop(url: url, onto: item, atIndex: index, store: store)
+        }
+
+        // Intra-outline move/reorder (issue #743): when the drag originated
+        // from THIS outline — pasteboard carries the private `bookmark-node-id`
+        // type — take the move path BEFORE the sidebar-payload branch. A
+        // folder's writer carries BOTH the node id and a
+        // `SidebarDragPayloadList` (the latter for the #150 welcome-screen
+        // drop); checking the payload first would misread an intra-outline
+        // folder drag as a "create bookmarks for every leaf" copy. Only
+        // external sidebar drags (no bookmark-node-id type) fall through to
+        // the sidebar-payload branch below.
+        if Self.isOutlineInternalDrag(info.draggingPasteboard) {
+            let draggedIDs = Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard).map { BookmarkID(rawValue: $0) }
+            guard !draggedIDs.isEmpty else { return false }
+
+            func moveAll(toParentID parentID: BookmarkID?, startingAt position: Int) -> Bool {
+                var position = position
+                var succeeded = true
+                for id in draggedIDs {
+                    succeeded = store.moveBookmarkNode(id: id, toParentID: parentID, position: position) && succeeded
+                    position += 1
+                }
+                return succeeded
+            }
+
+            if let folder = item as? BookmarkNode, folder.kind == .folder {
+                // Refuse moving a folder into itself or one of its own
+                // descendants (cycle). validateDrop advertises [] for this,
+                // but guard here too in case acceptDrop is reached anyway.
+                for id in draggedIDs where isDescendant(folder.id, of: id) {
+                    DebugLog.tabs("[drop] bookmark move refused: \(id) → \(folder.id) (descendant)")
+                    return false
+                }
+                return moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count)
+            }
+
+            if let leaf = item as? BookmarkNode {
+                // Reorder within the same parent.
+                return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
+            }
+
+            // Root append
+            return moveAll(toParentID: nil, startingAt: children(of: nil).count)
+        }
+
+        // Sidebar-item drop → create a bookmark for each page/source/chat in
+        // the payload (omnibox icon drag, or a SwiftUI .draggable sidebar row,
+        // or a bookmark folder dragged onto the welcome screen — #150).
+        if let payloadList = Self.firstSidebarPayload(from: info.draggingPasteboard) {
+            return acceptSidebarPayloadDrop(payloadList, onto: item, atIndex: index, store: store)
+        }
+
+        return false
+    }
+}
+
+// MARK: - Delegate
+
+extension BookmarksOutlineViewController: NSOutlineViewDelegate {
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        guard let node = item as? BookmarkNode else { return nil }
+        let cellID = NSUserInterfaceItemIdentifier("bookmark-cell")
+
+        let cell: NSTableCellView
+        if let reused = outlineView.makeView(withIdentifier: cellID, owner: nil) as? NSTableCellView {
+            cell = reused
+        } else {
+            cell = NSTableCellView()
+            cell.identifier = cellID
+
+            let imageView = NSImageView()
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.contentTintColor = .controlAccentColor
+            cell.addSubview(imageView)
+            cell.imageView = imageView
+
+            let textField = NSTextField(labelWithString: "")
+            textField.translatesAutoresizingMaskIntoConstraints = false
+            textField.font = .systemFont(ofSize: 13)
+            textField.lineBreakMode = .byTruncatingTail
+            cell.addSubview(textField)
+            cell.textField = textField
+
+            NSLayoutConstraint.activate([
+                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
+                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.widthAnchor.constraint(equalToConstant: 16),
+                imageView.heightAnchor.constraint(equalToConstant: 16),
+
+                textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 6),
+                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
+                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+        }
+
+        cell.imageView?.image = NSImage(systemSymbolName: iconName(for: node), accessibilityDescription: nil)
+        cell.textField?.stringValue = title(for: node)
+
+        return cell
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
+
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { true }
+
+    // Context menu via right-click
+    func outlineView(_ outlineView: NSOutlineView, menuFor item: Any) -> NSMenu? {
+        guard let clicked = item as? BookmarkNode else { return nil }
+
+        // Standard macOS semantics: right-click inside the selection acts on
+        // the whole selection; right-click outside it acts on the clicked row only.
+        let clickedRow = outlineView.row(forItem: clicked)
+        let selectedRows = outlineView.selectedRowIndexes
+        let inSelection = selectedRows.contains(clickedRow)
+        let effectiveNodes: [BookmarkNode] = inSelection
+            ? selectedRows.compactMap { outlineView.item(atRow: $0) as? BookmarkNode }
+            : [clicked]
+        let payload = BookmarksMenuPayload(clicked: clicked, effectiveNodes: effectiveNodes)
+
+        let isBatch = effectiveNodes.count > 1
+        let count = effectiveNodes.count
+
+        // Leaf nodes (pageRef / sourceRef / chatRef) that can be opened as tabs.
+        let openableNodes = effectiveNodes.filter {
+            $0.kind == .pageRef || $0.kind == .sourceRef || $0.kind == .chatRef
+        }
+        let openCount = openableNodes.count
+
+        let menu = NSMenu()
+
+        // "Go to Original" — reveal the bookmark's target in its sidebar
+        // section (Pages/Sources/Chats) without opening a reader tab. Uses the
+        // same "Show in List" mechanism (requestSidebarReveal) as the
+        // detail-view buttons. Single selection only, openable leaves only
+        // (pageRef / sourceRef / chatRef) — folders have no target, and batches
+        // are ambiguous about which item to reveal.
+        if !isBatch, !openableNodes.isEmpty {
+            menu.addItem(menuItem("Go to Original",
+                                  systemImage: "arrow.turn.up.right",
+                                  action: #selector(goToOriginalAction(_:)),
+                                  payload: payload))
+            menu.addItem(.separator())
+        }
+
+        // Open / Open in Background — only when there are openable leaves.
+        if !openableNodes.isEmpty {
+            menu.addItem(menuItem(
+                isBatch ? "Open \(openCount)" : "Open",
+                systemImage: "arrow.up.forward.app",
+                action: #selector(openAction(_:)), payload: payload))
+            menu.addItem(menuItem(
+                isBatch ? "Open \(openCount) in Background" : "Open in Background",
+                systemImage: "dock.arrow.down.rectangle",
+                action: #selector(openBackgroundAction(_:)), payload: payload))
+
+            // Open With — single item only (batch open-with is ambiguous).
+            if !isBatch, fileProvider?.path != nil {
+                let type: UTType
+                switch clicked.content {
+                case .page:
+                    type = OpenWithMenu.pageContentType
+                case .source(let sourceID):
+                    let src = store?.sources.first { $0.id == sourceID }
+                    type = OpenWithMenu.contentType(mimeType: src?.mimeType, filename: src?.filename)
+                case .chat:
+                    type = OpenWithMenu.pageContentType
+                case .folder:
+                    type = .data
+                }
+                let submenu = OpenWithMenu.build(
+                    contentType: type,
+                    target: self,
+                    action: #selector(openWithAppAction(_:)),
+                    payload: { appURL in
+                        OpenWithBookmarkRef(appURL: appURL, node: clicked)
+                    })
+                let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+                parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
+                                       accessibilityDescription: nil)
+                parent.submenu = submenu
+                menu.addItem(parent)
+            }
+            menu.addItem(.separator())
+        }
+
+        // Edit — single item only. Folders rename in place; leaf references
+        // retarget to a different page/source/chat from the same entry point.
+        if !isBatch {
+            menu.addItem(menuItem("Edit…", systemImage: "pencil",
+                                  action: #selector(editAction(_:)), payload: payload))
+        }
+
+        // Add Page / Add Source — folder, single item only.
+        if !isBatch && clicked.kind == .folder {
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Add Page…", systemImage: ResourceKind.page.systemImageName,
+                                  action: #selector(addPageAction(_:)), payload: payload))
+            menu.addItem(menuItem("Add Source…", systemImage: ResourceKind.source.systemImageName,
+                                  action: #selector(addSourceAction(_:)), payload: payload))
+        }
+
+        // Delete — always available, operates on all effective nodes.
+        menu.addItem(.separator())
+        menu.addItem(menuItem(
+            isBatch ? "Delete \(count)" : "Delete",
+            systemImage: "trash",
+            action: #selector(deleteAction(_:)), payload: payload))
+
+        return menu
+    }
+
+    private func menuItem(_ title: String, systemImage: String,
+                          action: Selector, payload: BookmarksMenuPayload) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        item.target = self
+        item.representedObject = payload
+        return item
+    }
+
+    // MARK: - Menu actions
+
+    @objc private func openAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        let selections = openableSelections(from: payload.effectiveNodes)
+        if !selections.isEmpty { callbacks?.onOpen(selections) }
+    }
+
+    @objc private func openBackgroundAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        let selections = openableSelections(from: payload.effectiveNodes)
+        if !selections.isEmpty { callbacks?.onOpenBackground(selections) }
+    }
+
+    /// Filters effective nodes to openable leaves and maps them to `WikiSelection`.
+    private func openableSelections(from nodes: [BookmarkNode]) -> [WikiSelection] {
+        nodes.compactMap { revealSelection(for: $0) }
+    }
+
+    /// Maps a single bookmark node to the `WikiSelection` its target represents.
+    /// Returns `nil` for folders. Shared by "Open" and "Go to Original" so
+    /// the typed target→selection mapping lives in one place.
+    private func revealSelection(for node: BookmarkNode) -> WikiSelection? {
+        switch node.content {
+        case .folder: return nil
+        case .page(let id): return .page(id)
+        case .source(let id): return .source(id)
+        case .chat(let id): return .chat(id)
+        }
+    }
+
+    @objc private func goToOriginalAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload,
+              let sel = revealSelection(for: payload.clicked) else { return }
+        DebugLog.tabs("Bookmarks goToOriginal: kind=\(payload.clicked.kind) targetID=\(payload.clicked.targetRawValue ?? "nil")")
+        callbacks?.onGoToOriginal(sel)
+    }
+
+    @objc private func openWithAppAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? OpenWithBookmarkRef,
+              let fileProvider else { return }
+        Task {
+            let picked: URL?
+            if let appURL = ref.appURL {
+                picked = appURL
+            } else {
+                picked = await AppPicker.pick()
+            }
+            guard let appURL = picked else { return }
+            switch ref.node.content {
+            case .page(let id): await fileProvider.openPage(id: id, with: appURL)
+            case .source(let id): await fileProvider.openSource(id: id, with: appURL)
+            case .chat(let id): await fileProvider.openChat(id: id, with: appURL)
+            case .folder: break
+            }
+        }
+    }
+
+    @objc private func editAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onEdit(payload.clicked.id)
+    }
+
+    @objc private func addPageAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onAddPage(payload.clicked.id)
+    }
+
+    @objc private func addSourceAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        callbacks?.onAddSource(payload.clicked.id)
+    }
+
+    @objc private func deleteAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BookmarksMenuPayload else { return }
+        deleteNodes(payload.effectiveNodes.map(\.id))
+    }
+
+    /// Keyboard-delete entry point (Backspace / forward-Delete on selected
+    /// rows). Builds the effective node list from the outline's current
+    /// selection and routes through the same `onDelete` callback the
+    /// context-menu "Delete" item uses — no separate deletion path (#744).
+    @objc func deleteSelection() {
+        let nodes = outlineView.selectedRowIndexes.compactMap {
+            outlineView.item(atRow: $0) as? BookmarkNode
+        }
+        guard !nodes.isEmpty else { return }
+        deleteNodes(nodes.map(\.id))
+    }
+
+    /// Shared deletion seam for both the context-menu "Delete" action and the
+    /// keyboard Delete/Backspace path (`deleteSelection`).
+    private func deleteNodes(_ ids: [BookmarkID]) {
+        guard !ids.isEmpty else { return }
+        callbacks?.onDelete(ids)
+    }
+}
+
+// MARK: - NSOutlineView subclass for context menu support
+
+final class BookmarksNSOutlineView: NSOutlineView {
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else { return nil }
+        let item = self.item(atRow: row)
+        return (self.delegate as? BookmarksOutlineViewController)?.outlineView(self, menuFor: item ?? "")
+    }
+
+    // Keyboard-delete (#744): when the outline view is first responder (no
+    // text field editing) and at least one row is selected, forward Delete /
+    // Backspace to the controller's deletion seam — the same `onDelete`
+    // callback the context-menu "Delete" item uses. A text field that is
+    // editing is the first responder and consumes `deleteBackward` /
+    // `deleteForward` itself, so this override only fires when no editor is
+    // active — renames/edit fields keep Backspace for text editing.
+    override func deleteBackward(_ sender: Any?) {
+        guard selectedRow != -1 else {
+            super.deleteBackward(sender)
+            return
+        }
+        (delegate as? BookmarksOutlineViewController)?.deleteSelection()
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        guard selectedRow != -1 else {
+            super.deleteForward(sender)
+            return
+        }
+        (delegate as? BookmarksOutlineViewController)?.deleteSelection()
+    }
+}

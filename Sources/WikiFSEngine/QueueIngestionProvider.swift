@@ -1,0 +1,335 @@
+import Foundation
+import WikiFSCore
+
+// MARK: - QueueIngestionProvider
+
+/// Bridges the `@MainActor` agent-launcher + store model into the headless
+/// queue engine for ingestion. The app provides a concrete implementation
+/// that hops to the main actor internally; the engine sees only this
+/// `Sendable` protocol.
+///
+/// The ingestion worker calls `runIngestion(...)` which does the full
+/// pipeline previously in `AgentOperationRunner.runMultiIngest`:
+/// 1. `beginIngest` signaling (issue #235)
+/// 2. Source reading + staging (reusing any already-extracted markdown)
+/// 3. Workspace create (if `workspacesEnabled`)
+/// 4. Agent spawn via `launcher.run(...)`
+/// 5. Workspace auto-merge on completion
+/// 6. `endIngest` signaling
+///
+/// Extraction for PDFs is handled separately: the call site enqueues an
+/// extraction item (Phase 4), waits for it, then enqueues the ingestion
+/// item. Or, for the chained path, extraction completion enqueues the
+/// linked ingestion item.
+public protocol QueueIngestionProvider: Sendable {
+    /// Run the full ingestion pipeline for the given sources. Returns when
+    /// the agent finishes (success or failure).
+    ///
+    /// - Parameters:
+    ///   - wikiID: The wiki to ingest into.
+    ///   - sourceIDs: The source IDs to ingest.
+    ///   - queueItemID: The queue item's stable ULID — used as the parent
+    ///     folder name for the run's scratch dir so retries of the same item
+    ///     share a namespace on disk
+    ///     (`<Caches>/Self Driving Wiki-agent/<id>/runs/<RFC3339>/`).
+    ///     Lets the Activity window's "Reveal Debug Folder" resolve by item
+    ///     ID even after an app restart (the latest run under `<id>/runs/`).
+    ///   - onProgress: Called with progress lines (agent stdout/stderr) to
+    ///     emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item,
+    ///     so the tracker can build a per-item transcript for the Activity
+    ///     window. `nil` for callers that don't need transcript forwarding.
+    ///   - onUsage: Called once after the run finishes with the cumulative
+    ///     token/cost usage (`SessionUsage`), if captured. `nil` when the
+    ///     backend did not report usage data. #528 spike.
+    ///   - onLiveUsage: Called on each `usage_update` notification during the
+    ///     run with the in-progress token/cost snapshot. `nil` for callers
+    ///     that don't need live progress (#544). May never fire if the backend
+    ///     doesn't stream usage updates.
+    ///   - onLogPaths: Called after the run with the run's `run.jsonl` log URL
+    ///     and `debug/` folder URL (either may be nil if the run didn't
+    ///     create them). `nil` for callers that don't need log-reveal UI.
+    ///   - onPendingPermission: Called whenever the launcher surfaces or
+    ///     clears a pending always-ask permission request for this run
+    ///     (issue #608). `nil` for callers that don't surface permission
+    ///     stalls in the Activity window. ACP agents gate one write at a
+    ///     time, so the closure fires with at most one `PendingPermission`
+    ///     at a time; a `nil` argument clears the prior request (resolved /
+    ///     rejected / auto-rejected). May never fire if the agent isn't
+    ///     configured for `always-ask`.
+    func runIngestion(
+        wikiID: WikiID,
+        sourceIDs: [SourceID],
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws
+
+    /// Run a whole-wiki lint health-check. Returns when the agent finishes.
+    ///
+    /// - Parameters:
+    ///   - wikiID: The wiki to lint.
+    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
+    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
+    ///   - onProgress: Called with progress lines to emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item.
+    ///   - onUsage: Called after the run with cumulative usage, if captured.
+    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
+    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
+    func runLint(
+        wikiID: WikiID,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws
+
+    /// Run a page-level lint health-check for the given pages. Returns when
+    /// the agent finishes.
+    ///
+    /// - Parameters:
+    ///   - wikiID: The wiki to lint.
+    ///   - pageIDs: The page IDs to lint.
+    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
+    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
+    ///   - onProgress: Called with progress lines to emit as `.progress` events.
+    ///   - onTranscript: Called with each typed agent event for this item.
+    ///   - onUsage: Called after the run with cumulative usage, if captured.
+    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
+    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
+    func runLintPages(
+        wikiID: WikiID,
+        pageIDs: [PageID],
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws
+
+    /// Run one repository clone, fetch, or incremental update. Repository
+    /// checkouts and Git execution are daemon-owned; app-side fallback
+    /// providers must reject this rather than spawning Git themselves.
+    func runRepositoryWork(
+        wikiID: WikiID,
+        request: RepositoryWorkRequest,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws
+
+    /// Quick readiness probe: checks whether the selected agent provider's
+    /// command binary exists on PATH (or is the bundled bun helper). Returns
+    /// `nil` when ready, or a user-facing message explaining what to fix and
+    /// how. Called before `runIngestion`/`runLint`/`runLintPages` so the user
+    /// gets actionable guidance instead of a cryptic spawn error like
+    /// `"bun: not found"`.
+    ///
+    /// **Not a network call** — a synchronous `which`-style check wrapped in
+    /// async for actor-hopping. Fast enough to run on every dispatch without
+    /// blocking the queue engine.
+    func readiness() async -> String?
+}
+
+// MARK: - QueueIngestionError
+
+public enum QueueIngestionError: Error, LocalizedError {
+    case noSources
+    case spawnFailed(String)
+    /// The agent provider's binary was not found on PATH (or the provider has
+    /// no command configured). Carries the readiness message for the user.
+    case notReady(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .noSources: return "Ingestion item has no valid sources"
+        case .spawnFailed(let msg): return "Agent spawn failed: \(msg)"
+        case .notReady(let msg): return msg
+        }
+    }
+}
+
+// MARK: - QueueIngestionWorkerFactory
+
+/// A `QueueWorkerFactory` that creates `QueueIngestionWorker` instances.
+/// Resolves the provider ID from the `QueueIngestionProvider` — the
+/// resolved provider determines which per-provider concurrency limit applies.
+///
+/// **Progress reporting:** receives an `emitProgress` closure that captures
+/// the engine's `AsyncStream.Continuation` (Sendable) and yields
+/// `.progress(id, line)` events. The worker passes this as `onProgress` to
+/// `runIngestion`.
+public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
+    private let provider: any QueueIngestionProvider
+    private let emitProgress: @Sendable (QueueItem.ID, String) -> Void
+    private let emitTranscript: @Sendable (QueueAttemptID, AgentEvent) -> Void
+    private let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    private let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    private let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
+    private let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
+
+    public init(
+        provider: any QueueIngestionProvider,
+        emitProgress: @escaping @Sendable (QueueItem.ID, String) -> Void,
+        emitTranscript: @escaping @Sendable (QueueAttemptID, AgentEvent) -> Void,
+        emitUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
+        emitLiveUsage: @escaping @Sendable (QueueItem.ID, SessionUsage) -> Void,
+        emitLogPaths: @escaping @Sendable (QueueItem.ID, URL?, URL?) -> Void,
+        emitPendingPermission: @escaping @Sendable (QueueItem.ID, PendingPermission?) -> Void
+    ) {
+        self.provider = provider
+        self.emitProgress = emitProgress
+        self.emitTranscript = emitTranscript
+        self.emitUsage = emitUsage
+        self.emitLiveUsage = emitLiveUsage
+        self.emitLogPaths = emitLogPaths
+        self.emitPendingPermission = emitPendingPermission
+    }
+
+    public func providerID(for item: QueueItem) async -> ProviderID? {
+        // The provider ID for ingestion is resolved from the agent provider
+        // config. For now, we use a fixed default — the app's provider
+        // resolution happens inside runIngestion when launcher.run() resolves
+        // the selected provider. The engine uses this ID for per-provider
+        // concurrency limits.
+        //
+        // TODO: Phase 5+ — resolve the actual provider from config so
+        // per-provider limits are enforced. For now, all ingestion items
+        // share one "default" provider slot.
+        return ProviderID(rawValue: "default-ingest")
+    }
+
+    public func worker(for item: QueueItem) async throws -> any QueueWorker {
+        QueueIngestionWorker(provider: provider, attemptID: QueueAttemptID(itemID: item.id, attempt: item.attempt), emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths, emitPendingPermission: emitPendingPermission)
+    }
+}
+
+// MARK: - QueueIngestionWorker
+
+/// A worker that runs one ingestion: calls `provider.runIngestion(...)` which
+/// does the full planner→executor→finalizer pipeline (source staging, agent
+/// spawn, workspace merge). The provider hops to `@MainActor` internally.
+///
+/// **Worker idempotency:** if the agent spawn succeeds but the item is
+/// cancelled mid-run, the worker throws `CancellationError` and the engine
+/// handles the state transition. Workspace auto-merge is best-effort inside
+/// the provider.
+struct QueueIngestionWorker: QueueWorker {
+    let provider: any QueueIngestionProvider
+    let attemptID: QueueAttemptID
+    let emitProgress: @Sendable (QueueItem.ID, String) -> Void
+    let emitTranscript: @Sendable (QueueAttemptID, AgentEvent) -> Void
+    let emitUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
+    let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
+    let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
+
+    func execute(_ item: QueueItem) async throws {
+        // Pre-dispatch readiness gate (#440): check the agent provider's binary
+        // is on PATH BEFORE running the full pipeline. If the binary is missing,
+        // fail the item with a clear, user-facing message instead of a cryptic
+        // spawn error like "bun: not found". This mirrors the extraction worker's
+        // `readiness()` check on `MarkdownExtractor`.
+        let needsAgent = item.payload.repositoryWork?.action == .update
+            || item.payload.repositoryWork == nil
+        if needsAgent, let message = await provider.readiness() {
+            throw QueueIngestionError.notReady(message)
+        }
+
+        let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [attemptID] event in
+            emitTranscript(attemptID, event)
+        }
+        let onUsage: (@Sendable (SessionUsage?) -> Void)? = { [itemID = item.id] usage in
+            guard let usage else { return }
+            emitUsage(itemID, usage)
+        }
+        // #544 live progress: forward each in-progress usage snapshot to the
+        // engine's broadcaster so the Activity window updates during the run.
+        let onLiveUsage: (@Sendable (SessionUsage) -> Void)? = { [itemID = item.id] usage in
+            emitLiveUsage(itemID, usage)
+        }
+        // Run paths: forward the run's log/debug URLs so the Activity window
+        // can offer "Reveal Log" / "Reveal Debug Folder".
+        let onLogPaths: (@Sendable (URL?, URL?) -> Void)? = { [itemID = item.id] logURL, debugURL in
+            emitLogPaths(itemID, logURL, debugURL)
+        }
+        // #608: forward the launcher's pending-permission snapshot so the
+        // Activity window can surface "Permission pending: <cmd>" while a
+        // run is parked on an always-ask prompt. `nil` clears the row.
+        let onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = { [itemID = item.id] permission in
+            emitPendingPermission(itemID, permission)
+        }
+
+        if let repositoryWork = item.payload.repositoryWork {
+            guard item.payload.sourceIDs.isEmpty, item.payload.lintPageIDs == nil else {
+                throw QueueIngestionError.spawnFailed("Repository work cannot include source ingestion or lint payloads")
+            }
+            try await provider.runRepositoryWork(
+                wikiID: item.wikiID,
+                request: repositoryWork,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
+            )
+        } else if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
+            // Page-level lint.
+            try await provider.runLintPages(
+                wikiID: item.wikiID,
+                pageIDs: pageIDs,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
+            )
+        } else if item.payload.lintPageIDs != nil {
+            // lintPageIDs is non-nil but empty → whole-wiki lint.
+            try await provider.runLint(
+                wikiID: item.wikiID,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
+            )
+        } else {
+            // Normal ingestion.
+            let sourceIDs = item.payload.sourceIDs
+            guard !sourceIDs.isEmpty else {
+                throw QueueIngestionError.noSources
+            }
+            try await provider.runIngestion(
+                wikiID: item.wikiID,
+                sourceIDs: sourceIDs,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
+            )
+        }
+    }
+}

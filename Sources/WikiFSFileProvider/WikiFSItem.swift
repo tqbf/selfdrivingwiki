@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 import UniformTypeIdentifiers
 
@@ -18,13 +19,14 @@ final class WikiFSItem: NSObject, NSFileProviderItem {
 
     var contentType: UTType {
         if node.isFolder { return .folder }
-        // Ingested files (Phase 5): derive the UTType from the ORIGINAL dropped
-        // extension, falling back to `.data` (generic binary) for unknown/empty
-        // extensions. This is a dedicated branch that runs ONLY for ingested-file
-        // leaves; the page (.md) and index (.json/.jsonl) logic below is
-        // unchanged so those types do not regress.
-        if let ext = node.ingestedExt {
-            if !ext.isEmpty, let type = UTType(filenameExtension: ext) { return type }
+        // Ingested files (sources): content-derived MIME first, then the original
+        // dropped extension, falling back to `.data` (generic binary) for
+        // unknown/empty. This is a dedicated branch that runs ONLY for
+        // ingested-file leaves; the page (.md) and index (.json/.jsonl) logic
+        // below is unchanged so those types do not regress.
+        if node.ingestedExt != nil {
+            if let mime = node.mimeType, let type = UTType(mimeType: mime) { return type }
+            if let ext = node.ingestedExt, !ext.isEmpty, let type = UTType(filenameExtension: ext) { return type }
             return .data
         }
         if node.name.hasSuffix(".md") { return UTType(filenameExtension: "md") ?? .plainText }
@@ -52,3 +54,5 @@ final class WikiFSItem: NSObject, NSFileProviderItem {
                                   metadataVersion: node.metadataVersion)
     }
 }
+#endif  // os(macOS)
+

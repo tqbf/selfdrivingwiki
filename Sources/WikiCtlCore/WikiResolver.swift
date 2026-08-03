@@ -27,7 +27,7 @@ public struct WikiResolver {
     /// the registry matches the selector by id or by display name.
     public func descriptor(forSelector selector: String) -> WikiDescriptor? {
         let registry = WikiRegistry.load(from: containerDirectory)
-        if let byID = registry.descriptor(id: selector) {
+        if let byID = registry.descriptor(id: WikiID(rawValue: selector)) {
             return byID
         }
         return registry.wikis.first { $0.displayName == selector }

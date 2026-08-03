@@ -1,3 +1,4 @@
+#if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
 import Foundation
 import WikiFSCore
@@ -6,9 +7,9 @@ import WikiFSCore
 /// `Catalog`. Owns:
 ///   * the identity ↔ row mapping (virtual ids; paths are presentation only),
 ///   * the static `README.md` bytes,
-///   * `node(for:)` / `children(of:)` / `contents(for:)`, each opening a
-///     fresh, short-lived read store (INITIAL §10 — the app is the only writer;
-///     WAL + `query_only` reads are safe concurrently).
+///   * `node(for:)` / `children(of:)` / `contents(for:)`, each sharing ONE
+///     short-lived read store per call (via `ReadScope` — #291); the app is
+///     the only writer, and WAL + `query_only` reads are safe concurrently.
 ///
 /// The id embedded in a page identifier is ALWAYS the full ULID, never the
 /// filename — filenames are derived for presentation (INITIAL §6).
@@ -24,7 +25,29 @@ struct Projection {
 
     /// The wiki this projection serves: the ULID from the FP domain identifier.
     /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
-    let wikiID: String
+    let wikiID: WikiID
+
+    /// Optional override for the wiki DB URL. Production (the File Provider
+    /// extension) leaves this `nil` and resolves the wiki's DB via
+    /// `DatabaseLocation` (the App Group container — unavailable outside the
+    /// entitled sandbox). Tests inject a temp URL so the projection tree
+    /// (`node`/`children`/`contents`) is exercisable end-to-end. Slice 2b: the
+    /// projection previously had NO integration coverage for this reason.
+    let databaseURL: URL?
+
+    /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
+    init(wikiID: WikiID, databaseURL: URL? = nil) {
+        self.wikiID = wikiID
+        self.databaseURL = databaseURL
+    }
+
+    /// Request-scoped read-store cache. The public entry points
+    /// (`children`/`node`/`contents`) set this on a scoped copy so every
+    /// `openReadStore()` / `changeToken()` call within one logical operation
+    /// reuses ONE SQLite connection + ONE token snapshot — collapsing the N+1
+    /// store opens that made `children(of: .workingSet)` take 165 s+ (#291).
+    /// Nil (the default) for standalone calls → each opens its own, as before.
+    var readStoreHolder: ReadScope?
 
     // MARK: - Identity
 
@@ -45,17 +68,37 @@ struct Projection {
         static let indexPagesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexPagesJSONL)
         static let indexLinksJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexLinksJSONL)
 
-        // Ingested files (Phase 5): a new top-level `files/` tree with `by-id` and
-        // `by-name` views, plus `indexes/files.jsonl`.
-        static let files = NSFileProviderItemIdentifier(WikiFSContainerID.files)
-        static let filesByID = NSFileProviderItemIdentifier(WikiFSContainerID.filesByID)
-        static let filesByName = NSFileProviderItemIdentifier(WikiFSContainerID.filesByName)
-        static let indexFilesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexFilesJSONL)
+        // Sources (Phase 5, renamed v10): a top-level `sources/` tree with `by-id`
+        // and `by-name` views, plus `indexes/sources.jsonl`.
+        static let sources = NSFileProviderItemIdentifier(WikiFSContainerID.sources)
+        static let sourcesByID = NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByID)
+        static let sourcesByName = NSFileProviderItemIdentifier(WikiFSContainerID.sourcesByName)
+        static let indexSourcesJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexSourcesJSONL)
+
+        // Chats (#119 follow-on): a top-level `chats/` tree with `by-id` and
+        // `by-name` views, plus `indexes/chats.jsonl`. Each chat renders as a
+        // readable `.md` transcript.
+        static let chats = NSFileProviderItemIdentifier(WikiFSContainerID.chats)
+        static let chatsByID = NSFileProviderItemIdentifier(WikiFSContainerID.chatsByID)
+        static let chatsByName = NSFileProviderItemIdentifier(WikiFSContainerID.chatsByName)
+        static let indexChatsJSONL = NSFileProviderItemIdentifier(WikiFSContainerID.indexChatsJSONL)
+        static let chatByIDPrefix = WikiFSContainerID.chatByIDPrefix
+        static let chatByNamePrefix = WikiFSContainerID.chatByNamePrefix
 
         // System prompt (v3): the same singleton document under two root-level
         // names (identical bytes) — `CLAUDE.md` and `AGENTS.md`.
         static let claudeMD = NSFileProviderItemIdentifier(WikiFSContainerID.claudeMD)
         static let agentsMD = NSFileProviderItemIdentifier(WikiFSContainerID.agentsMD)
+
+        // Bookmarks (#125, Phase D): a top-level `bookmarks/` tree mirroring the
+        // user-defined folder/ref structure. Folders and refs each carry the
+        // bookmark-node ULID (NOT the target's ULID) so one bookmark can point
+        // at the same page as another without colliding.
+        static let bookmarks = NSFileProviderItemIdentifier(WikiFSContainerID.bookmarks)
+        static let bookmarkFolderPrefix = WikiFSContainerID.bookmarkFolderPrefix
+        static let bookmarkPageRefPrefix = WikiFSContainerID.bookmarkPageRefPrefix
+        static let bookmarkSourceRefPrefix = WikiFSContainerID.bookmarkSourceRefPrefix
+        static let bookmarkChatRefPrefix = WikiFSContainerID.bookmarkChatRefPrefix
 
         // Phase B: two more root-level read-only docs. `log.md` renders the
         // append-only `log` table as grep-able lines; `index.md` serves the
@@ -73,8 +116,10 @@ struct Projection {
         static let byTitlePrefix = "page-by-title:"
         // Shared with the app (which resolves a per-file user-visible URL to open
         // it in the default app), so the two sides build the identical identifier.
-        static let fileByIDPrefix = WikiFSContainerID.fileByIDPrefix
-        static let fileByNamePrefix = "file-by-name:"
+        static let sourceByIDPrefix = WikiFSContainerID.sourceByIDPrefix
+        static let sourceByNamePrefix = WikiFSContainerID.sourceByNamePrefix
+        static let sourceMarkdownByIDPrefix = "source-markdown-by-id:"
+        static let sourceMarkdownByNamePrefix = "source-markdown-by-name:"
 
         static func pageByID(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(byIDPrefix + ulid)
@@ -84,12 +129,20 @@ struct Projection {
             NSFileProviderItemIdentifier(byTitlePrefix + ulid)
         }
 
-        static func fileByID(_ ulid: String) -> NSFileProviderItemIdentifier {
-            NSFileProviderItemIdentifier(fileByIDPrefix + ulid)
+        static func sourceByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceByIDPrefix + ulid)
         }
 
-        static func fileByName(_ ulid: String) -> NSFileProviderItemIdentifier {
-            NSFileProviderItemIdentifier(fileByNamePrefix + ulid)
+        static func sourceByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceByNamePrefix + ulid)
+        }
+
+        static func sourceMarkdownByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceMarkdownByIDPrefix + ulid)
+        }
+
+        static func sourceMarkdownByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(sourceMarkdownByNamePrefix + ulid)
         }
 
         /// Extract the embedded ULID from a `page-by-id:` / `page-by-title:`
@@ -106,9 +159,68 @@ struct Projection {
         /// ULID is in the identifier — never the filename (INITIAL §6).
         static func fileULID(from id: NSFileProviderItemIdentifier) -> String? {
             let raw = id.rawValue
-            if raw.hasPrefix(fileByIDPrefix) { return String(raw.dropFirst(fileByIDPrefix.count)) }
-            if raw.hasPrefix(fileByNamePrefix) { return String(raw.dropFirst(fileByNamePrefix.count)) }
+            if raw.hasPrefix(sourceByIDPrefix) { return String(raw.dropFirst(sourceByIDPrefix.count)) }
+            if raw.hasPrefix(sourceByNamePrefix) { return String(raw.dropFirst(sourceByNamePrefix.count)) }
             return nil
+        }
+
+        /// Extract the embedded ULID from a `source-markdown-by-id:` /
+        /// `source-markdown-by-name:` identifier, or nil if it isn't a processed
+        /// markdown head identifier.
+        static func sourceMarkdownULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            if raw.hasPrefix(sourceMarkdownByIDPrefix) { return String(raw.dropFirst(sourceMarkdownByIDPrefix.count)) }
+            if raw.hasPrefix(sourceMarkdownByNamePrefix) { return String(raw.dropFirst(sourceMarkdownByNamePrefix.count)) }
+            return nil
+        }
+
+        // MARK: Chat identifiers (#119 follow-on)
+
+        static func chatByID(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(chatByIDPrefix + ulid)
+        }
+
+        static func chatByName(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(chatByNamePrefix + ulid)
+        }
+
+        /// Extract the embedded ULID from a `chat-by-id:` / `chat-by-name:`
+        /// identifier, or nil if it isn't a chat identifier. The full ULID is in
+        /// the identifier — never the filename (INITIAL §6).
+        static func chatULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            if raw.hasPrefix(chatByIDPrefix) { return String(raw.dropFirst(chatByIDPrefix.count)) }
+            if raw.hasPrefix(chatByNamePrefix) { return String(raw.dropFirst(chatByNamePrefix.count)) }
+            return nil
+        }
+
+        // MARK: Bookmark identifiers (Phase D)
+
+        static func bookmarkFolder(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkFolderPrefix + ulid)
+        }
+        static func bookmarkPageRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkPageRefPrefix + ulid)
+        }
+        static func bookmarkSourceRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkSourceRefPrefix + ulid)
+        }
+        static func bookmarkChatRef(_ ulid: String) -> NSFileProviderItemIdentifier {
+            NSFileProviderItemIdentifier(bookmarkChatRefPrefix + ulid)
+        }
+
+        /// Extract the bookmark-node ULID from any bookmark identifier, or nil.
+        static func bookmarkULID(from id: NSFileProviderItemIdentifier) -> String? {
+            let raw = id.rawValue
+            for p in [bookmarkFolderPrefix, bookmarkPageRefPrefix, bookmarkSourceRefPrefix, bookmarkChatRefPrefix] {
+                if raw.hasPrefix(p) { return String(raw.dropFirst(p.count)) }
+            }
+            return nil
+        }
+
+        /// True if `id` is any bookmark identifier (folder or ref).
+        static func isBookmark(_ id: NSFileProviderItemIdentifier) -> Bool {
+            bookmarkULID(from: id) != nil
         }
     }
 
@@ -130,12 +242,16 @@ struct Projection {
     - `TREE.md` (legacy alias for `WIKI-STRUCTURE.md`)
     - `pages/by-id/`
     - `pages/by-title/`
-    - `files/by-id/`
-    - `files/by-name/`
+    - `sources/by-id/`
+    - `sources/by-name/`
+    - `bookmarks/`
+    - `chats/by-id/`
+    - `chats/by-name/`
     - `manifest.json`
     - `indexes/pages.jsonl`
     - `indexes/links.jsonl`
-    - `indexes/files.jsonl`
+    - `indexes/sources.jsonl`
+    - `indexes/chats.jsonl`
 
     """.utf8)
 
@@ -180,84 +296,158 @@ struct Projection {
 
     private static let indexCache = IndexCache()
 
-    /// Return the generated bytes for one of the three index files at the
-    /// current change token, regenerating (and caching) on a token miss.
-    /// Returns nil only if the DB is unavailable. Keyed by `(wikiID, identifier)`
-    /// so two wikis sharing the process-wide cache never collide.
+    /// Token-keyed byte cache for chat transcript content (#503 P1). Same
+    /// NSLock-guarded, token-keyed pattern as `indexCache`. Ensures the
+    /// rendering done in `chatNodes`/`nodeForLeaf` (for sizing) is reused by
+    /// `contentForLeaf` (for serving) instead of re-rendering — the renderer
+    /// is deterministic, so the cached bytes are byte-identical.
+    private static let chatContentCache = IndexCache()
+
+    /// Return the generated bytes for one index file at the current change
+    /// token, regenerating (and caching) on a token miss. Looks up the matching
+    /// `GeneratedIndex` descriptor and calls its generator. Returns nil only if
+    /// no descriptor owns `id` or the DB is unavailable. Keyed by
+    /// `(wikiID, identifier)` so two wikis sharing the process-wide cache never
+    /// collide.
     private func indexData(for id: NSFileProviderItemIdentifier) -> Data? {
-        Self.indexCache.data(forKey: "\(wikiID)/\(id.rawValue)", token: changeToken()) {
-            generateIndexData(for: id)
+        guard let index = Self.generatedIndexes.first(where: { $0.id == id }) else { return nil }
+        return Self.indexCache.data(forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()) {
+            index.generate(self)
         }
     }
 
-    /// Generate (no caching) the bytes for one index file from a fresh read
-    /// store. The `generated_at` stamp in the manifest is "now" at generation
-    /// time; once cached under a token it stays fixed until the token advances.
-    private func generateIndexData(for id: NSFileProviderItemIdentifier) -> Data? {
-        guard let store = openReadStore() else { return nil }
-        switch id {
-        case Identity.manifest:
-            guard let pages = try? store.listAllPagesOrderedByID() else { return nil }
-            // file_count must be resilient to a pre-migration `ingested_files`:
-            // a `nil` read → 0, so the manifest still generates.
-            let fileCount = (try? store.listAllIngestedFilesOrderedByID())?.count ?? 0
-            return IndexGenerators.manifest(pages: pages, fileCount: fileCount, generatedAt: Date())
-        case Identity.indexPagesJSONL:
-            guard let pages = try? store.listAllPagesOrderedByID() else { return nil }
-            return IndexGenerators.pagesJSONL(pages: pages)
-        case Identity.indexLinksJSONL:
-            guard let links = try? store.listAllLinks() else { return nil }
-            return IndexGenerators.linksJSONL(links: links)
-        case Identity.indexFilesJSONL:
-            // Resilient to the table not existing yet → empty index, never nil,
-            // so enumeration of `indexes/` never errors pre-migration.
-            let files = (try? store.listAllIngestedFilesOrderedByID()) ?? []
-            return IndexGenerators.filesJSONL(files: files)
-        default:
-            return nil
-        }
-    }
-
-    /// Build a file node for a generated index file, sizing it from the SAME
-    /// cached bytes `contents(for:)` will serve, and versioning it by the
+    /// Build a file node for a generated index descriptor, sizing it from the
+    /// SAME cached bytes `contents(for:)` will serve, and versioning it by the
     /// current token so the daemon re-fetches after any edit.
-    private func indexFileNode(for id: NSFileProviderItemIdentifier,
-                               name: String,
-                               parent: NSFileProviderItemIdentifier) -> ProjectedNode? {
-        guard let data = indexData(for: id) else { return nil }
+    private func indexFileNode(for index: GeneratedIndex) -> ProjectedNode? {
+        guard let data = indexData(for: index.id) else { return nil }
         let version = Data(changeToken().utf8)
-        return .file(id: id, parent: parent, name: name, size: data.count,
-                     version: version, metadataVersion: version,
+        return .file(id: index.id, parent: index.parent, name: index.name,
+                     size: data.count, version: version, metadataVersion: version,
                      created: nil, modified: nil)
     }
 
     // MARK: - Read store
 
-    /// Open a fresh, short-lived read-only store at THIS wiki's `<ulid>.sqlite`
-    /// in the App Group container. The wiki is selected by `wikiID` (the ULID the
-    /// File Provider domain carries) — the multi-wiki crux: same projection code,
-    /// different DB per domain. Returns nil if the container/DB is unavailable.
-    private func openReadStore() -> SQLiteWikiStore? {
-        guard let url = DatabaseLocation.extensionContainerURL(forWikiID: wikiID) else { return nil }
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try? SQLiteWikiStore(readOnlyURL: url)
+    /// A request-scoped cache for ONE read-only store + its change token. The
+    /// public entry points (`children`/`node`/`contents`) create one of these on
+    /// a scoped copy of the projection so every `openReadStore()` and
+    /// `changeToken()` call within that operation reuses the same connection,
+    /// instead of opening a fresh store (with pragma setup + WAL checkpoint on
+    /// close) for each leaf node (#291).
+    ///
+    /// Thread-safe (NSLock-guarded): the holder is a reference type shared
+    /// across value-type projection copies, so the lock guards the lazy open
+    /// and token cache even if two copies race (in practice each scope is
+    /// single-threaded — one File Provider callback).
+    final class ReadScope: @unchecked Sendable {
+        private let databaseURL: URL?
+        private let wikiID: WikiID
+        private let lock = NSLock()
+        private var cachedStore: GRDBWikiStore?
+        private var cachedToken: String?
+        /// Token-invalidated `LinkMaps` cache (#490). Built once per scope
+        /// (on the first `cachedLinkMaps()` call) and reused for every leaf
+        /// / bookmark in the same enumeration pass — replacing O(n) rebuilds
+        /// of 5 full-table scans per pass. Cleared whenever `cacheToken`
+        /// stores a DIFFERENT token so a store that was unavailable on the
+        /// first `changeToken()` (returning `"0:0"` without caching) and then
+        /// becomes available is correctly reflected.
+        private var cachedLinkMaps: LinkMaps?
+
+        /// Per-scope batched processed-markdown-heads map (#503 P5). Built
+        /// once per scope (on the first `cachedHeadsBySource()` call) and
+        /// reused for every source leaf — replacing per-item
+        /// `processedMarkdownHead(sourceID:)` SQL queries in `nodeForLeaf` /
+        /// `contentForLeaf`. Invalidated on token change, like
+        /// `cachedLinkMaps`.
+        private var cachedHeads: [String: SourceMarkdownVersion]?
+
+        init(databaseURL: URL?, wikiID: WikiID) {
+            self.databaseURL = databaseURL
+            self.wikiID = wikiID
+        }
+
+        /// Lazily open ONE store; subsequent calls return the same connection.
+        var store: GRDBWikiStore? {
+            lock.lock(); defer { lock.unlock() }
+            if cachedStore == nil {
+                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
+                if let url, FileManager.default.fileExists(atPath: url.path) {
+                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
+                    cachedStore = DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
+                }
+            }
+            return cachedStore
+        }
+
+        /// The cached token, or nil if not yet computed.
+        var token: String? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedToken
+        }
+
+        /// Cache the token (called once per scope, on first `changeToken()`).
+        /// A token change invalidates any cached `LinkMaps` so a scope that
+        /// initially saw `"0:0"` (store unavailable) rebuilds on the real
+        /// token once the store becomes reachable (#490).
+        func cacheToken(_ value: String) {
+            lock.lock(); defer { lock.unlock() }
+            if cachedToken != value {
+                cachedToken = value
+                cachedLinkMaps = nil
+                cachedHeads = nil
+            }
+        }
+
+        /// The cached link maps, or nil if not yet computed for this scope.
+        var linkMaps: LinkMaps? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedLinkMaps
+        }
+
+        /// Cache link maps (built once per scope from the shared read store).
+        func cacheLinkMaps(_ maps: LinkMaps) {
+            lock.lock(); defer { lock.unlock() }
+            cachedLinkMaps = maps
+        }
+
+        /// The cached batched heads map, or nil if not yet computed for this scope.
+        var heads: [String: SourceMarkdownVersion]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedHeads
+        }
+
+        /// Cache the batched heads map (built once per scope).
+        func cacheHeads(_ heads: [String: SourceMarkdownVersion]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedHeads = heads
+        }
+    }
+
+    /// Open a read-only store at THIS wiki's `<ulid>.sqlite` in the App Group
+    /// container. Within a read scope (`readStoreHolder` set) the SAME connection
+    /// is reused for every call; outside a scope a fresh, short-lived store is
+    /// opened each time (the historical behavior). Returns nil if the
+    /// container/DB is unavailable.
+    private func openReadStore() -> GRDBWikiStore? {
+        if let scope = readStoreHolder { return scope.store }
+        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
+        return DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
     }
 
     // MARK: - System prompt (CLAUDE.md / AGENTS.md)
 
-    /// The singleton system-prompt document, read live from SQLite. Falls back to
-    /// the seeded default (`version 0`) when the row/table can't be read — e.g. a
-    /// read connection opened against a not-yet-migrated DB — so `CLAUDE.md` and
-    /// `AGENTS.md` ALWAYS exist at the root. Read live in both `node(for:)` (size)
-    /// and `contents(for:)` (bytes), exactly like a page body; the row `version`
-    /// drives the item version so an edit re-fetches.
+    /// The singleton system-prompt document, sourced from the compiled default.
+    /// The system_prompt table was removed in v42, so this always returns the
+    /// compiled `SystemPrompt.defaultBody`. The version is a stable hash of the
+    /// body so the File Provider refreshes when the compiled prompt changes.
     private func systemPromptDocument() -> SystemPrompt {
-        guard let store = openReadStore(),
-              let prompt = try? store.getSystemPrompt() else {
-            return SystemPrompt(body: SystemPrompt.defaultBody,
-                                updatedAt: Date(timeIntervalSince1970: 0), version: 0)
-        }
-        return prompt
+        let version = Int(SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF)
+        return SystemPrompt(body: SystemPrompt.defaultBody,
+                            updatedAt: Date(timeIntervalSince1970: 0), version: version)
     }
 
     /// Build the root-level file node for the system prompt under whichever name
@@ -281,7 +471,7 @@ struct Projection {
     /// exists at the root. Mirrors `systemPromptDocument()`.
     private func wikiIndexDocument() -> WikiIndex {
         guard let store = openReadStore(),
-              let index = try? store.getWikiIndex() else {
+              let index = DebugLog.trying("getWikiIndex", operation: { try store.getWikiIndex() }) else {
             return WikiIndex(body: WikiIndex.defaultBody,
                              updatedAt: Date(timeIntervalSince1970: 0), version: 0)
         }
@@ -292,11 +482,15 @@ struct Projection {
     /// singleton row exactly like the system-prompt node.
     private func wikiIndexNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode {
         let index = wikiIndexDocument()
-        let body = Data(index.body.utf8)
+        let body = wikiIndexBody(index)
         let version = Data(String(index.version).utf8)
         return .file(id: id, parent: .rootContainer, name: "index.md", size: body.count,
                      version: version, metadataVersion: version,
                      created: nil, modified: index.updatedAt)
+    }
+
+    private func wikiIndexBody(_ index: WikiIndex) -> Data {
+        Data(OKFRootIndexFormat.fileContent(body: index.body).utf8)
     }
 
     // MARK: - log.md (append-only log)
@@ -308,7 +502,7 @@ struct Projection {
     /// change token rather than a row `version`.
     private func logBody() -> Data {
         guard let store = openReadStore(),
-              let entries = try? store.listAllLogEntriesOrderedByID() else {
+              let entries = DebugLog.trying("listAllLogEntries", operation: { try store.listAllLogEntriesOrderedByID() }) else {
             return Data(LogRenderer.render([]).utf8)
         }
         return Data(LogRenderer.render(entries).utf8)
@@ -335,9 +529,11 @@ struct Projection {
     /// already tracks.
     private func treeBody() -> Data {
         let store = openReadStore()
-        let pageCount = (try? store?.listAllPagesOrderedByID())??.count ?? 0
-        let fileCount = (try? store?.listAllIngestedFilesOrderedByID())??.count ?? 0
-        return Data(WikiTreeRenderer.render(pageCount: pageCount, fileCount: fileCount).utf8)
+        let pageCount = (DebugLog.trying("listAllPages", operation: { try store?.listAllPagesOrderedByID() }))??.count ?? 0
+        let sourceCount = (DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() }))??.count ?? 0
+        let chatCount = (DebugLog.trying("listAllChats", operation: { try store?.listAllChatsOrderedByID() }))??.count ?? 0
+        return Data(WikiTreeRenderer.render(pageCount: pageCount, sourceCount: sourceCount,
+                                            chatCount: chatCount).utf8)
     }
 
     /// Build a root-level layout-map file node. Versioned by the change token (like
@@ -355,118 +551,770 @@ struct Projection {
 
     /// The whole-database change token used as the File Provider sync anchor.
     /// Advances on ANY page create/update/delete (count:sum — see
-    /// `SQLiteWikiStore.changeToken()`). Opens a short-lived read store; returns
+    /// `GRDBWikiStore.changeToken()`). Opens a short-lived read store; returns
     /// a safe `"0:0"` default if the DB is unavailable so the enumerator can
     /// still answer (and a later real token simply differs → re-sync).
+    ///
+    /// Within a read scope the token is computed once and cached, so every node
+    /// built during one enumeration pass gets a CONSISTENT version (previously
+    /// each call queried independently, risking slight drift mid-pass) and avoids
+    /// N redundant queries (#291).
     func changeToken() -> String {
+        if let scope = readStoreHolder, let cached = scope.token {
+            return cached
+        }
         guard let store = openReadStore(),
-              let token = try? store.changeToken() else { return "0:0" }
-        return token
+              let token = DebugLog.trying("changeToken", operation: { try store.changeToken() }) else { return "0:0" }
+        let raw = token.rawString
+        readStoreHolder?.cacheToken(raw)
+        return raw
+    }
+
+    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) -> String {
+        let links = (DebugLog.trying("sourceLinks", operation: { try store.sourceLinks(from: page.id) }) ?? [])
+            .filter { $0.role == .cite }
+        var references: [OKFSourceReference] = []
+        references.reserveCapacity(links.count)
+        var seenSourceIDs = Set<SourceID>()
+        for link in links where seenSourceIDs.insert(link.sourceID).inserted {
+            guard let source = DebugLog.trying("getSource", operation: { try store.getSource(id: link.sourceID) }) else {
+                continue
+            }
+            references.append(
+                OKFSourceReference(
+                    resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md"))"),
+                    title: source.effectiveName
+                )
+            )
+        }
+
+        let generated = OKFGenerated(
+            by: OKFActor(pageAuthorRawValue: page.lastEditedBy ?? page.createdBy),
+            at: page.updatedAt
+        )
+        return PageMarkdownFormat.fileContent(
+            for: page,
+            metadata: PageOKFMetadata(generated: generated, sources: references)
+        )
+    }
+
+    private func sourceMarkdownContent(for source: SourceSummary,
+                                       head: SourceMarkdownVersion,
+                                       in store: GRDBWikiStore) -> String {
+        let producer = DebugLog.trying("processedMarkdownProducer", operation: {
+            try store.processedMarkdownProducer(versionID: head.id)
+        })
+        let generated = OKFGenerated(
+            by: OKFActor.sourceActor(
+                producerName: producer?.name,
+                producerVersion: producer?.version,
+                fallbackOrigin: head.origin
+            ),
+            at: head.createdAt
+        )
+        let resource = OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext))"),
+            title: source.effectiveName
+        )
+        return SourceMarkdownFormat.fileContent(
+            for: head,
+            metadata: SourceOKFMetadata(
+                title: source.effectiveName,
+                generated: generated,
+                sources: [resource]
+            )
+        )
+    }
+
+    // MARK: - Flat resource projections (slice 2b)
+
+    /// Describes how one flat resource kind (`pages`, `sources`) projects onto
+    /// the File Provider tree: a top-level folder holding two view containers
+    /// (`by-id` + `by-name`/`by-title`), each enumerating its rows as leaf nodes.
+    /// The generic `node`/`children`/`contents`/working-set logic iterates a
+    /// registry of these (`flatProjections`) instead of switch-ing per kind, so a
+    /// new flat kind is "add a descriptor", not "add four switch arms". (Phase D
+    /// adds a nested descriptor shape for bookmarks.)
+    ///
+    /// Value type with closures, not a protocol w/ associated types: the
+    /// per-kind store methods differ in signature, and only the dispatch varies
+    /// (`owns`/`enumerate`/`nodeForLeaf`/`contentForLeaf`). The closures are
+    /// same-file, so they may call `Projection`'s `private` read seam.
+    struct FlatResourceProjection: @unchecked Sendable {
+        let topLevel: NSFileProviderItemIdentifier
+        let byIDContainer: NSFileProviderItemIdentifier
+        let byNameContainer: NSFileProviderItemIdentifier
+        /// Does this projection own `id` — a leaf under either view, including
+        /// any sibling family (e.g. the source `.md` node)? Dispatches
+        /// `node(for:)` / `contents(for:)`. Container identifiers return false.
+        let owns: (NSFileProviderItemIdentifier) -> Bool
+        /// Enumerate the leaf nodes for a view, ordered by ULID. 1 node/row for
+        /// pages; 1 or 2 for sources (verbatim + optional `.md` sibling).
+        let enumerate: (Projection, Bool /*isByName*/) -> [ProjectedNode]
+        /// Resolve a single leaf node, or nil (for `node(for:)`).
+        let nodeForLeaf: (Projection, NSFileProviderItemIdentifier) -> ProjectedNode?
+        /// Serve the content bytes for a leaf, or nil (for `contents(for:)`).
+        let contentForLeaf: (Projection, NSFileProviderItemIdentifier) -> Data?
+    }
+
+    static let pagesProjection = FlatResourceProjection(
+        topLevel: Identity.pages,
+        byIDContainer: Identity.pagesByID,
+        byNameContainer: Identity.pagesByTitle,
+        owns: { Identity.pageULID(from: $0) != nil },
+        enumerate: { $0.pageNodes(byTitle: $1) },
+        nodeForLeaf: { projection, id in
+            guard let ulid = Identity.pageULID(from: id),
+                  let store = projection.openReadStore(),
+                  let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+            let body = projection.pageContent(for: page, in: store)
+            // For by-title pages, size must match the rewritten bytes that
+            // contents(for:) will serve — a mismatch truncates cat (#216).
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
+                let data = projection.rewriteLinks(body, maps: projection.cachedLinkMaps(),
+                                                   baseDir: Self.pagesByTitleDir)
+                return Self.pageFileNode(for: id, page: page, contentData: data)
+            }
+            return Self.pageFileNode(for: id, page: page, contentData: Data(body.utf8))
+        },
+        contentForLeaf: { projection, id in
+            guard let ulid = Identity.pageULID(from: id),
+                  let store = projection.openReadStore(),
+                  let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+            let body = projection.pageContent(for: page, in: store)
+            // By-title view: rewrite [[wikilinks]] to relative Markdown links.
+            if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
+                return projection.rewriteLinks(body, maps: projection.cachedLinkMaps(),
+                                               baseDir: Self.pagesByTitleDir)
+            }
+            return Data(body.utf8)
+        }
+    )
+
+    static let sourcesProjection = FlatResourceProjection(
+        topLevel: Identity.sources,
+        byIDContainer: Identity.sourcesByID,
+        byNameContainer: Identity.sourcesByName,
+        // Owns both the verbatim source leaves and the `.md` sibling family.
+        owns: { id in Identity.sourceMarkdownULID(from: id) != nil
+                || Identity.fileULID(from: id) != nil },
+        enumerate: { $0.sourceNodes(byName: $1) },
+        nodeForLeaf: { projection, id in
+            // Markdown sibling first (its prefix family is distinct from the
+            // verbatim source prefixes, but checked first for clarity).
+            if let ulid = Identity.sourceMarkdownULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let head = projection.cachedHeadsBySource()[ulid] else {
+                    return nil
+                }
+                let wrapped = projection.sourceMarkdownContent(for: file, head: head, in: store)
+                // For by-name markdown siblings, size must match rewritten bytes.
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
+                    let data = projection.rewriteLinks(wrapped, maps: projection.cachedLinkMaps(),
+                                                       baseDir: Self.sourcesByNameDir)
+                    return Self.sourceMarkdownNode(for: id, source: file, head: head, contentData: data)
+                }
+                return Self.sourceMarkdownNode(for: id, source: file, head: head,
+                                               contentData: Data(wrapped.utf8))
+            }
+            if let ulid = Identity.fileULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
+                if id.rawValue.hasPrefix(Identity.sourceByNamePrefix) {
+                    let contentData = projection.rewrittenVerbatimSourceContent(
+                        id: SourceID(rawValue: ulid), mimeType: file.mimeType,
+                        maps: projection.cachedLinkMaps())
+                    return Self.sourceNode(for: id, file: file, contentData: contentData)
+                }
+                return Self.sourceNode(for: id, file: file)
+            }
+            return nil
+        },
+        contentForLeaf: { projection, id in
+            if let ulid = Identity.sourceMarkdownULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let head = projection.cachedHeadsBySource()[ulid] else {
+                    return nil
+                }
+                let wrapped = projection.sourceMarkdownContent(for: file, head: head, in: store)
+                // By-name markdown siblings: rewrite [[wikilinks]] to relative links.
+                if id.rawValue.hasPrefix(Identity.sourceMarkdownByNamePrefix) {
+                    return projection.rewriteLinks(wrapped, maps: projection.cachedLinkMaps(),
+                                                   baseDir: Self.sourcesByNameDir)
+                }
+                return Data(wrapped.utf8)
+            }
+            if let ulid = Identity.fileULID(from: id) {
+                guard let store = projection.openReadStore(),
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
+                if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
+                   let rewritten = projection.rewrittenVerbatimSourceContent(
+                       id: SourceID(rawValue: ulid), mimeType: file.mimeType,
+                       maps: projection.cachedLinkMaps()) {
+                    return rewritten
+                }
+                return data
+            }
+            return nil
+        }
+    )
+
+    static let chatsProjection = FlatResourceProjection(
+        topLevel: Identity.chats,
+        byIDContainer: Identity.chatsByID,
+        byNameContainer: Identity.chatsByName,
+        owns: { Identity.chatULID(from: $0) != nil },
+        enumerate: { $0.chatNodes(byName: $1) },
+        nodeForLeaf: { projection, id in
+            guard let ulid = Identity.chatULID(from: id),
+                  let store = projection.openReadStore(),
+                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
+            // Size from the cached transcript bytes so size==content holds for
+            // both by-id and by-name views (#503 P1).
+            let data = projection.cachedChatTranscript(for: id, chat: chat, in: store)
+            return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
+        },
+        contentForLeaf: { projection, id in
+            guard let ulid = Identity.chatULID(from: id),
+                  let store = projection.openReadStore(),
+                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
+            // Serve the cached transcript bytes (rendered + cached during
+            // `nodeForLeaf` sizing or `chatNodes` enumeration) instead of
+            // re-rendering (#503 P1).
+            return projection.cachedChatTranscript(for: id, chat: chat, in: store)
+        }
+    )
+
+    /// The flat-resource projections, in tree order (pages before sources —
+    /// matches the historical root/working-set layout). `node`/`children`/
+    /// `contents`/working-set iterate this.
+    static let flatProjections: [FlatResourceProjection] = [pagesProjection, sourcesProjection, chatsProjection]
+
+    // MARK: - Singleton-doc + generated-index projections (slice 2b, Phase C)
+
+    /// Describes a root-level singleton document — one logical doc that may
+    /// appear under one or more filenames (e.g. CLAUDE.md + AGENTS.md serve the
+    /// identical system prompt; WIKI-STRUCTURE.md + TREE.md serve the identical
+    /// layout map). Mirrors `FlatResourceProjection` (Phase B): the dispatch
+    /// sites (`node`/`children`/`contents`/working set) iterate a registry of
+    /// these instead of switch-ing per doc, so a new singleton doc is "add a
+    /// descriptor", not "add switch arms + a bespoke builder".
+    ///
+    /// Value type with closures, not a protocol w/ associated types (D2): only
+    /// the dispatch varies (`nodeFor`/`contentFor`). The closures are same-file,
+    /// so they may call `Projection`'s `private` read seam.
+    struct SingletonDocEntry: Sendable {
+        let id: NSFileProviderItemIdentifier
+        let name: String
+    }
+
+    struct SingletonDoc: @unchecked Sendable {
+        /// The root-level filename(s). One entry for a single-name doc; two for
+        /// a dual-name alias (CLAUDE.md/AGENTS.md, WIKI-STRUCTURE.md/TREE.md).
+        let entries: [SingletonDocEntry]
+        /// Build the file node for one entry's identifier + name, or nil.
+        let nodeFor: (Projection, NSFileProviderItemIdentifier, String) -> ProjectedNode?
+        /// Serve the content bytes (identical for all aliases of one doc).
+        let contentFor: (Projection) -> Data?
+        /// Whether this doc participates in the working set. Static docs (README
+        /// — constant bytes, constant version) never change, so the daemon need
+        /// not track them for invalidation.
+        let participatesInWorkingSet: Bool
+    }
+
+    /// Describes one generated index file (manifest.json, *.jsonl). Already
+    /// deduplicated via the shared token-keyed `IndexCache` + `indexFileNode`;
+    /// Phase C collects the per-file variation (identifier, filename, parent,
+    /// generator) into a descriptor so the dispatch sites iterate a registry,
+    /// matching `SingletonDoc` / `FlatResourceProjection`.
+    struct GeneratedIndex: @unchecked Sendable {
+        let id: NSFileProviderItemIdentifier
+        let name: String
+        let parent: NSFileProviderItemIdentifier
+        /// Generate the raw bytes from a fresh read store (uncached; `indexData`
+        /// caches the result keyed by the current token).
+        let generate: (Projection) -> Data?
+    }
+
+    // --- Singleton-doc instances ---
+
+    static let readmeDoc = SingletonDoc(
+        entries: [.init(id: Identity.readme, name: "README.md")],
+        nodeFor: { _, id, name in
+            .file(id: id, parent: .rootContainer, name: name,
+                  size: Self.readmeBytes.count, version: Self.staticVersion,
+                  metadataVersion: Self.staticVersion, created: nil, modified: nil)
+        },
+        contentFor: { _ in Self.readmeBytes },
+        participatesInWorkingSet: false
+    )
+
+    static let systemPromptDoc = SingletonDoc(
+        entries: [.init(id: Identity.claudeMD, name: "CLAUDE.md"),
+                  .init(id: Identity.agentsMD, name: "AGENTS.md")],
+        nodeFor: { $0.systemPromptNode(for: $1, name: $2) },
+        contentFor: { Data($0.systemPromptDocument().body.utf8) },
+        participatesInWorkingSet: true
+    )
+
+    static let wikiIndexDoc = SingletonDoc(
+        entries: [.init(id: Identity.indexMD, name: "index.md")],
+        nodeFor: { projection, id, _ in projection.wikiIndexNode(for: id) },
+        contentFor: { projection in projection.wikiIndexBody(projection.wikiIndexDocument()) },
+        participatesInWorkingSet: true
+    )
+
+    static let logDoc = SingletonDoc(
+        entries: [.init(id: Identity.logMD, name: "log.md")],
+        nodeFor: { projection, id, _ in projection.logNode(for: id) },
+        contentFor: { $0.logBody() },
+        participatesInWorkingSet: true
+    )
+
+    static let wikiStructureDoc = SingletonDoc(
+        entries: [.init(id: Identity.wikiStructureMD, name: "WIKI-STRUCTURE.md"),
+                  .init(id: Identity.treeMD, name: "TREE.md")],
+        nodeFor: { $0.treeNode(for: $1, name: $2) },
+        contentFor: { $0.treeBody() },
+        participatesInWorkingSet: true
+    )
+
+    /// Singleton docs in root-tree order (README first, matching the historical
+    /// layout). `node`/`children`/`contents`/working-set iterate this.
+    static let singletonDocs: [SingletonDoc] = [
+        readmeDoc, systemPromptDoc, wikiIndexDoc, logDoc, wikiStructureDoc
+    ]
+
+    // --- Generated-index instances ---
+
+    static let manifestIndex = GeneratedIndex(
+        id: Identity.manifest, name: "manifest.json", parent: .rootContainer,
+        generate: { projection in
+            guard let store = projection.openReadStore(),
+                  let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return nil }
+            // file_count must be resilient to a pre-migration `ingested_files`:
+            // a `nil` read → 0, so the manifest still generates.
+            let sourceCount = (DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }))?.count ?? 0
+            let chatCount = (DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() }))?.count ?? 0
+            return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount,
+                                            chatCount: chatCount, generatedAt: Date())
+        }
+    )
+
+    static let pagesJSONLIndex = GeneratedIndex(
+        id: Identity.indexPagesJSONL, name: "pages.jsonl", parent: Identity.indexes,
+        generate: { projection in
+            guard let store = projection.openReadStore(),
+                  let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return nil }
+            return IndexGenerators.pagesJSONL(pages: pages)
+        }
+    )
+
+    static let linksJSONLIndex = GeneratedIndex(
+        id: Identity.indexLinksJSONL, name: "links.jsonl", parent: Identity.indexes,
+        generate: { projection in
+            guard let store = projection.openReadStore(),
+                  let pageLinks = DebugLog.trying("listAllLinks", operation: { try store.listAllLinks() }),
+                  let sourceLinks = DebugLog.trying("listAllSourceLinks", operation: { try store.listAllSourceLinks() }) else { return nil }
+            // Page rows first, then source rows — each already sorted by (from,to).
+            return IndexGenerators.linksJSONL(links: pageLinks + sourceLinks)
+        }
+    )
+
+    static let sourcesJSONLIndex = GeneratedIndex(
+        id: Identity.indexSourcesJSONL, name: "sources.jsonl", parent: Identity.indexes,
+        generate: { projection in
+            guard let store = projection.openReadStore() else { return nil }
+            // Resilient to the table not existing yet → empty index, never nil,
+            // so enumeration of `indexes/` never errors pre-migration.
+            let files = (DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() })) ?? []
+            return IndexGenerators.sourcesJSONL(sources: files)
+        }
+    )
+
+    static let chatsJSONLIndex = GeneratedIndex(
+        id: Identity.indexChatsJSONL, name: "chats.jsonl", parent: Identity.indexes,
+        generate: { projection in
+            guard let store = projection.openReadStore() else { return nil }
+            // Resilient to the `chats` table not existing yet → empty index,
+            // never nil, so enumeration of `indexes/` never errors pre-migration.
+            let chats = (DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() })) ?? []
+            return IndexGenerators.chatsJSONL(chats: chats)
+        }
+    )
+
+    /// Generated indexes in tree order. Root-level files (manifest.json) have
+    /// `parent == .rootContainer`; JSONL files live under `indexes/`. The root
+    /// and `indexes/` children lists filter on `parent`.
+    static let generatedIndexes: [GeneratedIndex] = [
+        manifestIndex, pagesJSONLIndex, linksJSONLIndex, sourcesJSONLIndex, chatsJSONLIndex
+    ]
+
+    // MARK: - Nested resource projections (slice 2b, Phase D)
+
+    /// Describes a nested (folder-tree) resource projection — a top-level
+    /// folder containing user-defined subfolders and leaf refs, like bookmarks.
+    /// Mirrors `FlatResourceProjection` (Phase B) / `SingletonDoc` (Phase C):
+    /// the dispatch sites iterate a registry of these. The key difference from a
+    /// flat projection is that nesting is arbitrary-depth: `childrenOf` resolves
+    /// any container (the topLevel or a folder) to its children.
+    ///
+    /// Value type with closures, not a protocol w/ associated types (D2). The
+    /// closures are same-file, so they may call `Projection`'s `private` seam.
+    struct NestedResourceProjection: @unchecked Sendable {
+        let topLevel: NSFileProviderItemIdentifier
+        /// Does this projection own `id` — any node (folder or leaf) in this tree?
+        let owns: (NSFileProviderItemIdentifier) -> Bool
+        /// Resolve a single node by identifier (folder or leaf), or nil.
+        let nodeFor: (Projection, NSFileProviderItemIdentifier) -> ProjectedNode?
+        /// Enumerate the children of a container (topLevel or a folder). Returns
+        /// `[]` for leaf identifiers (they have no children).
+        let childrenOf: (Projection, NSFileProviderItemIdentifier) -> [ProjectedNode]
+        /// Serve content bytes for a leaf identifier, or nil.
+        let contentFor: (Projection, NSFileProviderItemIdentifier) -> Data?
+        /// Emit ALL nodes at every depth (for the working set).
+        let allNodes: (Projection) -> [ProjectedNode]
+    }
+
+    static let bookmarksProjection = NestedResourceProjection(
+        topLevel: Identity.bookmarks,
+        owns: { Identity.isBookmark($0) },
+        nodeFor: { $0.bookmarkNode(for: $1) },
+        childrenOf: { $0.bookmarkChildren(of: $1) },
+        contentFor: { $0.bookmarkContent(for: $1) },
+        allNodes: { $0.allBookmarkNodes() }
+    )
+
+    /// Nested-resource projections, in tree order. `node`/`children`/`contents`/
+    /// working-set iterate this.
+    static let nestedProjections: [NestedResourceProjection] = [bookmarksProjection]
+
+    // MARK: - Bookmark projection helpers (Phase D)
+
+    /// Map a `BookmarkNode` to its File Provider identifier (kind-dispatched).
+    static func bookmarkID(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
+        switch node.kind {
+        case .folder:      return Identity.bookmarkFolder(node.id.rawValue)
+        case .pageRef:     return Identity.bookmarkPageRef(node.id.rawValue)
+        case .sourceRef:   return Identity.bookmarkSourceRef(node.id.rawValue)
+        case .chatRef:     return Identity.bookmarkChatRef(node.id.rawValue)
+        }
+    }
+
+    /// Resolve the File Provider parent identifier for a bookmark node (root →
+    /// the `bookmarks` folder; nested → the parent's folder identifier).
+    static func bookmarkParent(for node: BookmarkNode) -> NSFileProviderItemIdentifier {
+        if let parentID = node.parentID {
+            return Identity.bookmarkFolder(parentID.rawValue)
+        }
+        return Identity.bookmarks
+    }
+
+    /// Replace the path separator in a display name (folders are virtual, but
+    /// Finder/Terminal users see the name).
+    static func sanitizeFilename(_ name: String) -> String {
+        name.replacingOccurrences(of: "/", with: "-")
+    }
+
+    /// The projection-relative directory components CONTAINING `node` —
+    /// `["bookmarks"]` for a root-level ref, plus one sanitized label per
+    /// ancestor folder (root → immediate parent). Used as the rewriter's
+    /// `baseDir` so a nested ref's links climb the right number of `../`.
+    /// The parent walk is capped (matches `BookmarkNode.displayPath`) so a
+    /// corrupted parent cycle can't loop forever.
+    private func bookmarkBaseDir(for node: BookmarkNode,
+                                 in nodes: [BookmarkNode]) -> [String] {
+        var byID: [BookmarkID: BookmarkNode] = [:]
+        byID.reserveCapacity(nodes.count)
+        for n in nodes { byID[n.id] = n }
+
+        var labels: [String] = []
+        var current = node.parentID.flatMap { byID[$0] }
+        var depth = 0
+        let maxDepth = 64
+        while let folder = current, depth < maxDepth {
+            depth += 1
+            labels.insert(Self.sanitizeFilename(folder.label ?? "Untitled"), at: 0)
+            current = folder.parentID.flatMap { byID[$0] }
+        }
+        return ["bookmarks"] + labels
+    }
+
+    /// Build a `ProjectedNode` for one bookmark node, resolving the target for
+    /// refs. Stale refs (target deleted) render as a small placeholder file so
+    /// the tree shape is preserved. All bookmark nodes are versioned by the
+    /// change token so any mutation re-fetches them.
+    private func bookmarkNodeItem(
+        for node: BookmarkNode, in store: GRDBWikiStore,
+        maps: LinkMaps, allNodes: [BookmarkNode]
+    ) -> ProjectedNode {
+        let id = Self.bookmarkID(for: node)
+        let parent = Self.bookmarkParent(for: node)
+        let version = Data(changeToken().utf8)
+        switch node.content {
+        case .folder(let label):
+            return .folder(id: id, parent: parent, name: label)
+        case .page(let targetID):
+            if let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) {
+                let baseDir = bookmarkBaseDir(for: node, in: allNodes)
+                let body = rewriteLinks(pageContent(for: page, in: store),
+                                        maps: maps, baseDir: baseDir)
+                let name = Self.sanitizeFilename(page.title) + ".md"
+                return .file(id: id, parent: parent, name: name, size: body.count,
+                             version: version, metadataVersion: version,
+                             created: page.createdAt, modified: page.updatedAt)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.md",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
+        case .source(let targetID):
+            if let source = DebugLog.trying("getSource", operation: { try store.getSource(id: targetID) }) {
+                let humanName = source.displayName ?? source.filename
+                return .file(id: id, parent: parent,
+                             name: Self.sanitizeFilename(humanName),
+                             size: source.byteSize,
+                             version: version, metadataVersion: version,
+                             created: source.createdAt, modified: source.updatedAt,
+                             ingestedExt: source.ext, mimeType: source.mimeType)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.txt",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
+        case .chat(let targetID):
+            if let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) {
+                let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
+                let baseDir = bookmarkBaseDir(for: node, in: allNodes)
+                let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+                let body = rewriteLinks(raw, maps: maps, baseDir: baseDir)
+                let name = Self.sanitizeFilename(chat.title) + ".md"
+                return .file(id: id, parent: parent, name: name, size: body.count,
+                             version: version, metadataVersion: version,
+                             created: chat.createdAt, modified: chat.updatedAt)
+            }
+            let body = Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
+            return .file(id: id, parent: parent, name: "Stale Reference.md",
+                         size: body.count, version: version, metadataVersion: version,
+                         created: nil, modified: nil)
+        }
+    }
+
+    /// Resolve a single bookmark node by identifier (for `node(for:)`).
+    private func bookmarkNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        guard let ulid = Identity.bookmarkULID(from: id),
+              let store = openReadStore(),
+              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
+              let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
+        return bookmarkNodeItem(for: node, in: store, maps: cachedLinkMaps(), allNodes: nodes)
+    }
+
+    /// Enumerate the children of a bookmark container (the topLevel folder or a
+    /// nested folder). Leaf identifiers return `[]`.
+    private func bookmarkChildren(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
+        let parentID: BookmarkID?
+        if container == Identity.bookmarks {
+            parentID = nil
+        } else if container.rawValue.hasPrefix(Identity.bookmarkFolderPrefix),
+                  let ulid = Identity.bookmarkULID(from: container) {
+            parentID = BookmarkID(rawValue: ulid)
+        } else {
+            return []
+        }
+        guard let store = openReadStore(),
+              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) else { return [] }
+        let maps = cachedLinkMaps()
+        return nodes
+            .filter { $0.parentID == parentID }
+            .sorted { $0.position < $1.position }
+            .compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
+    }
+
+    /// Serve content for a bookmark ref leaf, resolving the target. Folders
+    /// return nil. Stale refs serve a placeholder.
+    private func bookmarkContent(for id: NSFileProviderItemIdentifier) -> Data? {
+        guard let ulid = Identity.bookmarkULID(from: id),
+              let store = openReadStore(),
+              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
+              let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
+        switch node.content {
+        case .folder:
+            return nil
+        case .page(let targetID):
+            guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) else {
+                return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
+            }
+            return rewriteLinks(pageContent(for: page, in: store),
+                                maps: cachedLinkMaps(),
+                                baseDir: bookmarkBaseDir(for: node, in: nodes))
+        case .source(let targetID):
+            return DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: targetID) })
+                ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
+        case .chat(let targetID):
+            guard let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) else {
+                return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
+            }
+            let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
+            let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+            return rewriteLinks(raw, maps: cachedLinkMaps(),
+                                baseDir: bookmarkBaseDir(for: node, in: nodes))
+        }
+    }
+
+    /// Emit ALL bookmark nodes at every depth (for the working set).
+    private func allBookmarkNodes() -> [ProjectedNode] {
+        guard let store = openReadStore(),
+              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) else { return [] }
+        let maps = cachedLinkMaps()
+        return nodes.compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
 
     // MARK: - Metadata resolution
 
-    /// Resolve a single item's metadata by identifier.
+    /// Resolve a single item's metadata by identifier. Opens ONE shared read
+    /// store for the whole resolution (including any change-token reads),
+    /// collapsing what was previously 1–3 independent store opens per call.
     func node(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.nodeResolved(for: id)
+    }
+
+    /// Store-sharing implementation of `node(for:)`. Called on a scoped copy
+    /// carrying a `ReadScope` so every `openReadStore()` / `changeToken()` within
+    /// this resolution reuses one connection (#291).
+    private func nodeResolved(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         if id == .rootContainer {
             return .folder(id: .rootContainer, parent: .rootContainer, name: "Self Driving Wiki")
         }
+        // Singleton docs (slice 2b Phase C): dispatch to the matching doc entry.
+        for doc in Self.singletonDocs {
+            if let entry = doc.entries.first(where: { $0.id == id }) {
+                return doc.nodeFor(self, id, entry.name)
+            }
+        }
+        // Generated indexes (slice 2b Phase C): dispatch to the matching index.
+        for index in Self.generatedIndexes where index.id == id {
+            return indexFileNode(for: index)
+        }
+        // Structural folders (per-kind — not resource-driven).
         switch id {
-        case Identity.readme:
-            return .file(id: id, parent: .rootContainer, name: "README.md",
-                         size: Self.readmeBytes.count, version: Self.staticVersion,
-                         metadataVersion: Self.staticVersion,
-                         created: nil, modified: nil)
-        case Identity.claudeMD:
-            return systemPromptNode(for: id, name: "CLAUDE.md")
-        case Identity.agentsMD:
-            return systemPromptNode(for: id, name: "AGENTS.md")
-        case Identity.indexMD:
-            return wikiIndexNode(for: id)
-        case Identity.logMD:
-            return logNode(for: id)
-        case Identity.wikiStructureMD:
-            return treeNode(for: id, name: "WIKI-STRUCTURE.md")
-        case Identity.treeMD:
-            return treeNode(for: id, name: "TREE.md")
         case Identity.pages:
             return .folder(id: id, parent: .rootContainer, name: "pages")
         case Identity.pagesByID:
             return .folder(id: id, parent: Identity.pages, name: "by-id")
         case Identity.pagesByTitle:
             return .folder(id: id, parent: Identity.pages, name: "by-title")
-        case Identity.manifest:
-            return indexFileNode(for: id, name: "manifest.json", parent: .rootContainer)
         case Identity.indexes:
             return .folder(id: id, parent: .rootContainer, name: "indexes")
-        case Identity.indexPagesJSONL:
-            return indexFileNode(for: id, name: "pages.jsonl", parent: Identity.indexes)
-        case Identity.indexLinksJSONL:
-            return indexFileNode(for: id, name: "links.jsonl", parent: Identity.indexes)
-        case Identity.indexFilesJSONL:
-            return indexFileNode(for: id, name: "files.jsonl", parent: Identity.indexes)
-        case Identity.files:
-            return .folder(id: id, parent: .rootContainer, name: "files")
-        case Identity.filesByID:
-            return .folder(id: id, parent: Identity.files, name: "by-id")
-        case Identity.filesByName:
-            return .folder(id: id, parent: Identity.files, name: "by-name")
+        case Identity.bookmarks:
+            return .folder(id: id, parent: .rootContainer, name: "bookmarks")
+        case Identity.sources:
+            return .folder(id: id, parent: .rootContainer, name: "sources")
+        case Identity.sourcesByID:
+            return .folder(id: id, parent: Identity.sources, name: "by-id")
+        case Identity.sourcesByName:
+            return .folder(id: id, parent: Identity.sources, name: "by-name")
+        case Identity.chats:
+            return .folder(id: id, parent: .rootContainer, name: "chats")
+        case Identity.chatsByID:
+            return .folder(id: id, parent: Identity.chats, name: "by-id")
+        case Identity.chatsByName:
+            return .folder(id: id, parent: Identity.chats, name: "by-name")
         default:
             break
         }
-        // Ingested-file leaf (file-by-id: / file-by-name:). Resolve the embedded
-        // ULID and look up the summary; resilient to a missing table (the read
-        // throws → nil → the node simply isn't found, never an enumeration error).
-        if let ulid = Identity.fileULID(from: id) {
-            guard let store = openReadStore(),
-                  let file = try? store.getIngestedFile(id: PageID(rawValue: ulid)) else {
-                return nil
-            }
-            return Self.ingestedFileNode(for: id, file: file)
+        // Flat leaf resolution (slice 2b Phase B): dispatch to the owning
+        // flat-resource projection. Each projection's `owns(_:)` recognizes its
+        // own leaf identifier families (page-by-id/title, source-by-id/name,
+        // and the source-markdown sibling); container identifiers return nil.
+        for projection in Self.flatProjections where projection.owns(id) {
+            return projection.nodeForLeaf(self, id)
         }
-        guard let ulid = Identity.pageULID(from: id),
-              let store = openReadStore(),
-              let page = try? store.getPage(id: PageID(rawValue: ulid)) else {
-            return nil
+        // Nested leaf/folder resolution (slice 2b Phase D).
+        for projection in Self.nestedProjections where projection.owns(id) {
+            return projection.nodeFor(self, id)
         }
-        return Self.pageFileNode(for: id, page: page)
+        return nil
+    }
+
+    /// Build a file node for a processed markdown head (the `.md` sibling of a
+    /// verbatim source, projected under both `by-id` and `by-name` views).
+    /// Always has `ingestedExt:"md"`; versioned by the head's ULID so any
+    /// edit/revert bumps the item version and invalidates the daemon's cache.
+    static func sourceMarkdownNode(
+        for id: NSFileProviderItemIdentifier,
+        source: SourceSummary,
+        head: SourceMarkdownVersion,
+        contentData: Data? = nil
+    ) -> ProjectedNode {
+        let raw = id.rawValue
+        let isByName = raw.hasPrefix(Identity.sourceMarkdownByNamePrefix)
+        let humanName = source.displayName ?? source.filename
+        let name = isByName
+            ? FilenameEscaping.byNameSourceFilename(
+                filename: humanName, ext: "md", sourceID: source.id)
+            : FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md")
+        let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        let size = contentData?.count ?? head.content.utf8.count
+        return .file(
+            id: id, parent: parent, name: name, size: size,
+            version: Data(head.id.rawValue.utf8),
+            metadataVersion: Data(head.id.rawValue.utf8),
+            created: head.createdAt, modified: head.createdAt,
+            ingestedExt: "md",
+            mimeType: MimeType.markdown
+        )
     }
 
     /// Build a file node for an ingested-file row, under whichever view `id`
     /// belongs to. Size is the stored `byteSize` (NEVER nil → no truncated
     /// `cat`); contentVersion is the row `version`; metadataVersion folds in the
-    /// filename + updated_at so a re-ingest under the same id would re-fetch.
-    static func ingestedFileNode(for id: NSFileProviderItemIdentifier,
-                                 file: IngestedFileSummary) -> ProjectedNode {
+    /// display name (or filename fallback) + updated_at so a rename re-fetches
+    /// the by-name node. By-id stays filename-keyed (stable identity).
+    static func sourceNode(for id: NSFileProviderItemIdentifier,
+                                 file: SourceSummary,
+                                 contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
-        let isByName = raw.hasPrefix(Identity.fileByNamePrefix)
+        let isByName = raw.hasPrefix(Identity.sourceByNamePrefix)
+        let humanName = file.displayName ?? file.filename
         let name = isByName
-            ? FilenameEscaping.byNameIngestedFilename(
-                filename: file.filename, ext: file.ext, fileID: file.id.rawValue)
-            : FilenameEscaping.byIDIngestedFilename(fileID: file.id.rawValue, ext: file.ext)
-        let parent = isByName ? Identity.filesByName : Identity.filesByID
+            ? FilenameEscaping.byNameSourceFilename(
+                filename: humanName, ext: file.ext, sourceID: file.id)
+            : FilenameEscaping.byIDSourceFilename(sourceID: file.id, ext: file.ext)
+        let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        let metaKey = isByName
+            ? "\(humanName)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
+            : "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)"
         return .file(
-            id: id, parent: parent, name: name, size: file.byteSize,
+            id: id, parent: parent, name: name, size: contentData?.count ?? file.byteSize,
             version: Data(String(file.version).utf8),
-            metadataVersion: Data(
-                "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(file.version)".utf8),
+            metadataVersion: Data(metaKey.utf8),
             created: file.createdAt, modified: file.updatedAt,
-            ingestedExt: file.ext
+            ingestedExt: file.ext,
+            mimeType: file.mimeType
         )
     }
 
     /// Build a file node for a page row, under whichever view `id` belongs to.
+    /// Pass `contentData` when the caller has already computed the rewritten
+    /// bytes (by-title view) so the reported `documentSize` matches what
+    /// `contents(for:)` will serve — a mismatch truncates `cat`.
     static func pageFileNode(for id: NSFileProviderItemIdentifier,
-                             page: WikiPage) -> ProjectedNode {
+                             page: WikiPage,
+                             contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByTitle = raw.hasPrefix(Identity.byTitlePrefix)
         let name = isByTitle
             ? FilenameEscaping.byTitleFilename(title: page.title, pageID: page.id.rawValue)
             : FilenameEscaping.byIDFilename(pageID: page.id.rawValue)
         let parent = isByTitle ? Identity.pagesByTitle : Identity.pagesByID
-        let body = Data(page.bodyMarkdown.utf8)
+        let fileData = contentData ?? Data(PageMarkdownFormat.fileContent(for: page).utf8)
         return .file(
-            id: id, parent: parent, name: name, size: body.count,
+            id: id, parent: parent, name: name, size: fileData.count,
             version: Data(String(page.version).utf8),
             metadataVersion: Data(
                 "\(page.title)|\(page.updatedAt.timeIntervalSince1970)|\(page.version)".utf8),
@@ -474,142 +1322,477 @@ struct Projection {
         )
     }
 
-    // MARK: - Enumeration
+    // MARK: - Link rewriting (by-title / by-name views)
 
-    /// Children of a container. Root → README + pages; pages → by-id + by-title;
-    /// by-id/by-title → one file per page row (ordered by ULID == creation
-    /// order). Other containers (files) → empty.
-    func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
-        switch container {
-        case .rootContainer:
-            return [
-                node(for: Identity.readme),
-                node(for: Identity.claudeMD),
-                node(for: Identity.agentsMD),
-                node(for: Identity.indexMD),
-                node(for: Identity.logMD),
-                node(for: Identity.wikiStructureMD),
-                node(for: Identity.treeMD),
-                node(for: Identity.manifest),
-                node(for: Identity.pages),
-                node(for: Identity.files),
-                node(for: Identity.indexes),
-            ].compactMap { $0 }
-        case Identity.pages:
-            return [
-                node(for: Identity.pagesByID),
-                node(for: Identity.pagesByTitle),
-            ].compactMap { $0 }
-        case Identity.files:
-            return [
-                node(for: Identity.filesByID),
-                node(for: Identity.filesByName),
-            ].compactMap { $0 }
-        case Identity.indexes:
-            return [
-                node(for: Identity.indexPagesJSONL),
-                node(for: Identity.indexLinksJSONL),
-                node(for: Identity.indexFilesJSONL),
-            ].compactMap { $0 }
-        case Identity.pagesByID:
-            return pageNodes(byTitle: false)
-        case Identity.pagesByTitle:
-            return pageNodes(byTitle: true)
-        case Identity.filesByID:
-            return ingestedFileNodes(byName: false)
-        case Identity.filesByName:
-            return ingestedFileNodes(byName: true)
-        case .workingSet:
-            // The working set is the set of items the daemon actively tracks for
-            // change. Re-emit ALL page nodes (both views) and ALL ingested-file
-            // nodes (both views) PLUS the generated index nodes so a working-set
-            // `enumerateChanges` after a signal carries the new itemVersions and
-            // the daemon invalidates its materialized copies (the index bytes
-            // derive from page + file content, so a mutation must invalidate them).
-            return pageNodes(byTitle: false) + pageNodes(byTitle: true)
-                + ingestedFileNodes(byName: false) + ingestedFileNodes(byName: true)
-                + [Identity.manifest, Identity.indexPagesJSONL,
-                   Identity.indexLinksJSONL, Identity.indexFilesJSONL,
-                   Identity.claudeMD, Identity.agentsMD,
-                   Identity.indexMD, Identity.logMD,
-                   Identity.wikiStructureMD, Identity.treeMD]
-                    .compactMap { node(for: $0) }
-        default:
-            return []
+    /// Root-relative directory of each projected view, matching the FileProvider
+    /// tree. These are the `baseDir` / target-path prefixes the rewriter uses to
+    /// compute relative link destinations across namespaces.
+    static let pagesByTitleDir  = ["pages", "by-title"]
+    static let sourcesByNameDir = ["sources", "by-name"]
+    static let chatsByNameDir   = ["chats", "by-name"]
+
+    /// The six title/id → target maps the rewriter resolves against, built once
+    /// from the store. Keys: page/chat by title, source by human name, and each
+    /// by uppercased ULID (canonical `[[page:<ULID>]]` form). A `resolver` for a
+    /// given document `baseDir` closes over these to relativize each target path.
+    struct LinkMaps {
+        let pageByTitle:  [String: RelativeLinkRewriter.Target]
+        let pageByID:     [String: RelativeLinkRewriter.Target]
+        let sourceByName: [String: RelativeLinkRewriter.Target]
+        let sourceByID:   [String: RelativeLinkRewriter.Target]
+        let chatByTitle:  [String: RelativeLinkRewriter.Target]
+        let chatByID:     [String: RelativeLinkRewriter.Target]
+        let siblingImages: [SourceID: [String: SourceID]]   // sourceID -> [originalPath -> sibling sourceID]
+
+        /// Loose-key fallback maps for sources and chats. When an exact name
+        /// lookup fails (e.g. an agent cited "Self-Driving Wiki User Guide" but
+        /// the source is named "Self-Driving Wiki — User Guide" with an em
+        /// dash), the loose key — which normalizes dashes, strips extensions
+        /// and parenthetical suffixes — still resolves. Collisions (two
+        /// entries with the same loose key) are omitted, mirroring the store's
+        /// `resolveSourceByName` pass-3 unique-only constraint.
+        let sourceByLooseKey: [String: RelativeLinkRewriter.Target]
+        let chatByLooseKey:   [String: RelativeLinkRewriter.Target]
+
+        func resolver(baseDir: [String]) -> RelativeLinkRewriter.Resolver {
+            RelativeLinkRewriter.Resolver(
+                baseDir: baseDir,
+                page:   { t, isID in isID ? pageByID[t.uppercased()]   : pageByTitle[t] },
+                source: { t, isID in
+                    if isID { return sourceByID[t.uppercased()] }
+                    return sourceByName[t]
+                        ?? WikiLinkResolver.legacySourceProjectionID(from: t)
+                            .flatMap { sourceByID[$0.rawValue.uppercased()] }
+                        ?? sourceByLooseKey[WikiNameRules.looseMatchKey(t)]
+                },
+                chat:   { t, isID in
+                    if isID { return chatByID[t.uppercased()] }
+                    return chatByTitle[t] ?? chatByLooseKey[WikiNameRules.looseMatchKey(t)]
+                }
+            )
+        }
+
+        /// The image-src resolver for ONE source's own markdown, or an
+        /// always-nil resolver if it has no image siblings (the common case —
+        /// most sources never call this at all, gated by the caller).
+        func imageResolver(forSource sourceID: SourceID, baseDir: [String]) -> SourceImageRewriter.Resolver {
+            let siblingMap = siblingImages[sourceID] ?? [:]
+            return SourceImageRewriter.Resolver(baseDir: baseDir, resolve: { originalPath in
+                guard let siblingID = siblingMap[originalPath] else { return nil }
+                return sourceByID[siblingID.rawValue.uppercased()]
+            })
         }
     }
 
+    /// Build the link-resolution maps from the shared read store. Resilient to
+    /// pre-migration tables (missing → empty map → links left `[[…]]` verbatim).
+    /// Source links target the readable `.md` sibling when one exists, else the
+    /// verbatim file — matching the file that `sourceNodes` actually projects.
+    ///
+    /// In a read scope (the normal path), the result is cached on the
+    /// `ReadScope` and reused for every leaf/bookmark in the same enumeration
+    /// pass — one build replaces the O(n) rebuilds that previously ran 5
+    /// full-table scans per leaf (#490). Call `cachedLinkMaps()` instead of
+    /// calling this directly so the cache is transparent to every call site.
+    private func cachedLinkMaps() -> LinkMaps {
+        if let scope = readStoreHolder, let cached = scope.linkMaps {
+            return cached
+        }
+        let maps = makeLinkMaps()
+        readStoreHolder?.cacheLinkMaps(maps)
+        return maps
+    }
+
+    /// The batched `[sourceID: SourceMarkdownVersion]` map for this scope.
+    /// Built once per read scope (one query for ALL sources) and reused by
+    /// every source leaf — replacing per-item `processedMarkdownHead(sourceID:)`
+    /// SQL queries in `nodeForLeaf` / `contentForLeaf` (#503 P5). Mirrors the
+    /// `cachedLinkMaps()` pattern.
+    private func cachedHeadsBySource() -> [String: SourceMarkdownVersion] {
+        if let scope = readStoreHolder, let cached = scope.heads {
+            return cached
+        }
+        let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try openReadStore()?.processedMarkdownHeadsBySource() })) ?? [:]
+        readStoreHolder?.cacheHeads(heads)
+        return heads
+    }
+
+    private func makeLinkMaps() -> LinkMaps {
+        let store = openReadStore()
+
+        // Build the shared link index from pre-fetched rows. Centralizes source
+        // name-variant / loose-key / sibling-image computation so this and
+        // WikiRenderContext.build agree on normalization (#511). The index is
+        // a neutral intermediate; we adapt its entries to RelativeLinkRewriter
+        // .Target below — the file-path logic is Projection-specific.
+        let siblingImages = (DebugLog.trying("siblingImageResolvers", operation: { try store?.siblingImageResolvers() })) ?? [:]
+        let index = WikiLinkIndex.build(
+            pages: ((DebugLog.trying("listAllPages", operation: { try store?.listAllPagesOrderedByID() })) ?? []).map {
+                WikiLinkIndex.PageEntry(id: $0.id.rawValue, title: $0.title) },
+            sources: ((DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() })) ?? []).map {
+                WikiLinkIndex.SourceEntry(
+                    id: $0.id, filename: $0.filename, ext: $0.ext,
+                    mime: $0.mime, displayName: $0.displayName) },
+            chats: ((DebugLog.trying("listAllChats", operation: { try store?.listAllChatsOrderedByID() })) ?? []).map {
+                WikiLinkIndex.ChatEntry(id: $0.id.rawValue, title: $0.title) },
+            siblingImages: siblingImages)
+
+        // Heads map — Projection-specific: determines whether each source
+        // target points at the readable .md sibling or the raw verbatim file.
+        let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+
+        var pageByTitle: [String: RelativeLinkRewriter.Target] = [:]
+        var pageByID: [String: RelativeLinkRewriter.Target] = [:]
+        for entry in index.pages {
+            let file = FilenameEscaping.byTitleFilename(title: entry.title, pageID: entry.id)
+            let target = RelativeLinkRewriter.Target(path: Self.pagesByTitleDir + [file], title: entry.title)
+            pageByTitle[entry.title] = target
+            pageByID[entry.id.uppercased()] = target
+        }
+
+        var sourceByName: [String: RelativeLinkRewriter.Target] = [:]
+        var sourceByID: [String: RelativeLinkRewriter.Target] = [:]
+        for entry in index.sources {
+            // Sibling eligibility mirrors `sourceNodes`: a processed head AND a
+            // non-`text/*` mime yields the `.md` sibling; otherwise the verbatim file.
+            let hasSibling = heads[entry.id] != nil
+                && (entry.mime.map { !MimeType.isText($0) } ?? false)
+            let file = hasSibling
+                ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: SourceID(rawValue: entry.id))
+                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: SourceID(rawValue: entry.id))
+            let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: entry.humanName)
+            sourceByName[entry.humanName] = target
+            sourceByID[entry.id.uppercased()] = target
+        }
+
+        var chatByTitle: [String: RelativeLinkRewriter.Target] = [:]
+        var chatByID: [String: RelativeLinkRewriter.Target] = [:]
+        for entry in index.chats {
+            let file = FilenameEscaping.byTitleFilename(title: entry.title, pageID: entry.id)
+            let target = RelativeLinkRewriter.Target(path: Self.chatsByNameDir + [file], title: entry.title)
+            chatByTitle[entry.title] = target
+            chatByID[entry.id.uppercased()] = target
+        }
+
+        // Loose-key maps: adapt from the shared index's collision-free
+        // looseMatchKey → name maps. Each name is guaranteed to be a key in
+        // the corresponding name → Target dict above (both were built from the
+        // same entries), so compactMapValues never drops a valid entry.
+        let sourceByLooseKey = index.sourceByLooseKey.compactMapValues { sourceByName[$0] }
+        let chatByLooseKey = index.chatByLooseKey.compactMapValues { chatByTitle[$0] }
+
+        return LinkMaps(pageByTitle: pageByTitle, pageByID: pageByID,
+                        sourceByName: sourceByName, sourceByID: sourceByID,
+                        chatByTitle: chatByTitle, chatByID: chatByID,
+                        siblingImages: siblingImages,
+                        sourceByLooseKey: sourceByLooseKey,
+                        chatByLooseKey: chatByLooseKey)
+    }
+
+    /// Rewrite `[[wikilinks]]` in `raw` to relative Markdown links, computing
+    /// destinations relative to `baseDir` (the document's own directory). Single
+    /// source of truth for both `documentSize` and served bytes — a mismatch
+    /// truncates `cat`, so every size/content pair must share this.
+    private func rewriteLinks(_ raw: String, maps: LinkMaps, baseDir: [String]) -> Data {
+        Data(RelativeLinkRewriter.rewrite(raw, resolver: maps.resolver(baseDir: baseDir)).utf8)
+    }
+
+    /// The rewritten by-title page content (page bodies live in `pages/by-title`).
+    private func byTitleContent(for page: WikiPage, maps: LinkMaps) -> Data {
+        guard let store = openReadStore() else {
+            return rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
+        }
+        return rewriteLinks(pageContent(for: page, in: store), maps: maps, baseDir: Self.pagesByTitleDir)
+    }
+
+    /// Rewrite relative image srcs in a markdown-native verbatim source's own
+    /// content, IF it has image siblings (`cachedLinkMaps().siblingImages`).
+    /// Returns `nil` when there's nothing to rewrite (binary sources, sources
+    /// with no image siblings, or non-`by-name` requests) — the caller then
+    /// falls back to raw stored bytes with NO computation, matching today's
+    /// behavior exactly for every unaffected source (the overwhelming
+    /// majority). Byte-identity: both the size path and content path MUST
+    /// call this with the same inputs and use the SAME returned Data.
+    private func rewrittenVerbatimSourceContent(
+        id: SourceID, mimeType: String?, maps: LinkMaps
+    ) -> Data? {
+        guard MimeType.isText(mimeType),
+              let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
+              let store = openReadStore(),
+              let raw = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) }),
+              let text = String(data: raw, encoding: .utf8) else { return nil }
+        let resolver = maps.imageResolver(forSource: id, baseDir: Self.sourcesByNameDir)
+        let rewritten = SourceImageRewriter.rewrite(text, resolver: resolver)
+        return Data(rewritten.utf8)
+    }
+
+    // MARK: - Enumeration
+
+    /// Children of a container. Opens ONE shared read store for the whole
+    /// enumeration pass — the fix for #291 where `children(of: .workingSet)`
+    /// opened ~35 independent SQLite connections (one per leaf, per index, per
+    /// doc, plus one per `changeToken()` call).
+    func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.childrenResolved(of: container)
+    }
+
+    /// Store-sharing implementation of `children(of:)`. Called on a scoped copy
+    /// carrying a `ReadScope` so every `openReadStore()` / `changeToken()` within
+    /// this enumeration reuses one connection (#291).
+    private func childrenResolved(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
+        switch container {
+        case .rootContainer:
+            var nodes: [ProjectedNode] = []
+            // Singleton docs (all aliases, in registry order).
+            for doc in Self.singletonDocs {
+                for entry in doc.entries {
+                    if let n = doc.nodeFor(self, entry.id, entry.name) { nodes.append(n) }
+                }
+            }
+            // Root-level generated indexes (manifest.json).
+            for index in Self.generatedIndexes where index.parent == .rootContainer {
+                if let n = indexFileNode(for: index) { nodes.append(n) }
+            }
+            // Flat-resource top-level folders.
+            for projection in Self.flatProjections {
+                if let n = nodeResolved(for: projection.topLevel) { nodes.append(n) }
+            }
+            // Nested-resource top-level folders (bookmarks).
+            for projection in Self.nestedProjections {
+                if let n = nodeResolved(for: projection.topLevel) { nodes.append(n) }
+            }
+            // The indexes folder.
+            if let n = nodeResolved(for: Identity.indexes) { nodes.append(n) }
+            return nodes
+        case Identity.indexes:
+            return Self.generatedIndexes
+                .filter { $0.parent == Identity.indexes }
+                .compactMap { indexFileNode(for: $0) }
+        case .workingSet:
+            // The working set is the set of items the daemon actively tracks for
+            // change. Re-emit EVERY flat kind's leaves (both views) PLUS the
+            // generated index + root-doc nodes so a working-set `enumerateChanges`
+            // after a signal carries the new itemVersions and the daemon
+            // invalidates its materialized copies (those bytes derive from page +
+            // source content, so any mutation must invalidate them). (slice 2b:
+            // the flat + doc + index contributions are all registry-driven.)
+            var nodes: [ProjectedNode] = []
+            for projection in Self.flatProjections {
+                nodes += projection.enumerate(self, false)
+                nodes += projection.enumerate(self, true)
+            }
+            // Generated indexes (all — their bytes derive from page/source content).
+            for index in Self.generatedIndexes {
+                if let n = indexFileNode(for: index) { nodes.append(n) }
+            }
+            // Singleton docs that participate in the working set (excludes README).
+            for doc in Self.singletonDocs where doc.participatesInWorkingSet {
+                for entry in doc.entries {
+                    if let n = doc.nodeFor(self, entry.id, entry.name) { nodes.append(n) }
+                }
+            }
+            // Nested-resource nodes at all depths (Phase D).
+            for projection in Self.nestedProjections {
+                nodes += projection.allNodes(self)
+            }
+            return nodes
+        default:
+            break
+        }
+        // Flat-resource containers (slice 2b): a top-level folder yields its two
+        // view containers; a view container enumerates its rows (ordered by ULID).
+        for projection in Self.flatProjections {
+            if container == projection.topLevel {
+                return [nodeResolved(for: projection.byIDContainer),
+                        nodeResolved(for: projection.byNameContainer)].compactMap { $0 }
+            }
+            if container == projection.byIDContainer {
+                return projection.enumerate(self, false)
+            }
+            if container == projection.byNameContainer {
+                return projection.enumerate(self, true)
+            }
+        }
+        // Nested-resource containers (slice 2b Phase D).
+        for projection in Self.nestedProjections {
+            if container == projection.topLevel || projection.owns(container) {
+                return projection.childrenOf(self, container)
+            }
+        }
+        return []
+    }
+
     /// All page rows projected as file nodes under the given view, ordered by id
-    /// (ULID == creation order).
+    /// (ULID == creation order). For the by-title view, builds a title map once
+    /// and computes rewritten content per page so `documentSize` matches the
+    /// rewritten bytes that `contents(for:)` will serve.
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let pages = try? store.listAllPagesOrderedByID() else { return [] }
+              let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return [] }
+        let maps = byTitle ? cachedLinkMaps() : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
-            return Self.pageFileNode(for: id, page: page)
+            let contentData = maps.map { byTitleContent(for: page, maps: $0) }
+            return Self.pageFileNode(for: id, page: page, contentData: contentData)
         }
     }
 
     /// All ingested-file rows projected as file nodes under the given view,
     /// ordered by id (ULID == ingest order). Resilient to the table not existing
     /// yet (pre-migration) → empty, so enumeration never errors.
-    private func ingestedFileNodes(byName: Bool) -> [ProjectedNode] {
+    /// When a source has a processed markdown head (from `source_markdown_versions`),
+    /// emits BOTH the verbatim source node AND a `.md` sibling — the processed
+    /// markdown version — under both `by-id` and `by-name` views. Single bulk
+    /// head query avoids N+1 across the source list.
+    private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let files = try? store.listAllIngestedFilesOrderedByID() else { return [] }
-        return files.map { row in
-            let id = byName ? Identity.fileByName(row.id) : Identity.fileByID(row.id)
-            let summary = IngestedFileSummary(
-                id: PageID(rawValue: row.id), filename: row.filename, ext: row.ext,
+              let files = DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }) else { return [] }
+        let heads = cachedHeadsBySource()
+        // Build link maps once for by-name markdown sibling rewriting.
+        let maps = byName ? cachedLinkMaps() : nil
+        return files.flatMap { row in
+            let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
+            let summary = SourceSummary(
+                id: SourceID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
-                createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version)
-            return Self.ingestedFileNode(for: id, file: summary)
+                createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version,
+                displayName: row.displayName)
+            let verbatimContentData = byName
+                ? maps.map { rewrittenVerbatimSourceContent(
+                    id: SourceID(rawValue: row.id), mimeType: row.mime, maps: $0) }
+                  .flatMap { $0 }
+                : nil
+            let verbatimNode = Self.sourceNode(for: id, file: summary, contentData: verbatimContentData)
+            // Sibling eligibility: has a chain AND is NOT markdown-native.
+            // Markdown-native sources don't get a sibling — the verbatim .md is the content.
+            guard let head = heads[row.id],
+                  !MimeType.isText(row.mime) else { return [verbatimNode] }
+            let markdownID = byName
+                ? Identity.sourceMarkdownByName(row.id)
+                : Identity.sourceMarkdownByID(row.id)
+            let contentData = maps.map {
+                rewriteLinks(head.content, maps: $0, baseDir: Self.sourcesByNameDir)
+            }
+            return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary,
+                                                          head: head, contentData: contentData)]
         }
+    }
+
+    /// All chat summaries projected as file nodes under the given view, ordered
+    /// by id (ULID == creation order). Mirrors `pageNodes(byTitle:)`. Resilient
+    /// to the `chats` table not existing yet (pre-migration) → empty, so
+    /// enumeration never errors.
+    private func chatNodes(byName: Bool) -> [ProjectedNode] {
+        guard let store = openReadStore(),
+              let chats = DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() }) else { return [] }
+        // `cachedChatTranscript` handles both by-id (raw) and by-name (rewritten)
+        // paths, caching the bytes so `contentForLeaf` serves the same Data
+        // instead of re-rendering (#503 P1). Link maps are built lazily inside
+        // `cachedChatTranscript` → `cachedLinkMaps()` (scope-cached, so once
+        // per enumeration pass).
+        return chats.map { chat in
+            let id = byName ? Identity.chatByName(chat.id.rawValue)
+                            : Identity.chatByID(chat.id.rawValue)
+            let data = cachedChatTranscript(for: id, chat: chat, in: store)
+            return Self.chatFileNode(for: id, chat: chat, in: store, contentData: data)
+        }
+    }
+
+    /// Render (and optionally link-rewrite) a chat transcript, caching the
+    /// result in the token-keyed `chatContentCache` so `chatNodes`/`nodeForLeaf`
+    /// (sizing) and `contentForLeaf` (serving) share the SAME bytes within a
+    /// change token (#503 P1). The renderer is deterministic, so the cached
+    /// bytes are byte-identical to a fresh render — the second call is a
+    /// pure cache hit. For by-name chats, rewrites `[[wikilinks]]` using the
+    /// scope-cached `LinkMaps`; for by-id, returns the raw UTF-8 bytes.
+    private func cachedChatTranscript(
+        for id: NSFileProviderItemIdentifier,
+        chat: ChatSummary,
+        in store: GRDBWikiStore
+    ) -> Data? {
+        Self.chatContentCache.data(
+            forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()
+        ) {
+            let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
+            let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
+            if id.rawValue.hasPrefix(Identity.chatByNamePrefix) {
+                return rewriteLinks(raw, maps: cachedLinkMaps(),
+                                     baseDir: Self.chatsByNameDir)
+            }
+            return Data(raw.utf8)
+        }
+    }
+
+    /// Build a file node for one chat row, under whichever view `id` belongs to.
+    /// Sized from the rendered transcript so `documentSize` matches the bytes
+    /// `contents(for:)` serves (else `cat` truncates). Versioned by the chat's
+    /// `updated_at` so any message append (which bumps `updated_at`) re-fetches
+    /// the node. Like `pageFileNode(for:page:)`.
+    static func chatFileNode(for id: NSFileProviderItemIdentifier,
+                             chat: ChatSummary,
+                             in store: GRDBWikiStore,
+                             contentData: Data? = nil) -> ProjectedNode {
+        let raw = id.rawValue
+        let isByName = raw.hasPrefix(Identity.chatByNamePrefix)
+        let name = isByName
+            ? FilenameEscaping.byTitleFilename(title: chat.title, pageID: chat.id.rawValue)
+            : FilenameEscaping.byIDFilename(pageID: chat.id.rawValue)
+        let parent = isByName ? Identity.chatsByName : Identity.chatsByID
+        // Callers should pass pre-cached `contentData` from
+        // `cachedChatTranscript` so size==content holds and `contents(for:)`
+        // serves the same cached bytes (#503 P1). The fallback render is kept
+        // for safety; the renderer is deterministic either way.
+        let size: Int
+        if let data = contentData {
+            size = data.count
+        } else {
+            let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
+            size = ChatTranscriptRenderer.render(summary: chat, messages: messages).utf8.count
+        }
+        let version = Data(String(chat.updatedAt.timeIntervalSince1970).utf8)
+        return .file(
+            id: id, parent: parent, name: name, size: size,
+            version: version, metadataVersion: version,
+            created: chat.createdAt, modified: chat.updatedAt
+        )
     }
 
     // MARK: - Content
 
     /// Materialize the bytes for a file identifier. README is static; page files
-    /// read the live body from SQLite. Folders return nil.
+    /// read the live body from SQLite. Folders return nil. Opens ONE shared read
+    /// store for the whole resolution (#291).
     func contents(for id: NSFileProviderItemIdentifier) -> Data? {
-        if id == Identity.readme { return Self.readmeBytes }
-        // System prompt: both names serve the same live body (read like a page).
-        if id == Identity.claudeMD || id == Identity.agentsMD {
-            return Data(systemPromptDocument().body.utf8)
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped.contentsResolved(for: id)
+    }
+
+    /// Store-sharing implementation of `contents(for:)`.
+    private func contentsResolved(for id: NSFileProviderItemIdentifier) -> Data? {
+        // Singleton docs (slice 2b Phase C): dispatch to the matching doc.
+        for doc in Self.singletonDocs where doc.entries.contains(where: { $0.id == id }) {
+            return doc.contentFor(self)
         }
-        // index.md: the singleton catalog body, served verbatim (like the prompt).
-        if id == Identity.indexMD {
-            return Data(wikiIndexDocument().body.utf8)
-        }
-        // log.md: the whole log table rendered as grep-able lines.
-        if id == Identity.logMD {
-            return logBody()
-        }
-        // WIKI-STRUCTURE.md / TREE.md: the layout/orientation map + live counts.
-        if id == Identity.wikiStructureMD || id == Identity.treeMD {
-            return treeBody()
-        }
-        // Generated index files: serve the SAME token-cached bytes whose length
-        // `node(for:)` reported as `documentSize` (else `cat` truncates).
-        if id == Identity.manifest || id == Identity.indexPagesJSONL
-            || id == Identity.indexLinksJSONL || id == Identity.indexFilesJSONL {
+        // Generated indexes (slice 2b Phase C): serve the SAME token-cached
+        // bytes whose length `node(for:)` reported as `documentSize` (else `cat`
+        // truncates).
+        if Self.generatedIndexes.contains(where: { $0.id == id }) {
             return indexData(for: id)
         }
-        // Ingested files: serve the verbatim bytes from SQLite (raw, no
-        // conversion). Resilient to a missing row/table → nil (noSuchItem).
-        if let fileULID = Identity.fileULID(from: id) {
-            guard let store = openReadStore(),
-                  let data = try? store.ingestedFileContent(id: PageID(rawValue: fileULID)) else {
-                return nil
-            }
-            return data
+        // Flat leaf content (slice 2b Phase B): dispatch to the owning
+        // flat-resource projection's `contentForLeaf`.
+        for projection in Self.flatProjections where projection.owns(id) {
+            return projection.contentForLeaf(self, id)
         }
-        guard let ulid = Identity.pageULID(from: id),
-              let store = openReadStore(),
-              let page = try? store.getPage(id: PageID(rawValue: ulid)) else {
-            return nil
+        // Nested leaf content (slice 2b Phase D).
+        for projection in Self.nestedProjections where projection.owns(id) {
+            return projection.contentFor(self, id)
         }
-        return Data(page.bodyMarkdown.utf8)
+        return nil
     }
 }
 
@@ -630,6 +1813,10 @@ struct ProjectedNode {
     /// UTType for ingested files WITHOUT touching the page/index branches. `nil`
     /// for every other node kind (pages, folders, generated indexes).
     let ingestedExt: String?
+    /// Set ONLY for ingested-file leaves: the content-derived MIME type stored in
+    /// the `sources` row. `WikiFSItem.contentType` prefers this over `ingestedExt`
+    /// when deriving the file's UTType. `nil` for every other node kind.
+    let mimeType: String?
 
     static func folder(id: NSFileProviderItemIdentifier,
                        parent: NSFileProviderItemIdentifier,
@@ -637,7 +1824,7 @@ struct ProjectedNode {
         ProjectedNode(id: id, parent: parent, name: name, isFolder: true, size: 0,
                       contentVersion: Projection.staticVersion,
                       metadataVersion: Projection.staticVersion,
-                      created: nil, modified: nil, ingestedExt: nil)
+                      created: nil, modified: nil, ingestedExt: nil, mimeType: nil)
     }
 
     static func file(id: NSFileProviderItemIdentifier,
@@ -645,9 +1832,12 @@ struct ProjectedNode {
                      name: String, size: Int,
                      version: Data, metadataVersion: Data,
                      created: Date?, modified: Date?,
-                     ingestedExt: String? = nil) -> ProjectedNode {
+                     ingestedExt: String? = nil,
+                     mimeType: String? = nil) -> ProjectedNode {
         ProjectedNode(id: id, parent: parent, name: name, isFolder: false, size: size,
                       contentVersion: version, metadataVersion: metadataVersion,
-                      created: created, modified: modified, ingestedExt: ingestedExt)
+                      created: created, modified: modified,
+                      ingestedExt: ingestedExt, mimeType: mimeType)
     }
 }
+#endif  // os(macOS)

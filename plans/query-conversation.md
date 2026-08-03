@@ -30,6 +30,30 @@ asks to save, update, add, rewrite, log, or otherwise persist something.
 - The sidebar separates app-level destinations into Tools (Query) and System
   (Activity, Instructions), with Pages and Files left as content lists.
 
+### Layout parity with PageDetailView (#275)
+
+The conversation surface (`ConversationView`) mirrors `PageDetailView`'s
+header + content + outline layout so the two detail surfaces read as siblings:
+
+- **Header** — `VStack`: title (`.largeTitle`) → metadata row (message count ·
+  date) → button row. The button row holds a "Show in List" button
+  (`sidebar.left` → `requestSidebarReveal(.chat(id))`, hidden in draft state)
+  and the outline toggle (`sidebar.right`). Both live and persisted chats use
+  the same `header(for:)` + divider.
+- **Content width** — transcript, composer, and editing banner fill the full
+  available width (`maxWidth: .infinity`) with `contentInset` (12pt) padding.
+  No `chatColumnWidth` cap (the old 900pt limit was removed).
+- **Outline** — `ChatOutlineView` mirrors `PageOutlineView`: draggable divider
+  with resize cursor, dynamic width via `@AppStorage("chatOutlineWidth")`
+  (default 240, range 60–600), `.windowBackgroundColor`. The outline sits flush
+  against the right window edge (`withChatOutline` stretches content to
+  `.infinity`). Lists user turns in order; clicking scrolls the transcript via
+  a versioned `ChatScrollRequest`.
+- **Chat bubble CSS** — agent responses fill the available width (no
+  `max-width` cap); only user messages are capped at `min(760px, 86%)` and
+  right-aligned. Transcript `body` padding is vertical-only (`10px 0`); the
+  SwiftUI layer handles horizontal insets.
+
 ## Agent Session
 
 Interactive Query uses Claude Code's print-mode streaming input:
@@ -54,6 +78,33 @@ schema plus an interactive Query overlay:
 - only mutate the wiki on explicit user request;
 - when mutating, write via `wikictl`, update `index.md` if appropriate, and
   append a `query` log entry.
+
+## Security: read-only vs edit-mode trust surface
+
+Query has two distinct trust tiers, enforced by **different mechanisms**:
+
+- **Read-only (default, "Allow wiki edits" OFF).** The agent runs under a
+  **hard seatbelt-sandbox boundary** (`SandboxProfile.readOnlyInvocation`) that
+  DENIES writes to the wiki database at the OS level. `wikictl page upsert` /
+  `index set` / `log append` physically fail regardless of what the prompt says.
+  This is enforced by `AgentLauncher.selectQuerySandbox(allowWikiEdits:false, …)`,
+  which returns the read-only sandbox EVEN WHEN a non-nil edit sandbox is
+  configured — global sandbox settings can never override the forced read-only
+  boundary. The editor lock is never taken, so ingestion stays unblocked.
+
+- **Edit-mode ("Allow wiki edits" ON).** A higher-trust surface. The agent runs
+  `claude --dangerously-skip-permissions` with only the opt-in seatbelt sandbox
+  (which may be `nil` / fail-open) plus prompt-level instructions. The per-turn
+  edit lock (`store.isAgentRunning`, driven by `onTurnBoundary`) is taken while
+  the agent is responding and RELEASED between turns so ingestion can run when the
+  agent is idle. Because edit mode skips the permission prompts, **ingested and
+  source content can influence agent writes** — a malicious source document could
+  attempt prompt injection. Read-only mode is the safe default for untrusted
+  material; edit mode should be reserved for material the user intends to act on.
+
+The lock is owned by `AgentLauncher.setGenerating(_:)` (single mutation point),
+fired via the `onTurnBoundary` callback the runner installs — NOT by any View —
+so it releases between turns even when the Query view is unmounted.
 
 ## UI Notes
 

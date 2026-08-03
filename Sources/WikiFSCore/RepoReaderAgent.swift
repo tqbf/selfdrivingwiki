@@ -55,12 +55,16 @@ public enum RepoReaderAgent {
         "tools": ["Bash", "Read", "Grep", "Glob"],
       ]
     ]
-    guard
-      let data = try? JSONSerialization.data(withJSONObject: agents, options: [.sortedKeys]),
-      let json = String(data: data, encoding: .utf8)
-    else {
+    do {
+      let data = try JSONSerialization.data(withJSONObject: agents, options: [.sortedKeys])
+      guard let json = String(data: data, encoding: .utf8) else {
+        DebugLog.agent("RepoReaderAgent.agentsJSON: encoded data is not UTF-8")
+        return "{}"
+      }
+      return json
+    } catch {
+      DebugLog.agent("RepoReaderAgent.agentsJSON: serialization failed: \(error)")
       return "{}"
     }
-    return json
   }
 }

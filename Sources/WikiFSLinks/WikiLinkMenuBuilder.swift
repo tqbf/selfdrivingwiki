@@ -1,0 +1,92 @@
+import Foundation
+
+// MARK: - Overview
+//
+// Right-click link context menu — the pure, view- and storage-free half.
+//
+// `WikiLinkMenuBuilder` decides which actions apply to a link URL. It is pure
+// so it is trivially unit-testable and free of the Textual/AppKit dependency.
+// The view layer (`WikiLinkMenuNSItems` in `WikiFS`) maps these actions to menu
+// items with real closures (navigation, semantic search, pasteboard, the File
+// Provider mount), where state is needed.
+//
+// URL kinds (mirroring `WikiLinkMarkdown`):
+//   wiki://page?title=…      — resolved page link
+//   wiki://source?title=…    — resolved source link
+//   wiki://missing?title=…   — unresolved wiki link (page or source)
+//   wiki://anchor#…          — same-page scroll (not a navigation)
+//   https/mailto/…           — external link
+
+/// The actions offered in a right-click link context menu.
+///
+/// Produced (in menu order) by ``WikiLinkMenuBuilder/actions(for:)`` for a link
+/// URL; the view layer turns each into a concrete menu item.
+public enum WikiLinkAction: Sendable, Equatable {
+    /// Missing wiki link — show the closest existing pages/sources (semantic
+    /// search) so the user can find what they likely meant.
+    case suggest
+    /// Any resolved wiki link — explore pages similar to the linked target.
+    case findSimilar
+    /// Resolved wiki link — open the target page/source in a background tab
+    /// without switching focus away from the current page.  Handled directly
+    /// in `WikiReaderView.willOpenMenu` (inserted right after WebKit's
+    /// "Open Link") rather than through the normal top-actions array.
+    case openInBackgroundTab
+    /// External http(s) link — fetch + ingest it into this wiki as a source,
+    /// the same path the "Add from URL…" toolbar button uses (it opens the sheet
+    /// pre-filled with the URL). Offered only for http/https links; other
+    /// external schemes (mailto:, etc.) can't be ingested and are skipped.
+    case addAsSource
+    /// Resolved internal wiki link (`wiki://page` / `wiki://source`) — file the
+    /// target page/source into a bookmark folder via `BookmarkTargetPickerSheet`.
+    /// The target already exists, so this is just a shortcut for the existing
+    /// "add page/source ref to a folder" path, surfaced inline on the link's
+    /// context menu. Not offered for unresolved (`wiki://missing`) links (no
+    /// existing id to file) or external links. Issue #188.
+    case addBookmark
+}
+
+public enum WikiLinkMenuBuilder {
+
+    /// Actions for the top section (prepended above WebKit's native items).
+    /// Pure — see ``actions(for:)``.
+    public static func actions(for url: URL) -> [WikiLinkAction] {
+        // Same-page anchor: it scrolls within the preview, not a navigation —
+        // no link-specific menu.
+        if WikiLinkMarkdown.isSamePageAnchor(url) {
+            return []
+        }
+
+        // External link (not our wiki scheme): browser + copy. For http(s) links
+        // we also lead with "Add as Source" (fetch + ingest, like the toolbar
+        // button) and offer "Download"; other schemes (mailto:, etc.) can't be
+        // fetched/ingested, so they get only browser + copy.
+        if url.scheme != WikiLinkMarkdown.scheme {
+            let scheme = url.scheme?.lowercased()
+            return (scheme == "http" || scheme == "https") ? [.addAsSource] : []
+        }
+
+        // Wiki link: resolved page/source vs unresolved (missing).
+        // openInBackgroundTab is handled directly in willOpenMenu so it
+        // sits right below WebKit's "Open Link".
+        switch WikiLinkMarkdown.resolvedKind(from: url) {
+        case .page?, .source?, .chat?:
+            // Resolved link — the target page/source/chat exists, so offer to file it
+            // into a bookmark folder directly (issue #188).
+            return [.addBookmark]
+        case nil:
+            // `wiki://missing` — unresolved. Suggest closest matches.
+            return [.suggest]
+        }
+    }
+
+    /// Actions for the bottom section (inserted before the Share item, below
+    /// WebKit's Open/Copy Link items). Currently only resolved wiki links get
+    /// "Find Similar…" here.
+    public static func bottomActions(for url: URL) -> [WikiLinkAction] {
+        guard url.scheme == WikiLinkMarkdown.scheme,
+              WikiLinkMarkdown.resolvedKind(from: url) != nil else { return [] }
+        return [.findSimilar]
+    }
+
+}

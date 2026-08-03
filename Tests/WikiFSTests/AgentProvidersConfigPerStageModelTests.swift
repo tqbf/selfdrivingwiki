@@ -1,0 +1,690 @@
+import Testing
+import Foundation
+@testable import WikiFSCore
+
+/// per-stage-model-selection plan §7: pure-logic tests for the per-stage model
+/// overrides (`ingestStageModelIds` + `modelId(forStage:fallbackProvider:)` +
+/// `settingIngestStageModel(_:forStage:)`). Mirrors the deleted per-op test
+/// shape (`AgentProvidersConfigPerOpProviderTests`). NO subprocess — pure
+/// config + resolver seam tests only.
+///
+/// Per-stage selection builds ON TOP of the per-provider `selectedModelId`
+/// infrastructure (it stays — #704's per-op PROVIDER pin was removed, but the
+/// per-provider model map remains). Per-stage only varies the model id within
+/// ONE provider's catalog (e.g. `glm-5.2` / `glm-5.2-fast` / `glm-5.2-short`
+/// — same provider's variants). See `plans/per-stage-model-selection.md`.
+@Suite("AgentProvidersConfig per-stage model selection")
+struct AgentProvidersConfigPerStageModelTests {
+
+    // MARK: - Fixture
+
+    /// One provider with three advertised model variants (matches the
+    /// neuralwatt use case from the plan: same provider, model-level variants).
+    private var fixture: AgentProvidersConfig {
+        AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: ProviderID(rawValue: "neuralwatt"), label: "Neuralwatt",
+                    command: ["neuralwatt", "acp"], env: [:],
+                    enabled: true, isDefault: true),
+            ],
+            providerModels: [
+                "neuralwatt": [
+                    CachedModelInfo(modelId: ModelID(rawValue: "glm-5.2"), name: "GLM-5.2", description: nil),
+                    CachedModelInfo(modelId: ModelID(rawValue: "glm-5.2-flex"), name: "GLM-5.2 Flex", description: nil),
+                    CachedModelInfo(modelId: ModelID(rawValue: "glm-5.2-short"), name: "GLM-5.2 Short", description: nil),
+                ]
+            ],
+            selectedModelIds: ["neuralwatt": ModelID(rawValue: "glm-5.2")])
+    }
+
+    // MARK: - ACPIngestStage
+
+    @Test func stageEnumHasThreeCasesInOrder() {
+        #expect(ACPIngestStage.allCases == [.planner, .executor, .finalizer])
+    }
+
+    @Test func stageLabelsAreCapitalized() {
+        #expect(ACPIngestStage.planner.label == "Planner")
+        #expect(ACPIngestStage.executor.label == "Executor")
+        #expect(ACPIngestStage.finalizer.label == "Finalizer")
+    }
+
+    @Test func stageRawValuesMatchConfigKeys() {
+        // The config keys are `"planner"`, `"executor"`, `"finalizer"` — these
+        // MUST match `ACPIngestStage.rawValue` so the orchestrator and config
+        // can never drift (the enum exists precisely for this compile-time check).
+        #expect(ACPIngestStage.planner.rawValue == "planner")
+        #expect(ACPIngestStage.executor.rawValue == "executor")
+        #expect(ACPIngestStage.finalizer.rawValue == "finalizer")
+    }
+
+    // MARK: - Resolution: falls back to selectedModelId when stage unset
+
+    @Test func modelForStageFallsBackToSelectedModelIdWhenUnset() {
+        let config = fixture
+        // No `ingestStageModelIds` entry → every stage falls back to the
+        // provider's selectedModelId ("glm-5.2"). This is the #604 collapsed
+        // behavior — every stage uses one model. Pin the contract.
+        #expect(config.ingestStageModelIds.isEmpty)
+        #expect(config.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+        #expect(config.modelId(forStage: "finalizer", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func modelForStageFallsBackWhenProviderHasNoSelectedModelId() {
+        // A provider with no `selectedModelIds` entry has no fallback → returns
+        // nil (the agent's default model will be used). Mirrors the legacy
+        // "no per-stage selection → use the agent's default" behavior.
+        let config = AgentProvidersConfig(
+            providers: [AgentProvider(id: ProviderID(rawValue: "p"), label: "P", command: ["p"], enabled: true, isDefault: true)])
+        #expect(config.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "p")) == nil)
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "p")) == nil)
+    }
+
+    // MARK: - Resolution: per-stage override wins
+
+    @Test func modelForStageReturnsOverrideWhenSet() {
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-short"), forStage: "finalizer")
+        #expect(config.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(config.modelId(forStage: "finalizer", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2-short"))
+    }
+
+    @Test func modelForStageIgnoresEmptyOverride() {
+        // An empty string falls through to the fallback (matches
+        // `selectedModelId(forProvider:)`'s empty collapse).
+        let config = fixture.settingIngestStageModel(ModelID(rawValue: ""), forStage: "executor")
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+        #expect(config.ingestStageModelIds["executor"] == nil)  // empty was normalized away
+    }
+
+    // MARK: - Setter: round-trip + nil/whitespace normalization
+
+    @Test func settingIngestStageModelClearsOnNil() {
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingIngestStageModel(nil, forStage: "executor")
+        #expect(config.ingestStageModelIds["executor"] == nil)
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func settingIngestStageModelClearsOnEmpty() {
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingIngestStageModel(ModelID(rawValue: ""), forStage: "executor")
+        #expect(config.ingestStageModelIds["executor"] == nil)
+    }
+
+    @Test func settingIngestStageModelTrimsWhitespace() {
+        let config = fixture.settingIngestStageModel(ModelID(rawValue: "  glm-5.2-flex  "), forStage: "executor")
+        #expect(config.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+    }
+
+    @Test func settingIngestStageModelClearsOnWhitespaceOnly() {
+        let config = fixture.settingIngestStageModel(ModelID(rawValue: "   "), forStage: "executor")
+        #expect(config.ingestStageModelIds["executor"] == nil)
+    }
+
+    @Test func stagesAreIndependent() {
+        // Three stages, three different models — the core use case.
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "planner")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-short"), forStage: "finalizer")
+        #expect(config.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(config.modelId(forStage: "finalizer", fallbackProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2-short"))
+    }
+
+    // MARK: - Carry-through: other setters preserve ingestStageModelIds
+
+    @Test func settingDefaultPreservesIngestStageModels() {
+        // Changing the default provider does NOT wipe the per-stage overrides.
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingDefault(id: ProviderID(rawValue: "neuralwatt"))
+        #expect(config.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+    }
+
+    @Test func settingSelectedModelPreservesIngestStageModels() {
+        // Changing the per-provider `selectedModelId` does NOT wipe the per-stage
+        // overrides — they're independent fields.
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingSelectedModel(ModelID(rawValue: "glm-5.2-short"), forProvider: ProviderID(rawValue: "neuralwatt"))
+        #expect(config.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2-short"))
+    }
+
+    @Test func settingCachedModelsPreservesIngestStageModels() {
+        let cached = [CachedModelInfo(modelId: ModelID(rawValue: "opus"), name: "Opus", description: nil)]
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingCachedModels(cached, forProvider: ProviderID(rawValue: "neuralwatt"))
+        #expect(config.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(config.cachedModels(forProvider: ProviderID(rawValue: "neuralwatt")).count == 1)
+    }
+
+    @Test func togglingFavoritePreservesIngestStageModels() {
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .togglingFavoriteModel(ModelID(rawValue: "glm-5.2"), forProvider: ProviderID(rawValue: "neuralwatt"))
+        #expect(config.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(config.isFavoriteModel(ModelID(rawValue: "glm-5.2"), forProvider: ProviderID(rawValue: "neuralwatt")))
+    }
+
+    // MARK: - Carry-through: settingIngestStageModel preserves other fields
+
+    @Test func settingIngestStageModelPreservesSelectedModelIds() {
+        let config = fixture
+            .settingSelectedModel(ModelID(rawValue: "glm-5.2"), forProvider: ProviderID(rawValue: "neuralwatt"))
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+        #expect(config.selectedModelId(forProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func settingIngestStageModelPreservesProviderModels() {
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+        #expect(config.cachedModels(forProvider: ProviderID(rawValue: "neuralwatt")).count == 3)
+    }
+
+    // MARK: - Codable backward-compat
+
+    @Test func oldConfigWithoutIngestStageModelIdsDecodesToEmpty() throws {
+        // A pre-per-stage `agent-providers.json` (no `ingestStageModelIds` key)
+        // decodes to `[:]` → every stage uses the provider's `selectedModelId`
+        // (the #604 collapsed behavior — no migration, no behavior change).
+        let json = """
+        {
+          "providers": [
+            { "id": "claude-acp", "label": "Claude", "command": ["bun", "x", "@agentclientprotocol/claude-agent-acp"], "env": {}, "enabled": true, "isDefault": true }
+          ],
+          "providerModels": {},
+          "selectedModelIds": { "claude-acp": "sonnet" },
+          "favoriteModelIds": {},
+          "maxConcurrent": {}
+        }
+        """
+        let data = Data(json.utf8)
+        let config = try JSONDecoder().decode(AgentProvidersConfig.self, from: data)
+        #expect(config.ingestStageModelIds == [:])
+        #expect(config.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
+        #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
+        #expect(config.modelId(forStage: "finalizer", fallbackProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
+    }
+
+    @Test func ingestStageModelIdsRoundTripThroughDisk() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-providers-stage-rt-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let original = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "planner")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "executor")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-short"), forStage: "finalizer")
+        try original.save(to: tmp)
+
+        let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
+        #expect(loaded.ingestStageModelIds["planner"] == ModelID(rawValue: "glm-5.2"))
+        #expect(loaded.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(loaded.ingestStageModelIds["finalizer"] == ModelID(rawValue: "glm-5.2-short"))
+    }
+
+    @Test func loadOrSeedPreservesIngestStageModelsFromDisk() throws {
+        // loadOrSeed re-wraps the decoded config (re-applies normalization + the
+        // claude-acp model backfill). That re-wrap must NOT wipe the per-stage
+        // overrides — same carry-through contract as the per-op fields used.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-providers-stage-loadorseed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let original = AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: ProviderID(rawValue: "claude-acp"), label: "Claude",
+                    command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"],
+                    env: [:], enabled: true, isDefault: true),
+            ],
+            selectedModelIds: ["claude-acp": ModelID(rawValue: "sonnet")],
+            ingestStageModelIds: ["executor": ModelID(rawValue: "haiku")])
+        try original.save(to: tmp)
+
+        let loaded = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
+        #expect(loaded.ingestStageModelIds["executor"] == ModelID(rawValue: "haiku"))
+        // Resolution-time fallback:
+        #expect(loaded.modelId(forStage: "planner", fallbackProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "sonnet"))
+        #expect(loaded.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "haiku"))
+    }
+
+    // MARK: - Removed #704 fields are silently ignored
+
+    @Test func oldConfigWithRemovedPerOpFieldsDecodesAndIgnoresThem() throws {
+        // A live `agent-providers.json` that still has `chatProviderId` /
+        // `ingestProviderId` / `lintProviderId` keys from the removed #704
+        // per-op provider pin layer MUST decode without error — those keys are
+        // silently ignored (not in `CodingKeys` anymore). Migration is silent
+        // + automatic on the next save.
+        let json = """
+        {
+          "providers": [
+            { "id": "claude-acp", "label": "Claude", "command": ["bun"], "env": {}, "enabled": true, "isDefault": true }
+          ],
+          "providerModels": {},
+          "selectedModelIds": { "claude-acp": "sonnet" },
+          "favoriteModelIds": {},
+          "maxConcurrent": {},
+          "chatProviderId": "claude-acp",
+          "ingestProviderId": "deleted-id",
+          "lintProviderId": null
+        }
+        """
+        let data = Data(json.utf8)
+        let config = try JSONDecoder().decode(AgentProvidersConfig.self, from: data)
+        #expect(config.providers.count == 1)
+        #expect(config.selectedProvider().id == ProviderID(rawValue: "claude-acp"))
+    }
+
+    // MARK: - replacingProviders carry-through (v2 §4f regression)
+
+    @Test func replacingProvidersCarriesIngestStageModelIdsAndMaxConcurrent() {
+        // Regression: the four AgentsSettingsView mutators (enabledBinding /
+        // applyEdit / appendProvider / removeProvider) used to rebuild the
+        // config via the 4-field memberwise init, which defaults
+        // `ingestStageModelIds` to `[:]` and `maxConcurrent` to `[:]` —
+        // silently wiping the per-stage model picks + the concurrency map on
+        // every enable-toggle / add / remove / edit. `replacingProviders(_:)`
+        // is the carry-through mutator that fixes it. Post-#711 this matters
+        // MORE: a user picks planner=glm-5.2-fast in the (now-moved) per-stage
+        // section, toggles an unrelated provider's enabled switch in the
+        // Agents list, and the per-stage pick silently reverts without this
+        // fix.
+        let config = fixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"),  forStage: "planner")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2-short"), forStage: "finalizer")
+        // Hand-set maxConcurrent (no public mutator exists for it; round-trip
+        // via the memberwise init to simulate a config that already has it).
+        var withConcurrent = config
+        withConcurrent.maxConcurrent = ["neuralwatt": 4]
+
+        // Replace the providers list (toggling a provider's `enabled` is the
+        // canonical trigger in `enabledBinding`).
+        var toggled = withConcurrent.providers
+        toggled[0].enabled = false
+        // Re-add an enabled provider so `normalized` has something to promote
+        // (otherwise the single-default invariant still picks neuralwatt).
+        toggled.append(AgentProvider(
+            id: ProviderID(rawValue: "alt"), label: "Alt", command: ["alt"], env: [:],
+            enabled: true, isDefault: false))
+        let replaced = withConcurrent.replacingProviders(toggled)
+
+        // ingestStageModelIds survives.
+        #expect(replaced.ingestStageModelIds["planner"] == ModelID(rawValue: "glm-5.2-flex"))
+        #expect(replaced.ingestStageModelIds["executor"] == nil)
+        #expect(replaced.ingestStageModelIds["finalizer"] == ModelID(rawValue: "glm-5.2-short"))
+        // maxConcurrent survives.
+        #expect(replaced.maxConcurrent == ["neuralwatt": 4])
+        // The providers list is actually replaced. Note: `normalized` keeps the
+        // disabled default provider as default (it only promotes a new default
+        // when NONE was default) — `selectedProvider()` is the seam that falls
+        // back to first-enabled at READ time, so the runtime behavior is still
+        // correct (alt runs even though neuralwatt is still nominally default).
+        #expect(replaced.providers.count == 2)
+        #expect(replaced.providers.first(where: { $0.isDefault })?.id == ProviderID(rawValue: "neuralwatt"))
+        #expect(replaced.selectedProvider().id == ProviderID(rawValue: "alt"))
+        // Model caches + selections + favorites also carry through (not the
+        // bug, but the helper must not regress them either).
+        #expect(replaced.cachedModels(forProvider: ProviderID(rawValue: "neuralwatt")).count == 3)
+        #expect(replaced.selectedModelId(forProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func replacingProvidersReNormalizesEmptyListToDefault() {
+        // `init` calls `normalized(providers)`, which seeds `[claudeAcpDefault]`
+        // for an empty list. `replacingProviders([])` must NOT bypass that
+        // invariant (the helper is a thin wrapper around the memberwise init).
+        let config = fixture.settingIngestStageModel(ModelID(rawValue: "glm-5.2-flex"), forStage: "planner")
+        let replaced = config.replacingProviders([])
+        #expect(replaced.providers.count == 1)
+        #expect(replaced.providers.first?.id == ProviderID(rawValue: "claude-acp"))
+        // The per-stage pick survives even when the providers list is re-seeded
+        // (the resolver will fall back to the provider's selectedModelId at
+        // read time since `neuralwatt` is no longer in the list).
+        #expect(replaced.ingestStageModelIds["planner"] == ModelID(rawValue: "glm-5.2-flex"))
+    }
+
+    // MARK: - Per-stage PROVIDER pin (agent-settings-tabs plan)
+
+    /// Two providers so the pin has somewhere to go.
+    private var twoProviderFixture: AgentProvidersConfig {
+        AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: ProviderID(rawValue: "neuralwatt"), label: "Neuralwatt",
+                    command: ["neuralwatt", "acp"], env: [:],
+                    enabled: true, isDefault: true),
+                AgentProvider(
+                    id: ProviderID(rawValue: "acme"), label: "Acme",
+                    command: ["acme", "acp"], env: [:],
+                    enabled: true, isDefault: false),
+            ],
+            providerModels: [
+                "neuralwatt": [CachedModelInfo(modelId: ModelID(rawValue: "glm-5.2"), name: "GLM-5.2", description: nil)],
+                "acme": [CachedModelInfo(modelId: ModelID(rawValue: "acme-1"), name: "Acme One", description: nil)],
+            ],
+            selectedModelIds: [
+                "neuralwatt": ModelID(rawValue: "glm-5.2"),
+                "acme": ModelID(rawValue: "acme-1"),
+            ])
+    }
+
+    @Test func providerForStageNoPinReturnsGlobalDefault() {
+        let config = twoProviderFixture
+        #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "neuralwatt"))
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "neuralwatt"))
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    @Test func providerForStageEnabledPinReturnsPinned() {
+        let config = twoProviderFixture.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "acme"))
+        // Other stages unaffected.
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    @Test func providerForStageDisabledPinFallsBackToDefault() {
+        var disabled = twoProviderFixture
+        disabled.providers[1].enabled = false  // disable acme
+        let config = disabled.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        // acme is disabled → the pin falls back to the global default.
+        #expect(config.provider(forStage: "chat").id == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    @Test func modelIdForStageConvenienceUsesPerStageProvider() {
+        // modelId(forStage:) composes provider(forStage:) + model override.
+        // Pin chat to acme → the fallback is acme's selectedModelId.
+        let config = twoProviderFixture.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "acme-1"))
+        // A chat stage model override wins.
+        let overridden = config.settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "chat")
+        #expect(overridden.modelId(forStage: "chat") == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func chatAndLintKeysResolveViaModelIdForStage() {
+        // The chat/lint keys ride the same ingestStageModelIds map (no schema
+        // change). modelId(forStage:) resolves them through provider(forStage:).
+        let config = twoProviderFixture
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "acme-1"), forStage: "lint")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "glm-5.2"))
+        #expect(config.modelId(forStage: "lint") == ModelID(rawValue: "acme-1"))
+    }
+
+    // MARK: - Stale-model clear on provider pin change (MEDIUM #6)
+
+    @Test func changingStageProviderClearsStaleModelOverride() {
+        // Set a model override under provider A, then change the stage's
+        // provider pin to B → the override MUST be cleared so a model id from
+        // A's catalog is never sent to B's subprocess.
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "neuralwatt"), forStage: "planner")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "planner")
+        #expect(config.ingestStageModelIds["planner"] == ModelID(rawValue: "glm-5.2"))
+        let repinned = config.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "planner")
+        #expect(repinned.ingestStageModelIds["planner"] == nil)
+        // The provider pin itself changed.
+        #expect(repinned.stageProviderIds["planner"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func clearingStageProviderPinDoesNotTouchOtherStages() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "lint")
+        let cleared = config.settingStageProvider(nil, forStage: "chat")
+        #expect(cleared.stageProviderIds["chat"] == nil)
+        #expect(cleared.stageProviderIds["lint"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func settingSameStageProviderDoesNotClearModel() {
+        // Re-pinning the SAME provider is a no-op for the model override
+        // (didChange == false → no clear).
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "acme-1"), forStage: "chat")
+        let samePin = config.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        #expect(samePin.ingestStageModelIds["chat"] == ModelID(rawValue: "acme-1"))
+    }
+
+    // MARK: - settingStageProvider carry-through (other fields survive)
+
+    @Test func settingStageProviderPreservesOtherStagePinsAndModels() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "executor")
+        let repinned = config.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "lint")
+        #expect(repinned.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+        #expect(repinned.ingestStageModelIds["executor"] == ModelID(rawValue: "glm-5.2"))
+        #expect(repinned.selectedModelId(forProvider: ProviderID(rawValue: "neuralwatt")) == ModelID(rawValue: "glm-5.2"))
+    }
+
+    @Test func settingStageProviderPreservesStageProviderIdsOfOtherStages() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "planner")
+        let repinned = config.settingStageProvider(ProviderID(rawValue: "neuralwatt"), forStage: "lint")
+        #expect(repinned.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+        #expect(repinned.stageProviderIds["planner"] == ProviderID(rawValue: "acme"))
+        #expect(repinned.stageProviderIds["lint"] == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    // MARK: - stageProviderIds carry-through across existing mutators
+
+    @Test func settingDefaultPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingDefault(id: ProviderID(rawValue: "acme"))
+        #expect(config.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func settingIngestStageModelPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "acme-1"), forStage: "chat")
+        #expect(config.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func settingCachedModelsPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingCachedModels([], forProvider: ProviderID(rawValue: "neuralwatt"))
+        #expect(config.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func settingSelectedModelPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingSelectedModel(ModelID(rawValue: "acme-1"), forProvider: ProviderID(rawValue: "acme"))
+        #expect(config.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func togglingFavoritePreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .togglingFavoriteModel(ModelID(rawValue: "acme-1"), forProvider: ProviderID(rawValue: "acme"))
+        #expect(config.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func replacingProvidersPreservesStageProviderIds() {
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        let replaced = config.replacingProviders(config.providers)
+        #expect(replaced.stageProviderIds["chat"] == ProviderID(rawValue: "acme"))
+    }
+
+    // MARK: - Per-chat model override (outranks the stage pin AND the global default)
+
+    @Test func providerForStageChatOverrideOutranksStagePin() {
+        // Chat is pinned to acme, but THIS chat's override picks neuralwatt —
+        // the per-chat tier is the highest priority.
+        let config = twoProviderFixture.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: ProviderID(rawValue: "neuralwatt")).id == ProviderID(rawValue: "neuralwatt"))
+        // Other stages (no override argument passed) are unaffected.
+        #expect(config.provider(forStage: "planner").id == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    @Test func providerForStageChatOverrideOutranksGlobalDefault() {
+        // No stage pin at all — the override still wins over the global default.
+        let config = twoProviderFixture
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: ProviderID(rawValue: "acme")).id == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func providerForStageDisabledChatOverrideFallsBackToStagePin() {
+        // A disabled override provider must not be selectable — falls through
+        // to the stage pin, same as a disabled stage pin falls through to the
+        // global default.
+        var disabled = twoProviderFixture
+        disabled.providers[1].enabled = false  // disable acme
+        let config = disabled.settingStageProvider(ProviderID(rawValue: "neuralwatt"), forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: ProviderID(rawValue: "acme")).id == ProviderID(rawValue: "neuralwatt"))
+    }
+
+    @Test func providerForStageEmptyChatOverrideFallsBackNormally() {
+        // Empty string (the "no override" sentinel) behaves exactly like nil.
+        let config = twoProviderFixture.settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+        #expect(config.provider(forStage: "chat", chatOverrideProviderId: ProviderID(rawValue: "")).id == ProviderID(rawValue: "acme"))
+    }
+
+    @Test func modelIdForStageChatOverrideUsesOverrideModelId() {
+        // A chat stage MODEL pin exists, but the per-chat override model wins.
+        let config = twoProviderFixture.settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "chat")
+        #expect(config.modelId(
+            forStage: "chat",
+            chatOverrideProviderId: ProviderID(rawValue: "acme"), chatOverrideModelId: ModelID(rawValue: "acme-1")) == ModelID(rawValue: "acme-1"))
+    }
+
+    @Test func modelIdForStageChatOverrideProviderWithNoModelUsesProviderDefault() {
+        // Override provider set, no override model ("Default" row picked) —
+        // resolves to THAT provider's own selectedModelId, NOT the stage's
+        // model pin (which belongs to a different provider's catalog).
+        let config = twoProviderFixture.settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "chat")
+        #expect(config.modelId(
+            forStage: "chat",
+            chatOverrideProviderId: ProviderID(rawValue: "acme"), chatOverrideModelId: nil) == ModelID(rawValue: "acme-1"))
+    }
+
+    @Test func modelIdForStageNoChatOverridePreservesExistingResolution() {
+        // Omitting the override params entirely must not change behavior for
+        // every pre-existing call site.
+        let config = twoProviderFixture
+            .settingStageProvider(ProviderID(rawValue: "acme"), forStage: "chat")
+            .settingIngestStageModel(ModelID(rawValue: "glm-5.2"), forStage: "chat")
+        #expect(config.modelId(forStage: "chat") == ModelID(rawValue: "glm-5.2"))
+    }
+}
+
+/// per-stage-model-selection plan §7: pure-logic tests for the
+/// `ACPModelSelectionResolver.resolve` decision under per-stage inputs.
+/// Proves the DECISION logic that drives `ACPBackend.applyModelIfNeeded`
+/// without an actor or subprocess (the SDK `Client` is a concrete actor, NOT
+/// a protocol — `ACPTurnRecoveryTests.swift:21-30` documents exactly this
+/// gap; the integration is manual validation MV-1/MV-2/MV-3 only).
+@Suite("ACPModelSelectionResolver per-stage decision")
+struct ACPModelSelectionResolverPerStageTests {
+
+    // MARK: - (a) executor selected ≠ baseline → .apply
+
+    @Test func executorModelDifferentFromBaselineApplies() {
+        // The fork path: baseline = planner's RESOLVED model (NOT the stale
+        // stored modelsInfo.currentModelId — HIGH #2). Executor selected is a
+        // different advertised model → resolver returns `.apply` → setModel
+        // runs in `applyModelIfNeeded`.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: "glm-5.2-flex",
+            currentModelId: "glm-5.2",  // the planner's RESOLVED model
+            advertisedModelIds: ["glm-5.2", "glm-5.2-flex", "glm-5.2-short"])
+        #expect(decision == .apply(selectedId: "glm-5.2-flex"))
+    }
+
+    // MARK: - (b) executor selected == baseline (the planner's resolved model) → no-op
+
+    @Test func executorModelEqualsBaselineIsNoOp() {
+        // MV-2 from the plan: with executor and planner set to the same model,
+        // the forked executor's `applyModelIfNeeded` correctly no-ops (no
+        // setModel round-trip). The baseline is the planner's RESOLVED model
+        // — when executor == planner, the resolver's "already current → no-op"
+        // guard fires correctly WITH an accurate baseline.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: "glm-5.2",
+            currentModelId: "glm-5.2",  // planner == executor → no-op baseline match
+            advertisedModelIds: ["glm-5.2", "glm-5.2-flex"])
+        #expect(decision == .useAgentDefault)
+    }
+
+    // MARK: - (c) stale/unadvertised stage model → useAgentDefault (no 404)
+
+    @Test func unadvertisedStageModelFallsBack() {
+        // The user pinned an executor stage model that the agent no longer
+        // advertises (stale selection). The resolver falls back to
+        // `useAgentDefault` rather than reproducing the exact 404 the picker
+        // exists to prevent. No setModel is sent.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: "legacy-glm-4",
+            currentModelId: "glm-5.2",
+            advertisedModelIds: ["glm-5.2", "glm-5.2-flex"])
+        #expect(decision == .useAgentDefault)
+    }
+
+    // MARK: - HIGH #2 regression: planner ≠ advertised default
+
+    @Test func highRisk2PlannerNotDefaultExecutorIsDefaultStillApplies() {
+        // MV-3: the regression case the plan calls out explicitly. The planner
+        // is set to a non-default model; the executor is pinned to the
+        // advertised default. With the STALE stored `currentModelId` (= the
+        // advertised default), the resolver's "already current → no-op" guard
+        // would WRONGLY no-op — the executor would silently stay on the
+        // inherited PLANNER model (silent model bleed — the exact bug being
+        // fixed).
+        //
+        // The fix: `applyModelIfNeeded` takes an EXPLICIT
+        // `baselineCurrentModelId` (the planner's RESOLVED model, NOT the
+        // stale stored id). The resolver then sees executor ≠ baseline →
+        // `.apply` → setModel runs. This is the **core** HIGH #2 assertion.
+        let plannerResolvedModel = "glm-5.2"
+        let advertisedDefault = "glm-5.2-default"  // (only used by the stale path)
+        let executorSelected = advertisedDefault
+        // STALE path (the bug): baseline == advertised default → no-op.
+        let staleDecision = ACPModelSelectionResolver.resolve(
+            selectedModelId: executorSelected,
+            currentModelId: advertisedDefault,
+            advertisedModelIds: [advertisedDefault, plannerResolvedModel])
+        #expect(staleDecision == .useAgentDefault)  // ← the bug
+        // FIXED path: baseline == planner's RESOLVED model → .apply.
+        let fixedDecision = ACPModelSelectionResolver.resolve(
+            selectedModelId: executorSelected,
+            currentModelId: plannerResolvedModel,
+            advertisedModelIds: [advertisedDefault, plannerResolvedModel])
+        #expect(fixedDecision == .apply(selectedId: executorSelected))  // ← the fix
+    }
+
+    // MARK: - Empty / nil selection → useAgentDefault
+
+    @Test func nilSelectedModelReturnsUseAgentDefault() {
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: nil,
+            currentModelId: "glm-5.2",
+            advertisedModelIds: ["glm-5.2"])
+        #expect(decision == .useAgentDefault)
+    }
+
+    @Test func emptyAdvertisedListReturnsUseAgentDefault() {
+        // Agent that didn't advertise a list of models → never override.
+        let decision = ACPModelSelectionResolver.resolve(
+            selectedModelId: "glm-5.2",
+            currentModelId: nil,
+            advertisedModelIds: [])
+        #expect(decision == .useAgentDefault)
+    }
+}

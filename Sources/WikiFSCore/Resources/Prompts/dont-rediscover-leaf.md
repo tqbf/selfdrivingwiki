@@ -1,0 +1,1 @@
+DO NOT REDISCOVER. The wiki's current state — existing page titles (your cross-link vocabulary), the current index.md body, and the recent log tail — is already staged locally at {{stateFilePath}}. Read THAT; do NOT run `wikictl page list` or read index.md/log.md to rediscover it.

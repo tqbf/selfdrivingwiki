@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Test the full pdf2md pipeline end-to-end.
+# Usage: ./test-pipeline [path-to-pdf]
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PDF2MD="${SCRIPT_DIR}/pdf2md"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+pass()  { echo -e "${GREEN}✓${NC} $*"; }
+fail() { echo -e "${RED}✗${NC} $*"; }
+warn() { echo -e "${YELLOW}⚠${NC} $*"; }
+
+# ── 1. Check prerequisites ──────────────────────────────────────────────
+
+echo "=== pdf2md pipeline test ==="
+echo
+
+# 1a. pdf2md script exists and is executable
+if [ -x "$PDF2MD" ]; then
+    pass "pdf2md script is executable: $PDF2MD"
+else
+    fail "pdf2md script not found or not executable: $PDF2MD"
+    exit 1
+fi
+
+# 1b. uv is installed (needed by the shebang)
+if command -v uv &>/dev/null; then
+    pass "uv is in PATH: $(command -v uv)"
+elif [ -x "$HOME/.local/bin/uv" ]; then
+    warn "uv found at ~/.local/bin/uv but not in PATH — shebang will fail"
+    export PATH="$HOME/.local/bin:$PATH"
+    pass "PATH fixed"
+else
+    fail "uv not found — install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+
+# 1c. python3 in PATH (for fallback / debugging)
+if command -v python3 &>/dev/null; then
+    pass "python3 available: $(python3 --version 2>&1)"
+else
+    warn "python3 not in PATH"
+fi
+
+echo
+
+# ── 2. Check dependency cache ────────────────────────────────────────────
+
+echo "--- Check ready ---"
+START=$(date +%s)
+if "$PDF2MD" --help &>/dev/null; then
+    ELAPSED=$(($(date +%s) - START))
+    if [ "$ELAPSED" -lt 5 ]; then
+        pass "Dependencies cached (--help returned in ${ELAPSED}s)"
+    else
+        warn "Dependencies may need downloading (--help took ${ELAPSED}s)"
+    fi
+else
+    ELAPSED=$(($(date +%s) - START))
+    fail "--help failed after ${ELAPSED}s"
+    exit 1
+fi
+
+echo
+
+# ── 3. Test conversion (if a PDF is provided) ────────────────────────────
+
+TEST_PDF="${1:-}"
+if [ -z "$TEST_PDF" ]; then
+    # Look for a candidate PDF
+    for candidate in \
+        "$HOME/work/R2R/py/core/examples/supported_file_types/pdf.pdf" \
+        "$HOME/work/hermes-agent/docs/hermes-kanban-v1-spec.pdf" \
+        /System/Library/Image\ Capture/Devices/VirtualScanner.app/Contents/Resources/blank.pdf; do
+        if [ -f "$candidate" ]; then
+            TEST_PDF="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$TEST_PDF" ] || [ ! -f "$TEST_PDF" ]; then
+    warn "No test PDF found. Provide one as an argument to test conversion."
+    echo "  $0 ~/Documents/paper.pdf"
+    exit 0
+fi
+
+echo "--- Convert ---"
+echo "Input: $TEST_PDF ($(du -h "$TEST_PDF" | cut -f1))"
+
+TMPDIR="${TMPDIR:-/tmp}"
+OUTFILE="$TMPDIR/pdf2md-test-$$.md"
+START=$(date +%s)
+
+if "$PDF2MD" "$TEST_PDF" -o "$OUTFILE" 2>"$TMPDIR/pdf2md-test-$$.err"; then
+    ELAPSED=$(($(date +%s) - START))
+    CHARS=$(wc -c < "$OUTFILE" | tr -d ' ')
+    LINES=$(wc -l < "$OUTFILE" | tr -d ' ')
+    pass "Conversion succeeded in ${ELAPSED}s — ${CHARS} chars, ${LINES} lines"
+
+    # Show first few lines
+    echo "  --- first 5 lines ---"
+    head -5 "$OUTFILE" | sed 's/^/  | /'
+    echo "  ---------------------"
+else
+    ELAPSED=$(($(date +%s) - START))
+    fail "Conversion failed after ${ELAPSED}s"
+    echo "  stderr:"
+    cat "$TMPDIR/pdf2md-test-$$.err" 2>/dev/null | sed 's/^/  | /' || true
+fi
+
+rm -f "$OUTFILE" "$TMPDIR/pdf2md-test-$$.err"
+
+echo
+echo "=== Done ==="

@@ -126,3 +126,53 @@ inside-out codesigning, and `NSFileProviderManager.add(domain:)` at runtime.
 - **Inside-out signing.** Sign the `.appex` (its own entitlements + profile)
   first, then the `.app`.
 - **Profiles expire (~1 year).** Renew = re-download into `signing/`, rebuild.
+
+---
+
+## Multi-developer signing (parameterized — 2026-06-19)
+
+The identifiers above are the *original author's* and are globally unique, so
+anyone cloning this repo must build against their **own** Apple Developer
+account. Signing is now **parameterized** instead of hardcoded:
+
+- **`signing/local.config`** (gitignored; `signing/local.config.example` is the
+  template) is the single source of truth — `TEAM_ID`, `DEV_IDENTITY`,
+  `BUNDLE_ID`, `EXT_BUNDLE_ID`, `APP_GROUP`. `build.sh` sources it; the
+  `Makefile` reads it via a `cfg` shell helper. Absent → upstream defaults, so a
+  fresh clone still compiles + ad-hoc signs.
+- **`build.sh`** generates both `.entitlements` (into `build/`, from `TEAM_ID` +
+  ids) and injects the ids into the app/appex `Info.plist` and a
+  `wiki-identifiers.env` sidecar next to `wikictl`. The committed
+  `WikiFS/*.entitlements` were **removed** (they baked in one team).
+- **Swift** reads the ids at runtime via `WikiFSCore/WikiIdentifiers.swift`
+  (env var → `Bundle.main` Info.plist → sidecar → compiled default), so the
+  app, the extension, AND `wikictl` resolve the same values with nothing
+  per-user committed. `DatabaseLocation.appGroupID` /
+  `FileProviderSetupVerifier.providerID` delegate to it.
+- **`signing/setup.sh`** automates provisioning via the `asc` CLI: discover team
+  + dev cert (mint one if absent), register this Mac, create both bundle ids +
+  the App Groups capability, pause for the **one** portal step the API can't do
+  (creating + binding the App Group), then create + download both profiles and
+  write `local.config`. Re-runnable.
+
+### Cert minting gotchas (when `asc certificates create` → keychain)
+
+- p12 must be built with `openssl pkcs12 -export -legacy` **and** a non-empty
+  password, or `security import` fails `MAC verification failed`.
+- The Apple WWDR **G3** intermediate must be in the keychain or the identity
+  shows as invalid (`0 valid identities`).
+
+### Provisioning UDID, not Hardware UUID
+
+Register Macs with the **Provisioning UDID** from
+`system_profiler SPHardwareDataType` (`00006050-…`). `asc devices local-udid`
+returns the Hardware UUID, which the portal rejects for Macs.
+
+### Requires full Xcode (not just Command Line Tools)
+
+The app target pulls `textual` → `swiftui-math`, which uses the `@Entry` /
+`#Preview` macros. Those macro plugins ship **inside Xcode.app**, not the
+standalone CLT. With only CLT, `swift build`/`swift test` fail on those macros
+(`SwiftUIMacros.EntryMacro … plugin not found`). Install Xcode and
+`sudo xcode-select -s /Applications/Xcode.app`. Non-UI targets (`WikiFSCore`,
+`WikiCtlCore`, `wikictl`) build fine under CLT alone.

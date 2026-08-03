@@ -5,3 +5,45 @@ dist/
 *.swiftpm
 .DS_Store
 signing/*.provisionprofile
+signing/local.config
+# Vendored JS tooling — reproduction is `npm ci` from the pinned lockfile.
+tools/markdownlint-vendor/node_modules/
+# MLX MiniLM model — downloaded on demand (not committed). Regenerate via
+# tools/minilm-prepare/download.py (pinned HF revision); build.sh bundles it
+# into the .app. See plans/mlx-minilm-design.md.
+Resources/all-MiniLM-L6-v2/
+Resources/all-MiniLM-L6-v2-reference-embeddings.json
+# MLX metallib (Metal shaders) — swift build can't build it (needs xcodebuild),
+# so a prebuilt, version-matched one is fetched by download.py. Not committed.
+Resources/mlx.metallib
+/default.metallib
+
+.vscode/
+.codex/
+
+.xcodebuildmcp/
+tmp/
+:memory:*
+
+# Generated codegen output — derived artifact, NEVER committed.
+# Regenerated at build time by `make version` (git state → GeneratedVersion.swift);
+# a prerequisite of build/check/test/release. Bare `swift build` on a fresh
+# clone won't find it — run `make version` first, or use
+# `make check`/`make build`/`make test`. See tools/versiongen.
+# Note: prompts are no longer code-generated — they are bundled as .md
+# resources in Sources/WikiFSCore/Resources/Prompts/ (loaded via Bundle.module).
+Sources/WikiFSCore/GeneratedVersion.swift
+# Shared keychain access group, baked from signing/local.config (TEAM_ID +
+# APP_GROUP) so the app + wikid daemon agree. Same codegen/build-time contract
+# as GeneratedVersion.swift above — run `make keychain` on a fresh clone.
+Sources/WikiFSCore/GeneratedKeychain.swift
+
+# swift-mutation-testing (schematized mutation testing — `make mutate`).
+# Result cache + JSON/HTML/Sonar reports; all derived, never committed.
+.swift-mutation-testing-cache/
+mutation-report.json
+mutation-report.html
+sonar-mutation-report.json
+
+# SwiftLint transient config written by `make lint-baseline`
+.swiftlint-regen.yml
