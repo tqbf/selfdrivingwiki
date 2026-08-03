@@ -120,7 +120,7 @@ struct ProcessSignalSafetyAuditTests {
         #expect(watchdog.contains(watchdogWrapper))
         #expect(watchdog.contains("watchdog_has_precise_identity_observer"))
         let availabilityCheck = try #require(watchdog.range(of: "watchdog_has_precise_identity_observer"))
-        let testLaunch = try #require(watchdog.range(of: "swift test -v"))
+        let testLaunch = try #require(watchdog.range(of: "swift test -v \"$@\""))
         let postLaunchRefusal = try #require(watchdog.range(of: "post-launch process identity unavailable"))
         #expect(availabilityCheck.lowerBound < testLaunch.lowerBound)
         #expect(testLaunch.lowerBound < postLaunchRefusal.lowerBound)
@@ -190,7 +190,7 @@ struct ProcessSignalSafetyAuditTests {
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1366, primitive: .posixSignal): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1411, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/ACPBackend.swift", line: 1418, primitive: .processTermination): .productOutsideConditionA,
-            .init(relativePath: "Sources/WikiFSEngine/ACPProviderModelProbe.swift", line: 393, primitive: .processTermination): .productOutsideConditionA,
+            .init(relativePath: "Sources/WikiFSEngine/ACPProviderModelProbe.swift", line: 394, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 25, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 191, primitive: .processTermination): .productOutsideConditionA,
             .init(relativePath: "Sources/WikiFSEngine/PdfExtractionService.swift", line: 484, primitive: .processTermination): .productOutsideConditionA,
