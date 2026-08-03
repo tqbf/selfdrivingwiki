@@ -49,35 +49,52 @@ expect_refused "refuses a PID with whitespace padding" " 4242" "$SNAP"
 expect_refused "refuses this shell" "$$" "$(printf '%s\n' "$$")"
 expect_refused "refuses this shell's parent" "$PPID" "$(printf '%s\n' "$PPID")"
 
-echo "watchdog_signal_verified_child — signal-name allowlist:"
-if watchdog_signal_verified_child HUP 4242 "$SNAP" 2>/dev/null; then
-    fail "refuses HUP"
-else
-    pass "refuses HUP"
-fi
-if watchdog_signal_verified_child STOP 4242 "$SNAP" 2>/dev/null; then
-    fail "refuses STOP"
-else
-    pass "refuses STOP"
-fi
-if watchdog_signal_verified_child TERM 9999 "$SNAP" 2>/dev/null; then
-    fail "refuses TERM for an unverified PID"
-else
-    pass "refuses TERM for an unverified PID"
-fi
+echo "watchdog_signal_job — signal-name allowlist:"
+for bad_signal in HUP STOP CONT USR1 9 -9; do
+    if watchdog_signal_job "$bad_signal" "%1" 2>/dev/null; then
+        fail "refuses $bad_signal"
+    else
+        pass "refuses $bad_signal"
+    fi
+done
 
-echo "live child — end to end:"
+echo "watchdog_signal_job — refuses anything that is not a jobspec:"
+# A numeric PID must never reach kill, or the check-then-signal race returns.
+for bad_target in 4242 -4242 "" "abc" "%" "%%1" "% 1" "1%"; do
+    if watchdog_signal_job TERM "$bad_target" 2>/dev/null; then
+        fail "refuses target '$bad_target'"
+    else
+        pass "refuses target '$bad_target'"
+    fi
+done
+
+echo "live job — end to end via jobspec:"
 sleep 30 &
 LIVE_PID=$!
-LIVE_SNAP="$(watchdog_running_child_pids)"
-expect_verified "verifies a live direct child" "$LIVE_PID" "$LIVE_SNAP"
+expect_verified "verifies a live direct child" "$LIVE_PID" "$(watchdog_running_child_pids)"
 
-if watchdog_signal_verified_child TERM "$LIVE_PID" "$LIVE_SNAP"; then
-    pass "delivers TERM to a verified live child"
+if watchdog_signal_job TERM "%1"; then
+    pass "delivers TERM to a live job by jobspec"
 else
-    fail "delivers TERM to a verified live child"
+    fail "delivers TERM to a live job by jobspec"
 fi
-wait "$LIVE_PID" 2>/dev/null
+wait %1 2>/dev/null
+
+echo "the race the reviewer found — target exits AND is reaped after verification:"
+sleep 0.1 &
+RACE_PID=$!
+RACE_SNAP="$(watchdog_running_child_pids)"
+# Verification succeeded against this snapshot...
+expect_verified "snapshot verified the child while it was running" "$RACE_PID" "$RACE_SNAP"
+# ...then the child exits and bash reaps it, freeing the PID for reuse.
+wait %1 2>/dev/null
+# A numeric signal authorised by the now-stale snapshot would land on whatever
+# holds that PID next. The jobspec boundary refuses instead.
+if watchdog_signal_job TERM "%1" 2>/dev/null; then
+    fail "refuses to signal a job reaped after verification"
+else
+    pass "refuses to signal a job reaped after verification"
+fi
 
 echo "reaped child — the PID-reuse window kill -0 would miss:"
 sleep 0.1 &

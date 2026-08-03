@@ -47,6 +47,10 @@ echo "==> timeout: ${TIMEOUT_SECS}s (override with TEST_TIMEOUT=<seconds>)"
 
 swift test -v --parallel --num-workers "$NUM_WORKERS" "$@" >"$LOG_FILE" 2>&1 &
 TEST_PID=$!
+# The only background job this script starts, so it is always %1. Signals are
+# addressed by this jobspec; the PID is used only for the liveness loop and for
+# `wait`, neither of which sends a signal.
+TEST_JOB="%1"
 
 START_TS=$(date +%s)
 TIMED_OUT=0
@@ -65,18 +69,16 @@ done
 if [ "$TIMED_OUT" -eq 1 ]; then
     echo ""
     echo "✗ TIMED OUT after ${TIMEOUT_SECS}s — signaling only the verified swift test child."
-    if ! watchdog_signal_verified_child TERM "$TEST_PID" "$(watchdog_running_child_pids)"; then
-        echo "test watchdog: TERM not delivered; child is no longer a verified running child." >&2
-    fi
+    # Addressed by jobspec, never by PID: bash resolves ownership and signals in
+    # one step, so there is no interval in which the number could be recycled.
+    # This script launches exactly one background job, so %1 is that job.
+    watchdog_signal_job TERM "$TEST_JOB" || true
     sleep 1
-    # Escalate only if the child is still running. A child that exited on TERM is
-    # the expected outcome, not a refusal worth reporting.
-    KILL_SNAPSHOT="$(watchdog_running_child_pids)"
-    if watchdog_is_verified_child "$TEST_PID" "$KILL_SNAPSHOT"; then
+    # Escalate only if the job is still running. A child that exited on TERM is
+    # the expected outcome, not a failure worth reporting.
+    if watchdog_is_verified_child "$TEST_PID" "$(watchdog_running_child_pids)"; then
         echo "==> child survived TERM; escalating to KILL."
-        if ! watchdog_signal_verified_child KILL "$TEST_PID" "$KILL_SNAPSHOT"; then
-            echo "test watchdog: KILL not delivered; child is no longer a verified running child." >&2
-        fi
+        watchdog_signal_job KILL "$TEST_JOB" || true
     else
         echo "==> child exited on TERM; no KILL needed."
     fi

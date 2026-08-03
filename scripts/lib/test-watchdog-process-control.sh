@@ -5,17 +5,26 @@
 # only ever signals a PID that bash still lists as one of THIS shell's running
 # jobs.
 #
-# Why `jobs -pr` is sound proof of identity, and `kill -0` is not:
+# Why signalling goes through a JOBSPEC (%1) and never through a number:
 #
 #   `kill -0 $pid` asks "does some process with this number exist?". Between the
 #   timeout decision and the signal, the child can exit and the kernel can
 #   reissue its PID to an unrelated process. The answer stays "yes" and the
 #   signal lands on a stranger.
 #
-#   `jobs -pr` asks "is this still one of MY un-reaped running children?". The
-#   kernel cannot recycle a child's PID until its parent reaps it, so while the
-#   PID appears in this shell's job table it unambiguously denotes the process
-#   this shell launched. No PID-reuse window exists.
+#   Checking `jobs -pr` first is better, but it is still check-then-signal: the
+#   snapshot proves the PID was an un-reaped job at snapshot time only. Bash can
+#   handle SIGCHLD and reap the job between that check and a later
+#   `kill "$pid"`, after which the kernel may recycle the number. A separately
+#   captured snapshot therefore cannot authorise a numeric signal.
+#
+#   `builtin kill -TERM %1` closes this. Bash resolves the jobspec against its
+#   own job table at the moment of the signal, so the proof and the signal are a
+#   single operation and no recyclable number is ever passed. If the job has been
+#   reaped, the builtin fails with "no such job" and delivers nothing.
+#
+# The numeric predicates below remain for the wait loop and for tests, where a
+# stale answer is harmless. They must NOT be used to authorise a signal.
 #
 # This also replaces the previous `pkill -f "[s]wiftpm-testing-helper.*"` sweep,
 # which selected processes by command-line appearance rather than by ownership.
@@ -57,13 +66,19 @@ watchdog_is_verified_child() {
     return 1
 }
 
-# Signals `pid` only if the snapshot proves it is still our running child.
-# Refuses every other signal name so a caller cannot smuggle in a group signal
-# (a negative PID) or a stop signal.
-watchdog_signal_verified_child() {
+# Signals one of THIS shell's background jobs, addressed only by jobspec.
+#
+# There is deliberately no PID parameter and no snapshot parameter: accepting
+# either would reintroduce the check-then-signal race described above. Bash
+# performs the ownership lookup and the signal together, and fails closed with
+# "no such job" if the job has already been reaped.
+#
+# Refuses every signal name outside TERM/KILL so a caller cannot smuggle in a
+# stop signal, and refuses anything that is not a literal jobspec so a numeric
+# PID or a negative process-group number can never reach `kill`.
+watchdog_signal_job() {
     local signal_name="$1"
-    local pid="$2"
-    local snapshot="$3"
+    local jobspec="$2"
 
     case "$signal_name" in
         TERM | KILL) ;;
@@ -73,10 +88,13 @@ watchdog_signal_verified_child() {
             ;;
     esac
 
-    if ! watchdog_is_verified_child "$pid" "$snapshot"; then
-        echo "test watchdog: refused $signal_name for PID $pid — not a verified running child of this shell" >&2
+    if [[ ! "$jobspec" =~ ^%[0-9]+$ ]]; then
+        echo "test watchdog: refused $signal_name for '$jobspec' — not a jobspec" >&2
         return 1
     fi
 
-    builtin kill "-$signal_name" "$pid" 2>/dev/null
+    if ! builtin kill "-$signal_name" "$jobspec" 2>/dev/null; then
+        echo "test watchdog: $signal_name not delivered to $jobspec — no such job (already exited)" >&2
+        return 1
+    fi
 }

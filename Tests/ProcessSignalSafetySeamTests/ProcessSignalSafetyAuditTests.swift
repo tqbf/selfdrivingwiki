@@ -68,9 +68,11 @@ struct ProcessSignalSafetyAuditTests {
                     + "ProcessSignalSafety.signal on a re-verified direct child"),
             .init(path: "scripts/lib/test-watchdog-process-control.sh",
                   primitive: .shellSignal):
-                (1, "guarded: builtin kill reached only after "
-                    + "watchdog_is_verified_child proves the PID is an un-reaped "
-                    + "running job of this shell, so the PID cannot have been reused"),
+                (1, "guarded: builtin kill is addressed by jobspec (%N), never by a "
+                    + "number. Bash resolves ownership and signals in one step, so "
+                    + "there is no interval in which the PID could be reaped and "
+                    + "recycled. A separately captured jobs snapshot cannot authorise "
+                    + "a signal, because it only proves ownership at snapshot time"),
 
             // --- Owner-terminates-its-own-child, no numeric PID -------------
             // These call terminate() on a Process/client object the same code
@@ -203,8 +205,8 @@ struct ProcessSignalSafetyAuditTests {
 
         #expect(watchdog.contains("swift test -v"), "watchdog must still launch the suite")
         #expect(
-            watchdog.contains("watchdog_signal_verified_child"),
-            "watchdog must signal only through the verified-child boundary")
+            watchdog.contains("watchdog_signal_job"),
+            "watchdog must signal only through the jobspec boundary")
         // Comments stripped: this script documents the `kill -0` it removed.
         #expect(
             strippingCommentsAndLiterals(watchdog, path: "scripts/test-with-watchdog.sh")
@@ -215,9 +217,28 @@ struct ProcessSignalSafetyAuditTests {
             contentsOf: root.appendingPathComponent(
                 "scripts/lib/test-watchdog-process-control.sh"),
             encoding: .utf8)
+        let executableBoundary = strippingCommentsAndLiterals(
+            boundary, path: "scripts/lib/test-watchdog-process-control.sh")
+
+        // The signal must be addressed by jobspec. A `jobs -pr` snapshot proves
+        // ownership only at snapshot time: bash can reap the job between the
+        // check and a later numeric `kill`, after which the kernel may recycle
+        // the number. Signalling `%N` makes the lookup and the signal one step.
         #expect(
-            boundary.contains("jobs -pr"),
-            "verification must rest on this shell's un-reaped job table")
+            executableBoundary.contains("builtin kill \"-$signal_name\" \"$jobspec\""),
+            "the only kill must be addressed by jobspec, not by PID")
+        #expect(
+            executableBoundary.contains("^%[0-9]+$"),
+            "the jobspec must be validated so a numeric PID cannot reach kill")
+        // No `kill` anywhere in the boundary may take a PID variable.
+        for pidAddressedKill in ["kill \"-$signal_name\" \"$pid\"",
+                                 "kill \"-$signal_name\" \"$processID\"",
+                                 "kill -TERM \"$pid\"",
+                                 "kill -KILL \"$pid\""] {
+            #expect(
+                executableBoundary.contains(pidAddressedKill) == false,
+                "signalling a numeric PID reintroduces the check-then-signal race")
+        }
     }
 
     @Test func scannerIgnoresProcessControlTextInCommentsAndLiterals() {
