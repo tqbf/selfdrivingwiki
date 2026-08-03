@@ -373,6 +373,15 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
+        // Signal-target validation tests compile against the pure validation
+        // target only. They deliberately cannot link the production `kill`
+        // closures in WikiFSCore, so a test can never signal a real process.
+        .testTarget(
+            name: "ProcessSignalSafetySeamTests",
+            dependencies: ["WikiFSTypes"],
+            path: "Tests/ProcessSignalSafetySeamTests",
+            swiftSettings: strictSwiftSettings
+        ),
         // macOS-only integration tests — AppKit/WebKit/FileProvider/SwiftUI-hosted
         // views, Tantivy integration, MLX embedder, PDF extraction, JS linter/
         // validator. Kept out of the default test graph because these suites can
