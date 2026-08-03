@@ -404,6 +404,15 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
+        // Condition A signal checks compile against the pure validation target
+        // only. They cannot link the production `kill` closures in WikiFSCore
+        // or DynamicRendererPRSeriesAudit.
+        .testTarget(
+            name: "ProcessSignalSafetySeamTests",
+            dependencies: ["WikiFSTypes"],
+            path: "Tests/ProcessSignalSafetySeamTests",
+            swiftSettings: strictSwiftSettings
+        ),
         .testTarget(
             name: "DynamicRendererPRSeriesAuditTests",
             dependencies: ["DynamicRendererPRSeriesAudit", "WikiFSTypes"],
