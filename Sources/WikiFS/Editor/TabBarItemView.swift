@@ -3,8 +3,8 @@ import WikiFSCore
 
 /// One tab button in the tab bar. Shows icon + truncated title + close button.
 /// Active tab has an accent underline; inactive tabs get a subtle background on
-/// hover. Right-click opens a native `.contextMenu` (Close / Close Others /
-/// Close Tabs After / Close All).
+/// hover. Pinned tabs show a pin and preserve their selection during ordinary
+/// navigation. Right-click opens a native `.contextMenu` for pin and close actions.
 struct TabBarItemView: View {
     let tab: EditorTab
     let isActive: Bool
@@ -13,6 +13,7 @@ struct TabBarItemView: View {
     /// as more open; the title truncates within.
     let width: CGFloat
     let onClick: () -> Void
+    let onTogglePin: () -> Void
     let onClose: () -> Void
     let onCloseOthers: () -> Void
     let onCloseAfter: () -> Void
@@ -25,6 +26,7 @@ struct TabBarItemView: View {
         HStack(spacing: 4) {
             closeButton
             icon
+            pinIndicator
             titleText
         }
         .padding(.horizontal, 8)
@@ -66,6 +68,16 @@ struct TabBarItemView: View {
             .foregroundStyle(isActive ? Color.accentColor : .secondary)
     }
 
+    @ViewBuilder
+    private var pinIndicator: some View {
+        if tab.isPinned {
+            Image(systemName: "pin.fill")
+                .font(.caption)
+                .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                .accessibilityLabel("Pinned")
+        }
+    }
+
     private var titleText: some View {
         Text(tab.title)
             .font(.caption)
@@ -99,10 +111,14 @@ struct TabBarItemView: View {
 
     @ViewBuilder
     private var contextMenuItems: some View {
-        Button("Close") { onClose() }
-        Button("Close Others") { onCloseOthers() }
-        Button("Close Tabs After") { onCloseAfter() }
+        Button(tab.isPinned ? "Unpin" : "Pin", systemImage: tab.isPinned ? "pin.slash" : "pin") {
+            onTogglePin()
+        }
         Divider()
-        Button("Close All") { onCloseAll() }
+        Button("Close", systemImage: "xmark") { onClose() }
+        Button("Close Others", systemImage: "xmark.circle") { onCloseOthers() }
+        Button("Close Tabs After", systemImage: "arrow.right.to.line") { onCloseAfter() }
+        Divider()
+        Button("Close All", systemImage: "xmark.circle.fill") { onCloseAll() }
     }
 }

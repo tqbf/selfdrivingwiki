@@ -10,6 +10,9 @@ public struct EditorTab: Hashable, Sendable, Identifiable {
     public var selection: WikiSelection
     /// Display label in the tab bar (page title, "Query", "Instructions", etc.).
     public var title: String
+    /// A pinned tab keeps its current selection when normal navigation opens a
+    /// different target. Pin state belongs to this tab instance, not its content.
+    public var isPinned: Bool = false
     /// Whether the page editor was open when this tab was last focused.
     /// Persisted here so switching back to the tab restores edit mode.
     public var isEditing: Bool = false

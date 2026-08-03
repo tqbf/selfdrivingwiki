@@ -26,6 +26,7 @@ struct TabBarView: View {
                         iconName: store.tabIcon(for: tab.selection),
                         width: layout.tabWidth,
                         onClick: { store.selectTab(id: tab.id) },
+                        onTogglePin: { store.toggleTabPin(id: tab.id) },
                         onClose: { store.closeTab(id: tab.id) },
                         onCloseOthers: { store.closeOtherTabs(id: tab.id) },
                         onCloseAfter: { store.closeTabsAfter(id: tab.id) },

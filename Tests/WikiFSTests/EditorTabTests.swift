@@ -240,6 +240,63 @@ struct EditorTabTests {
         #expect(model.tabs.count == 1)
     }
 
+    // MARK: - Pinning
+
+    @Test func toggleTabPinChangesOnlyTheTargetTab() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        let tabA = try #require(model.activeTabID)
+        model.openTab(.page(b.id))
+        let tabB = try #require(model.activeTabID)
+
+        model.toggleTabPin(id: tabA)
+
+        #expect(model.tabs.first { $0.id == tabA }?.isPinned == true)
+        #expect(model.tabs.first { $0.id == tabB }?.isPinned == false)
+
+        model.toggleTabPin(id: tabA)
+
+        #expect(model.tabs.first { $0.id == tabA }?.isPinned == false)
+    }
+
+    @Test func pinnedTabKeepsPinStateWhenRetargetedAndReopened() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        let tabID = try #require(model.activeTabID)
+
+        model.toggleTabPin(id: tabID)
+        model.retargetTab(id: tabID, to: .page(b.id))
+
+        #expect(model.tabs.first?.id == tabID)
+        #expect(model.tabs.first?.isPinned == true)
+        model.closeTab(id: tabID)
+        model.reopenLastClosedTab()
+        #expect(model.tabs.first?.isPinned == true)
+    }
+
+    @Test func navigationFromPinnedTabOpensANewUnpinnedTab() throws {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        model.reloadFromStore()
+        model.openTab(.page(a.id))
+        let pinnedTabID = try #require(model.activeTabID)
+        model.toggleTabPin(id: pinnedTabID)
+
+        #expect(model.selectPage(byID: b.id))
+        #expect(model.tabs.count == 2)
+        #expect(model.tabs.first { $0.id == pinnedTabID }?.selection == .page(a.id))
+        #expect(model.tabs.first { $0.id == pinnedTabID }?.isPinned == true)
+        #expect(model.activeTab?.selection == .page(b.id))
+        #expect(model.activeTab?.isPinned == false)
+    }
+
     // MARK: - closeTab
 
     @Test func closeTabActivatesRightNeighbor() throws {
