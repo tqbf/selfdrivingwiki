@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "pr": 1,
+  "scope": "portable renderer contract only",
+  "productionSources": [
+    "Sources/WikiFSTypes/Renderer/RendererConstraints.swift",
+    "Sources/WikiFSTypes/Renderer/RendererDescriptor.swift",
+    "Sources/WikiFSTypes/Renderer/RendererIdentifier.swift",
+    "Sources/WikiFSTypes/Renderer/RendererManifest.swift",
+    "Sources/WikiFSTypes/Renderer/RendererMatcher.swift",
+    "Sources/WikiFSTypes/Renderer/RendererResolution.swift",
+    "Sources/WikiFSTypes/Renderer/RendererSHA256.swift",
+    "Sources/WikiFSTypes/Renderer/RendererValidationError.swift",
+    "Sources/WikiFSCore/Core/PortableHash.swift"
+  ],
+  "requiredTests": [
+    "RendererSHA256Tests.testDigestBytes",
+    "RendererDigestHexCodecTests.testCanonicalLowercaseHex",
+    "RendererDigestHexCodecTests.testRejectsMalformedDigests",
+    "RendererPortableHashImportTests.testSupportedPlatformImports",
+    "RendererPackageHashTests.canonicalEnvelopeGoldenDigestAndOrderIndependence",
+    "RendererMatcherTests.usesExtensionOnlyWhenNoStrongMatcherExists",
+    "RendererResolutionTests.sortsByPriorityThenStableReferenceWithoutInputOrder",
+    "RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference",
+    "RendererDescriptorValidationTests.rejectsForbiddenNetworkCapability",
+    "RendererManifestValidationTests.rejectsDuplicateRegistrationUnsupportedRevisionAndIdentityMismatch"
+  ],
+  "decisionBranches": [
+    "identifier validation and namespace separation",
+    "semantic-version precedence",
+    "bounded matcher input and extension fallback",
+    "descriptor capability, presentation, and size-limit validation",
+    "manifest identity, registration, and asset validation",
+    "deterministic priority and preference resolution",
+    "strict lowercase digest codec",
+    "canonical package-hash envelope order independence"
+  ],
+  "notApplicable": [
+    "package filesystem installation",
+    "persistence",
+    "network",
+    "UI",
+    "compiler-boundary negative typechecking",
+    "cross-process hash determinism"
+  ],
+  "mutationScope": "Sources/WikiFSTypes/Renderer",
+  "mutationEvidence": "Run and classify the documented scoped mutation report separately; optional mutation-evidence schema and audit enforcement are intentionally excluded from this recovery.",
+  "gateLimitations": [
+    "The compile-boundary negative namespace fixture test is deferred because this recovery may not add subprocess waiting or process-safety harness code.",
+    "The fresh-process package-hash determinism test is deferred for the same reason; the pure construction-order test remains."
+  ]
+}
