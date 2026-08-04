@@ -5,6 +5,17 @@ import WikiFSCore
 
 struct StageProviderModelPickerTests {
 
+    @Test func inheritedModelUsesAgentDefaultWhenProviderHasNoSelectedModel() {
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "codex-acp"), label: "Codex", enabled: true, isDefault: true),
+        ])
+
+        let state = StageModelInheritanceState.resolve(config: config, stageKey: "planner")
+
+        #expect(state == .agentDefault)
+        #expect(state.optionLabel == "Same as provider (agent default)")
+    }
+
     @Test func selectionStateUsesInheritedWhenNoPinExists() {
         let config = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", enabled: true, isDefault: true),

@@ -162,6 +162,9 @@ public actor QueueEngine {
             throw QueueStoreError.invalidRequest("wikiID must not be empty")
         }
         let item = try store.enqueue(request)
+        if item.queue == .ingestion {
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=engine event=enqueued queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt) sources=\(item.payload.sourceIDs.count)")
+        }
         emit(.enqueued(item))
         await dispatchScan()
         return item.id
@@ -682,8 +685,14 @@ public actor QueueEngine {
                 continue
             }
             for item in active where item.state == .queued {
+                if item.queue == .ingestion {
+                    DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=dispatch event=scan queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt)")
+                }
                 // The ONE await — resolve the provider up front.
                 guard let providerID = await workerFactory.providerID(for: item) else {
+                    if item.queue == .ingestion {
+                        DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=dispatch event=blocked queue=ingestion wiki=\(item.wikiID.rawValue) reason=no-provider")
+                    }
                     continue  // No provider available; item stays queued.
                 }
 
@@ -703,11 +712,19 @@ public actor QueueEngine {
 
                 // Per-provider capacity check.
                 let currentCount = providerActiveCounts[providerID] ?? 0
-                guard currentCount < limit else { continue }
+                guard currentCount < limit else {
+                    if item.queue == .ingestion {
+                        DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=dispatch event=blocked queue=ingestion wiki=\(item.wikiID.rawValue) reason=provider-capacity provider=\(providerID.rawValue) active=\(currentCount) limit=\(limit)")
+                    }
+                    continue
+                }
 
                 // Per-wiki ingestion invariant: at most one ingestion per wiki.
                 if item.queue == .ingestion {
-                    guard !activeIngestionWikis.contains(item.wikiID) else { continue }
+                    guard !activeIngestionWikis.contains(item.wikiID) else {
+                        DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=dispatch event=blocked queue=ingestion wiki=\(item.wikiID.rawValue) reason=wiki-active")
+                        continue
+                    }
                 }
 
                 // Claim the item: mark running (synchronous store call).
@@ -733,6 +750,7 @@ public actor QueueEngine {
                 incrementProviderCount(providerID)
                 if item.queue == .ingestion {
                     activeIngestionWikis.insert(item.wikiID)
+                    DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=dispatch event=claimed queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt) provider=\(providerID.rawValue)")
                 }
 
                 // Emit the started event.
@@ -758,10 +776,16 @@ public actor QueueEngine {
     private func runWorker(_ item: QueueItem) async {
         let attemptID = QueueAttemptID(itemID: item.id, attempt: item.attempt)
         transcriptState.begin(attemptID)
+        if item.queue == .ingestion {
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=worker event=started queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt)")
+        }
         let worker: any QueueWorker
         do {
             worker = try await workerFactory.worker(for: item)
         } catch {
+            if item.queue == .ingestion {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=worker event=failed queue=ingestion wiki=\(item.wikiID.rawValue) reason=worker-factory error=\(error.localizedDescription)")
+            }
             // Factory failed to produce a worker — mark the item failed.
             await handleWorkerFinished(item, result: .failure(error))
             transcriptState.finish(attemptID)
@@ -774,10 +798,19 @@ public actor QueueEngine {
         do {
             try await worker.execute(item)
             result = .success(())
+            if item.queue == .ingestion {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=worker event=finished queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt)")
+            }
         } catch is CancellationError {
             result = .failure(CancellationError())
+            if item.queue == .ingestion {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=worker event=cancelled queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt)")
+            }
         } catch {
             result = .failure(error)
+            if item.queue == .ingestion {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=worker event=failed queue=ingestion wiki=\(item.wikiID.rawValue) attempt=\(item.attempt) error=\(error.localizedDescription)")
+            }
         }
 
         await handleWorkerFinished(item, result: result)

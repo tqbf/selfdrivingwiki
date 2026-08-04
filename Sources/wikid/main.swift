@@ -138,14 +138,21 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
             do {
-                let engine = try await daemon.ensureQueueEngine()
                 let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
+                DebugLog.ingest("Queue trace=pending stage=xpc.daemon event=received queue=\(req.queue.rawValue) wiki=\(req.wikiID.rawValue) sources=\(req.payload.sourceIDs.count)")
+                if let error = daemon.queueRequestPreflightError(req) {
+                    DebugLog.ingest("Queue trace=pending stage=xpc.daemon event=rejected queue=\(req.queue.rawValue) wiki=\(req.wikiID.rawValue) error=\(error)")
+                    throw QueueStoreError.invalidRequest(error)
+                }
+                let engine = try await daemon.ensureQueueEngine()
                 let id = try await engine.enqueue(req)
+                DebugLog.ingest("Queue trace=\(id.rawValue) stage=xpc.daemon event=accepted queue=\(req.queue.rawValue) wiki=\(req.wikiID.rawValue)")
                 // XPC wire boundary: the engine returns a QueueItemID; the reply dict serializes the raw String.
                 let envelope: [String: String?] = ["id": id.rawValue, "error": nil]
                 let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)
             } catch {
+                DebugLog.ingest("Queue trace=pending stage=xpc.daemon event=failed error=\(error.localizedDescription)")
                 let envelope: [String: String?] = ["id": nil, "error": error.localizedDescription]
                 let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
                 sendableReply.reply(data)

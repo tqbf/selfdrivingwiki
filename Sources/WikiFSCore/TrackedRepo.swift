@@ -88,6 +88,14 @@ public struct TrackedRepo: Identifiable, Hashable, Sendable {
     return headCommit != lastIngestedCommit
   }
 
+  /// Whether an Update request can run. Update always fetches first, so a
+  /// cloned repository remains updateable even when its last fetch found no
+  /// drift; the daemon will report that it is already up to date.
+  public var canRequestUpdate: Bool {
+    guard let headCommit else { return false }
+    return !headCommit.isEmpty
+  }
+
   /// The first 7 characters of `headCommit`, for compact display. Empty when the
   /// repo has not been cloned yet.
   public var shortHead: String {

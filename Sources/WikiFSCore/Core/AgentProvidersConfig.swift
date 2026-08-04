@@ -302,9 +302,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     }
 
     /// The chat composer may enable submission only when the same resolved
-    /// provider/model pair that the launcher validates is available. This keeps
-    /// an all-disabled provider list or a missing selected model from reaching
-    /// the daemon as a preflight failure.
+    /// provider is available. A nil model inherits the provider's agent
+    /// default, so only provider availability is required.
     public func isChatOperationConfigured(
         chatOverrideProviderId: ProviderID? = nil,
         chatOverrideModelId: ModelID? = nil
@@ -315,14 +314,31 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             chatOverrideProviderId: chatOverrideProviderId
         )
         guard provider.enabled else { return false }
-        guard let modelID = modelId(
-            forStage: "chat",
-            chatOverrideProviderId: chatOverrideProviderId,
-            chatOverrideModelId: chatOverrideModelId
-        ) else {
-            return false
+        return true
+    }
+
+    /// Whether a repository update can start. Repository updates use the same
+    /// planner-stage provider and model as normal ingestion.
+    public func isRepositoryUpdateConfigured() -> Bool {
+        agentOperationConfigurationError(forStages: [ACPIngestStage.planner.rawValue]) == nil
+    }
+
+    /// Returns the user-facing reason an agent operation cannot start, or nil
+    /// when every required stage resolves to an enabled provider. A nil model
+    /// inherits the provider's agent default.
+    public func agentOperationConfigurationError(forStages stages: [String]) -> String? {
+        guard enabledProviders.isEmpty == false else {
+            return "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Providers to retry."
         }
-        return modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+
+        for stage in stages {
+            let provider = provider(forStage: stage)
+            guard provider.enabled else {
+                let stageLabel = ACPIngestStage(rawValue: stage)?.label ?? stage.capitalized
+                return "Agent is not available for the \(stageLabel) stage because provider ‘\(provider.label)’ is disabled. Re-enable it in Settings → Providers to retry."
+            }
+        }
+        return nil
     }
 
     // MARK: - Per-stage model selection (per-stage-model-selection plan)

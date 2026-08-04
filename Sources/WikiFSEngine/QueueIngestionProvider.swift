@@ -238,6 +238,7 @@ struct QueueIngestionWorker: QueueWorker {
     let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
 
     func execute(_ item: QueueItem) async throws {
+        DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=entered wiki=\(item.wikiID.rawValue) attempt=\(item.attempt) sources=\(item.payload.sourceIDs.count)")
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
         // is on PATH BEFORE running the full pipeline. If the binary is missing,
         // fail the item with a clear, user-facing message instead of a cryptic
@@ -246,6 +247,7 @@ struct QueueIngestionWorker: QueueWorker {
         let needsAgent = item.payload.repositoryWork?.action == .update
             || item.payload.repositoryWork == nil
         if needsAgent, let message = await provider.readiness() {
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=blocked wiki=\(item.wikiID.rawValue) reason=not-ready error=\(message)")
             throw QueueIngestionError.notReady(message)
         }
 
@@ -317,8 +319,10 @@ struct QueueIngestionWorker: QueueWorker {
             // Normal ingestion.
             let sourceIDs = item.payload.sourceIDs
             guard !sourceIDs.isEmpty else {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=failed wiki=\(item.wikiID.rawValue) reason=no-sources")
                 throw QueueIngestionError.noSources
             }
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=handoff wiki=\(item.wikiID.rawValue) target=provider sources=\(sourceIDs.count)")
             try await provider.runIngestion(
                 wikiID: item.wikiID,
                 sourceIDs: sourceIDs,

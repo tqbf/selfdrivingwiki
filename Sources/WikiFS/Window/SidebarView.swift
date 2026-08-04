@@ -74,6 +74,9 @@ struct SidebarView: View {
             Divider()
             bookmarksOrList
         }
+        // The repositories empty state has only an intrinsic height. Claim the
+        // full sidebar column so NavigationSplitView does not center this stack.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,
                                          ideal: PageEditorMetrics.sidebarIdealWidth)

@@ -26,9 +26,13 @@ struct RepositoriesContainerView: View {
                 }
             } else {
                 List(store.trackedRepositories) { repository in
-                    RepositoryRow(repository: repository) { action in
-                        enqueue(action, for: repository)
-                    }
+                    RepositoryRow(
+                        repository: repository,
+                        enqueue: { action in
+                            enqueue(action, for: repository)
+                        },
+                        updateConfigurationError: updateConfigurationError
+                    )
                 }
                 .listStyle(.sidebar)
                 .toolbar {
@@ -50,6 +54,11 @@ struct RepositoriesContainerView: View {
     }
 
     private func enqueue(_ action: RepositoryWorkAction, for repository: TrackedRepo) {
+        DebugLog.ingest("Repository action tapped action=\(action.rawValue) repo=\(repository.id.rawValue) canUpdate=\(repository.canRequestUpdate) drifted=\(repository.isDrifted)")
+        if action == .update, let error = updateConfigurationError {
+            DebugLog.ingest("RepositoriesContainerView refused update for \(repository.id.rawValue): \(error)")
+            return
+        }
         Task {
             do {
                 let request = QueueItemRequest(
@@ -64,11 +73,21 @@ struct RepositoriesContainerView: View {
             }
         }
     }
+
+    private var updateConfigurationError: String? {
+        let directory = DebugLog.trying("resolve app group container", operation: {
+            try DatabaseLocation.appGroupContainerDirectory()
+        }) ?? FileManager.default.temporaryDirectory
+        let config = AgentProvidersConfig.loadOrSeed(from: directory)
+        return config.isRepositoryUpdateConfigured() ? nil : config.agentOperationConfigurationError(
+            forStages: [ACPIngestStage.planner.rawValue])
+    }
 }
 
 private struct RepositoryRow: View {
     let repository: TrackedRepo
     let enqueue: (RepositoryWorkAction) -> Void
+    let updateConfigurationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -87,11 +106,15 @@ private struct RepositoryRow: View {
                     enqueue(.update)
                 }
                 .buttonStyle(.borderless)
-                .disabled(!repository.isDrifted)
+                .disabled(!repository.canRequestUpdate || updateConfigurationError != nil)
+                .help(updateConfigurationError ?? "Update this wiki from the repository")
             }
             .controlSize(.small)
         }
         .padding(.vertical, 2)
+        .onAppear {
+            DebugLog.ingest("Repository row displayed repo=\(repository.id.rawValue) canUpdate=\(repository.canRequestUpdate) drifted=\(repository.isDrifted) configurationError=\(updateConfigurationError ?? "nil")")
+        }
     }
 
     private var repositoryStatus: String {

@@ -82,6 +82,21 @@ struct AgentProvidersConfigPerStageModelTests {
         #expect(config.modelId(forStage: "executor", fallbackProvider: ProviderID(rawValue: "p")) == nil)
     }
 
+    @Test func repositoryUpdateAllowsThePlannerToUseItsProvidersAgentDefault() {
+        let providerID = ProviderID(rawValue: "configured")
+        let agentDefaultPlanner = AgentProvidersConfig(providers: [
+            AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+        ])
+        let plannerOnly = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: providerID, label: "Configured", enabled: true, isDefault: true),
+            ],
+            ingestStageModelIds: [ACPIngestStage.planner.rawValue: ModelID(rawValue: "planner-model")]
+        )
+        #expect(agentDefaultPlanner.isRepositoryUpdateConfigured())
+        #expect(plannerOnly.isRepositoryUpdateConfigured())
+    }
+
     // MARK: - Resolution: per-stage override wins
 
     @Test func modelForStageReturnsOverrideWhenSet() {

@@ -31,6 +31,30 @@ enum StageProviderSelectionState: Equatable {
     }
 }
 
+/// The effective meaning of the model-picker inheritance option. Kept pure so
+/// the UI cannot accidentally label an agent-default choice as a missing model.
+enum StageModelInheritanceState: Equatable {
+    case selectedModel(ModelID)
+    case agentDefault
+
+    static func resolve(config: AgentProvidersConfig, stageKey: String) -> StageModelInheritanceState {
+        let provider = config.provider(forStage: stageKey)
+        if let modelID = config.selectedModelId(forProvider: provider.id) {
+            return .selectedModel(modelID)
+        }
+        return .agentDefault
+    }
+
+    var optionLabel: String {
+        switch self {
+        case .selectedModel(let modelID):
+            return "Same as provider (\(modelID.rawValue))"
+        case .agentDefault:
+            return "Same as provider (agent default)"
+        }
+    }
+}
+
 /// A provider + model picker for a single agent stage/operation
 /// (`plans/agent-settings-tabs.md` §2.2/§6). Reused for the Chat Model,
 /// Planner/Executor/Finalizer Models, and Lint Model rows in the nested
@@ -87,11 +111,8 @@ struct StageProviderModelPicker: View {
         config.cachedModels(forProvider: resolvedProvider.id)
     }
 
-    /// Friendly name for the "Same as provider" option — shows the concrete
-    /// model id the stage will actually use, so the user can see the effective
-    /// resolution at a glance.
-    private var fallbackLabel: String {
-        config.selectedModelId(forProvider: resolvedProvider.id)?.rawValue ?? "default"
+    private var modelInheritanceState: StageModelInheritanceState {
+        StageModelInheritanceState.resolve(config: config, stageKey: stageKey)
     }
 
     /// The Summary tab's provider pin is load-bearing: a non-empty but
@@ -170,7 +191,7 @@ struct StageProviderModelPicker: View {
                     if shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty {
                         Text(modelPickerPlaceholder).tag("")
                     } else {
-                        Text("Same as provider (\(fallbackLabel))").tag("")
+                        Text(modelInheritanceState.optionLabel).tag("")
                         ForEach(resolvedModels, id: \.modelId) { model in
                             Text(model.displayLabel).tag(model.modelId.rawValue)
                         }

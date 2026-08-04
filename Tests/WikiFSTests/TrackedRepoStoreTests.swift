@@ -37,6 +37,17 @@ struct TrackedRepoStoreTests {
         #expect(persisted.lastIngestedCommit == "abc123")
         #expect(persisted.lastFetchedAt == Date(timeIntervalSince1970: 42))
         #expect(!persisted.isDrifted)
+        #expect(persisted.canRequestUpdate)
+    }
+
+    @Test func repositoryWithoutAnInitialCloneCannotRequestUpdate() throws {
+        let store = try TestStoreFactory.inMemory()
+        let repository = try store.addRepo(
+            name: "example/project",
+            remoteURL: "https://github.com/example/project.git",
+            branch: nil)
+
+        #expect(repository.canRequestUpdate == false)
     }
 
     @Test func v48UpgradeCreatesTrackedRepositoriesTable() throws {

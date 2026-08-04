@@ -551,6 +551,27 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    /// Reject user-submitted agent work before it becomes a durable queue item.
+    /// Fetch and clone use Git only, so they do not need a model.
+    func queueRequestPreflightError(_ request: QueueItemRequest) -> String? {
+        guard request.queue == .ingestion else { return nil }
+
+        let requiredStages: [String]
+        if let repositoryWork = request.payload.repositoryWork {
+            guard repositoryWork.action == .update else { return nil }
+            requiredStages = [ACPIngestStage.planner.rawValue]
+        } else if request.payload.lintPageIDs != nil {
+            requiredStages = ["lint"]
+        } else if request.payload.sourceIDs.isEmpty == false {
+            requiredStages = ACPIngestStage.allCases.map(\.rawValue)
+        } else {
+            return nil
+        }
+
+        let config = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
+        return config.agentOperationConfigurationError(forStages: requiredStages)
+    }
+
     /// Serve a queue snapshot as JSON `Data` for the XPC `queueSnapshot` method.
     /// The engine's `snapshot()` is async (it's an actor method), so this is
     /// async too — the exporter wraps it in a `Task` and replies when it

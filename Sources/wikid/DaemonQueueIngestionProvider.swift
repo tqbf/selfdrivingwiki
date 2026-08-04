@@ -79,7 +79,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             throw QueueIngestionError.noSources
         }
 
-        DebugLog.ingest("DaemonQueueIngestionProvider.runIngestion: begin count=\(sourceIDs.count)")
+        DebugLog.ingest("Queue trace=\(queueItemID.rawValue) stage=daemon-provider event=started wiki=\(wikiID.rawValue) sources=\(sourceIDs.count)")
 
         let launcher = await makeLauncher()
 
@@ -117,7 +117,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             throw QueueIngestionError.noSources
         }
 
-        DebugLog.ingest("DaemonQueueIngestionProvider: handing off \(sources.count) source(s)")
+        DebugLog.ingest("Queue trace=\(queueItemID.rawValue) stage=daemon-provider event=handoff wiki=\(wikiID.rawValue) target=launcher sources=\(sources.count)")
 
         let providerLabel = resolveSelectedProvider().label
 
@@ -139,7 +139,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
         )
 
-        let results = await launcherResults(launcher)
+        let results = try await completedLauncherResults(launcher)
+        DebugLog.ingest("Queue trace=\(queueItemID.rawValue) stage=daemon-provider event=launcher-returned wiki=\(wikiID.rawValue) exitStatus=\(results.exitStatus.map(String.init) ?? "nil") turnFailed=\(results.hadTurnFailure)")
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         if let status = results.exitStatus, status != 0, results.hadTurnFailure {
@@ -179,7 +180,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onTranscript: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission)
-        let results = await launcherResults(launcher)
+        let results = try await completedLauncherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         if let status = results.exitStatus, status != 0, results.hadTurnFailure {
@@ -228,7 +229,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onTranscript: onTranscript,
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission)
-        let results = await launcherResults(launcher)
+        let results = try await completedLauncherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         if let status = results.exitStatus, status != 0, results.hadTurnFailure {
@@ -252,6 +253,12 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     ) async throws {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
+        }
+
+        if request.action == .update,
+           let error = resolveProviderConfig().agentOperationConfigurationError(
+               forStages: [ACPIngestStage.planner.rawValue]) {
+            throw QueueIngestionError.notReady(error)
         }
 
         switch request.action {
@@ -462,7 +469,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             providerLabel: resolveSelectedProvider().label,
             onLock: { },
             onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) })
-        let results = await launcherResults(launcher)
+        let results = try await completedLauncherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         if let status = results.exitStatus, status != 0, results.hadTurnFailure {
@@ -511,7 +518,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                         }
                     }
                     try Task.checkCancellation()
-                    let results = await launcherResults(launcher)
+                    let results = try await completedLauncherResults(launcher)
                     if let status = results.exitStatus, status != 0 {
                         throw QueueIngestionError.spawnFailed(
                             "Repository reader \(assignment.ordinal) failed (exit status \(status)).")
@@ -567,6 +574,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let debugURL: URL?
         let exitStatus: Int32?
         let hadTurnFailure: Bool
+        let preflightError: String?
     }
 
     private func launcherResults(_ launcher: AgentLauncher) async -> LauncherResults {
@@ -576,8 +584,19 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 logURL: launcher.logFileURL,
                 debugURL: launcher.debugFolderURL,
                 exitStatus: launcher.exitStatus,
-                hadTurnFailure: launcher.runHadTurnFailure)
+                hadTurnFailure: launcher.runHadTurnFailure,
+                preflightError: launcher.preflightError)
         }
+    }
+
+    /// Queue items must not report completion when the launcher refused to
+    /// start. Preflight failures are configuration errors the user can fix.
+    private func completedLauncherResults(_ launcher: AgentLauncher) async throws -> LauncherResults {
+        let results = await launcherResults(launcher)
+        if let preflightError = results.preflightError, !preflightError.isEmpty {
+            throw QueueIngestionError.notReady(preflightError)
+        }
+        return results
     }
 
     private func runLintAgent(
