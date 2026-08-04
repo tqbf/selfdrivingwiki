@@ -47,14 +47,38 @@ public enum OperationRequest: Sendable {
   /// (pre-computed before the LLM run so the agent has concrete targets).
   case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
 
+  /// A daemon-owned repository curator pass. `readerDigestsMarkdown` is present
+  /// only for the 2...19 read-only reader fan-out path.
+  case repositoryUpdate(
+    stateMarkdown: String,
+    repoStateMarkdown: String,
+    checkoutPath: String,
+    repositoryName: String,
+    headCommit: String,
+    readerDigestsMarkdown: String?
+  )
+
+  /// One read-only repository reader task. This request never receives a
+  /// `CLIProfile`, so the agent cannot discover `wikictl` or the wiki database.
+  case repositoryReader(
+    repoStateMarkdown: String,
+    checkoutPath: String,
+    assignedPaths: [String]
+  )
+
   /// Which generation lane this request runs on (Phase 2: lane-aware gate).
   /// Ingest-class operations (ingest, lint, lintPage) serialize on `.ingest`;
   /// query/chat runs on `.interactive` so they don't block on a long ingest.
   var generationLane: GenerationGate.GenerationLane {
     switch self {
-    case .ingest, .lint, .lintPage: return .ingest
+    case .ingest, .lint, .lintPage, .repositoryUpdate, .repositoryReader: return .ingest
     case .query: return .interactive
     }
+  }
+
+  var isRepositoryReader: Bool {
+    if case .repositoryReader = self { return true }
+    return false
   }
 
   /// Stage this request's inputs into `scratch` and return the finalized
@@ -89,6 +113,29 @@ public enum OperationRequest: Sendable {
     case .lintPage(let pageTitle, let brokenLinks, let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lintPage(pageTitle: pageTitle, brokenLinks: brokenLinks, stateFilePath: stateFilePath)
+
+    case .repositoryUpdate(let stateMarkdown, let repoStateMarkdown, let checkoutPath, let repositoryName, let headCommit, let readerDigestsMarkdown):
+      let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
+      let repoStateFilePath = try AgentStaging.stageTextFile(
+        repoStateMarkdown, named: "REPO_STATE.md", in: scratch)
+      let readerDigestsFilePath = try readerDigestsMarkdown.map {
+        try AgentStaging.stageTextFile($0, named: "REPO_READER_DIGESTS.md", in: scratch)
+      }
+      return .repositoryUpdate(
+        stateFilePath: stateFilePath,
+        repoStateFilePath: repoStateFilePath,
+        checkoutPath: checkoutPath,
+        repositoryName: repositoryName,
+        headCommit: headCommit,
+        readerDigestsFilePath: readerDigestsFilePath)
+
+    case .repositoryReader(let repoStateMarkdown, let checkoutPath, let assignedPaths):
+      let repoStateFilePath = try AgentStaging.stageTextFile(
+        repoStateMarkdown, named: "REPO_STATE.md", in: scratch)
+      return .repositoryReader(
+        repoStateFilePath: repoStateFilePath,
+        checkoutPath: checkoutPath,
+        assignedPaths: assignedPaths)
     }
   }
 }

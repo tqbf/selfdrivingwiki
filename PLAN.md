@@ -41,6 +41,7 @@ load-bearing for the app to function.
 | [`plans/INITIAL.md`](plans/INITIAL.md) | Original full product/architecture plan (milestones, schema, File Provider design, definition of done). Source of truth for *what we're building*. |
 | [`plans/llm-wiki.md`](plans/llm-wiki.md) | **Next major effort:** turning Self Driving Wiki into a self-maintaining LLM Wiki — **many** wikis (one SQLite DB + one File Provider domain each), with `claude -p` authoring/maintaining each one by writing via a new `wikictl` CLI (read via the mount, write via the CLI). Locked decisions, components, and the Phase 0 → A–D plan. Read before Phase 0. |
 | [`plans/page-reader-ui.md`](plans/page-reader-ui.md) | **Current UI direction:** page detail is reader-first because the agent should maintain wiki content; manual source editing is an explicit, rare mode. |
+| [`plans/repo-tracking.md`](plans/repo-tracking.md) | **Tracked git repositories.** Manual daemon-queued clone, fetch, and update work; GRDB-owned repository state; an agent-owned ingestion watermark; and `wikictl repo` inspection/update contracts. Repositories are not File Provider resources. |
 | [`plans/page-source-id-separation.md`](plans/page-source-id-separation.md) | **Page and source identifier boundary.** Separates `PageID` from `SourceID` in Swift APIs while preserving SQLite, queue JSON, wiki links, File Provider, CLI, and staging string contracts. The record also defines tagged bookmark targets and defers chat and version identifier types. |
 | [`plans/chat-id-separation.md`](plans/chat-id-separation.md) | **Chat identifier boundary.** Introduces `ChatID` for persisted chat entities while preserving SQLite rows, daemon JSON/XPC payloads, File Provider projections, wiki links, CLI text, provenance strings, and every existing raw ULID contract. Keeps `ChatMessage.id` on `PageID` in this phase and documents the deferred message-ID namespace. |
 | [`plans/chat-architecture-redesign.md`](plans/chat-architecture-redesign.md) | **Issue #982 chat redesign.** Redesigns chat around a daemon-owned, typed conversation domain with explicit session generations, turn lifecycles, permission models, transcript vocabulary, and client synchronization rules. Phases 0 and 1 define the Foundation-only identifiers, transcript items, runtime protocol, reducers, and scripted runtime. Phase 2 adds schema v46 chat-subsystem rebuild, durable queued turns, typed transcript persistence, cursor paging/checkpoints, and Tantivy rebuild invalidation while preserving non-chat wiki data. Phase 3 moves lifecycle ownership into per-chat daemon controllers, restart recovery, bounded replay, typed snapshots, and one daemon-owned submit path while keeping the current XPC wire and client compatibility adapters. Phase 4 replaces the launcher-shaped XPC mirror with versioned sequenced snapshot/update envelopes plus a pure client reducer that owns stale/duplicate/gap rejection, authoritative snapshot catch-up, optimistic overlay reconciliation, and durable-history preservation while keeping JSON-encoded `Data` transport and the current `ChatDetailView` rendering surface. Phase 5 decomposes `ChatDetailView` into a composition root over a pure presentation projection and focused macOS child views while preserving Phase 4 sync semantics and the existing renderer/composer behavior. Phase 6 removes migrated app shims and host polling while preserving raw XPC adapters, adds quiescent idle-controller eviction, and records the final command-line and hosted verification. The Wednesday, July 29, 2026 Phase 3 remediation note, Wednesday, July 29, 2026 local Phase 4 implementation evidence (timestamp `2026-07-30T010000Z`), Wednesday, July 29, 2026 local Phase 5 UI decomposition evidence (timestamp `2026-07-30T050641Z`), and Wednesday, July 29, 2026 Phase 6 integration evidence (timestamp `2026-07-30T062603Z`) link from this plan into the matching `progress/` entries. |
@@ -188,6 +189,11 @@ change — code-only. **Phase gate met: 1653 tests green** (AC.1–AC.10). See
 [`plans/phase-6-pinning.md`](plans/phase-6-pinning.md).
 
 **Post-completion features (also on `main`):**
+- **Repository tracking** — a wiki can follow git repositories through manual,
+  daemon-queued clone, fetch, and update work. GRDB stores the remote and
+  synchronization watermark; `wikictl repo mark-ingested` alone advances the
+  agent-owned ingestion watermark. Repositories are not File Provider resources.
+  See [`plans/repo-tracking.md`](plans/repo-tracking.md).
 - **Reveal in Finder** — "Reveal in Finder" action on every page and source surface
   (sidebar context menu + detail view header). Calls
   `NSWorkspace.shared.activateFileViewerSelecting` after resolving the item's
@@ -218,6 +224,7 @@ change — code-only. **Phase gate met: 1653 tests green** (AC.1–AC.10). See
   via Ingest. Hidden files/dirs are skipped; duplicate filenames get a disambiguating
   suffix. `MarkdownFolderReader` (pure core) + `ImportMarkdownSheet` (phase-enum UI).
   26 new tests. See `plans/markdown-folder-import.md`.
+- **Wiki backup/restore management** — the wiki switcher can rename the active
   wiki, export its checkpointed standalone SQLite file, and import a SQLite wiki
   backup under a new display name/new ULID. Rename refreshes the File Provider
   display name while preserving identity; export refuses to overwrite its source.

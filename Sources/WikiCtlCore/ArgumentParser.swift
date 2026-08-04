@@ -11,8 +11,11 @@ import WikiFSCore
 ///   wikictl [--wiki <id>] page get (--title X | --id Y)
 ///   wikictl [--wiki <id>] page add --title X [--id Y] --body-file <path|->
 ///   wikictl [--wiki <id>] page delete --id Y
-///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
+///   wikictl [--wiki <id>] log append --kind ingest|query|lint|repo --title X [--note N] [--source <file-id>]
 ///   wikictl [--wiki <id>] index set --body-file <path|->
+///   wikictl [--wiki <id>] repo list [--json]
+///   wikictl [--wiki <id>] repo get --name owner/repo
+///   wikictl [--wiki <id>] repo mark-ingested --name owner/repo --commit <sha>
 ///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
 public enum ArgumentParser {
@@ -55,6 +58,9 @@ public enum ArgumentParser {
         case bookmark(BookmarkCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
+        /// Repository-tracking reads and the sole agent-authorized mutation.
+        /// Repositories are addressed by `owner/repo`, never their internal ID.
+        case repo(RepoCommand.Action)
         /// Print build version info. Does not require a wiki selection.
         case version(json: Bool)
         /// `wikictl wiki list/create/delete/rename` — registry operations routed
@@ -167,6 +173,10 @@ public enum ArgumentParser {
                                                resolve a conflict with the given body
       workspace retry --id W                   re-open + re-merge after resolving conflicts
       workspace reap [--ttl <seconds>]         abandon stale open workspaces (default 3600s)
+      repo list [--json]                       list tracked git repositories
+      repo get --name owner/repo               print one repo's tracking state
+      repo mark-ingested --name owner/repo --commit <sha>
+                                               record that the wiki now covers <sha>
     """
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
@@ -227,6 +237,8 @@ public enum ArgumentParser {
             command = try parseBookmarkCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
+        case "repo":
+            command = try parseRepoCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -304,11 +316,12 @@ public enum ArgumentParser {
         }
         let options = try Options(Array(args.dropFirst()))
         guard let kindRaw = options.value("--kind") else {
-            throw Failure.usage("log append: --kind is required (ingest|query|lint)")
+            throw Failure.usage("log append: --kind is required (\(LogEntry.Kind.optionList))")
         }
         guard let kind = LogEntry.Kind(rawValue: kindRaw) else {
             throw Failure.usage(
-                "log append: --kind must be one of ingest|query|lint, got \(kindRaw.debugDescription)")
+                "log append: --kind must be one of \(LogEntry.Kind.optionList), "
+                + "got \(kindRaw.debugDescription)")
         }
         guard let title = options.value("--title") else {
             throw Failure.usage("log append: --title is required")
@@ -490,6 +503,38 @@ public enum ArgumentParser {
 
         default:
             throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")
+        }
+    }
+
+    /// `repo list|get|mark-ingested`. Everything selects by `--name owner/repo`,
+    /// matching how the agent is told about repos; there is deliberately no
+    /// `--id` form, and no `add`/`remove` — adding a repo means cloning it, which
+    /// is the app's job, not the agent's.
+    private static func parseRepoCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else { throw Failure.usage("repo: missing subcommand") }
+        let options = try Options(Array(args.dropFirst()))
+
+        switch sub {
+        case "list":
+            return .repo(.list(json: options.flag("--json")))
+
+        case "get":
+            guard let name = options.value("--name") else {
+                throw Failure.usage("repo get: --name is required (owner/repo)")
+            }
+            return .repo(.get(name: name))
+
+        case "mark-ingested":
+            guard let name = options.value("--name") else {
+                throw Failure.usage("repo mark-ingested: --name is required (owner/repo)")
+            }
+            guard let commit = options.value("--commit"), !commit.isEmpty else {
+                throw Failure.usage("repo mark-ingested: --commit is required (a commit sha)")
+            }
+            return .repo(.markIngested(name: name, commit: commit))
+
+        default:
+            throw Failure.usage("repo: unknown subcommand \(sub.debugDescription)")
         }
     }
 

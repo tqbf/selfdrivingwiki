@@ -88,6 +88,26 @@ public struct QueueAttemptID: Hashable, Codable, Sendable {
 
 // MARK: - Payload
 
+/// A daemon-owned repository operation that runs in the existing ingestion
+/// lane. The tagged operation keeps repository work distinct from source
+/// ingestion while preserving the queue's durable ordering and XPC contract.
+public enum RepositoryWorkAction: String, Codable, Sendable, Equatable {
+    case clone
+    case fetch
+    case update
+}
+
+/// Typed repository work carried by an `.ingestion` queue item.
+public struct RepositoryWorkRequest: Codable, Sendable, Equatable {
+    public let repositoryID: TrackedRepoID
+    public let action: RepositoryWorkAction
+
+    public init(repositoryID: TrackedRepoID, action: RepositoryWorkAction) {
+        self.repositoryID = repositoryID
+        self.action = action
+    }
+}
+
 /// The work description for a queue item — what the worker should process.
 /// Encoded as JSON text in the `payload` column of `queue_items`.
 public struct QueueItemPayload: Codable, Sendable {
@@ -113,18 +133,24 @@ public struct QueueItemPayload: Codable, Sendable {
     /// ACP session ID for crash-resume. Set after session start, cleared on completion.
     public var acpSessionId: AcpSessionID?
 
+    /// A repository operation. When present, this item is repository work and
+    /// `sourceIDs` must be empty. `nil` preserves every existing queue payload.
+    public var repositoryWork: RepositoryWorkRequest?
+
     public init(
         sourceIDs: [SourceID],
         stageRouting: [String: String]? = nil,
         chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,
-        acpSessionId: AcpSessionID? = nil
+        acpSessionId: AcpSessionID? = nil,
+        repositoryWork: RepositoryWorkRequest? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
         self.chainedItemID = chainedItemID
         self.lintPageIDs = lintPageIDs
         self.acpSessionId = acpSessionId
+        self.repositoryWork = repositoryWork
     }
 }
 

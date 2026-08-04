@@ -211,6 +211,9 @@ func execute(
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .repo(let action):
+        let r = try RepoCommand.run(action, in: store)
+        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .version:
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)

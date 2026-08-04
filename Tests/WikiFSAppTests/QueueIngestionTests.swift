@@ -109,6 +109,7 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     var shouldThrow = false
     var calledLintWikiID: String?
     var calledLintPageIDs: [PageID] = []
+    var calledRepositoryWork: RepositoryWorkRequest?
     var transcriptEvents: [AgentEvent] = []
     /// When non-nil, `readiness()` returns this message (simulating a
     /// not-ready provider). When nil, `readiness()` returns nil (ready).
@@ -173,10 +174,26 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onProgress("lint done")
     }
 
+    func runRepositoryWork(
+        wikiID: WikiID,
+        request: RepositoryWorkRequest,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws {
+        calledRepositoryWork = request
+        onProgress("repository \(request.action.rawValue)")
+    }
+
     func getCalledWikiID() -> String? { calledWikiID }
     func getCalledSourceIDs() -> [SourceID] { calledSourceIDs }
     func getCalledLintWikiID() -> String? { calledLintWikiID }
     func getCalledLintPageIDs() -> [PageID] { calledLintPageIDs }
+    func getCalledRepositoryWork() -> RepositoryWorkRequest? { calledRepositoryWork }
 }
 
 @Suite("QueueIngestionWorker")
@@ -297,6 +314,30 @@ struct QueueIngestionWorkerTests {
 
         let wikiID = await provider.getCalledWikiID()
         #expect(wikiID == "wiki1")
+    }
+
+    @Test("Repository clone dispatches without app-side agent readiness")
+    func repositoryCloneUsesRepositoryProviderContract() async throws {
+        let provider = FakeIngestionProvider()
+        await provider.setReadinessMessage("Agent intentionally unavailable")
+        let worker = QueueIngestionWorker(
+            provider: provider,
+            attemptID: QueueAttemptID(itemID: QueueItemID(rawValue: "repo-clone"), attempt: 0),
+            emitProgress: { _, _ in },
+            emitTranscript: { _, _ in }, emitUsage: { _, _ in }, emitLiveUsage: { _, _ in },
+            emitLogPaths: { _, _, _ in }, emitPendingPermission: { _, _ in })
+        let repositoryID = TrackedRepoID(rawValue: "repo-1")
+        let item = QueueItem(
+            id: QueueItemID(rawValue: "repo-clone"), queue: .ingestion, wikiID: WikiID(rawValue: "wiki1"),
+            payload: QueueItemPayload(
+                sourceIDs: [],
+                repositoryWork: RepositoryWorkRequest(repositoryID: repositoryID, action: .clone)),
+            state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0)
+
+        try await worker.execute(item)
+
+        #expect(await provider.getCalledRepositoryWork() == RepositoryWorkRequest(repositoryID: repositoryID, action: .clone))
+        #expect(await provider.getCalledWikiID() == nil)
     }
 }
 

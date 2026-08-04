@@ -38,7 +38,10 @@ final class XPCQueueEngineProxy: QueueEngineClient {
 
     @discardableResult
     func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
-        try await workloadClient.enqueue(request)
+        DebugLog.ingest("Queue trace=pending stage=xpc.client event=submitted queue=\(request.queue.rawValue) wiki=\(request.wikiID.rawValue) sources=\(request.payload.sourceIDs.count)")
+        let itemID = try await workloadClient.enqueue(request)
+        DebugLog.ingest("Queue trace=\(itemID.rawValue) stage=xpc.client event=accepted queue=\(request.queue.rawValue) wiki=\(request.wikiID.rawValue)")
+        return itemID
     }
 
     func cancelItem(_ id: QueueItem.ID) async {

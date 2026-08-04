@@ -58,4 +58,6 @@ enum GeneratedPrompts {
     static let ingestPlanner = load("ingest-planner")
     static let ingestExecutor = load("ingest-executor")
     static let ingestFinalizer = load("ingest-finalizer")
+    static let repositoryReaderTask = load("repo-reader-task")
+    static let repositoryUpdateTask = load("repo-update-task")
 }

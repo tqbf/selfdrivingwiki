@@ -64,12 +64,32 @@ public enum WikiOperation: Equatable, Sendable {
   /// concrete targets rather than having to discover issues itself).
   case lintPage(pageTitle: String, brokenLinks: [String], stateFilePath: String)
 
+  /// Curate a tracked repository after the daemon has completed its optional
+  /// read-only fan-out. Only this operation receives `wikictl` access.
+  case repositoryUpdate(
+    stateFilePath: String,
+    repoStateFilePath: String,
+    checkoutPath: String,
+    repositoryName: String,
+    headCommit: String,
+    readerDigestsFilePath: String?
+  )
+
+  /// Read one assigned repository slice. The launcher uses this case to make a
+  /// profile without a wiki CLI or database environment.
+  case repositoryReader(
+    repoStateFilePath: String,
+    checkoutPath: String,
+    assignedPaths: [String]
+  )
+
   /// A short, stable identifier for the operation kind (logging / UI).
   public var kind: Kind {
     switch self {
     case .ingest: .ingest
     case .query, .queryChat: .query
     case .lint, .lintPage: .lint
+    case .repositoryUpdate, .repositoryReader: .repo
     }
   }
 
@@ -77,6 +97,7 @@ public enum WikiOperation: Equatable, Sendable {
     case ingest
     case query
     case lint
+    case repo
 
     /// User-facing title for the operation.
     public var title: String {
@@ -84,6 +105,7 @@ public enum WikiOperation: Equatable, Sendable {
       case .ingest: "Ingest"
       case .query: "Query"
       case .lint: "Lint"
+      case .repo: "Repository update"
       }
     }
   }
@@ -131,7 +153,50 @@ extension WikiOperation {
       return Self.lintPagePrompt(
         wikiRoot: wikiRoot, pageTitle: pageTitle,
         brokenLinks: brokenLinks, stateFilePath: stateFilePath)
+    case .repositoryUpdate(let stateFilePath, let repoStateFilePath, let checkoutPath, let repositoryName, let headCommit, let readerDigestsFilePath):
+      return Self.repositoryUpdatePrompt(
+        stateFilePath: stateFilePath,
+        repoStateFilePath: repoStateFilePath,
+        checkoutPath: checkoutPath,
+        repositoryName: repositoryName,
+        headCommit: headCommit,
+        readerDigestsFilePath: readerDigestsFilePath)
+    case .repositoryReader(let repoStateFilePath, let checkoutPath, let assignedPaths):
+      return Self.repositoryReaderPrompt(
+        repoStateFilePath: repoStateFilePath,
+        checkoutPath: checkoutPath,
+        assignedPaths: assignedPaths)
     }
+  }
+
+  private static func repositoryUpdatePrompt(
+    stateFilePath: String,
+    repoStateFilePath: String,
+    checkoutPath: String,
+    repositoryName: String,
+    headCommit: String,
+    readerDigestsFilePath: String?
+  ) -> String {
+    return PromptTemplate.fill(GeneratedPrompts.repositoryUpdateTask, [
+      "stateFilePath": stateFilePath,
+      "repoStateFilePath": repoStateFilePath,
+      "checkoutPath": checkoutPath,
+      "readerDigestsFilePath": readerDigestsFilePath ?? "(no reader fan-out for this update)",
+      "repoName": repositoryName,
+      "headCommit": headCommit,
+    ])
+  }
+
+  private static func repositoryReaderPrompt(
+    repoStateFilePath: String,
+    checkoutPath: String,
+    assignedPaths: [String]
+  ) -> String {
+    PromptTemplate.fill(GeneratedPrompts.repositoryReaderTask, [
+      "repoStateFilePath": repoStateFilePath,
+      "checkoutPath": checkoutPath,
+      "assignedPaths": assignedPaths.map { "- \($0)" }.joined(separator: "\n"),
+    ])
   }
 
   /// Recover the source id from its `sources/by-id/<id>[.ext]` path —

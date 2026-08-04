@@ -39,6 +39,20 @@ public enum AgentStaging {
     return url.path
   }
 
+  /// Write an explicitly named text artifact into a run scratch directory.
+  /// Repository orchestration uses this for `REPO_STATE.md` and the ordered
+  /// reader digests. The caller owns the filename vocabulary.
+  @discardableResult
+  public static func stageTextFile(
+    _ text: String,
+    named filename: String,
+    in scratchDirectory: URL
+  ) throws -> String {
+    let url = scratchDirectory.appendingPathComponent(filename, isDirectory: false)
+    try Data(text.utf8).write(to: url, options: .atomic)
+    return url.path
+  }
+
   /// Write multiple source files as `<shellSafeStem>--<full-ULID>.<ext>` leaves
   /// into `scratchDirectory`. Returns their absolute paths in the same order.
   /// Each entry is `(bytes, ext, name, sourceID)`. Throws on the first write

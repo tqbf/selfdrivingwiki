@@ -7,6 +7,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case open(String)
     case sqlite(code: Int32, message: String)
     case notFound(PageID)
+    case repoNotFound(TrackedRepoID)
     case chatNotFound(ChatID)
     case sourceNotFound(SourceID)
     case sourceVersionNotFound(SourceVersionID)
@@ -29,6 +30,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .open(let m): return "WikiStore open failed: \(m)"
         case .sqlite(let code, let message): return "SQLite error \(code): \(message)"
         case .notFound(let id): return "Page not found: \(id.rawValue)"
+        case .repoNotFound(let id): return "Tracked repository not found: \(id.rawValue)"
         case .chatNotFound(let id): return "Page not found: \(id.rawValue)"
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
         case .sourceVersionNotFound(let id): return "Source version not found: \(id.rawValue)"
@@ -179,6 +181,30 @@ public protocol WikiStore: Sendable {
     func createPage(title: String, createdBy: String?, provenance: [PageVersionSourceInput]) throws -> WikiPage
     func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?, provenance: [PageVersionSourceInput]) throws
     func deletePage(id: PageID) throws
+
+    // MARK: - Tracked repositories
+
+    /// Add the durable metadata for an app-owned repository checkout. Cloning
+    /// and fetching happen in the daemon queue; this store owns rows only.
+    @discardableResult
+    func addRepo(name: String, remoteURL: String, branch: String?) throws -> TrackedRepo
+    /// Stable, oldest-first repository list for the Repositories sidebar and
+    /// agent-facing `wikictl repo list` command.
+    func listRepos() throws -> [TrackedRepo]
+    func getRepo(id: TrackedRepoID) throws -> TrackedRepo
+    /// Resolve by the agent-facing `owner/repo` name. The oldest duplicate wins
+    /// for compatibility with title-resolution semantics.
+    func findRepo(name: String) throws -> TrackedRepo?
+    /// Persist the daemon's post-fetch upstream tip. This does not advance the
+    /// agent-owned ingestion watermark.
+    func updateRepoSync(id: TrackedRepoID, headCommit: String, fetchedAt: Date) throws
+    /// Advance only after an agent pass has written wiki content.
+    func markRepoIngested(id: TrackedRepoID, commit: String) throws
+    /// Set the remote default branch observed after an initially branchless clone.
+    func setRepoBranch(id: TrackedRepoID, branch: String) throws
+    /// Remove the metadata row. The daemon removes its app-owned checkout
+    /// separately so persistence never deletes arbitrary paths.
+    func deleteRepo(id: TrackedRepoID) throws
 
     /// Resolve a page *title* to its id, or nil if no page has that title.
     /// On duplicate titles, the lowest ULID (oldest page) wins. Used by

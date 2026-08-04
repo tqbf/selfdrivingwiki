@@ -145,7 +145,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 48
+    private static let currentSchemaVersion = 49
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1445,6 +1445,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return .commit
             }
             version = 48
+        }
+
+        // v48→v49: tracked repositories are durable metadata for app-owned
+        // checkouts. They intentionally do not participate in the File Provider
+        // projection or its change token: repository state is daemon/app state,
+        // not a projected wiki resource.
+        if version < 49 {
+            try Self.createTrackedReposTable(in: db)
+            try db.execute(sql: "PRAGMA user_version = 49;")
+            version = 49
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
@@ -2874,6 +2884,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """)
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS pages_slug_unique ON pages(slug);")
 
+        try Self.createTrackedReposTable(in: db)
+
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS attachments (
             id TEXT PRIMARY KEY,
@@ -3245,6 +3257,30 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             arguments: [slug, id.rawValue]
         ) ?? 0
         return count > 0
+    }
+
+    /// Create the non-projected repository metadata table for both fresh and
+    /// upgraded wikis. The checkout itself is daemon-owned filesystem state;
+    /// this table records only its remote/watermark facts.
+    private static func createTrackedReposTable(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS tracked_repos (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            remote_url TEXT NOT NULL,
+            branch TEXT,
+            head_commit TEXT,
+            last_ingested_commit TEXT,
+            last_fetched_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        """)
+        try db.execute(sql: """
+        CREATE UNIQUE INDEX IF NOT EXISTS tracked_repos_remote_unique
+        ON tracked_repos(remote_url);
+        """)
     }
 
     /// Get-or-create the `legacy-import` agent row, returning its id.
@@ -3679,6 +3715,136 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                            arguments: [id.rawValue])
             try db.execute(sql: "DELETE FROM pages WHERE id = ?;",
                            arguments: [id.rawValue])
+        }
+    }
+
+    // MARK: - WikiStore protocol: Tracked repositories
+
+    /// Add a repository row before the daemon clones it, because the generated
+    /// identifier owns the checkout path. NO-EMIT: tracked repositories are not
+    /// File Provider resources; daemon and CLI mutations notify clients through
+    /// the existing coarse Darwin-reload bridge.
+    public func addRepo(name: String, remoteURL: String, branch: String?) throws -> TrackedRepo {
+        try mutate(event: { _ in nil }) { db in
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedRemote = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedBranch = branch?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty, !trimmedRemote.isEmpty else {
+                throw WikiStoreError.unexpected("tracked repository name and remote URL must not be empty")
+            }
+            guard trimmedBranch != "" else {
+                throw WikiStoreError.unexpected("tracked repository branch must not be empty when specified")
+            }
+            let id = TrackedRepoID(rawValue: ULID.generate())
+            let now = Date()
+            try db.execute(sql: """
+            INSERT INTO tracked_repos
+                (id, name, remote_url, branch, head_commit, last_ingested_commit,
+                 last_fetched_at, created_at, updated_at, version)
+            VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 1);
+            """, arguments: [id.rawValue, trimmedName, trimmedRemote, trimmedBranch,
+                               now.timeIntervalSince1970, now.timeIntervalSince1970])
+            return TrackedRepo(
+                id: id, name: trimmedName, remoteURL: trimmedRemote, branch: trimmedBranch,
+                headCommit: nil, lastIngestedCommit: nil, lastFetchedAt: nil,
+                createdAt: now, updatedAt: now, version: 1)
+        }
+    }
+
+    public func listRepos() throws -> [TrackedRepo] {
+        try dbWriter.read { db in
+            try Row.fetchAll(db, sql: Self.trackedRepoSelect + " ORDER BY id ASC;")
+                .map(Self.readTrackedRepo)
+        }
+    }
+
+    public func getRepo(id: TrackedRepoID) throws -> TrackedRepo {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db, sql: Self.trackedRepoSelect + " WHERE id = ?;", arguments: [id.rawValue])
+            else { throw WikiStoreError.repoNotFound(id) }
+            return try Self.readTrackedRepo(from: row)
+        }
+    }
+
+    public func findRepo(name: String) throws -> TrackedRepo? {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: Self.trackedRepoSelect + " WHERE name = ? ORDER BY id ASC LIMIT 1;",
+                arguments: [name])
+            else { return nil }
+            return try Self.readTrackedRepo(from: row)
+        }
+    }
+
+    /// NO-EMIT: the fetch watermark is not projected by File Provider; the
+    /// daemon posts its coarse committed-change notification after queue work.
+    public func updateRepoSync(id: TrackedRepoID, headCommit: String, fetchedAt: Date) throws {
+        try updateTrackedRepo(id: id, assignments: "head_commit = ?, last_fetched_at = ?",
+                              values: [headCommit, fetchedAt.timeIntervalSince1970])
+    }
+
+    /// NO-EMIT: see `updateRepoSync`; the agent's CLI commit path posts the
+    /// same coarse Darwin notification after this transaction succeeds.
+    public func markRepoIngested(id: TrackedRepoID, commit: String) throws {
+        try updateTrackedRepo(id: id, assignments: "last_ingested_commit = ?", values: [commit])
+    }
+
+    /// NO-EMIT: branch metadata is non-projected daemon state.
+    public func setRepoBranch(id: TrackedRepoID, branch: String) throws {
+        let trimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw WikiStoreError.unexpected("tracked repository branch must not be empty")
+        }
+        try updateTrackedRepo(id: id, assignments: "branch = ?", values: [trimmed])
+    }
+
+    /// NO-EMIT: the row is non-projected; checkout removal is separately owned
+    /// by the daemon and never derived from a File Provider signal.
+    public func deleteRepo(id: TrackedRepoID) throws {
+        try mutate(event: { _ in nil }) { db in
+            try db.execute(sql: "DELETE FROM tracked_repos WHERE id = ?;", arguments: [id.rawValue])
+            guard db.changesCount == 1 else { throw WikiStoreError.repoNotFound(id) }
+        }
+    }
+
+    private static let trackedRepoSelect = """
+        SELECT id, name, remote_url, branch, head_commit, last_ingested_commit,
+               last_fetched_at, created_at, updated_at, version
+        FROM tracked_repos
+        """
+
+    private static func readTrackedRepo(from row: Row) throws -> TrackedRepo {
+        let id = try row.decode(String.self, forColumn: "id")
+        let name = try row.decode(String.self, forColumn: "name")
+        let remoteURL = try row.decode(String.self, forColumn: "remote_url")
+        let branch: String? = row["branch"]
+        let headCommit: String? = row["head_commit"]
+        let lastIngestedCommit: String? = row["last_ingested_commit"]
+        let fetchedAt: Double? = row["last_fetched_at"]
+        let createdAt = try row.decode(Double.self, forColumn: "created_at")
+        let updatedAt = try row.decode(Double.self, forColumn: "updated_at")
+        let version = try row.decode(Int.self, forColumn: "version")
+        return TrackedRepo(
+            id: TrackedRepoID(rawValue: id), name: name, remoteURL: remoteURL, branch: branch,
+            headCommit: headCommit, lastIngestedCommit: lastIngestedCommit,
+            lastFetchedAt: fetchedAt.map(Date.init(timeIntervalSince1970:)),
+            createdAt: Date(timeIntervalSince1970: createdAt),
+            updatedAt: Date(timeIntervalSince1970: updatedAt), version: version)
+    }
+
+    private func updateTrackedRepo(
+        id: TrackedRepoID, assignments: String, values: [DatabaseValueConvertible?]
+    ) throws {
+        try mutate(event: { _ in nil }) { db in
+            let now = Date().timeIntervalSince1970
+            var arguments = StatementArguments(values)
+            arguments += [now, id.rawValue]
+            try db.execute(
+                sql: "UPDATE tracked_repos SET \(assignments), updated_at = ?, version = version + 1 WHERE id = ?;",
+                arguments: arguments)
+            guard db.changesCount == 1 else { throw WikiStoreError.repoNotFound(id) }
         }
     }
 

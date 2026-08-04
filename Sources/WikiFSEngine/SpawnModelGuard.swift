@@ -2,15 +2,11 @@
 import Foundation
 import WikiFSCore
 
-/// Pure validation that a provider has an explicitly selected model before the
-/// launcher will spawn an ACP subprocess on its behalf.
+/// Pure model-selection validation at the ACP launch seam.
 ///
-/// Background: without an explicit `selectedModelId`, the launcher passed `nil`
-/// to `providerHints`, and the ACP subprocess picked its own first-listed
-/// upstream model. For OpenCode that was `opencode/big-pickle` (a free model) —
-/// silently, with no UI signal. This guard refuses to spawn instead, setting
-/// `AgentLauncher.preflightError` to an actionable message that points the user
-/// at Agents settings. See `tmp/ingestion-stall-diagnosis.md` (2026-07-18).
+/// A nil selection is deliberate: it inherits the provider's agent default,
+/// so ACP starts without `session/set_model`. An explicit non-empty model still
+/// pins that model for the run.
 ///
 /// PURE — no actor, no I/O. Unit-tested directly. Called from two launch sites:
 /// - `AgentLauncher.runACPIngestPlannerExecutors` (ingest — validates each of
@@ -18,27 +14,18 @@ import WikiFSCore
 ///   `plans/per-stage-model-selection.md` §6)
 /// - `AgentLauncher.startInteractiveQuery` (interactive chat)
 enum SpawnModelGuard {
-    /// Returns `nil` when spawning is allowed (a non-empty `modelId` is set for
-    /// `provider`); otherwise a human-readable preflight error message that
-    /// names the provider and points the user at Settings → Providers.
-    ///
-    /// When `stageName` is provided (the per-stage ingest path), the message
-    /// names the stage too — e.g. "No model selected for the Planner stage of
-    /// provider ‘Claude’." — so a missing *executor*-stage model (with
-    /// planner/finalizer set) is diagnosed specifically rather than as a
-    /// generic "no model" refusal.
+    /// A stage may either pin a model or inherit the provider's agent default;
+    /// both are valid ACP launch configurations. Provider availability is
+    /// validated independently before this seam.
     static func validate(
         provider: AgentProvider,
         modelId: String?,
         stageName: String? = nil
     ) -> String? {
-        if let modelId, !modelId.isEmpty { return nil }
-        if let stageName, !stageName.isEmpty {
-            return "No model selected for the \(stageName) stage of provider ‘\(provider.label)’. "
-                 + "Open Settings → Providers and pick a model before running."
-        }
-        return "No model selected for provider ‘\(provider.label)’. "
-             + "Open Settings → Providers and pick a model before running."
+        _ = provider
+        _ = modelId
+        _ = stageName
+        return nil
     }
 }
 #endif

@@ -403,6 +403,21 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         }
     }
 
+    func runRepositoryWork(
+        wikiID: WikiID,
+        request: RepositoryWorkRequest,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws {
+        throw QueueIngestionError.spawnFailed(
+            "Repository work requires the wikid daemon; reconnect the queue and retry.")
+    }
+
     // MARK: - Private
 
     /// Run the agent via `launcher.run(...)`. Mirrors

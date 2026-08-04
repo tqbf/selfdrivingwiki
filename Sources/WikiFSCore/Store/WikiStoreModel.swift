@@ -37,6 +37,10 @@ public struct SearchUpgradeState: Identifiable {
 @Observable
 public final class WikiStoreModel {
     public private(set) var summaries: [WikiPageSummary] = []
+    /// Durable repository metadata for the Repositories sidebar. Repository
+    /// work itself is queued to `wikid`; this model owns only the GRDB-backed
+    /// projection that SwiftUI observes.
+    public private(set) var trackedRepositories: [TrackedRepo] = []
     /// Sort order for the sidebar pages list. Changing this triggers a reload.
     public var pageSortOrder: PageSortOrder = .lastUpdated {
         didSet {
@@ -441,6 +445,7 @@ public final class WikiStoreModel {
     public init(store: WikiStore) {
         self.store = store
         reloadSummaries()
+        reloadTrackedRepositories()
         reloadSources()
         reloadBookmarkNodes()
         reloadChats()
@@ -3773,6 +3778,7 @@ public final class WikiStoreModel {
     /// page write). When the draft IS dirty, the user's in-flight edits win.
     public func reloadFromStore() {
         reloadSummaries()
+        reloadTrackedRepositories()
         reloadSources()
         reloadChats()
         reloadBookmarkNodes()
@@ -3805,6 +3811,34 @@ public final class WikiStoreModel {
         summaries = DebugLog.trying("listPages", operation: { try store.listPages(sortBy: pageSortOrder) }) ?? []
         // Phase A.1: any page mutation invalidates the memoized render context.
         renderContextGeneration &+= 1
+    }
+
+    /// Rebuild the repository sidebar projection from the store. This is
+    /// intentionally separate from source reloads: a repository is mutable
+    /// remote state, not an immutable ingested source.
+    public func reloadTrackedRepositories() {
+        trackedRepositories = DebugLog.trying("listRepos", operation: { try store.listRepos() }) ?? []
+    }
+
+    /// Persist a validated repository descriptor before the app enqueues its
+    /// daemon-owned clone. No git process is ever started from the app.
+    @discardableResult
+    public func addTrackedRepository(remoteInput: String) -> TrackedRepo? {
+        guard let remote = GitRemoteURL.parse(remoteInput) else {
+            storeError = StoreError(
+                title: "Invalid repository address",
+                message: "Enter an HTTPS, SSH, Git, or supported scp-style repository address.")
+            return nil
+        }
+        do {
+            let repository = try store.addRepo(name: remote.name, remoteURL: remote.remote, branch: nil)
+            reloadTrackedRepositories()
+            return repository
+        } catch {
+            DebugLog.store("WikiStoreModel.addTrackedRepository failed: \(error)")
+            storeError = StoreError(title: "Could not add repository", message: error.localizedDescription)
+            return nil
+        }
     }
 
     // MARK: - Search

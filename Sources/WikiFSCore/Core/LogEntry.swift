@@ -25,12 +25,22 @@ public struct LogEntry: Equatable, Sendable {
         self.note = note
     }
 
-    /// The operation that produced a log entry. A closed set (the three
-    /// agent operations) so `wikictl log append --kind …` can validate its
-    /// argument and the rendered `log.md` lines are predictable to `grep`.
+    /// The operation that produced a log entry. A closed set so `wikictl log
+    /// append --kind …` can validate its argument and rendered `log.md` lines
+    /// remain predictable to `grep`.
     public enum Kind: String, Equatable, Sendable, CaseIterable {
         case ingest
         case query
         case lint
+        /// A tracked-repository pass — the wiki being brought up to date with new
+        /// commits. Distinct from `.ingest` (a one-shot source) so `log.md` can be
+        /// grepped for "when was this repo last covered, and through which commit".
+        case repo
+
+        /// The `a|b|c` list used in the CLI's usage/validation text and the
+        /// on-mount cheatsheets, derived from the cases so it can never drift.
+        public static var optionList: String {
+            allCases.map(\.rawValue).joined(separator: "|")
+        }
     }
 }

@@ -252,7 +252,7 @@ struct LogIndexTests {
         #expect(prompt.body == SystemPrompt.defaultBody)
         #expect(prompt.version == (SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF))
 
-        // user_version advanced to v43.
+        // user_version advanced through every migration step to head.
         var check: OpaquePointer?
         #expect(sqlite3_open(url.path, &check) == SQLITE_OK)
         defer { sqlite3_close(check) }

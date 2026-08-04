@@ -43,7 +43,7 @@ struct SchemaV48MigrationTests {
 
     @Test func freshDatabaseHasV48Schema() throws {
         let store = try TestStoreFactory.inMemory()
-        #expect(store.pragmaValue("user_version") == "48")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(store.scalarText("SELECT COUNT(*) FROM pragma_table_info('chat_turns') WHERE name = 'input_tokens'") == "1")
         #expect(store.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'page_version_sources'") == "1")
     }
@@ -62,7 +62,7 @@ struct SchemaV48MigrationTests {
 
     @Test func upgradeStampsVersionAfterCommit() throws {
         let store = try migrationStore(at: v47URL())
-        #expect(store.pragmaValue("user_version") == "48")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func reopenV48IsIdempotent() throws {
@@ -70,7 +70,7 @@ struct SchemaV48MigrationTests {
         let first = try migrationStore(at: url)
         first.close()
         let reopened = try migrationStore(at: url)
-        #expect(reopened.pragmaValue("user_version") == "48")
+        #expect(reopened.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func rewoundV48SchemaRepairsSafely() throws {
@@ -78,7 +78,7 @@ struct SchemaV48MigrationTests {
         let first = try migrationStore(at: url)
         first.close()
         try MetadataSQLiteFixtureSupport.execute("PRAGMA user_version = 47", at: url)
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func freshAndUpgradeSchemasMatch() throws {
@@ -252,7 +252,7 @@ struct SchemaV48MigrationTests {
         // The store must open despite the orphans: the gate repairs the
         // cascade children, then re-checks clean.
         let store = try migrationStore(at: url)
-        #expect(store.pragmaValue("user_version") == "48")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(try scalar("SELECT COUNT(*) FROM source_chunks WHERE source_id = 'ghost-source'", at: url) == "0")
         #expect(try scalar("SELECT COUNT(*) FROM source_search WHERE source_id = 'ghost-source'", at: url) == "0")
         #expect(try scalar("SELECT COUNT(*) FROM pragma_foreign_key_check", at: url) == "0")
@@ -300,7 +300,7 @@ struct SchemaV48MigrationTests {
     @Test func retryAfterEnablingForeignKeyEnforcementSucceeds() throws {
         let url = try v47URL()
         do { _ = try migrationStore(at: url, foreignKeysEnabled: false) } catch { }
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func injectedForeignKeyResultMapsToTypedViolation() throws {
@@ -358,14 +358,14 @@ struct SchemaV48MigrationTests {
         )
         let url = try v47URL()
         do { _ = try migrationStore(at: url, checker: checker) } catch { }
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func retryAfterReplacingThrowingCheckerWithProductionCheckerSucceeds() throws {
         let throwing = SchemaForeignKeyChecker(verifyEnforcement: { _ in }, check: { _ in throw Sentinel() })
         let url = try v47URL()
         do { _ = try migrationStore(at: url, checker: throwing) } catch { }
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func failedUpgradeRollsBackAndRetries() throws {
@@ -375,7 +375,7 @@ struct SchemaV48MigrationTests {
         let url = try v47URL()
         do { _ = try migrationStore(at: url, hooks: hooks) } catch { }
         try assertV48ObjectsAbsent(at: url)
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func injectedForeignKeyCheckerRunsAtExactFinalSchemaCheckpoint() throws {
@@ -400,7 +400,7 @@ struct SchemaV48MigrationTests {
         )
         let store = try migrationStore(at: v47URL(), hooks: hooks, checker: checker)
         #expect(recorder.events == ["verify", "cleanup", "copy", "check"])
-        #expect(store.pragmaValue("user_version") == "48")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func readOnlyV47ReturnsCompatibilityEmptyValues() throws {
@@ -446,14 +446,14 @@ struct SchemaV48MigrationTests {
 
     @Test func migrationHooksAreInternalAndProductionDefaultsAreNoOp() throws {
         let store = try migrationStore(at: v47URL(), hooks: .productionDefault, checker: .productionDefault())
-        #expect(store.pragmaValue("user_version") == "48")
+        #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func productionForeignKeyCheckerIsRestoredPerStoreInstance() throws {
         let url = try v47URL()
         let rejecting = SchemaForeignKeyChecker(verifyEnforcement: { _ in throw Sentinel() }, check: { _ in [] })
         do { _ = try migrationStore(at: url, checker: rejecting) } catch { }
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func injectedForeignKeyCheckerStateDoesNotLeakAfterRollbackAndReopen() throws {
@@ -463,12 +463,12 @@ struct SchemaV48MigrationTests {
             check: { _ in [.init(table: "child", rowID: 1, parentTable: "parent", foreignKeyIndex: 0)] }
         )
         do { _ = try migrationStore(at: url, checker: rejecting) } catch { }
-        #expect(try migrationStore(at: url).pragmaValue("user_version") == "48")
+        #expect(try migrationStore(at: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func fixtureFactoryUsesFreshProductionCheckerByDefault() throws {
         let url = try v47URL()
-        #expect(try GRDBWikiStore(databaseURL: url).pragmaValue("user_version") == "48")
+        #expect(try GRDBWikiStore(databaseURL: url).pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 
     @Test func foreignKeysAreEnabled() throws {

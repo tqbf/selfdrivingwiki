@@ -542,6 +542,9 @@ public enum AgentOperationRunner {
         onWorkspaceMerge: (@MainActor () -> Void)? = nil
     ) async {
         switch request {
+        case .repositoryUpdate, .repositoryReader:
+            DebugLog.agent("Rejected repository operation on the app-local runner; wikid owns repository work")
+            return
         case .ingest:
             break
         case .query, .lint, .lintPage:

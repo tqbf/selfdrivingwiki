@@ -116,6 +116,21 @@ public protocol QueueIngestionProvider: Sendable {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
     ) async throws
 
+    /// Run one repository clone, fetch, or incremental update. Repository
+    /// checkouts and Git execution are daemon-owned; app-side fallback
+    /// providers must reject this rather than spawning Git themselves.
+    func runRepositoryWork(
+        wikiID: WikiID,
+        request: RepositoryWorkRequest,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+    ) async throws
+
     /// Quick readiness probe: checks whether the selected agent provider's
     /// command binary exists on PATH (or is the bundled bun helper). Returns
     /// `nil` when ready, or a user-facing message explaining what to fix and
@@ -223,12 +238,16 @@ struct QueueIngestionWorker: QueueWorker {
     let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
 
     func execute(_ item: QueueItem) async throws {
+        DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=entered wiki=\(item.wikiID.rawValue) attempt=\(item.attempt) sources=\(item.payload.sourceIDs.count)")
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
         // is on PATH BEFORE running the full pipeline. If the binary is missing,
         // fail the item with a clear, user-facing message instead of a cryptic
         // spawn error like "bun: not found". This mirrors the extraction worker's
         // `readiness()` check on `MarkdownExtractor`.
-        if let message = await provider.readiness() {
+        let needsAgent = item.payload.repositoryWork?.action == .update
+            || item.payload.repositoryWork == nil
+        if needsAgent, let message = await provider.readiness() {
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=blocked wiki=\(item.wikiID.rawValue) reason=not-ready error=\(message)")
             throw QueueIngestionError.notReady(message)
         }
 
@@ -256,7 +275,22 @@ struct QueueIngestionWorker: QueueWorker {
             emitPendingPermission(itemID, permission)
         }
 
-        if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
+        if let repositoryWork = item.payload.repositoryWork {
+            guard item.payload.sourceIDs.isEmpty, item.payload.lintPageIDs == nil else {
+                throw QueueIngestionError.spawnFailed("Repository work cannot include source ingestion or lint payloads")
+            }
+            try await provider.runRepositoryWork(
+                wikiID: item.wikiID,
+                request: repositoryWork,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission
+            )
+        } else if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
             try await provider.runLintPages(
                 wikiID: item.wikiID,
@@ -285,8 +319,10 @@ struct QueueIngestionWorker: QueueWorker {
             // Normal ingestion.
             let sourceIDs = item.payload.sourceIDs
             guard !sourceIDs.isEmpty else {
+                DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=failed wiki=\(item.wikiID.rawValue) reason=no-sources")
                 throw QueueIngestionError.noSources
             }
+            DebugLog.ingest("Queue trace=\(item.id.rawValue) stage=ingestion-worker event=handoff wiki=\(item.wikiID.rawValue) target=provider sources=\(sourceIDs.count)")
             try await provider.runIngestion(
                 wikiID: item.wikiID,
                 sourceIDs: sourceIDs,

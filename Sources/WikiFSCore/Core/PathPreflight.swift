@@ -21,9 +21,15 @@ public enum PathPreflight {
     /// Search `path` (a colon-separated PATH string) for `executable`, using
     /// `fileExists` to test each candidate. Returns the first hit. An absolute or
     /// `./`-relative `executable` is tested directly without consulting PATH.
+    ///
+    /// `installHint` completes the not-found message. It defaults to the Claude
+    /// CLI's, since that is the executable this preflight exists for; the repo
+    /// tracker passes git's instead, because telling someone to install Claude
+    /// Code when `git` is missing is worse than saying nothing.
     public static func resolve(
         executable: String,
         onPath path: String,
+        installHint: String = "Install the Claude CLI (claude.com/claude-code)",
         fileExists: (String) -> Bool
     ) -> Result {
         guard !executable.isEmpty else {
@@ -45,8 +51,8 @@ public enum PathPreflight {
             }
         }
         return .missing(reason: """
-            ‘\(executable)’ was not found on your PATH. Install the Claude CLI \
-            (claude.com/claude-code) and make sure it is on your login shell PATH.
+            ‘\(executable)’ was not found on your PATH. \(installHint) and make sure \
+            it is on your login shell PATH.
             """)
     }
 
@@ -54,22 +60,30 @@ public enum PathPreflight {
     /// app's process PATH, which is the launchd-minimal one and usually lacks
     /// `/opt/homebrew/bin`. Best-effort: if the shell hop fails we fall back to
     /// the process PATH so we never spuriously block a working setup.
-    public static func resolveOnLoginShell(executable: String = "claude") async -> Result {
-        await resolveOnLoginShell(executable: executable, runProcess: AsyncProcessRunner.run)
+    public static func resolveOnLoginShell(
+        executable: String = "claude",
+        installHint: String = "Install the Claude CLI (claude.com/claude-code)"
+    ) async -> Result {
+        await resolveOnLoginShell(
+            executable: executable, installHint: installHint,
+            runProcess: AsyncProcessRunner.run)
     }
 
     static func resolveOnLoginShell(
         executable: String = "claude",
+        installHint: String = "Install the Claude CLI (claude.com/claude-code)",
         runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult
     ) async -> Result {
         await resolveOnLoginShell(
             executable: executable,
+            installHint: installHint,
             runProcess: runProcess,
             fallbackPath: ProcessInfo.processInfo.environment["PATH"] ?? "")
     }
 
     static func resolveOnLoginShell(
         executable: String = "claude",
+        installHint: String = "Install the Claude CLI (claude.com/claude-code)",
         runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult,
         fallbackPath: String
     ) async -> Result {
@@ -77,6 +91,7 @@ public enum PathPreflight {
         return resolve(
             executable: executable,
             onPath: path,
+            installHint: installHint,
             fileExists: { FileManager.default.isExecutableFile(atPath: $0) }
         )
     }

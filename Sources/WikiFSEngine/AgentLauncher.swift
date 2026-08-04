@@ -1166,6 +1166,7 @@ public final class AgentLauncher {
             case .ingest: return .ingest
             case .lint, .lintPage: return .lint
             case .query: return .chat
+            case .repositoryUpdate, .repositoryReader: return .ingest
             }
         }()
         // agent-settings-tabs §3: derive the per-stage key from the operation
@@ -1178,9 +1179,16 @@ public final class AgentLauncher {
         // own per-phase resolution in `runACPIngestPlannerExecutors`.
         let stageKey = Self.stageKey(for: request)
         let policy: PermissionPolicy = resolvePermissionMode(permissionKind)
-        let executionAccess: AgentExecutionAccess = switch permissionKind {
-        case .ingest, .lint: .fullAccess
-        case .chat: .standard
+        let executionAccess: AgentExecutionAccess
+        if request.isRepositoryReader {
+            executionAccess = .standard
+        } else {
+            switch permissionKind {
+            case .ingest, .lint:
+                executionAccess = .fullAccess
+            case .chat:
+                executionAccess = .standard
+            }
         }
         // #606: chat is interactive (unbounded — the UI chip is the release
         // valve); ingest/lint are unattended and MUST auto-reject so a stuck
@@ -1365,17 +1373,24 @@ public final class AgentLauncher {
 
         // Build the backend profile. The launcher resolves app-level concerns
         // (scratch dir, wikictl env); `ACPBackend` owns the spawn + session.
-        let cli = CLIProfile(
-            operation: operation,
-            wikiRoot: wikiRoot,
-            wikiID: wikiID,
-            wikictlDirectory: wikictlDirectory,
-            onStdoutChunk: { [weak self] chunk in
-                Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
-            },
-            onStderrChunk: { [weak self] chunk in
-                Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
-            })
+        let cli: CLIProfile?
+        if request.isRepositoryReader {
+            // Reader sessions must not receive WIKI_DB or WIKICTL in their
+            // environment. Their only material input is the staged repo state.
+            cli = nil
+        } else {
+            cli = CLIProfile(
+                operation: operation,
+                wikiRoot: wikiRoot,
+                wikiID: wikiID,
+                wikictlDirectory: wikictlDirectory,
+                onStdoutChunk: { [weak self] chunk in
+                    Task { @MainActor [weak self] in self?.ingestRawStdout(chunk) }
+                },
+                onStderrChunk: { [weak self] chunk in
+                    Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
+                })
+        }
         var providerHints = AgentBackendFactory.providerHints(
                 provider: provider,
                 resolvedCommand: resolvedACPCommand,
@@ -1398,7 +1413,7 @@ public final class AgentLauncher {
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,
-            isReadOnly: false,
+            isReadOnly: request.isRepositoryReader,
             executionAccess: executionAccess,
             cli: cli,
             debugLogURL: debugFolderURL)
@@ -2882,6 +2897,8 @@ public final class AgentLauncher {
         case .ingest:          return ACPIngestStage.planner.rawValue
         case .lint, .lintPage: return "lint"
         case .query:           return "chat"
+        case .repositoryUpdate: return ACPIngestStage.planner.rawValue
+        case .repositoryReader: return ACPIngestStage.executor.rawValue
         }
     }
 

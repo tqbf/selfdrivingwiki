@@ -2,7 +2,8 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
-/// Sidebar host: a section-selector bar (Pages / Sources / Bookmarks / Chats)
+/// Sidebar host: a section-selector bar (Pages / Sources / Repositories /
+/// Bookmarks / Chats)
 /// above the active section's view. Each section is now an independent view:
 /// Pages, Sources, and Bookmarks are native AppKit `NSTableView`/`NSOutlineView`
 /// (instant selection, native double-click); Chats is a small SwiftUI `List`.
@@ -41,7 +42,7 @@ struct SidebarView: View {
     /// The sidebar's sections. Each gets an icon in the selector bar and, when
     /// selected, fills the list below.
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case pages, sources, bookmarks, chats
+        case pages, sources, repositories, bookmarks, chats
 
         var id: String { rawValue }
 
@@ -49,6 +50,7 @@ struct SidebarView: View {
             switch self {
             case .pages: "Pages"
             case .sources: "Sources"
+            case .repositories: "Repositories"
             case .bookmarks: "Bookmarks"
             case .chats: "Chats"
             }
@@ -58,6 +60,7 @@ struct SidebarView: View {
             switch self {
             case .pages: ResourceKind.page.systemImageName
             case .sources: ResourceKind.source.systemImageName
+            case .repositories: "folder.badge.gearshape"
             case .bookmarks: ResourceKind.bookmark.systemImageName
             case .chats: ResourceKind.chat.systemImageName
             }
@@ -71,6 +74,9 @@ struct SidebarView: View {
             Divider()
             bookmarksOrList
         }
+        // The repositories empty state has only an intrinsic height. Claim the
+        // full sidebar column so NavigationSplitView does not center this stack.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,
                                          ideal: PageEditorMetrics.sidebarIdealWidth)
@@ -167,6 +173,8 @@ struct SidebarView: View {
                                  showingImportMarkdown: $showingImportMarkdown,
                                  onAddFromURL: onAddFromURL,
                                  isZoteroConfigured: isZoteroConfigured)
+        case .repositories:
+            RepositoriesContainerView(store: store, session: session)
         case .bookmarks:
             BookmarksContainerView(store: store, fileProvider: fileProvider,
                 onShowPicker: { bookmarkPickerContext = $0 },
