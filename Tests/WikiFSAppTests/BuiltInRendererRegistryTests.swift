@@ -78,6 +78,34 @@ import WikiFSTypes
         #expect(id == .media)
     }
 
+    @Test("Planner preserves Source fallback for media origins missing renderable identity or plan")
+    func plannerRejectsMalformedMediaOrigins() throws {
+        let youtube = fixtureSource(filename: "video.url", ext: "", mimeType: "video/youtube", byteSize: 0)
+        let applePodcast = fixtureSource(filename: "episode.md", ext: "md", mimeType: MimeType.markdown, byteSize: 0)
+        let remoteMedia = fixtureSource(filename: "clip.mp4", ext: "mp4", mimeType: "video/mp4", byteSize: 0)
+
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: youtube,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: nil)) == nil)
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: applePodcast,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .applePodcast, plan: nil, externalIdentity: nil)) == nil)
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: applePodcast,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .applePodcast, plan: "https://example.com/show", externalIdentity: nil)) == nil)
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: remoteMedia,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .remoteMedia, plan: "https://example.com/clip.mp4", externalIdentity: nil)) == nil)
+    }
+
     @Test("Source fallback stays outside matching for plain text, unknown, and missing content")
     func sourceFallbackIsOutsideRegistryMatching() throws {
         let plain = fixtureSource(filename: "note.txt", ext: "txt", mimeType: "text/plain", byteSize: 5)
@@ -147,6 +175,27 @@ import WikiFSTypes
             origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: "dQw4w9WgXcQ"))
         #expect(result.contentArea == .tabbed)
         #expect(result.tabs == [.reader, .media, .split])
+    }
+
+    @Test("Characterization: malformed media metadata keeps fallback with no Media tab")
+    func characterizesMalformedMediaMetadataFallback() {
+        let youtubeResult = SourceDetailPresentationCharacterization.characterize(
+            source: fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0),
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            hasProcessedMarkdown: false,
+            origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: nil))
+        let podcastResult = SourceDetailPresentationCharacterization.characterize(
+            source: fixtureSource(filename: "episode.md", ext: "md", mimeType: MimeType.markdown, byteSize: 0),
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            hasProcessedMarkdown: false,
+            origin: fixtureOrigin(provider: .applePodcast, plan: nil, externalIdentity: nil))
+
+        #expect(youtubeResult.contentArea == .binaryFallback)
+        #expect(youtubeResult.tabs == [])
+        #expect(podcastResult.contentArea == .markdown)
+        #expect(podcastResult.tabs == [])
     }
 
     @Test("Characterization: plain text uses markdown content area with no tabs")
@@ -223,13 +272,16 @@ private func testInstalledDescriptor() throws -> RendererDescriptor {
     let packageID = try RendererPackageID(validating: "org.example.installed")
     let version = try RendererPackageVersion(validating: "1.0.0")
     let registrationID = try RendererRegistrationID(validating: "installed")
+    let entryPoint = RendererAsset(
+        path: try .init(validating: "index.html"),
+        digest: try RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))
     return try RendererDescriptor(
         reference: RendererReference(packageID: packageID, version: version, registrationID: registrationID),
         displayName: "Installed",
-        implementation: .builtIn(.pdf),
+        implementation: .webPackage(.init(path: entryPoint.path)),
         matchers: [.normalizedMIME(try .init(validating: MimeType.pdf))],
-        presentations: [.native],
-        approvedAssets: [],
+        presentations: [.web],
+        approvedAssets: [entryPoint],
         capabilities: [.inputRead],
         sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1),
         linkPolicy: .none,

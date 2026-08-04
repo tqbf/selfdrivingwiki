@@ -20,6 +20,9 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
         guard hostProtocolRevision > 0 else {
             throw RendererValidationError.invalidCompatibilityRange
         }
+        try Self.validateChannelInvariants(
+            builtInDescriptors: builtInDescriptors,
+            enabledInstalledDescriptors: enabledInstalledDescriptors)
         let combined = builtInDescriptors + enabledInstalledDescriptors
         try Self.validateUniqueReferences(combined)
         self.hostProtocolRevision = hostProtocolRevision
@@ -53,6 +56,22 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
             preference: preference,
             input: input,
             hostProtocolRevision: hostProtocolRevision)
+    }
+
+    private static func validateChannelInvariants(
+        builtInDescriptors: [RendererDescriptor],
+        enabledInstalledDescriptors: [RendererDescriptor]
+    ) throws {
+        for descriptor in builtInDescriptors {
+            guard case .builtIn = descriptor.implementation else {
+                throw RendererValidationError.builtInRegistryContainsInstalled(descriptor.reference.registrationID)
+            }
+        }
+        for descriptor in enabledInstalledDescriptors {
+            guard case .webPackage = descriptor.implementation else {
+                throw RendererValidationError.installedRegistryContainsBuiltIn(descriptor.reference.registrationID)
+            }
+        }
     }
 
     private static func validateUniqueReferences(_ descriptors: [RendererDescriptor]) throws {

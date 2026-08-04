@@ -81,8 +81,8 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     private static func normalizedMIME(for source: SourceSummary, origin: SourceOrigin?) throws -> RendererMIMEType? {
-        if let providerMime = syntheticMediaMIME(for: origin?.provider) {
-            return try RendererMIMEType(validating: providerMime)
+        if let mediaMime = renderableMediaMIME(for: source, origin: origin) {
+            return try RendererMIMEType(validating: mediaMime)
         }
         if let mime = source.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !mime.isEmpty {
             return RendererMIMEType(rawValue: mime)
@@ -101,7 +101,7 @@ struct SourceRendererPresentationPlanner: Sendable {
         currentMarkdown: String?,
         origin: SourceOrigin?
     ) -> RendererArtifactKind? {
-        if origin?.provider != nil, syntheticMediaMIME(for: origin?.provider) != nil { return .source }
+        if renderableMediaMIME(for: source, origin: origin) != nil { return .source }
         if MermaidSourceDetector.isMermaidSource(
             mimeType: source.mimeType,
             filename: source.filename,
@@ -113,14 +113,28 @@ struct SourceRendererPresentationPlanner: Sendable {
         return nil
     }
 
-    private static func syntheticMediaMIME(for provider: SourceProvider?) -> String? {
+    private static func renderableMediaMIME(for source: SourceSummary, origin: SourceOrigin?) -> String? {
+        guard let origin else { return nil }
+        let mime = mediaMIME(for: source, provider: origin.provider)
+        let descriptor = SourceEmbedDescriptor(
+            id: source.id,
+            mimeType: mime,
+            externalIdentity: origin.externalIdentity,
+            agentName: origin.agentName,
+            planURL: origin.plan)
+        guard ExternalEmbed.target(for: descriptor) != nil else { return nil }
+        return mime
+    }
+
+    private static func mediaMIME(for source: SourceSummary, provider: SourceProvider?) -> String? {
         switch provider {
         case .youtube?: BuiltInRendererMIME.youtube
         case .vimeo?: BuiltInRendererMIME.vimeo
         case .applePodcast?: BuiltInRendererMIME.applePodcast
         case .spotify?: BuiltInRendererMIME.spotify
         case .soundcloud?: BuiltInRendererMIME.soundCloud
-        case .remoteMedia?, .localFile?, .website?, .zotero?, .markdownFolder?, .podcast?, .legacyImport?, .none:
+        case .remoteMedia?: source.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        case .localFile?, .website?, .zotero?, .markdownFolder?, .podcast?, .legacyImport?, .none:
             nil
         }
     }
