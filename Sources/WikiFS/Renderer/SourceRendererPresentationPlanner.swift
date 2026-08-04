@@ -80,9 +80,20 @@ struct SourceRendererPresentationPlanner: Sendable {
         return id
     }
 
+    private enum MediaMIMECandidate: Sendable, Equatable {
+        case notMediaOrigin
+        case rejected
+        case renderable(String)
+    }
+
     private static func normalizedMIME(for source: SourceSummary, origin: SourceOrigin?) throws -> RendererMIMEType? {
-        if let mediaMime = renderableMediaMIME(for: source, origin: origin) {
+        switch mediaMIMECandidate(for: source, origin: origin) {
+        case .renderable(let mediaMime):
             return try RendererMIMEType(validating: mediaMime)
+        case .rejected:
+            return nil
+        case .notMediaOrigin:
+            break
         }
         if let mime = source.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !mime.isEmpty {
             return RendererMIMEType(rawValue: mime)
@@ -114,16 +125,23 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     private static func renderableMediaMIME(for source: SourceSummary, origin: SourceOrigin?) -> String? {
-        guard let origin else { return nil }
-        let mime = mediaMIME(for: source, provider: origin.provider)
+        guard case .renderable(let mime) = mediaMIMECandidate(for: source, origin: origin) else { return nil }
+        return mime
+    }
+
+    private static func mediaMIMECandidate(for source: SourceSummary, origin: SourceOrigin?) -> MediaMIMECandidate {
+        guard let origin,
+              let mime = mediaMIME(for: source, provider: origin.provider) else {
+            return .notMediaOrigin
+        }
         let descriptor = SourceEmbedDescriptor(
             id: source.id,
             mimeType: mime,
             externalIdentity: origin.externalIdentity,
             agentName: origin.agentName,
             planURL: origin.plan)
-        guard ExternalEmbed.target(for: descriptor) != nil else { return nil }
-        return mime
+        guard ExternalEmbed.target(for: descriptor) != nil else { return .rejected }
+        return .renderable(mime)
     }
 
     private static func mediaMIME(for source: SourceSummary, provider: SourceProvider?) -> String? {

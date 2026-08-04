@@ -81,11 +81,18 @@ import WikiFSTypes
     @Test("Planner preserves Source fallback for media origins missing renderable identity or plan")
     func plannerRejectsMalformedMediaOrigins() throws {
         let youtube = fixtureSource(filename: "video.url", ext: "", mimeType: "video/youtube", byteSize: 0)
+        let youtubeWithRawVideoMIME = fixtureSource(filename: "video.url", ext: "", mimeType: "video/mp4", byteSize: 0)
         let applePodcast = fixtureSource(filename: "episode.md", ext: "md", mimeType: MimeType.markdown, byteSize: 0)
+        let applePodcastWithRawAudioMIME = fixtureSource(filename: "episode.mp3", ext: "mp3", mimeType: "audio/mpeg", byteSize: 0)
         let remoteMedia = fixtureSource(filename: "clip.mp4", ext: "mp4", mimeType: "video/mp4", byteSize: 0)
 
         #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
             for: youtube,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: nil)) == nil)
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: youtubeWithRawVideoMIME,
             boundedBytes: nil,
             currentMarkdown: nil,
             origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: nil)) == nil)
@@ -96,6 +103,11 @@ import WikiFSTypes
             origin: fixtureOrigin(provider: .applePodcast, plan: nil, externalIdentity: nil)) == nil)
         #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
             for: applePodcast,
+            boundedBytes: nil,
+            currentMarkdown: nil,
+            origin: fixtureOrigin(provider: .applePodcast, plan: "https://example.com/show", externalIdentity: nil)) == nil)
+        #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: applePodcastWithRawAudioMIME,
             boundedBytes: nil,
             currentMarkdown: nil,
             origin: fixtureOrigin(provider: .applePodcast, plan: "https://example.com/show", externalIdentity: nil)) == nil)
