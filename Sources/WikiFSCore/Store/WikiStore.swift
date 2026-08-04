@@ -274,6 +274,17 @@ public protocol WikiStore: Sendable {
     /// Source summaries (no content blob), most-recent-first.
     func listSources() throws -> [SourceSummary]
 
+    // MARK: - Renderer settings (dynamic renderers Phase 3)
+
+    func listRendererWikiEnablement() throws -> [RendererWikiEnablement]
+    func rendererWikiEnablement(packageID: RendererPackageID) throws -> RendererWikiEnablement?
+    func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws
+    func listRendererSourcePreferences() throws -> [RendererSourcePreference]
+    func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference?
+    func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws
+    func removeRendererSourcePreference(sourceID: SourceID) throws
+    func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord]
+
     /// The verbatim content bytes for one source, fetched on demand. On the
     /// protocol so `WikiStoreModel` can STAGE the source into the agent's scratch
     /// dir (reading from SQLite, not the laggy mount) without downcasting. Throws

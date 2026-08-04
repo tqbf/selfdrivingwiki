@@ -872,6 +872,13 @@ struct WikiCtlCommandTests {
         #expect(name.hasPrefix(WikiChangeNotification.baseName))
     }
 
+    @Test func rendererWakeNamesCarryOnlyScopeIdentity() throws {
+        let wikiID = WikiID(rawValue: "01ABCDEF")
+        let machineID = try RendererMachineScopeID(validating: "machine.example")
+        #expect(RendererChangeNotification.wikiName(forWikiID: wikiID) == "org.sockpuppet.wiki.renderers.wiki.changed.01ABCDEF")
+        #expect(RendererChangeNotification.machineName(for: machineID) == "org.sockpuppet.wiki.renderers.machine.changed.machine.example")
+    }
+
     // MARK: - Markdown auto-fix (wikictl page add)
 
     /// Resolve the committed bundles relative to this test file for injection.

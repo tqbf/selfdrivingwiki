@@ -87,15 +87,24 @@ public final class WikiEventBus: @unchecked Sendable {
     /// when building events.
     public let wikiID: WikiID
 
-    private typealias Handler = @MainActor @Sendable (ResourceChangeEvent) -> Void
+    public enum StoreChangeEvent: Sendable, Equatable {
+        case resource(ResourceChangeEvent)
+        case rendererSettings(RendererSettingsChangeEvent)
+    }
+
+    private typealias ResourceHandler = @MainActor @Sendable (ResourceChangeEvent) -> Void
+    private typealias RendererSettingsHandler = @MainActor @Sendable (RendererSettingsChangeEvent) -> Void
 
     private let lock = NSLock()
     /// Subscriber registry: `id → (kindFilter, handler)`. A `nil` kindFilter
     /// means "all kinds" (also the only subscribers that receive coarse,
     /// `kind == nil` events). Guarded by `lock`.
-    private var subscribers: [UUID: (ResourceKind?, Handler)] = [:]
-    /// Monotone per-emit counter, stamped onto each delivered event's `seq`.
-    /// Guarded by `lock`.
+    private var resourceSubscribers: [UUID: (ResourceKind?, ResourceHandler)] = [:]
+    /// Renderer-settings subscribers are separate from resource subscribers, but
+    /// share this bus so the app has one per-wiki in-process event path.
+    private var rendererSettingsSubscribers: [UUID: RendererSettingsHandler] = [:]
+    /// Monotone per-emit counter, stamped onto each delivered resource event's
+    /// `seq`. Guarded by `lock`.
     private var seqCounter: UInt64 = 0
 
     public init(wikiID: WikiID) {
@@ -113,7 +122,18 @@ public final class WikiEventBus: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let token = SubscriptionToken()
-        subscribers[token.id] = (kind, handler)
+        resourceSubscribers[token.id] = (kind, handler)
+        return token
+    }
+
+    @discardableResult
+    public func subscribeRendererSettings(
+        _ handler: @escaping @MainActor (RendererSettingsChangeEvent) -> Void
+    ) -> SubscriptionToken {
+        lock.lock()
+        defer { lock.unlock() }
+        let token = SubscriptionToken()
+        rendererSettingsSubscribers[token.id] = handler
         return token
     }
 
@@ -122,7 +142,8 @@ public final class WikiEventBus: @unchecked Sendable {
     public func unsubscribe(_ token: SubscriptionToken) {
         lock.lock()
         defer { lock.unlock() }
-        subscribers[token.id] = nil
+        resourceSubscribers[token.id] = nil
+        rendererSettingsSubscribers[token.id] = nil
     }
 
     /// Stamp `seq`, snapshot the matching handlers, then dispatch each to the
@@ -141,7 +162,7 @@ public final class WikiEventBus: @unchecked Sendable {
             change: event.change,
             seq: seqCounter
         )
-        let snapshot = Array(subscribers.values)
+        let snapshot = Array(resourceSubscribers.values)
         lock.unlock()
 
         for (kindFilter, handler) in snapshot {
@@ -150,6 +171,16 @@ public final class WikiEventBus: @unchecked Sendable {
             // nil-filter (all-events) subscribers.
             if let kindFilter, kindFilter != stamped.kind { continue }
             Task { @MainActor in handler(stamped) }
+        }
+    }
+
+    public func emitRendererSettings(_ event: RendererSettingsChangeEvent) {
+        lock.lock()
+        let snapshot = Array(rendererSettingsSubscribers.values)
+        lock.unlock()
+
+        for handler in snapshot {
+            Task { @MainActor in handler(event) }
         }
     }
 }

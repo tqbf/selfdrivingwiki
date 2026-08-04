@@ -256,6 +256,41 @@ struct RendererDescriptorValidationTests {
     }
 }
 
+struct RendererPhase3PortableTests {
+    @Test func offsetBearingTimestampRejectsZAndAcceptsNumericOffset() throws {
+        #expect(RFC3339Timestamp(rawValue: "2026-08-04T12:34:56Z") == nil)
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
+        #expect(timestamp.rawValue.hasSuffix("+00:00"))
+    }
+
+    @Test func envelopePayloadRoundTrip() throws {
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        let version = try RendererPackageVersion(validating: "1.2.3")
+        let payload = WikiStoreChangeEvent.rendererSettings(
+            .machineInstallStateChanged(packageID: packageID, version: version)
+        )
+        let record = try PersistedWikiStoreChangeRecord(
+            eventID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            sequence: 42,
+            scope: .machine(try RendererMachineScopeID(validating: "machine.example")),
+            payload: payload,
+            committedAt: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
+        )
+        let decoded = try JSONDecoder().decode(PersistedWikiStoreChangeRecord.self, from: JSONEncoder().encode(record))
+        #expect(decoded == record)
+    }
+
+    @Test func namedPolicyDefaultsMatchApprovedPhase3Timing() {
+        let policy = RendererEventPolicy.phase3Default
+        #expect(policy.heartbeatInterval == 10)
+        #expect(policy.leaseExpiry == 45)
+        #expect(policy.clockSkewSafetyMargin == 15)
+        #expect(policy.cleanRetirementSafetyInterval == 5 * 60)
+        #expect(policy.lockAcquisitionTimeout == 30)
+        #expect(policy.orderedDrainBatchLimit == 256)
+    }
+}
+
 struct RendererPackageHashTests {
     @Test func canonicalEnvelopeGoldenDigestAndOrderIndependence() throws {
         let packageID = RendererFixtures.packageID

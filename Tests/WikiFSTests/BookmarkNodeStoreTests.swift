@@ -607,3 +607,106 @@ import SQLite3
         #expect(reloaded.updatedAt == originalUpdatedAt)
     }
 }
+
+private final class DeterministicRendererEventIDGenerator: RendererEventIDGenerating, @unchecked Sendable {
+    let ids: [UUID]
+    private let lock = NSLock()
+    private var index = 0
+
+    init(_ ids: [UUID]) { self.ids = ids }
+
+    func nextEventID() -> UUID {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = ids[min(index, ids.count - 1)]
+        index += 1
+        return id
+    }
+}
+
+private struct FixedRendererEventClock: RendererEventClock {
+    let timestamp: RFC3339Timestamp
+    func now() -> RFC3339Timestamp { timestamp }
+}
+
+@Suite struct RendererSettingsStoreTests {
+    private func tempDatabaseURL() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("renderer-settings-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("WikiFS.sqlite")
+    }
+
+    private func store(url: URL? = nil) throws -> GRDBWikiStore {
+        try GRDBWikiStore(
+            databaseURL: url ?? (try tempDatabaseURL()),
+            schemaV48MigrationHooks: .productionDefault,
+            schemaForeignKeyChecker: .productionDefault(),
+            rendererEventIDGenerator: DeterministicRendererEventIDGenerator([
+                UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+                UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+            ]),
+            rendererEventClock: FixedRendererEventClock(
+                timestamp: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
+            )
+        )
+    }
+
+    @Test func freshSchemaCreatesRendererTablesAndReopensAtV49() throws {
+        let url = try tempDatabaseURL()
+        let first = try store(url: url)
+        #expect(first.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
+        #expect(first.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_wiki_enablement';") == "1")
+        #expect(first.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_event_journal';") == "1")
+
+        let reopened = try store(url: url)
+        #expect(reopened.pragmaValue("user_version") == "49")
+        #expect(try reopened.listRendererWikiEnablement().isEmpty)
+    }
+
+    @Test func settingsRoundTripPersistsJournalRecordsInOrder() throws {
+        let store = try store()
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        let source = try store.addSource(filename: "diagram.canvas", data: Data("{}".utf8))
+        let preference = RendererPreferenceReference.logical(
+            LogicalRendererReference(packageID: packageID, registrationID: try RendererRegistrationID(validating: "canvas"))
+        )
+
+        try store.setRendererWikiEnablement(packageID: packageID, isEnabled: true)
+        try store.setRendererSourcePreference(sourceID: source.id, preference: preference)
+
+        #expect(try store.rendererWikiEnablement(packageID: packageID)?.isEnabled == true)
+        #expect(try store.rendererSourcePreference(sourceID: source.id)?.preference == preference)
+        let records = try store.rendererSettingsJournalRecords()
+        #expect(records.map(\.sequence) == [1, 2])
+        #expect(records.allSatisfy { $0.committedAt.rawValue.hasSuffix("+00:00") })
+    }
+
+    @Test func sourcePreferenceConstraintRollbackPersistsNoJournalRecord() throws {
+        let store = try store()
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        let missing = SourceID(rawValue: "missing-source")
+        let preference = RendererPreferenceReference.logical(
+            LogicalRendererReference(packageID: packageID, registrationID: try RendererRegistrationID(validating: "canvas"))
+        )
+
+        #expect(throws: Error.self) {
+            try store.setRendererSourcePreference(sourceID: missing, preference: preference)
+        }
+        #expect(try store.rendererSettingsJournalRecords().isEmpty)
+        #expect(try store.rendererSourcePreference(sourceID: missing) == nil)
+    }
+
+    @Test func rendererSettingsJournalDoesNotCreateResourceEventRecord() throws {
+        let store = try store()
+        let bus = WikiEventBus(wikiID: WikiID(rawValue: "wiki-renderer-settings-test"))
+        store.eventBus = bus
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+
+        try store.setRendererWikiEnablement(packageID: packageID, isEnabled: true)
+
+        #expect(try store.rendererSettingsJournalRecords().count == 1)
+        #expect(store.scalarText("SELECT COUNT(*) FROM renderer_event_journal WHERE payload_json LIKE '%resource%';") == "0")
+    }
+}
