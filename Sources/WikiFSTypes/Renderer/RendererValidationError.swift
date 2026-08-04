@@ -23,6 +23,8 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case manifestAssetNotApproved(RendererRelativePath)
     case emptyManifest
     case packageManifestContainsBuiltIn(BuiltInRendererID)
+    case builtInRegistryContainsInstalled(RendererRegistrationID)
+    case installedRegistryContainsBuiltIn(RendererRegistrationID)
     case emptyPreference
     case mismatchedPreferenceIdentity
 
@@ -47,6 +49,8 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case let .manifestAssetNotApproved(path): "renderer descriptor does not approve manifest asset: \(path.rawValue)"
         case .emptyManifest: "renderer manifest must register at least one renderer"
         case let .packageManifestContainsBuiltIn(id): "renderer package manifest cannot contain built-in renderer: \(id.rawValue)"
+        case let .builtInRegistryContainsInstalled(id): "built-in renderer registry input contains installed renderer: \(id.rawValue)"
+        case let .installedRegistryContainsBuiltIn(id): "installed renderer registry input contains built-in renderer: \(id.rawValue)"
         case .emptyPreference: "renderer preference has no exact or logical reference"
         case .mismatchedPreferenceIdentity: "renderer preference exact and logical identities differ"
         }

@@ -30,9 +30,12 @@ enum RendererFixtures {
     }
 
     static func webDescriptor(
-        assets: [RendererAsset],
+        assets: [RendererAsset] = [webAsset()],
+        packageID: RendererPackageID = packageID,
+        version: RendererPackageVersion = version,
         registrationID: RendererRegistrationID = registrationID,
-        matchers: [RendererMatcher] = [.artifactKind(.source)]
+        matchers: [RendererMatcher] = [.artifactKind(.source)],
+        priority: Int = 0
     ) throws -> RendererDescriptor {
         guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
         return try RendererDescriptor(
@@ -47,8 +50,14 @@ enum RendererFixtures {
             linkPolicy: .none,
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
             compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
-            priority: 0
+            priority: priority
         )
+    }
+
+    static func webAsset(path: String = "index.html") -> RendererAsset {
+        RendererAsset(
+            path: try! .init(validating: path),
+            digest: try! RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))
     }
 
     static func input(
