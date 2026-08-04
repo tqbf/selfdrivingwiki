@@ -173,6 +173,7 @@ public enum RendererSettingsChangeEvent: Codable, Hashable, Sendable {
 }
 
 public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
+    case resource(ResourceChangeEvent)
     case rendererSettings(RendererSettingsChangeEvent)
 }
 

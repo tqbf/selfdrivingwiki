@@ -4,53 +4,6 @@ import Foundation
 // now live in `Resource.swift` (slice 2b) next to the access layer that owns
 // them; the bus is a consumer of kinds, not their home.
 
-/// How a resource changed.
-public enum ChangeKind: String, Sendable {
-    case created, updated, deleted
-}
-
-/// A thin, serializable description of one resource change. Emitted by the
-/// store at the method-atomic write seam (`mutate()`), and by the cross-process
-/// bridge as a coarse "reload everything" event. Events are *hints*:
-/// subscribers (the File Provider signaler, the model's reload path) react to
-/// them, but the authoritative change-detection token is still
-/// `GRDBWikiStore.changeToken()`.
-///
-/// `kind` is optional: a `nil` kind means a coarse, whole-wiki change (the
-/// Darwin notification carries no per-resource detail), which only matches
-/// all-events (nil-filtered) subscribers. A concrete kind matches its own
-/// kind-filtered subscribers plus all-events subscribers.
-///
-/// `seq` is a bus-stamped, monotonically increasing sequence number owned by
-/// `WikiEventBus.emit` (callers pass `0`; the bus overwrites it on delivery).
-/// It is present but unconsumed (reserved for the future daemon resync
-/// handshake — §3 decision 2).
-///
-/// **Phase E:** the `origin` field (`.local` / `.external`) is removed. The
-/// model now subscribes to ALL events and reloads through the bus for both
-/// in-app writes and cross-process (`wikictl`) writes — one path, not two.
-public struct ResourceChangeEvent: Sendable, Equatable {
-    public let wikiID: WikiID
-    public let kind: ResourceKind?
-    public let id: String
-    public let change: ChangeKind
-    public let seq: UInt64
-
-    public init(
-        wikiID: WikiID,
-        kind: ResourceKind?,
-        id: String,
-        change: ChangeKind,
-        seq: UInt64 = 0
-    ) {
-        self.wikiID = wikiID
-        self.kind = kind
-        self.id = id
-        self.change = change
-        self.seq = seq
-    }
-}
-
 /// Opaque handle returned by ``WikiEventBus/subscribe(_:_:)``; pass it to
 /// ``WikiEventBus/unsubscribe(_:)`` to stop delivery. Unique per subscription.
 public struct SubscriptionToken: Sendable, Hashable {

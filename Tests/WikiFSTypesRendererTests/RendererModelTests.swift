@@ -280,6 +280,27 @@ struct RendererPhase3PortableTests {
         #expect(decoded == record)
     }
 
+    @Test func envelopeResourcePayloadRoundTripUsesSameDiscriminatedEvent() throws {
+        let payload = WikiStoreChangeEvent.resource(ResourceChangeEvent(
+            wikiID: WikiID(rawValue: "wiki-event-contract"),
+            kind: .source,
+            id: "source-1",
+            change: .updated,
+            seq: 7
+        ))
+        let record = try PersistedWikiStoreChangeRecord(
+            eventID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            sequence: 43,
+            scope: .wiki(WikiID(rawValue: "wiki-event-contract")),
+            payload: payload,
+            committedAt: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
+        )
+
+        let decoded = try JSONDecoder().decode(PersistedWikiStoreChangeRecord.self, from: JSONEncoder().encode(record))
+
+        #expect(decoded == record)
+    }
+
     @Test func namedPolicyDefaultsMatchApprovedPhase3Timing() {
         let policy = RendererEventPolicy.phase3Default
         #expect(policy.heartbeatInterval == 10)

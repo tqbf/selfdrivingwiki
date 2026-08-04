@@ -196,6 +196,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private let appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks
     private let rendererEventIDGenerator: any RendererEventIDGenerating
     private let rendererEventClock: any RendererEventClock
+    private let rendererWikiWakePoster: @Sendable (WikiID) -> Void
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -234,6 +235,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks = .productionDefault,
         rendererEventIDGenerator: any RendererEventIDGenerating = UUIDRendererEventIDGenerator(),
         rendererEventClock: any RendererEventClock = WallRendererEventClock(),
+        rendererWikiWakePoster: @escaping @Sendable (WikiID) -> Void = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) },
         foreignKeysEnabled: Bool = true
     ) throws {
         self.schemaV48MigrationHooks = schemaV48MigrationHooks
@@ -241,6 +243,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         self.appendDerivedMarkdownHooks = appendDerivedMarkdownHooks
         self.rendererEventIDGenerator = rendererEventIDGenerator
         self.rendererEventClock = rendererEventClock
+        self.rendererWikiWakePoster = rendererWikiWakePoster
         var config = Configuration()
         config.foreignKeysEnabled = foreignKeysEnabled
         config.busyMode = .timeout(5)
@@ -316,6 +319,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         appendDerivedMarkdownHooks = .productionDefault
         rendererEventIDGenerator = UUIDRendererEventIDGenerator()
         rendererEventClock = WallRendererEventClock()
+        rendererWikiWakePoster = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) }
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -371,6 +375,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         appendDerivedMarkdownHooks = .productionDefault
         rendererEventIDGenerator = UUIDRendererEventIDGenerator()
         rendererEventClock = WallRendererEventClock()
+        rendererWikiWakePoster = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) }
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -3537,6 +3542,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    func corruptRendererJournalEventIDForTesting(_ rawEventID: String) throws {
+        try dbWriter.write { db in
+            try db.execute(sql: "UPDATE renderer_event_journal SET event_id = ?;", arguments: [rawEventID])
+        }
+    }
+
     private func mutateRendererSettings(
         event: RendererSettingsChangeEvent,
         _ body: (Database, RFC3339Timestamp) throws -> Void
@@ -3553,6 +3564,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
         if let pending {
             eventBus?.emitRendererSettings(pending)
+            rendererWikiWakePoster(wikiID)
         }
     }
 
@@ -3619,8 +3631,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let payloadJSON: String = row["payload_json"]
         let payloadData = Data(payloadJSON.utf8)
         let payload = try JSONDecoder().decode(WikiStoreChangeEvent.self, from: payloadData)
+        let rawEventID: String = row["event_id"]
+        guard let eventID = UUID(uuidString: rawEventID) else {
+            throw WikiStoreError.invalidRendererEventID(rawEventID)
+        }
         return try PersistedWikiStoreChangeRecord(
-            eventID: UUID(uuidString: row["event_id"]) ?? UUID(),
+            eventID: eventID,
             sequence: UInt64(row["sequence"] as Int64),
             scope: .wiki(WikiID(rawValue: row["scope_id"])),
             payload: payload,

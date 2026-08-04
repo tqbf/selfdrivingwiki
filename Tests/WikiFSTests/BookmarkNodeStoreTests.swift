@@ -637,7 +637,10 @@ private struct FixedRendererEventClock: RendererEventClock {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func store(url: URL? = nil) throws -> GRDBWikiStore {
+    private func store(
+        url: URL? = nil,
+        rendererWikiWakePoster: @escaping @Sendable (WikiID) -> Void = { _ in }
+    ) throws -> GRDBWikiStore {
         try GRDBWikiStore(
             databaseURL: url ?? (try tempDatabaseURL()),
             schemaV48MigrationHooks: .productionDefault,
@@ -649,7 +652,8 @@ private struct FixedRendererEventClock: RendererEventClock {
             ]),
             rendererEventClock: FixedRendererEventClock(
                 timestamp: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
-            )
+            ),
+            rendererWikiWakePoster: rendererWikiWakePoster
         )
     }
 
@@ -708,5 +712,110 @@ private struct FixedRendererEventClock: RendererEventClock {
 
         #expect(try store.rendererSettingsJournalRecords().count == 1)
         #expect(store.scalarText("SELECT COUNT(*) FROM renderer_event_journal WHERE payload_json LIKE '%resource%';") == "0")
+    }
+
+    @Test func successfulRendererSettingsMutationPostsOneWikiWake() throws {
+        final class WakeCollector: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [WikiID] = []
+            func append(_ value: WikiID) { lock.withLock { values.append(value) } }
+            var snapshot: [WikiID] { lock.withLock { values } }
+        }
+        let collector = WakeCollector()
+        let store = try store(rendererWikiWakePoster: { collector.append($0) })
+        let wikiID = WikiID(rawValue: "wiki-renderer-wake-test")
+        store.eventBus = WikiEventBus(wikiID: wikiID)
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+
+        try store.setRendererWikiEnablement(packageID: packageID, isEnabled: true)
+
+        #expect(collector.snapshot == [wikiID])
+        #expect(try store.rendererSettingsJournalRecords().count == 1)
+    }
+
+    @Test func failedRendererSettingsTransactionPostsNoWikiWake() throws {
+        final class WakeCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var countValue = 0
+            func increment(_: WikiID) { lock.withLock { countValue += 1 } }
+            var count: Int { lock.withLock { countValue } }
+        }
+        let counter = WakeCounter()
+        let store = try store(rendererWikiWakePoster: { counter.increment($0) })
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "wiki-renderer-rollback-test"))
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        let missing = SourceID(rawValue: "missing-source")
+        let preference = RendererPreferenceReference.logical(
+            LogicalRendererReference(packageID: packageID, registrationID: try RendererRegistrationID(validating: "canvas"))
+        )
+
+        #expect(throws: Error.self) {
+            try store.setRendererSourcePreference(sourceID: missing, preference: preference)
+        }
+
+        #expect(counter.count == 0)
+        #expect(try store.rendererSettingsJournalRecords().isEmpty)
+    }
+
+    @Test func invalidRendererJournalEventIDFailsClosed() throws {
+        let store = try store()
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "wiki-invalid-event-id"))
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        try store.setRendererWikiEnablement(packageID: packageID, isEnabled: true)
+        try store.corruptRendererJournalEventIDForTesting("not-a-uuid")
+
+        do {
+            _ = try store.rendererSettingsJournalRecords()
+            Issue.record("expected invalid renderer event ID")
+        } catch WikiStoreError.invalidRendererEventID(let raw) {
+            #expect(raw == "not-a-uuid")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func v49FreshAndUpgradeRendererSchemasMatch() throws {
+        let freshURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "fresh-v49-renderer")
+        let fresh = try store(url: freshURL)
+        fresh.close()
+
+        let upgradedURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "upgrade-v49-renderer")
+        try MetadataSQLiteFixtureSupport.prepareV48(at: upgradedURL)
+        let upgraded = try store(url: upgradedURL)
+        upgraded.close()
+
+        let names = rendererSchemaObjectNamesSQLList
+        for type in ["table", "index"] {
+            let freshSQL = try normalizedMetadataSQL(type: type, names: names, at: freshURL)
+            let upgradedSQL = try normalizedMetadataSQL(type: type, names: names, at: upgradedURL)
+            #expect(freshSQL == upgradedSQL)
+        }
+    }
+
+    @Test func explicitV48UpgradeCreatesRendererSchemaAndReopensAtV49() throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "explicit-v48-to-v49")
+        try MetadataSQLiteFixtureSupport.prepareV48(at: url)
+        #expect(try MetadataSQLiteFixtureSupport.scalar("PRAGMA user_version", at: url) == "48")
+
+        let upgraded = try store(url: url)
+        #expect(upgraded.pragmaValue("user_version") == "49")
+        #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_wiki_enablement';") == "1")
+        #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='renderer_event_journal_scope_sequence';") == "1")
+        upgraded.close()
+
+        let reopened = try store(url: url)
+        #expect(reopened.pragmaValue("user_version") == "49")
+        #expect(try reopened.listRendererWikiEnablement().isEmpty)
+    }
+
+    private var rendererSchemaObjectNamesSQLList: String {
+        "('renderer_wiki_enablement', 'renderer_source_preferences', 'renderer_source_preferences_package', 'renderer_event_sequence', 'renderer_event_journal', 'renderer_event_journal_scope_sequence', 'renderer_event_process_leases', 'renderer_event_process_leases_subsystem', 'renderer_event_cursors', 'renderer_event_checkpoints')"
+    }
+
+    private func normalizedMetadataSQL(type: String, names: String, at url: URL) throws -> String {
+        try MetadataSQLiteFixtureSupport.scalar(
+            "SELECT group_concat(replace(replace(lower(sql), char(10), ' '), '  ', ' '), '|') FROM sqlite_master WHERE type = '\(type)' AND name IN \(names) ORDER BY name",
+            at: url
+        )
     }
 }

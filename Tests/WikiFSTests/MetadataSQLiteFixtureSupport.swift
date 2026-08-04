@@ -74,6 +74,24 @@ enum MetadataSQLiteFixtureSupport {
         fresh.close()
         try SchemaV48FixtureFactory.apply(classificationFixture, at: url)
     }
+
+    static func prepareV48(at url: URL) throws {
+        let fresh = try GRDBWikiStore(databaseURL: url)
+        fresh.close()
+        try execute("""
+        DROP TABLE IF EXISTS renderer_event_checkpoints;
+        DROP TABLE IF EXISTS renderer_event_cursors;
+        DROP INDEX IF EXISTS renderer_event_process_leases_subsystem;
+        DROP TABLE IF EXISTS renderer_event_process_leases;
+        DROP INDEX IF EXISTS renderer_event_journal_scope_sequence;
+        DROP TABLE IF EXISTS renderer_event_journal;
+        DROP TABLE IF EXISTS renderer_event_sequence;
+        DROP INDEX IF EXISTS renderer_source_preferences_package;
+        DROP TABLE IF EXISTS renderer_source_preferences;
+        DROP TABLE IF EXISTS renderer_wiki_enablement;
+        PRAGMA user_version = 48;
+        """, at: url)
+    }
 }
 
 enum ChatTurnsSchemaClassificationFixture: CaseIterable {
