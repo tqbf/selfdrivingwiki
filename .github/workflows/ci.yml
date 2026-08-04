@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   # Enforces the AGENTS.md "no bare try?" rule via a SwiftLint custom rule.
