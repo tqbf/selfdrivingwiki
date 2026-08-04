@@ -373,6 +373,16 @@ let package = Package(
             exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
+        // Renderer contract tests depend on the portable leaf target alone.
+        // This makes an accidental WikiFSTypes -> WikiFSCore dependency a
+        // package-graph failure on every supported platform.
+        .testTarget(
+            name: "WikiFSTypesRendererTests",
+            dependencies: ["WikiFSTypes"],
+            path: "Tests/WikiFSTypesRendererTests",
+            exclude: ["Fixtures"],
+            swiftSettings: strictSwiftSettings
+        ),
         // Signal-target validation tests compile against the pure validation
         // target only. They deliberately cannot link the production `kill`
         // closures in WikiFSCore, so a test can never signal a real process.
