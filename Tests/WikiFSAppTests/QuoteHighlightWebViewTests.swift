@@ -175,6 +175,18 @@ struct QuoteHighlightWebViewTests {
         #expect(exact.lowercased() == "clear improvement")
     }
 
+    @Test("#1059 highlight retains quoted text inside a quoted source fragment")
+    func highlightWrapsQuoteContainingInnerQuotationMarks() async throws {
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
+        let quote = #"The location for tests is in the "test" folder."#
+        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML("<p>\(quote)</p>"))
+
+        await run(webView, WikiReaderRep.highlightJS(quote: quote))
+
+        #expect(await markText(in: webView) == quote)
+    }
+
     @Test func highlightMatchesAcrossCollapsedWhitespace() async throws {
         // The source has extra internal whitespace / a newline; the quote is
         // single-spaced. The index-map fallback must still wrap the match.
