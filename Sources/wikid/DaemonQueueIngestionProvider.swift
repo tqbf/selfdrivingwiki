@@ -435,6 +435,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 wikiID: wikiID,
                 repoStateMarkdown: snapshot.renderStateFile(),
                 workPlan: readerWorkPlan,
+                onProgress: onProgress,
                 onTranscript: onTranscript)
         } else {
             readerDigests = nil
@@ -476,12 +477,16 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         wikiID: WikiID,
         repoStateMarkdown: String,
         workPlan: RepoReaderWorkPlan,
+        onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?
     ) async throws -> String {
         guard workPlan.isEligibleForReaderFanout else {
             throw QueueIngestionError.spawnFailed(
                 "Repository fan-out requires two or more nonempty reader allowlists")
         }
+
+        let total = workPlan.assignments.count
+        onProgress(ReaderFanoutProgress.start(repositoryName: repository.name, total: total))
 
         let digests = try await withThrowingTaskGroup(of: (Int, String).self) { group in
             for assignment in workPlan.assignments {
@@ -539,9 +544,17 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                     description: "\(repository.name) reader \(digest.0)",
                     isCompletion: true))
                 result.append(digest)
+                onProgress(ReaderFanoutProgress.readerCompleted(
+                    repositoryName: repository.name,
+                    completed: result.count,
+                    total: total))
             }
             return result
         }
+
+        onProgress(ReaderFanoutProgress.curatorHandoff(
+            repositoryName: repository.name, total: total))
+
         return digests.sorted { $0.0 < $1.0 }.map { ordinal, digest in
             "## Reader \(ordinal)\n\n\(digest)"
         }.joined(separator: "\n\n")
