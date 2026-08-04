@@ -380,7 +380,6 @@ let package = Package(
             name: "WikiFSTypesRendererTests",
             dependencies: ["WikiFSTypes"],
             path: "Tests/WikiFSTypesRendererTests",
-            exclude: ["Fixtures"],
             swiftSettings: strictSwiftSettings
         ),
         // Signal-target validation tests compile against the pure validation
