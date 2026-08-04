@@ -103,7 +103,7 @@ public struct RFC3339Timestamp: RawRepresentable, Codable, Hashable, Sendable, C
         self = value
     }
 
-    public init(date: Date, timeZone: TimeZone = TimeZone(secondsFromGMT: 0)!) {
+    public init(date: Date, timeZone: TimeZone = TimeZone(secondsFromGMT: 0) ?? .current) {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds, .withColonSeparatorInTimeZone]
         formatter.timeZone = timeZone
