@@ -110,6 +110,9 @@ public struct RendererRegistrationID: RawRepresentable, Codable, Hashable, Senda
 /// cannot add a case to this enum.
 public enum BuiltInRendererID: String, Codable, CaseIterable, Hashable, Sendable, Comparable {
     case pdf
+    case html
+    case mermaid
+    case media
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
