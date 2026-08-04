@@ -14,12 +14,30 @@ import Foundation
 public enum DarwinNotifier {
     public static func postChange(forWikiID id: String) {
         #if os(macOS)
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let name = CFNotificationName(WikiChangeNotification.name(forWikiID: id) as CFString)
-        CFNotificationCenterPostNotification(center, name, nil, nil, true)
+        post(name: WikiChangeNotification.name(forWikiID: id))
         #else
         // Darwin notifications are macOS-only; on Linux the cross-process
         // change-notification path is unused.
         #endif
     }
+
+    public static func postRendererWikiWake(forWikiID id: WikiID) {
+        #if os(macOS)
+        post(name: RendererChangeNotification.wikiName(forWikiID: id))
+        #endif
+    }
+
+    public static func postRendererMachineWake(for scopeID: RendererMachineScopeID) {
+        #if os(macOS)
+        post(name: RendererChangeNotification.machineName(for: scopeID))
+        #endif
+    }
+
+    #if os(macOS)
+    private static func post(name rawName: String) {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let name = CFNotificationName(rawName as CFString)
+        CFNotificationCenterPostNotification(center, name, nil, nil, true)
+    }
+    #endif
 }

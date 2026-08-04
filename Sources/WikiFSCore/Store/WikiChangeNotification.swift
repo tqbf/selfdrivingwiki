@@ -34,3 +34,16 @@ public enum WikiChangeNotification {
         "\(baseName).\(id)"
     }
 }
+
+public enum RendererChangeNotification {
+    public static let wikiBaseName = "org.sockpuppet.wiki.renderers.wiki.changed"
+    public static let machineBaseName = "org.sockpuppet.wiki.renderers.machine.changed"
+
+    public static func wikiName(forWikiID id: WikiID) -> String {
+        "\(wikiBaseName).\(id.rawValue)"
+    }
+
+    public static func machineName(for scopeID: RendererMachineScopeID) -> String {
+        "\(machineBaseName).\(scopeID.rawValue)"
+    }
+}

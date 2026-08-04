@@ -145,7 +145,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 48
+    private static let currentSchemaVersion = 49
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -194,6 +194,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     private let schemaV48MigrationHooks: SchemaV48MigrationHooks
     private let schemaForeignKeyChecker: SchemaForeignKeyChecker
     private let appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks
+    private let rendererEventIDGenerator: any RendererEventIDGenerating
+    private let rendererEventClock: any RendererEventClock
+    private let rendererWikiWakePoster: @Sendable (WikiID) -> Void
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -230,11 +233,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         schemaV48MigrationHooks: SchemaV48MigrationHooks,
         schemaForeignKeyChecker: SchemaForeignKeyChecker,
         appendDerivedMarkdownHooks: AppendDerivedMarkdownHooks = .productionDefault,
+        rendererEventIDGenerator: any RendererEventIDGenerating = UUIDRendererEventIDGenerator(),
+        rendererEventClock: any RendererEventClock = WallRendererEventClock(),
+        rendererWikiWakePoster: @escaping @Sendable (WikiID) -> Void = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) },
         foreignKeysEnabled: Bool = true
     ) throws {
         self.schemaV48MigrationHooks = schemaV48MigrationHooks
         self.schemaForeignKeyChecker = schemaForeignKeyChecker
         self.appendDerivedMarkdownHooks = appendDerivedMarkdownHooks
+        self.rendererEventIDGenerator = rendererEventIDGenerator
+        self.rendererEventClock = rendererEventClock
+        self.rendererWikiWakePoster = rendererWikiWakePoster
         var config = Configuration()
         config.foreignKeysEnabled = foreignKeysEnabled
         config.busyMode = .timeout(5)
@@ -308,6 +317,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         schemaV48MigrationHooks = .productionDefault
         schemaForeignKeyChecker = .productionDefault()
         appendDerivedMarkdownHooks = .productionDefault
+        rendererEventIDGenerator = UUIDRendererEventIDGenerator()
+        rendererEventClock = WallRendererEventClock()
+        rendererWikiWakePoster = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) }
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -361,6 +373,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         schemaV48MigrationHooks = .productionDefault
         schemaForeignKeyChecker = .productionDefault()
         appendDerivedMarkdownHooks = .productionDefault
+        rendererEventIDGenerator = UUIDRendererEventIDGenerator()
+        rendererEventClock = WallRendererEventClock()
+        rendererWikiWakePoster = { DarwinNotifier.postRendererWikiWake(forWikiID: $0) }
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -1447,6 +1462,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 48
         }
 
+        // v48→v49: dynamic renderer wiki settings and wiki-scoped renderer
+        // event journal foundation. This step must stay before the catch-all
+        // fallback so existing v48 databases get the dedicated tables.
+        if version < 49 {
+            try db.inTransaction(.immediate) {
+                try Self.createRendererSettingsTablesV49(in: db)
+                try db.execute(sql: "PRAGMA user_version = 49;")
+                return .commit
+            }
+            version = 49
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1512,6 +1539,90 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// scalar text value (e.g. `SELECT sql FROM sqlite_master …`).
     private static func queryScalarText(_ sql: String, in db: Database) throws -> String {
         try String.fetchOne(db, sql: sql) ?? ""
+    }
+
+    private static func createRendererSettingsTablesV49(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_wiki_enablement (
+            package_id TEXT PRIMARY KEY,
+            is_enabled INTEGER NOT NULL CHECK (is_enabled IN (0, 1)),
+            updated_at TEXT NOT NULL CHECK (
+                length(updated_at) >= 25 AND
+                substr(updated_at, -6, 1) IN ('+', '-') AND
+                substr(updated_at, -3, 1) = ':'
+            )
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_source_preferences (
+            source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+            reference_kind TEXT NOT NULL CHECK (reference_kind IN ('exact', 'logical')),
+            package_id TEXT NOT NULL,
+            package_version TEXT,
+            registration_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL CHECK (
+                length(updated_at) >= 25 AND
+                substr(updated_at, -6, 1) IN ('+', '-') AND
+                substr(updated_at, -3, 1) = ':'
+            ),
+            CHECK ((reference_kind = 'exact' AND package_version IS NOT NULL) OR
+                   (reference_kind = 'logical' AND package_version IS NULL))
+        );
+        """)
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS renderer_source_preferences_package ON renderer_source_preferences(package_id, registration_id);")
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_event_sequence (
+            scope TEXT PRIMARY KEY CHECK (scope = 'wiki'),
+            next_sequence INTEGER NOT NULL CHECK (next_sequence >= 1)
+        );
+        """)
+        try db.execute(sql: "INSERT OR IGNORE INTO renderer_event_sequence(scope, next_sequence) VALUES ('wiki', 1);")
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_event_journal (
+            sequence INTEGER PRIMARY KEY CHECK (sequence >= 1),
+            event_id TEXT NOT NULL UNIQUE,
+            scope_kind TEXT NOT NULL CHECK (scope_kind = 'wiki'),
+            scope_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            committed_at TEXT NOT NULL CHECK (
+                length(committed_at) >= 25 AND
+                substr(committed_at, -6, 1) IN ('+', '-') AND
+                substr(committed_at, -3, 1) = ':'
+            )
+        );
+        """)
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS renderer_event_journal_scope_sequence ON renderer_event_journal(scope_kind, scope_id, sequence);")
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_event_process_leases (
+            lease_id TEXT PRIMARY KEY,
+            subsystem_id TEXT NOT NULL,
+            process_id INTEGER NOT NULL,
+            executable_identity TEXT NOT NULL,
+            host_identity TEXT,
+            started_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_heartbeat_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active', 'retired', 'expired')),
+            retired_at TEXT
+        );
+        """)
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS renderer_event_process_leases_subsystem ON renderer_event_process_leases(subsystem_id, status);")
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_event_cursors (
+            subsystem_id TEXT NOT NULL,
+            lease_id TEXT NOT NULL REFERENCES renderer_event_process_leases(lease_id) ON DELETE CASCADE,
+            sequence INTEGER NOT NULL CHECK (sequence >= 0),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (subsystem_id, lease_id)
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_event_checkpoints (
+            subsystem_id TEXT PRIMARY KEY,
+            sequence INTEGER NOT NULL CHECK (sequence >= 0),
+            updated_at TEXT NOT NULL
+        );
+        """)
     }
 
     /// Classification deliberately combines exact column namespaces with the
@@ -3217,6 +3328,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try createMetadataProvenanceTablesV48(in: db)
+        try createRendererSettingsTablesV49(in: db)
     }
 
     // MARK: - Internal helpers (mirrors of SQLiteWikiStore privates)
@@ -3326,6 +3438,251 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 token.apply(try contributor.fold(in: self, on: db))
             }
             return token
+        }
+    }
+
+    // MARK: - Renderer settings (dynamic renderers Phase 3)
+
+    public func listRendererWikiEnablement() throws -> [RendererWikiEnablement] {
+        try dbWriter.read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT package_id, is_enabled, updated_at
+            FROM renderer_wiki_enablement
+            ORDER BY package_id;
+            """).map(Self.rendererWikiEnablement(from:))
+        }
+    }
+
+    public func rendererWikiEnablement(packageID: RendererPackageID) throws -> RendererWikiEnablement? {
+        try dbWriter.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT package_id, is_enabled, updated_at FROM renderer_wiki_enablement WHERE package_id = ?;",
+                arguments: [packageID.rawValue]
+            ).map(Self.rendererWikiEnablement(from:))
+        }
+    }
+
+    public func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws {
+        let event = RendererSettingsChangeEvent.wikiEnablementSet(packageID: packageID, isEnabled: isEnabled)
+        try mutateRendererSettings(event: event) { db, committedAt in
+            try db.execute(sql: """
+            INSERT INTO renderer_wiki_enablement (package_id, is_enabled, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(package_id) DO UPDATE SET
+                is_enabled = excluded.is_enabled,
+                updated_at = excluded.updated_at;
+            """, arguments: [packageID.rawValue, isEnabled ? 1 : 0, committedAt.rawValue])
+        }
+    }
+
+    public func listRendererSourcePreferences() throws -> [RendererSourcePreference] {
+        try dbWriter.read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT source_id, reference_kind, package_id, package_version, registration_id, updated_at
+            FROM renderer_source_preferences
+            ORDER BY source_id;
+            """).map(Self.rendererSourcePreference(from:))
+        }
+    }
+
+    public func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference? {
+        try dbWriter.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                SELECT source_id, reference_kind, package_id, package_version, registration_id, updated_at
+                FROM renderer_source_preferences
+                WHERE source_id = ?;
+                """,
+                arguments: [sourceID.rawValue]
+            ).map(Self.rendererSourcePreference(from:))
+        }
+    }
+
+    public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws {
+        let event = RendererSettingsChangeEvent.sourcePreferenceSet(sourceID: sourceID, preference: preference)
+        try mutateRendererSettings(event: event) { db, committedAt in
+            let persisted = Self.persistedPreferenceColumns(preference)
+            try db.execute(sql: """
+            INSERT INTO renderer_source_preferences (
+                source_id, reference_kind, package_id, package_version, registration_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                reference_kind = excluded.reference_kind,
+                package_id = excluded.package_id,
+                package_version = excluded.package_version,
+                registration_id = excluded.registration_id,
+                updated_at = excluded.updated_at;
+            """, arguments: [
+                sourceID.rawValue,
+                persisted.kind,
+                persisted.packageID,
+                persisted.packageVersion,
+                persisted.registrationID,
+                committedAt.rawValue,
+            ])
+        }
+    }
+
+    public func removeRendererSourcePreference(sourceID: SourceID) throws {
+        let event = RendererSettingsChangeEvent.sourcePreferenceRemoved(sourceID: sourceID)
+        try mutateRendererSettings(event: event) { db, _ in
+            try db.execute(sql: "DELETE FROM renderer_source_preferences WHERE source_id = ?;", arguments: [sourceID.rawValue])
+        }
+    }
+
+    public func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord] {
+        try dbWriter.read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT sequence, event_id, scope_id, payload_json, committed_at
+            FROM renderer_event_journal
+            ORDER BY sequence;
+            """).map(Self.rendererJournalRecord(from:))
+        }
+    }
+
+    func corruptRendererJournalEventIDForTesting(_ rawEventID: String) throws {
+        try dbWriter.write { db in
+            try db.execute(sql: "UPDATE renderer_event_journal SET event_id = ?;", arguments: [rawEventID])
+        }
+    }
+
+    private func mutateRendererSettings(
+        event: RendererSettingsChangeEvent,
+        _ body: (Database, RFC3339Timestamp) throws -> Void
+    ) throws {
+        var pending: RendererSettingsChangeEvent?
+        try dbWriter.unsafeReentrantWrite { db in
+            try db.inSavepoint {
+                let committedAt = rendererEventClock.now()
+                try body(db, committedAt)
+                try appendRendererJournalRecord(event: event, committedAt: committedAt, on: db)
+                pending = event
+                return .commit
+            }
+        }
+        if let pending {
+            eventBus?.emitRendererSettings(pending)
+            rendererWikiWakePoster(wikiID)
+        }
+    }
+
+    private func appendRendererJournalRecord(
+        event: RendererSettingsChangeEvent,
+        committedAt: RFC3339Timestamp,
+        on db: Database
+    ) throws {
+        let sequence = try Self.nextRendererSequence(on: db)
+        let eventID = rendererEventIDGenerator.nextEventID()
+        let record = try PersistedWikiStoreChangeRecord(
+            eventID: eventID,
+            sequence: sequence,
+            scope: .wiki(wikiID),
+            payload: .rendererSettings(event),
+            committedAt: committedAt
+        )
+        let payloadData = try JSONEncoder().encode(record.payload)
+        guard let payloadJSON = String(data: payloadData, encoding: .utf8) else {
+            throw WikiStoreError.unexpected("Renderer event payload was not valid UTF-8 JSON")
+        }
+        try db.execute(sql: """
+        INSERT INTO renderer_event_journal (
+            sequence, event_id, scope_kind, scope_id, payload_json, committed_at
+        ) VALUES (?, ?, 'wiki', ?, ?, ?);
+        """, arguments: [
+            Int64(sequence),
+            eventID.uuidString,
+            wikiID.rawValue,
+            payloadJSON,
+            committedAt.rawValue,
+        ])
+    }
+
+    private static func nextRendererSequence(on db: Database) throws -> UInt64 {
+        let next = try Int64.fetchOne(
+            db,
+            sql: "SELECT next_sequence FROM renderer_event_sequence WHERE scope = 'wiki';"
+        ) ?? 1
+        try db.execute(
+            sql: "UPDATE renderer_event_sequence SET next_sequence = ? WHERE scope = 'wiki';",
+            arguments: [next + 1]
+        )
+        return UInt64(next)
+    }
+
+    private static func rendererWikiEnablement(from row: Row) throws -> RendererWikiEnablement {
+        try RendererWikiEnablement(
+            packageID: RendererPackageID(validating: row["package_id"]),
+            isEnabled: (row["is_enabled"] as Int64) != 0,
+            updatedAt: RFC3339Timestamp(validating: row["updated_at"])
+        )
+    }
+
+    private static func rendererSourcePreference(from row: Row) throws -> RendererSourcePreference {
+        try RendererSourcePreference(
+            sourceID: SourceID(rawValue: row["source_id"]),
+            preference: rendererPreferenceReference(from: row),
+            updatedAt: RFC3339Timestamp(validating: row["updated_at"])
+        )
+    }
+
+    private static func rendererJournalRecord(from row: Row) throws -> PersistedWikiStoreChangeRecord {
+        let payloadJSON: String = row["payload_json"]
+        let payloadData = Data(payloadJSON.utf8)
+        let payload = try JSONDecoder().decode(WikiStoreChangeEvent.self, from: payloadData)
+        let rawEventID: String = row["event_id"]
+        guard let eventID = UUID(uuidString: rawEventID) else {
+            throw WikiStoreError.invalidRendererEventID(rawEventID)
+        }
+        return try PersistedWikiStoreChangeRecord(
+            eventID: eventID,
+            sequence: UInt64(row["sequence"] as Int64),
+            scope: .wiki(WikiID(rawValue: row["scope_id"])),
+            payload: payload,
+            committedAt: RFC3339Timestamp(validating: row["committed_at"])
+        )
+    }
+
+    private static func rendererPreferenceReference(from row: Row) throws -> RendererPreferenceReference {
+        let packageID = try RendererPackageID(validating: row["package_id"])
+        let registrationID = try RendererRegistrationID(validating: row["registration_id"])
+        let kind: String = row["reference_kind"]
+        switch kind {
+        case "exact":
+            guard let versionRaw: String = row["package_version"] else {
+                throw WikiStoreError.unexpected("Exact renderer preference is missing package version")
+            }
+            return .exact(RendererReference(
+                packageID: packageID,
+                version: try RendererPackageVersion(validating: versionRaw),
+                registrationID: registrationID
+            ))
+        case "logical":
+            return .logical(LogicalRendererReference(packageID: packageID, registrationID: registrationID))
+        default:
+            throw WikiStoreError.unexpected("Unknown renderer preference kind: \(kind)")
+        }
+    }
+
+    private static func persistedPreferenceColumns(
+        _ preference: RendererPreferenceReference
+    ) -> (kind: String, packageID: String, packageVersion: String?, registrationID: String) {
+        switch preference {
+        case let .exact(reference):
+            return (
+                "exact",
+                reference.packageID.rawValue,
+                reference.version.rawValue,
+                reference.registrationID.rawValue
+            )
+        case let .logical(reference):
+            return (
+                "logical",
+                reference.packageID.rawValue,
+                nil,
+                reference.registrationID.rawValue
+            )
         }
     }
 

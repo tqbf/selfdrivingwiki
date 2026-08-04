@@ -22,9 +22,17 @@ Current evidence:
 - [`createFreshSchema(on:)`](../Sources/WikiFSCore/Store/GRDBWikiStore.swift) is the fresh-schema authority.
 - [`StoreBackend`](../Sources/WikiFSCore/Store/StoreBackend.swift) uses GRDB as the sole production backend.
 
-## Bootstrap decisions to make
+## Bootstrap decisions
 
-These are implementation choices for Phase 3 bootstrap. They are not a redesign.
+These implementation choices are approved for Phase 3 bootstrap. They do not redesign the reviewed implementation plan.
+
+- Machine metadata is authoritative in SQLite under the resolved App Group renderers root.
+- The JSON index is derived from SQLite and regenerated atomically.
+- The machine coordinator uses a POSIX `O_CREAT|O_EXCL` lock file with ownership, bounded retry, and stale-owner recovery.
+- Phase 3 timing defaults are: heartbeat 10 seconds, expiry 45 seconds, clock-skew safety margin 15 seconds, clean-retirement safety interval 5 minutes, lock acquisition timeout 30 seconds, and ordered drain batch limit 256.
+- Retention age and count remain deferred.
+
+This bounded first increment implements the portable Phase 3 values and the wiki-scoped v49 settings and journal foundation first. The machine SQLite store, JSON index, and POSIX coordinator remain the next bounded increment.
 
 ### Machine package-store coordination
 

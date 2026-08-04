@@ -13,6 +13,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
     case deletionRestricted(ResourceDeletionRestriction)
     case invalidBookmarkRow(id: String, reason: String)
+    case invalidRendererEventID(String)
     case unexpected(String)
     /// Thrown by `addSource` when the incoming bytes are byte-identical to an
     /// already-stored source (matched by `content_hash`). Carries the existing
@@ -36,6 +37,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .deletionRestricted(.provenance(let blockers)):
             return "Source deletion restricted by \(blockers.values.count) page version provenance reference(s)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
+        case .invalidRendererEventID(let raw): return "Invalid renderer event ID: \(raw)"
         case .unexpected(let m): return "Unexpected: \(m)"
         case .duplicateContent(let existing):
             return "Duplicate content: already stored as \(existing.effectiveName) (\(existing.id.rawValue))"
@@ -273,6 +275,17 @@ public protocol WikiStore: Sendable {
 
     /// Source summaries (no content blob), most-recent-first.
     func listSources() throws -> [SourceSummary]
+
+    // MARK: - Renderer settings (dynamic renderers Phase 3)
+
+    func listRendererWikiEnablement() throws -> [RendererWikiEnablement]
+    func rendererWikiEnablement(packageID: RendererPackageID) throws -> RendererWikiEnablement?
+    func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws
+    func listRendererSourcePreferences() throws -> [RendererSourcePreference]
+    func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference?
+    func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws
+    func removeRendererSourcePreference(sourceID: SourceID) throws
+    func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord]
 
     /// The verbatim content bytes for one source, fetched on demand. On the
     /// protocol so `WikiStoreModel` can STAGE the source into the agent's scratch
