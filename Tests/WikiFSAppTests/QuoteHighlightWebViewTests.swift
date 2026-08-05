@@ -180,11 +180,12 @@ struct QuoteHighlightWebViewTests {
         let (lease, window, webView) = await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let quote = #"The location for tests is in the "test" folder."#
-        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML("<p>\(quote)</p>"))
+        let renderedQuote = #"The location for tests is in the “test” folder."#
+        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML("<p>\(renderedQuote)</p>"))
 
         await run(webView, WikiReaderRep.highlightJS(quote: quote))
 
-        #expect(await markText(in: webView) == quote)
+        #expect(await markText(in: webView) == renderedQuote)
     }
 
     @Test func highlightMatchesAcrossCollapsedWhitespace() async throws {
