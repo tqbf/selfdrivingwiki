@@ -861,8 +861,11 @@ struct SourceDetailView: View {
                             // switched to the PDF, HTML, Media, or Rendered
                             // tab, where the markdown editor isn't rendered.
                             // Leave Split alone — the editor is already
-                            // visible there.
-                            rendererPresentation.selectSource()
+                            // visible there. Rendered-only mode needs Source
+                            // so editing keeps its editor input visible.
+                            if rendererPresentation.selection == .rendered {
+                                rendererPresentation.selectSource()
+                            }
                         }
                         .keyboardShortcut("e", modifiers: .command)
                         .disabled(isRunning)

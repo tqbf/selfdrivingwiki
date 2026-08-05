@@ -19,9 +19,13 @@ import Testing
             "private var isHTMLSource",
             "private var isMermaidSource",
             "private var isBytelessEmbedWithPlayer",
-            "BuiltInRendererID",
             "Excalidraw",
             "JSON Canvas",
+            "MimeType.isMermaid",
+            "MimeType.isHTML",
+            "ExternalEmbed.target",
+            "ExternalEmbed.mediaTabLabel",
+            "BuiltInRendererID",
         ]
         for symbol in forbiddenDeclarations {
             #expect(source.contains(symbol) == false, "SourceDetailView must not contain \(symbol)")
@@ -30,6 +34,7 @@ import Testing
         // anchor consumer; planner/factory code owns renderer presentation.
         #expect(source.components(separatedBy: "MimeType.isPDF").count == 2)
         #expect(source.contains("requiresPDFQuoteAnchor"))
+        #expect(source.contains("SourceRendererPresentationPlanner.showsMarkdownOriginMetadata"))
         // The snapshot loader is the only allowed source-byte read; no body
         // helper or editor path may directly perform a full store read.
         #expect(source.components(separatedBy: "store.sourceBytes(id: file.id)").count == 2)

@@ -131,7 +131,11 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     nonisolated static func showsMarkdownOriginMetadata(for source: SourceSummary) -> Bool {
-        !MimeType.isPDF(source.mimeType)
+        let extractionPath = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: nil,
+            ext: source.ext).capabilities.extractionPath
+        return extractionPath != .pdfBackend
     }
 
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
