@@ -95,6 +95,25 @@ struct RendererPackageStoreCoordinatorTests {
         #expect(FileManager.default.fileExists(atPath: layout.lockURL.path))
     }
 
+    @Test func replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner() async throws {
+        let layout = try makeLayout("replacement-race")
+        let now = Date(timeIntervalSince1970: 10_000)
+        let staleToken = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        let replacementToken = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        try writeOwnerLock(layout, now: now.addingTimeInterval(-61), token: staleToken)
+        let replacement = try JSONEncoder().encode(RendererCoordinatorOwnerRecord(processIdentity: testIdentity, now: now, ownerToken: replacementToken))
+        let fileSystem = ReplacingAfterQuarantineFileSystem(lockURL: layout.lockURL, replacement: replacement)
+        let subject = RendererPackageStoreCoordinator(layout: layout, fileSystem: fileSystem, clock: FixedClock(now: now), processIdentity: testIdentity, livenessChecker: FixedLiveness(isLive: false), tokenGenerator: FixedToken(value: "ffffffff-ffff-ffff-ffff-ffffffffffff"))
+
+        await #expect(throws: RendererCoordinatorFailure.lockIdentityChanged) {
+            try await subject.withExclusiveAccess {}
+        }
+        let descriptor = try RealRendererPackageFileSystem().openReadOnlyNoFollow(at: layout.lockURL)
+        let data = try RealRendererPackageFileSystem().readAll(fileDescriptor: descriptor, maximumBytes: 4_096)
+        try RealRendererPackageFileSystem().close(fileDescriptor: descriptor)
+        #expect(try RendererCoordinatorOwnerRecord.decode(data).ownerToken == replacementToken)
+    }
+
     private func makeLayout(_ name: String) throws -> RendererPackageStoreLayout {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("renderer-coordinator-\(name)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -119,3 +138,23 @@ private struct FixedLiveness: RendererProcessLivenessChecking { let isLive: Bool
 private struct FixedToken: RendererCoordinatorOwnerTokenGenerating { let value: String; func nextOwnerToken() -> String { value } }
 private struct TestFailure: Error {}
 private actor EventLog { private var storage: [String] = []; func append(_ value: String) { storage.append(value) }; func values() -> [String] { storage } }
+
+private struct ReplacingAfterQuarantineFileSystem: RendererPackageFileSystem {
+    private let real = RealRendererPackageFileSystem()
+    let lockURL: URL
+    let replacement: Data
+    func ensureDirectory(at url: URL) throws { try real.ensureDirectory(at: url) }
+    func lstat(at url: URL) throws -> RendererPackageFileIdentity { try real.lstat(at: url) }
+    func openReadOnlyNoFollow(at url: URL) throws -> Int32 { try real.openReadOnlyNoFollow(at: url) }
+    func fileIdentity(fileDescriptor: Int32) throws -> RendererPackageFileIdentity { try real.fileIdentity(fileDescriptor: fileDescriptor) }
+    func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data { try real.readAll(fileDescriptor: fileDescriptor, maximumBytes: maximumBytes) }
+    func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity { try real.createExclusiveFile(at: url, contents: contents) }
+    func createHardLink(from source: URL, to destination: URL) throws {
+        try real.createHardLink(from: source, to: destination)
+        guard source == lockURL else { return }
+        try real.removeFile(at: lockURL)
+        _ = try real.createExclusiveFile(at: lockURL, contents: replacement)
+    }
+    func removeFile(at url: URL) throws { try real.removeFile(at: url) }
+    func close(fileDescriptor: Int32) throws { try real.close(fileDescriptor: fileDescriptor) }
+}

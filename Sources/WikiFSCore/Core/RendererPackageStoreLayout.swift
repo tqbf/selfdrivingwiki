@@ -62,6 +62,10 @@ public struct RendererPackageStoreLayout: Sendable {
     public var lockURL: URL { root.appendingPathComponent(Names.lockFile, isDirectory: false) }
     public var journalURL: URL { root.appendingPathComponent(Names.journalFile, isDirectory: false) }
 
+    func recoveryQuarantineURL(ownerToken: String) -> URL {
+        root.appendingPathComponent(".store.lock.reclaim-\(ownerToken)", isDirectory: false)
+    }
+
     public func packageURL(packageID: RendererPackageID, version: RendererPackageVersion) -> URL {
         packagesRoot
             .appendingPathComponent(packageID.rawValue, isDirectory: true)
@@ -141,14 +145,20 @@ public struct RendererPackageFileIdentity: Hashable, Sendable {
         changedAt = Date(timeIntervalSince1970: TimeInterval(metadata.st_ctim.tv_sec) + TimeInterval(metadata.st_ctim.tv_nsec) / 1_000_000_000)
         #endif
     }
+
+    public func refersToSameObject(as other: Self) -> Bool {
+        device == other.device && inode == other.inode
+    }
 }
 
 public protocol RendererPackageFileSystem: Sendable {
     func ensureDirectory(at url: URL) throws
     func lstat(at url: URL) throws -> RendererPackageFileIdentity
     func openReadOnlyNoFollow(at url: URL) throws -> Int32
+    func fileIdentity(fileDescriptor: Int32) throws -> RendererPackageFileIdentity
     func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data
     func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity
+    func createHardLink(from source: URL, to destination: URL) throws
     func removeFile(at url: URL) throws
     func close(fileDescriptor: Int32) throws
 }
@@ -188,6 +198,14 @@ public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable
         return descriptor
     }
 
+    public func fileIdentity(fileDescriptor: Int32) throws -> RendererPackageFileIdentity {
+        var metadata = stat()
+        guard fstat(fileDescriptor, &metadata) == 0 else {
+            throw RendererPackageStoreError.posix(operation: "fstat", path: nil, code: errno)
+        }
+        return RendererPackageFileIdentity(metadata: metadata)
+    }
+
     public func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: min(maximumBytes, 4096))
@@ -218,6 +236,17 @@ public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable
             do { try close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock descriptor close failed.") }
             throw error
         }
+    }
+
+    public func createHardLink(from source: URL, to destination: URL) throws {
+        try requireFileURL(source)
+        try requireFileURL(destination)
+        let result = source.path.withCString { sourcePath in
+            destination.path.withCString { destinationPath in
+                link(sourcePath, destinationPath)
+            }
+        }
+        guard result == 0 else { throw posixError(operation: "link", path: destination.path) }
     }
 
     public func removeFile(at url: URL) throws {
