@@ -69,6 +69,20 @@ import WikiFSTypes
         #expect(state.selection == .source)
     }
 
+    @Test("Selecting Source clears the live renderer pin so a registry refresh cannot report it unavailable")
+    func selectingSourceClearsLiveRendererPin() {
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
+        state.selectRendered(pdf)
+
+        state.selectSource()
+        state.keepPinnedRenderer(available: [])
+
+        #expect(state.selection == .source)
+        #expect(state.pinnedRenderer == nil)
+        #expect(state.fallbackReason == nil)
+    }
+
     @Test("Production lifecycle: an unchanged source refresh preserves its pinned renderer and selected mode")
     func unchangedRefreshPreservesPinnedRendererAndMode() {
         let source = pdfSource()
@@ -109,11 +123,20 @@ import WikiFSTypes
             availableRenderers: [pdf],
             matchingRenderer: pdf,
             currentMarkdown: nil,
-            persistedSelection: .source)
+            persistedSelection: .rendered)
 
         #expect(lifecycle.state.selection == .source)
         #expect(lifecycle.state.pinnedRenderer == nil)
         #expect(lifecycle.state.fallbackReason == "The selected renderer could not be loaded.")
+
+        var reopened = RendererPresentationLifecycle(sourceID: source.id)
+        reopened.resolveLoadedSource(
+            source: source,
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+        #expect(reopened.state.selection == .rendered)
+        #expect(reopened.state.pinnedRenderer == pdf)
     }
 
     @Test("The detail minimum width admits the production Split layout")
@@ -317,6 +340,26 @@ import WikiFSTypes
         #expect(RendererHostView<EmptyView, EmptyView>.splitRendererReference(
             pinnedRenderer: pdf,
             availableRendererReferences: [html]) == html)
+    }
+
+    @Test("Deferred fallback applies only to the source that scheduled it")
+    @MainActor
+    func deferredFallbackRejectsSourceNavigationAndDuplicateFallbacks() {
+        let firstSource = SourceID(rawValue: "01J00000000000000000000000")
+        let secondSource = SourceID(rawValue: "01J00000000000000000000001")
+        let cleanState = RendererPresentationState(sourceID: firstSource)
+        var fallbackState = cleanState
+        fallbackState.selectFallback(reason: "The selected renderer is unavailable.")
+
+        #expect(RendererHostView<EmptyView, EmptyView>.shouldApplyDeferredFallback(
+            failedSourceID: firstSource,
+            currentState: cleanState))
+        #expect(RendererHostView<EmptyView, EmptyView>.shouldApplyDeferredFallback(
+            failedSourceID: firstSource,
+            currentState: RendererPresentationState(sourceID: secondSource)) == false)
+        #expect(RendererHostView<EmptyView, EmptyView>.shouldApplyDeferredFallback(
+            failedSourceID: firstSource,
+            currentState: fallbackState) == false)
     }
 }
 

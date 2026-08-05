@@ -45,7 +45,7 @@ import Testing
         #expect(source.contains("refreshRendererPresentation"))
     }
 
-    @Test func rendererFallbackSelectsSourceWithoutDeletingRendererPreference() throws {
+    @Test func rendererFallbackStaysLiveWithoutOverwritingStoredPresentationOrPreference() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/WikiFS/Sources/SourceDetailView.swift")
@@ -54,9 +54,30 @@ import Testing
         let fallbackEnd = try #require(source[fallbackStart.lowerBound...].range(of: "\n    // MARK:"))
         let fallback = source[fallbackStart.lowerBound..<fallbackEnd.lowerBound]
 
-        #expect(fallback.contains("store.setRendererSourcePresentation(sourceID: file.id, presentation: .source)"))
         #expect(fallback.contains("DebugLog.tabs"))
+        #expect(fallback.contains("setRendererSourcePresentation") == false)
         #expect(fallback.contains("removeRendererSourcePreference") == false)
+    }
+
+    @Test func sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let detail = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Sources/SourceDetailView.swift"), encoding: .utf8)
+        let host = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererHostView.swift"), encoding: .utf8)
+
+        #expect(detail.contains("clearRendererPreference") == false)
+        #expect(detail.contains("removeRendererSourcePreference") == false)
+        #expect(host.contains("onSourceSelected") == false)
+        #expect(host.contains("onPresentationSelected(.source)"))
+    }
+
+    @Test func deferredFallbackIsGuardedByTheFailingSourceIdentity() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let host = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererHostView.swift"), encoding: .utf8)
+
+        #expect(host.contains("let failedSourceID = state.sourceID"))
+        #expect(host.contains("shouldApplyDeferredFallback(failedSourceID: failedSourceID, currentState: state)"))
     }
 
     @Test func rendererShortcutsDoNotOverlapGlobalCommandNumberTabs() throws {
@@ -69,6 +90,7 @@ import Testing
             #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: [.command, .option])"))
             #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: .command)") == false)
         }
+        #expect(host.contains("primaryAction:"))
     }
 
     @Test("Renderer host guards Split with the detail-width contract") func rendererHostGuardsSplitWidth() throws {

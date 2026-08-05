@@ -1151,7 +1151,6 @@ struct SourceDetailView: View {
             source: { sourcePresentationContent },
             rendered: { descriptor in renderedContent(for: descriptor) },
             onRendererSelected: persistRendererPreference,
-            onSourceSelected: clearRendererPreference,
             onPresentationSelected: persistRendererPresentationSelection,
             onFallback: handleRendererFallback)
     }
@@ -1185,10 +1184,6 @@ struct SourceDetailView: View {
 
     private func persistRendererPreference(_ reference: RendererReference) {
         store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
-    }
-
-    private func clearRendererPreference() {
-        store.removeRendererSourcePreference(sourceID: file.id)
     }
 
     private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
@@ -1285,11 +1280,9 @@ struct SourceDetailView: View {
 
     private func handleRendererFallback(_ reason: String) {
         DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
-        // A failed renderer changes this source's visible presentation, not
-        // the user's stored logical or exact renderer preference. Retaining
-        // that preference allows an explicit retry when a compatible renderer
-        // is available, without data loss.
-        store.setRendererSourcePresentation(sourceID: file.id, presentation: .source)
+        // The host owns the live Source fallback. Do not persist it: an
+        // explicit Rendered or Split selection and its renderer preference
+        // remain available for a later refresh or reopen retry.
     }
 
     // MARK: Markdown reader / editor

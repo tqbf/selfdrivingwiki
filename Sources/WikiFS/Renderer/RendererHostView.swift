@@ -25,7 +25,6 @@ struct RendererHostView<Source: View, Rendered: View>: View {
     let source: () -> Source
     let rendered: (RendererDescriptor) -> Rendered?
     let onRendererSelected: (RendererReference) -> Void
-    let onSourceSelected: () -> Void
     let onPresentationSelected: (RendererPresentationState.Selection) -> Void
     let onFallback: (String) -> Void
 
@@ -83,14 +82,13 @@ struct RendererHostView<Source: View, Rendered: View>: View {
             presentationControl(.source) {
                 Button("Source") {
                     state.selectSource()
-                    onSourceSelected()
                     onPresentationSelected(.source)
                 }
                 .keyboardShortcut("1", modifiers: [.command, .option])
                 .accessibilityLabel("Show source")
             }
             presentationControl(.rendered) {
-                Menu("Rendered") {
+                Menu("Rendered", content: {
                     ForEach(descriptors, id: \.reference) { descriptor in
                         Button(descriptor.displayName) {
                             state.selectRendered(descriptor.reference)
@@ -98,7 +96,16 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                             onPresentationSelected(.rendered)
                         }
                     }
+                }, primaryAction: {
+                    guard let reference = Self.splitRendererReference(
+                        pinnedRenderer: state.pinnedRenderer,
+                        availableRendererReferences: descriptors.map(\.reference)
+                    ) else { return }
+                    state.selectRendered(reference)
+                    onRendererSelected(reference)
+                    onPresentationSelected(.rendered)
                 }
+                )
                 .keyboardShortcut("2", modifiers: [.command, .option])
                 .accessibilityLabel("Show rendered content")
             }
@@ -156,6 +163,15 @@ struct RendererHostView<Source: View, Rendered: View>: View {
         return pinnedRenderer
     }
 
+    /// A fallback is only valid for the source that scheduled it. This pure
+    /// gate also makes repeated `onAppear` callbacks idempotent.
+    static func shouldApplyDeferredFallback(
+        failedSourceID: SourceID,
+        currentState: RendererPresentationState
+    ) -> Bool {
+        currentState.sourceID == failedSourceID && currentState.fallbackReason == nil
+    }
+
     @ViewBuilder
     private func fallbackWithSource(reason: String) -> some View {
         source()
@@ -187,8 +203,9 @@ struct RendererHostView<Source: View, Rendered: View>: View {
         // `onAppear` runs after the update pass, so this is not an AppKit
         // representable update seam. Defer one turn to avoid a synchronous
         // state mutation while SwiftUI is constructing the fallback tree.
+        let failedSourceID = state.sourceID
         Task { @MainActor in
-            guard state.fallbackReason == nil else { return }
+            guard Self.shouldApplyDeferredFallback(failedSourceID: failedSourceID, currentState: state) else { return }
             state.selectFallback(reason: reason)
             onFallback(reason)
         }

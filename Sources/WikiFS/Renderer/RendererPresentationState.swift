@@ -37,6 +37,7 @@ struct RendererPresentationState: Sendable, Equatable {
 
     mutating func selectSource() {
         selection = .source
+        pinnedRenderer = nil
         fallbackReason = nil
     }
 

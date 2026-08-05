@@ -119,6 +119,18 @@ struct RendererResolutionTests {
             hostProtocolRevision: 1) == nil)
     }
 
+    @Test func absentCompoundPreferenceKeepsTheHostOwnedSourceDefault() throws {
+        let descriptor = try RendererFixtures.nativeDescriptor()
+        let input = try RendererFixtures.input()
+        let preference: RendererPreference? = nil
+
+        #expect(RendererResolution.preferred(
+            descriptors: [descriptor],
+            preference: preference,
+            input: input,
+            hostProtocolRevision: 1) == nil)
+    }
+
     @Test func rejectsEmptyPreference() {
         #expect(throws: RendererValidationError.self) {
             _ = try RendererPreference(exact: nil, logical: nil)
