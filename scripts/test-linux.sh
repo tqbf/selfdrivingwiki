@@ -9,6 +9,7 @@ CONFIG_FILE="$REPO_ROOT/scripts/lib/linux-swift-test-config.sh"
 # swift:6.3.3-noble, an Ubuntu 24.04 multi-architecture manifest list.
 DEFAULT_IMAGE='docker.io/library/swift@sha256:69bf1f0281e13d82c9e49d67c2dd1dcc8c00bad738c860f4323d7078787ec8ea'
 IMAGE="${LINUX_TEST_IMAGE:-$DEFAULT_IMAGE}"
+PLATFORM='linux/amd64'
 REQUESTED_RUNTIME="${LINUX_TEST_RUNTIME:-auto}"
 TEST_FILTER="${LINUX_TEST_FILTER:-}"
 
@@ -65,6 +66,7 @@ TEST_COMMAND="swift test -v --parallel --num-workers $LINUX_SWIFT_TEST_NUM_WORKE
 {
     printf 'runtime=%s\n' "$RUNTIME"
     printf 'image=%s\n' "$IMAGE"
+    printf 'platform=%s\n' "$PLATFORM"
     printf 'host_commit=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
     printf 'package_resolved_sha256=%s\n' "$(shasum -a 256 "$REPO_ROOT/Package.resolved" | awk '{print $1}')"
     printf 'test_filter=%s\n' "$TEST_FILTER"
@@ -91,12 +93,20 @@ RUNTIME_VERSION="$(tr '\n' ' ' <"$RUNTIME_LOG" | sed 's/[[:space:]]*$//')"
 printf 'runtime_version=%s\n' "$RUNTIME_VERSION" >>"$EVIDENCE_FILE"
 
 if [[ "$RUNTIME" == docker ]]; then
-    if ! docker run --rm "$IMAGE" swift --version >"$TOOLCHAIN_LOG" 2>&1; then
+    if ! docker pull --platform "$PLATFORM" "$IMAGE" >>"$RUNTIME_LOG" 2>&1; then
+        echo "failed to pull the Linux image. See $RUNTIME_LOG" >&2
+        exit 1
+    fi
+    if ! docker run --rm --platform "$PLATFORM" "$IMAGE" swift --version >"$TOOLCHAIN_LOG" 2>&1; then
         echo "failed to inspect the Linux Swift toolchain. See $TOOLCHAIN_LOG" >&2
         exit 1
     fi
 else
-    if ! container run --rm "$IMAGE" swift --version >"$TOOLCHAIN_LOG" 2>&1; then
+    if ! container image pull --platform "$PLATFORM" "$IMAGE" >>"$RUNTIME_LOG" 2>&1; then
+        echo "failed to pull the Linux image. See $RUNTIME_LOG" >&2
+        exit 1
+    fi
+    if ! container run --rm --platform "$PLATFORM" --rosetta "$IMAGE" swift --version >"$TOOLCHAIN_LOG" 2>&1; then
         echo "failed to inspect the Linux Swift toolchain. See $TOOLCHAIN_LOG" >&2
         exit 1
     fi
@@ -106,13 +116,14 @@ printf 'swift_version=%s\n' "$TOOLCHAIN_VERSION" >>"$EVIDENCE_FILE"
 
 echo "==> Linux runtime: $RUNTIME"
 echo "==> Image: $IMAGE"
+echo "==> Platform: $PLATFORM"
 echo "==> Evidence: $EVIDENCE_FILE"
 echo "==> Test log: $CONTAINER_LOG"
 
 CONTAINER_COMMAND='set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get -q update
-apt-get -q install -y --no-install-recommends libsqlite3-dev
+apt-get -q install -y --no-install-recommends libsqlite3-dev make
 mkdir -p /work
 cp -a /workspace/. /work/
 cd /work
@@ -125,6 +136,7 @@ swift test -v --parallel --num-workers "$LINUX_SWIFT_TEST_NUM_WORKERS" --filter 
 set +e
 if [[ "$RUNTIME" == docker ]]; then
     docker run --rm \
+        --platform "$PLATFORM" \
         --volume "$REPO_ROOT:/workspace:ro" \
         --workdir /workspace \
         --env LINUX_SWIFT_TEST_NUM_WORKERS="$LINUX_SWIFT_TEST_NUM_WORKERS" \
@@ -133,6 +145,8 @@ if [[ "$RUNTIME" == docker ]]; then
         "$IMAGE" /bin/bash -lc "$CONTAINER_COMMAND" 2>&1 | tee "$CONTAINER_LOG"
 else
     container run --rm \
+        --platform "$PLATFORM" \
+        --rosetta \
         --volume "$REPO_ROOT:/workspace:ro" \
         --workdir /workspace \
         --env LINUX_SWIFT_TEST_NUM_WORKERS="$LINUX_SWIFT_TEST_NUM_WORKERS" \

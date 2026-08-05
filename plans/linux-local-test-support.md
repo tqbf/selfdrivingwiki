@@ -15,9 +15,10 @@ local runner sources it before it starts a container.
 uses Docker when Apple `container` is unavailable. An explicit runtime request
 cannot fall back to another runtime.
 
-The runner uses a digest-pinned Swift 6.3.3 Ubuntu 24.04 image. This is
-compatible with the CI job's Ubuntu and Swift 6.3 environment. The runner
-installs the CI system dependency, `libsqlite3-dev`, inside the container.
+The runner uses a digest-pinned Swift 6.3.3 Ubuntu 24.04 image on
+`linux/amd64`. This matches GitHub-hosted Ubuntu, rather than the host ARM
+image variant. The runner installs `libsqlite3-dev` and `make` inside the
+container. GitHub-hosted Ubuntu already provides `make`.
 
 The checkout mounts read-only at `/workspace`. The runner copies it to `/work`
 inside the container. Code generation, build products, and package resolution

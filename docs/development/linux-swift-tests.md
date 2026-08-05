@@ -9,8 +9,9 @@ Install one OCI runtime. The runner selects Apple `container` first when it is
 available. Otherwise, it selects Docker.
 
 The default image is `swift:6.3.3-noble` with an immutable manifest digest. It
-uses Swift 6.3.3 and Ubuntu 24.04. The GitHub job uses Ubuntu and Swift 6.3.
-The local image fixes the patch release and base image for repeatable results.
+uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. GitHub-hosted
+Ubuntu is x86_64 and uses Swift 6.3. The local runner fixes the architecture,
+patch release, and base image for repeatable results.
 
 Do not install a Linux runtime only for this command. GitHub Actions remains a
 supported validation path for macOS-only development.
@@ -23,8 +24,8 @@ From the repository root, run this command:
 make test-linux
 ```
 
-The command starts a Linux container. It installs `libsqlite3-dev`, creates a
-container-local copy of the checkout, generates required files, builds
+The command starts a Linux container. It installs `libsqlite3-dev` and `make`,
+creates a container-local copy of the checkout, generates required files, builds
 `WikiFSCoreTests`, and runs the CI test command.
 
 The test command uses the shared configuration in
@@ -74,13 +75,14 @@ contains these files:
 
 | File | Contents |
 | --- | --- |
-| `evidence.txt` | Runtime, image digest, Swift version, commit, `Package.resolved` hash, filter, skip list, worker count, and command. |
-| `runtime.log` | Runtime availability diagnostics. |
+| `evidence.txt` | Runtime, image digest, platform, Swift version, commit, `Package.resolved` hash, filter, skip list, worker count, and command. |
+| `runtime.log` | Runtime availability and image-pull diagnostics. |
 | `toolchain.log` | The Swift version from the Linux image. |
 | `container.log` | Image pull output, package installation output, build output, and verbose Swift Testing diagnostics. |
 
 The runner keeps this directory for both success and failure. Send
-`container.log` and `evidence.txt` with a portability failure report.
+`runtime.log`, `container.log`, and `evidence.txt` with a portability failure
+report.
 
 ## Cache and cleanup
 
@@ -109,6 +111,9 @@ or the Docker daemon. Run the command again after the daemon is ready.
 If Apple `container` reports a machine, image, or virtualization error, run
 `container --version` and check the Apple Container requirements. Use Docker
 with `LINUX_TEST_RUNTIME=docker` when Docker is available.
+
+The runner uses the `linux/amd64` image to match GitHub-hosted Ubuntu. Apple
+Container uses Rosetta for this image on Apple Silicon.
 
 Do not restart Paseo, the app daemon, or unrelated services. This runner uses
 only a temporary Linux container and a read-only checkout mount.
