@@ -110,10 +110,9 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
     let derivedIndexWriter: any RendererMachineDerivedIndexWriting
 
     func readOrInitialize() throws -> RendererMachineIndex {
-        let didExist = FileManager.default.fileExists(atPath: layout.indexDatabaseURL.path)
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
-            if didExist {
+            if try hasIndexTable(database) {
                 let index = try load(database: database)
                 try rendererMachineIndexValidatingPackagePaths(index, layout: layout)
                 return index
@@ -129,10 +128,9 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         expectedGeneration: UInt64,
         mutation: (inout [RendererPackageInstallRecord], inout Bool) throws -> Void
     ) throws -> RendererMachineIndex {
-        let didExist = FileManager.default.fileExists(atPath: layout.indexDatabaseURL.path)
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
-            guard didExist else { throw RendererMachineIndexStoreError.corruptIndex }
+            guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
             let current = try load(database: database)
             try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
@@ -163,7 +161,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
     ) throws -> (index: RendererMachineIndex, record: PersistedWikiStoreChangeRecord) {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
-            guard FileManager.default.fileExists(atPath: layout.indexDatabaseURL.path) else { throw RendererMachineIndexStoreError.corruptIndex }
+            guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
             let current = try load(database: database)
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
             try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
@@ -216,7 +214,9 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
               sqlite3_column_type(statement, 2) == SQLITE_BLOB
         else { throw RendererMachineIndexStoreError.corruptIndex }
         let schemaVersion = Int(sqlite3_column_int64(statement, 0))
-        let generation = UInt64(sqlite3_column_int64(statement, 1))
+        let rawGeneration = sqlite3_column_int64(statement, 1)
+        guard rawGeneration >= 0 else { throw RendererMachineIndexStoreError.corruptIndex }
+        let generation = UInt64(rawGeneration)
         let length = Int(sqlite3_column_bytes(statement, 2))
         guard length >= 0, let bytes = sqlite3_column_blob(statement, 2) else {
             throw RendererMachineIndexStoreError.corruptIndex
@@ -247,7 +247,8 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
             throw RendererMachineIndexStoreError.sqliteFailure
         }
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_bind_int64(statement, 1, sqlite3_int64(index.schemaVersion)) == SQLITE_OK,
+        guard index.generation <= UInt64(Int64.max),
+              sqlite3_bind_int64(statement, 1, sqlite3_int64(index.schemaVersion)) == SQLITE_OK,
               sqlite3_bind_int64(statement, 2, sqlite3_int64(index.generation)) == SQLITE_OK,
               data.withUnsafeBytes({ sqlite3_bind_blob(statement, 3, $0.baseAddress, Int32(data.count), rendererMachineIndexSQLiteTransient) }) == SQLITE_OK,
               sqlite3_step(statement) == SQLITE_DONE
@@ -271,6 +272,17 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         }
         defer { sqlite3_close(database) }
         return try body(database)
+    }
+
+    /// SQLite owns the authoritative existence decision. This avoids a
+    /// link-following Foundation pathname inspection before opening the DB.
+    private func hasIndexTable(_ database: OpaquePointer) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'renderer_machine_index'", -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineIndexStoreError.corruptIndex }
+        defer { sqlite3_finalize(statement) }
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_ROW || result == SQLITE_DONE else { throw RendererMachineIndexStoreError.corruptIndex }
+        return result == SQLITE_ROW
     }
 
     private func execute(_ database: OpaquePointer, sql: String) throws {

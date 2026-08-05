@@ -59,6 +59,8 @@ public enum RendererMachineEventJournalError: Error, Equatable, Sendable {
     case nonMonotoneSequence
     case unsupportedSchemaVersion
     case corruptRecord
+    case invalidTimestamp
+    case invalidSequence
     case sqliteFailure
     case leaseNotFound
     case liveLeaseCannotBeReclaimed
@@ -222,7 +224,7 @@ enum RendererMachineJournalSQLite {
     static func highWater(_ database: OpaquePointer, scope: RendererMachineScopeID) throws -> UInt64 {
         var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, "SELECT COALESCE(MAX(sequence), 0) FROM renderer_machine_events WHERE scope = ?1", -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }
         guard sqlite3_bind_text(statement, 1, scope.rawValue, -1, transient) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW else { throw RendererMachineEventJournalError.sqliteFailure }
-        return UInt64(sqlite3_column_int64(statement, 0))
+        return try nonnegativeSequence(database, statement: statement, column: 0)
     }
 
     static func validate(_ record: PersistedWikiStoreChangeRecord) throws {
@@ -231,13 +233,21 @@ enum RendererMachineJournalSQLite {
     }
 
     static func insertLease(_ database: OpaquePointer, lease: RendererEventProcessLease) throws { try storeLease(database, lease: lease) }
-    static func heartbeat(_ database: OpaquePointer, lease: RendererEventProcessLease, at now: RFC3339Timestamp) throws { var next = lease; next = RendererEventProcessLease(scope: lease.scope, subsystemID: lease.subsystemID, leaseID: lease.leaseID, processID: lease.processID, executableIdentity: lease.executableIdentity, hostIdentity: lease.hostIdentity, startedAt: lease.startedAt, createdAt: lease.createdAt, lastHeartbeatAt: now, retiredAt: nil, status: .live); try storeLease(database, lease: next) }
+    static func heartbeat(_ database: OpaquePointer, lease: RendererEventProcessLease, at now: RFC3339Timestamp) throws {
+        let current = try loadLease(database, lease: lease)
+        guard current == lease, current.status == .live else { throw RendererMachineEventJournalError.liveLeaseCannotBeReclaimed }
+        let next = RendererEventProcessLease(scope: current.scope, subsystemID: current.subsystemID, leaseID: current.leaseID, processID: current.processID, executableIdentity: current.executableIdentity, hostIdentity: current.hostIdentity, startedAt: current.startedAt, createdAt: current.createdAt, lastHeartbeatAt: now, retiredAt: nil, status: .live)
+        try storeLease(database, lease: next)
+    }
     static func retire(_ database: OpaquePointer, lease: RendererEventProcessLease, at now: RFC3339Timestamp) throws { let next = RendererEventProcessLease(scope: lease.scope, subsystemID: lease.subsystemID, leaseID: lease.leaseID, processID: lease.processID, executableIdentity: lease.executableIdentity, hostIdentity: lease.hostIdentity, startedAt: lease.startedAt, createdAt: lease.createdAt, lastHeartbeatAt: lease.lastHeartbeatAt, retiredAt: now, status: .retired); try storeLease(database, lease: next) }
     static func reclaim(_ database: OpaquePointer, lease: RendererEventProcessLease, at now: RFC3339Timestamp, policy: RendererEventPolicy) throws {
         let current = try loadLease(database, lease: lease)
         let baseline = current.retiredAt ?? current.lastHeartbeatAt
         let required = current.status == .retired ? policy.cleanRetirementSafetyInterval : policy.leaseExpiry + policy.clockSkewSafetyMargin
-        guard date(now).timeIntervalSince(date(baseline)) >= required else { throw RendererMachineEventJournalError.liveLeaseCannotBeReclaimed }
+        let elapsed: TimeInterval
+        do { elapsed = try now.date().timeIntervalSince(baseline.date()) }
+        catch { throw RendererMachineEventJournalError.invalidTimestamp }
+        guard elapsed >= required else { throw RendererMachineEventJournalError.liveLeaseCannotBeReclaimed }
         let next = RendererEventProcessLease(scope: current.scope, subsystemID: current.subsystemID, leaseID: current.leaseID, processID: current.processID, executableIdentity: current.executableIdentity, hostIdentity: current.hostIdentity, startedAt: current.startedAt, createdAt: current.createdAt, lastHeartbeatAt: current.lastHeartbeatAt, retiredAt: current.retiredAt, status: .reclaimed); try storeLease(database, lease: next)
     }
     static func cursor(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID) throws -> UInt64 { try scalar(database, sql: "SELECT COALESCE(sequence, 0) FROM renderer_machine_cursors WHERE scope = ?1 AND subsystem = ?2 AND lease = ?3", strings: [scope.rawValue, subsystem.rawValue, leaseID.rawValue.uuidString]) }
@@ -261,8 +271,13 @@ enum RendererMachineJournalSQLite {
         do { return try JSONDecoder().decode(RendererEventProcessLease.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))) }
         catch { throw RendererMachineEventJournalError.corruptRecord }
     }
-    static func scalar(_ database: OpaquePointer, sql: String, strings: [String]) throws -> UInt64 { var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }; for (offset, string) in strings.enumerated() { guard sqlite3_bind_text(statement, Int32(offset + 1), string, -1, transient) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }; guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }; return UInt64(sqlite3_column_int64(statement, 0)) }
-    static func bind(_ database: OpaquePointer, sql: String, strings: [String], integer: UInt64? = nil, data: Data? = nil) throws { var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }; var parameter = 1; for string in strings { guard sqlite3_bind_text(statement, Int32(parameter), string, -1, transient) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure }; parameter += 1 }; if let integer { guard sqlite3_bind_int64(statement, Int32(parameter), sqlite3_int64(integer)) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure }; parameter += 1 }; if let data { guard data.withUnsafeBytes({ sqlite3_bind_blob(statement, Int32(parameter), $0.baseAddress, Int32(data.count), transient) }) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }; guard sqlite3_step(statement) == SQLITE_DONE else { throw RendererMachineEventJournalError.sqliteFailure } }
+    static func scalar(_ database: OpaquePointer, sql: String, strings: [String]) throws -> UInt64 { var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }; for (offset, string) in strings.enumerated() { guard sqlite3_bind_text(statement, Int32(offset + 1), string, -1, transient) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }; guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }; return try nonnegativeSequence(database, statement: statement, column: 0) }
+    static func nonnegativeSequence(_ database: OpaquePointer, statement: OpaquePointer, column: Int32) throws -> UInt64 {
+        guard sqlite3_column_type(statement, column) == SQLITE_INTEGER else { throw RendererMachineEventJournalError.invalidSequence }
+        let value = sqlite3_column_int64(statement, column)
+        guard value >= 0 else { throw RendererMachineEventJournalError.invalidSequence }
+        return UInt64(value)
+    }
+    static func bind(_ database: OpaquePointer, sql: String, strings: [String], integer: UInt64? = nil, data: Data? = nil) throws { var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }; var parameter = 1; for string in strings { guard sqlite3_bind_text(statement, Int32(parameter), string, -1, transient) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure }; parameter += 1 }; if let integer { guard integer <= UInt64(Int64.max), sqlite3_bind_int64(statement, Int32(parameter), sqlite3_int64(integer)) == SQLITE_OK else { throw RendererMachineEventJournalError.invalidSequence }; parameter += 1 }; if let data { guard data.withUnsafeBytes({ sqlite3_bind_blob(statement, Int32(parameter), $0.baseAddress, Int32(data.count), transient) }) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }; guard sqlite3_step(statement) == SQLITE_DONE else { throw RendererMachineEventJournalError.sqliteFailure } }
     static func exec(_ database: OpaquePointer, _ sql: String) throws { guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }
-    static func date(_ timestamp: RFC3339Timestamp) -> Date { ISO8601DateFormatter().date(from: timestamp.rawValue.replacingOccurrences(of: "+00:00", with: "Z")) ?? .distantPast }
 }

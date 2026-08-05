@@ -24,6 +24,7 @@ public struct RendererMachineScopeID: RawRepresentable, Codable, Hashable, Senda
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
 }
 
 /// Lifecycle state recorded for an immutable renderer package version.
@@ -192,6 +193,17 @@ public struct RFC3339Timestamp: RawRepresentable, Codable, Hashable, Sendable, C
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// Parses a persisted timestamp using the same RFC 3339 variants accepted
+    /// at construction. Persistence readers must not substitute a sentinel.
+    public func date() throws -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        throw RendererValidationError.invalidIdentifier(kind: "offset-bearing RFC3339 timestamp", value: rawValue)
+    }
 
     private static func isOffsetBearingRFC3339(_ value: String) -> Bool {
         guard value.contains("T"), value.count >= 25 else { return false }

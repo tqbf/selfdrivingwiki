@@ -6,13 +6,11 @@ import Foundation
 /// processes sharing the same App Group container.
 public actor RendererPackageStoreCoordinator {
     private static let retryBackoff: Duration = .milliseconds(25)
-    private static let maximumOwnerRecordBytes = 4_096
 
     private let layout: RendererPackageStoreLayout
     private let fileSystem: any RendererPackageFileSystem
     private let clock: any RendererCoordinatorClock
     private let processIdentity: RendererProcessIdentity
-    private let livenessChecker: any RendererProcessLivenessChecking
     private let tokenGenerator: any RendererCoordinatorOwnerTokenGenerating
     private let policy: RendererEventPolicy
 
@@ -29,7 +27,7 @@ public actor RendererPackageStoreCoordinator {
         self.fileSystem = fileSystem
         self.clock = clock
         self.processIdentity = processIdentity
-        self.livenessChecker = livenessChecker
+        _ = livenessChecker // Metadata is diagnostic only and never authorizes recovery.
         self.tokenGenerator = tokenGenerator
         self.policy = policy
     }
@@ -47,15 +45,15 @@ public actor RendererPackageStoreCoordinator {
             try Task.checkCancellation()
             do {
                 return try createLock()
-            } catch RendererPackageStoreError.posix(_, _, let code) where code == EEXIST {
-                try recoverExpiredLockIfSafe()
+            } catch RendererPackageStoreError.posix(_, _, let code) where code == EWOULDBLOCK || code == EAGAIN {
+                // Ordinary contention: the current owner may cooperatively release.
+                try await Task.sleep(for: Self.retryBackoff)
             } catch let failure as RendererCoordinatorFailure {
                 throw failure
             } catch {
                 throw RendererCoordinatorFailure.filesystemOperationFailed
             }
             guard clock.now() < deadline else { throw RendererCoordinatorFailure.lockAcquisitionTimedOut }
-            try await Task.sleep(for: Self.retryBackoff)
         }
     }
 
@@ -69,65 +67,25 @@ public actor RendererPackageStoreCoordinator {
         let data: Data
         do { data = try JSONEncoder().encode(record) }
         catch { throw RendererCoordinatorFailure.filesystemOperationFailed }
-        let identity = try fileSystem.createExclusiveFile(at: layout.lockURL, contents: data)
-        return LockOwnership(identity: identity, ownerToken: record.ownerToken)
-    }
-
-    private func recoverExpiredLockIfSafe() throws {
-        let (record, identity) = try readOwnerRecord()
-        guard try rendererCoordinatorShouldRecover(owner: record, now: clock.now(), policy: policy, livenessChecker: livenessChecker) else { return }
-        let quarantineURL = layout.recoveryQuarantineURL(ownerToken: record.ownerToken)
-        do { try fileSystem.createHardLink(from: layout.lockURL, to: quarantineURL) }
-        catch { throw RendererCoordinatorFailure.lockCleanupFailed }
-        var quarantineNeedsCleanup = true
-        defer {
-            if quarantineNeedsCleanup {
-                do { try fileSystem.removeFile(at: quarantineURL) }
-                catch { DebugLog.store("Renderer coordinator quarantine cleanup failed.") }
-            }
-        }
-        let (quarantinedRecord, quarantinedIdentity) = try readOwnerRecord(at: quarantineURL)
-        guard identity.refersToSameObject(as: quarantinedIdentity) else { throw RendererCoordinatorFailure.lockIdentityChanged }
-        guard record.ownerToken == quarantinedRecord.ownerToken else { throw RendererCoordinatorFailure.lockOwnershipChanged }
-        let (canonicalRecord, canonicalIdentity) = try readOwnerRecord()
-        guard identity.refersToSameObject(as: canonicalIdentity) else { throw RendererCoordinatorFailure.lockIdentityChanged }
-        guard record.ownerToken == canonicalRecord.ownerToken else { throw RendererCoordinatorFailure.lockOwnershipChanged }
-        do { try fileSystem.removeFile(at: layout.lockURL) }
-        catch { throw RendererCoordinatorFailure.lockCleanupFailed }
-        do {
-            try fileSystem.removeFile(at: quarantineURL)
-            quarantineNeedsCleanup = false
-        } catch { throw RendererCoordinatorFailure.lockCleanupFailed }
-    }
-
-    private func readOwnerRecord(at url: URL? = nil) throws -> (RendererCoordinatorOwnerRecord, RendererPackageFileIdentity) {
-        let targetURL = url ?? layout.lockURL
-        let identity: RendererPackageFileIdentity
         let descriptor: Int32
         do {
-            identity = try fileSystem.lstat(at: targetURL)
-            descriptor = try fileSystem.openReadOnlyNoFollow(at: targetURL)
-        } catch { throw RendererCoordinatorFailure.filesystemOperationFailed }
-        let data: Data
-        do {
-            guard try fileSystem.fileIdentity(fileDescriptor: descriptor).refersToSameObject(as: identity) else {
-                throw RendererCoordinatorFailure.lockIdentityChanged
-            }
-            data = try fileSystem.readAll(fileDescriptor: descriptor, maximumBytes: Self.maximumOwnerRecordBytes)
-            try fileSystem.close(fileDescriptor: descriptor)
-        } catch {
-            do { try fileSystem.close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock read descriptor close failed.") }
-            throw RendererCoordinatorFailure.filesystemOperationFailed
+            descriptor = try fileSystem.createExclusiveLockFile(at: layout.lockURL, contents: data)
+        } catch RendererPackageStoreError.posix(_, _, let code) where code == EEXIST {
+            descriptor = try fileSystem.openLockFileNoFollow(at: layout.lockURL)
         }
-        return (try RendererCoordinatorOwnerRecord.decode(data), identity)
+        do {
+            try fileSystem.lockExclusiveNonblocking(fileDescriptor: descriptor)
+            return LockOwnership(fileDescriptor: descriptor)
+        } catch {
+            do { try fileSystem.close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock descriptor close failed.") }
+            throw error
+        }
     }
 
     private func releaseLock(_ ownership: LockOwnership) {
         do {
-            let (record, identity) = try readOwnerRecord()
-            guard identity == ownership.identity else { throw RendererCoordinatorFailure.lockIdentityChanged }
-            guard record.ownerToken == ownership.ownerToken else { throw RendererCoordinatorFailure.lockOwnershipChanged }
-            try fileSystem.removeFile(at: layout.lockURL)
+            try fileSystem.unlock(fileDescriptor: ownership.fileDescriptor)
+            try fileSystem.close(fileDescriptor: ownership.fileDescriptor)
         } catch {
             DebugLog.store("Renderer coordinator lock release failed: redacted ownership verification error.")
         }
@@ -135,6 +93,5 @@ public actor RendererPackageStoreCoordinator {
 }
 
 private struct LockOwnership: Sendable {
-    let identity: RendererPackageFileIdentity
-    let ownerToken: String
+    let fileDescriptor: Int32
 }

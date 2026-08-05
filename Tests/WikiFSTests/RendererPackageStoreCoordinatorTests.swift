@@ -4,114 +4,45 @@ import Testing
 
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct RendererPackageStoreCoordinatorTests {
-    @Test func twoCoordinatorInstancesSerializeAccess() async throws {
-        let layout = try makeLayout("mutual-exclusion")
+    @Test func stableLockInodeSurvivesReleaseAndSerializesOwners() async throws {
+        let layout = try makeLayout("stable-inode")
         let first = coordinator(layout: layout, token: "11111111-1111-1111-1111-111111111111")
         let second = coordinator(layout: layout, token: "22222222-2222-2222-2222-222222222222")
-        let events = EventLog()
-
-        async let firstResult: Void = first.withExclusiveAccess {
-            await events.append("first-start")
-            try await Task.sleep(for: .milliseconds(100))
-            await events.append("first-end")
-        }
-        try await Task.sleep(for: .milliseconds(10))
-        async let secondResult: Void = second.withExclusiveAccess {
-            await events.append("second")
-        }
-        _ = try await (firstResult, secondResult)
-        #expect(await events.values() == ["first-start", "first-end", "second"])
+        try await first.withExclusiveAccess {}
+        let identity = try RealRendererPackageFileSystem().lstat(at: layout.lockURL)
+        try await second.withExclusiveAccess {}
+        #expect(try RealRendererPackageFileSystem().lstat(at: layout.lockURL).refersToSameObject(as: identity))
     }
 
-    @Test func boundedTimeoutLeavesExistingLiveLockUntouched() async throws {
-        let layout = try makeLayout("timeout")
-        try writeOwnerLock(layout, now: Date(), token: "33333333-3333-3333-3333-333333333333")
-        let policy = RendererEventPolicy(heartbeatInterval: 1, leaseExpiry: 45, clockSkewSafetyMargin: 15, cleanRetirementSafetyInterval: 1, lockAcquisitionTimeout: 0.05, orderedDrainBatchLimit: 1)
-        let subject = RendererPackageStoreCoordinator(
-            layout: layout,
-            processIdentity: testIdentity,
-            livenessChecker: FixedLiveness(isLive: true),
-            tokenGenerator: FixedToken(value: "44444444-4444-4444-4444-444444444444"),
-            policy: policy
-        )
-        do {
-            try await subject.withExclusiveAccess {}
-            Issue.record("Expected bounded lock acquisition to time out.")
-        } catch let failure as RendererCoordinatorFailure {
-            #expect(failure == .lockAcquisitionTimedOut)
-        }
-        #expect(FileManager.default.fileExists(atPath: layout.lockURL.path))
+    @Test func cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode() async throws {
+        let layout = try makeLayout("retry")
+        let fileSystem = RealRendererPackageFileSystem()
+        try fileSystem.ensureDirectory(at: layout.root)
+        let descriptor = try fileSystem.createExclusiveLockFile(at: layout.lockURL, contents: Data())
+        try fileSystem.lockExclusiveNonblocking(fileDescriptor: descriptor)
+        try fileSystem.unlock(fileDescriptor: descriptor)
+        try fileSystem.close(fileDescriptor: descriptor)
+        let subject = RendererPackageStoreCoordinator(layout: layout, tokenGenerator: FixedToken(value: "33333333-3333-3333-3333-333333333333"))
+        try await subject.withExclusiveAccess {}
     }
 
-    @Test func expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew() async throws {
-        let layout = try makeLayout("stale")
-        let now = Date(timeIntervalSince1970: 10_000)
-        try writeOwnerLock(layout, now: now.addingTimeInterval(-61), token: "55555555-5555-5555-5555-555555555555")
-        let subject = coordinator(layout: layout, now: now, token: "66666666-6666-6666-6666-666666666666", live: false)
-        let value = try await subject.withExclusiveAccess { "acquired" }
-        #expect(value == "acquired")
-        #expect(FileManager.default.fileExists(atPath: layout.lockURL.path) == false)
+    @Test func malformedDiagnosticMetadataDoesNotBlockKernelRecovery() async throws {
+        let layout = try makeLayout("metadata")
+        let filesystem = RealRendererPackageFileSystem()
+        try filesystem.ensureDirectory(at: layout.root)
+        let descriptor = try filesystem.createExclusiveLockFile(at: layout.lockURL, contents: Data("not-json".utf8))
+        try filesystem.close(fileDescriptor: descriptor)
+        let subject = coordinator(layout: layout, token: "44444444-4444-4444-4444-444444444444")
+        try await subject.withExclusiveAccess {}
+        #expect(try filesystem.lstat(at: layout.lockURL).size > 0)
     }
 
-    @Test func expiredLiveOwnerIsNeverReclaimed() async throws {
-        let layout = try makeLayout("live")
-        let now = Date(timeIntervalSince1970: 10_000)
-        try writeOwnerLock(layout, now: now.addingTimeInterval(-61), token: "77777777-7777-7777-7777-777777777777")
-        let policy = RendererEventPolicy(heartbeatInterval: 1, leaseExpiry: 45, clockSkewSafetyMargin: 15, cleanRetirementSafetyInterval: 1, lockAcquisitionTimeout: 0.01, orderedDrainBatchLimit: 1)
-        let subject = coordinator(layout: layout, now: now, token: "88888888-8888-8888-8888-888888888888", live: true, policy: policy)
-        await #expect(throws: RendererCoordinatorFailure.staleOwnerStillLive) {
-            try await subject.withExclusiveAccess {}
-        }
-    }
-
-    @Test func cancellationDuringAcquisitionDoesNotCreateOwnership() async throws {
-        let layout = try makeLayout("cancellation")
-        try writeOwnerLock(layout, now: Date(), token: "99999999-9999-9999-9999-999999999999")
-        let subject = coordinator(layout: layout, token: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", live: true)
-        let task = Task { try await subject.withExclusiveAccess {} }
-        try await Task.sleep(for: .milliseconds(25))
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(FileManager.default.fileExists(atPath: layout.lockURL.path))
-    }
-
-    @Test func throwingBodyReleasesLock() async throws {
-        let layout = try makeLayout("throw")
-        let subject = coordinator(layout: layout, token: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-        await #expect(throws: TestFailure.self) {
-            try await subject.withExclusiveAccess { throw TestFailure() }
-        }
-        #expect(FileManager.default.fileExists(atPath: layout.lockURL.path) == false)
-    }
-
-    @Test func malformedOwnerRecordFailsClosed() async throws {
-        let layout = try makeLayout("malformed")
+    @Test func symlinkLockFailsClosed() async throws {
+        let layout = try makeLayout("symlink")
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
-        try Data("not-json".utf8).write(to: layout.lockURL)
-        let subject = coordinator(layout: layout, token: "cccccccc-cccc-cccc-cccc-cccccccccccc")
-        await #expect(throws: RendererCoordinatorFailure.malformedOwnerRecord) {
-            try await subject.withExclusiveAccess {}
-        }
-        #expect(FileManager.default.fileExists(atPath: layout.lockURL.path))
-    }
-
-    @Test func replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner() async throws {
-        let layout = try makeLayout("replacement-race")
-        let now = Date(timeIntervalSince1970: 10_000)
-        let staleToken = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-        let replacementToken = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-        try writeOwnerLock(layout, now: now.addingTimeInterval(-61), token: staleToken)
-        let replacement = try JSONEncoder().encode(RendererCoordinatorOwnerRecord(processIdentity: testIdentity, now: now, ownerToken: replacementToken))
-        let fileSystem = ReplacingAfterQuarantineFileSystem(lockURL: layout.lockURL, replacement: replacement)
-        let subject = RendererPackageStoreCoordinator(layout: layout, fileSystem: fileSystem, clock: FixedClock(now: now), processIdentity: testIdentity, livenessChecker: FixedLiveness(isLive: false), tokenGenerator: FixedToken(value: "ffffffff-ffff-ffff-ffff-ffffffffffff"))
-
-        await #expect(throws: RendererCoordinatorFailure.lockIdentityChanged) {
-            try await subject.withExclusiveAccess {}
-        }
-        let descriptor = try RealRendererPackageFileSystem().openReadOnlyNoFollow(at: layout.lockURL)
-        let data = try RealRendererPackageFileSystem().readAll(fileDescriptor: descriptor, maximumBytes: 4_096)
-        try RealRendererPackageFileSystem().close(fileDescriptor: descriptor)
-        #expect(try RendererCoordinatorOwnerRecord.decode(data).ownerToken == replacementToken)
+        try FileManager.default.createSymbolicLink(at: layout.lockURL, withDestinationURL: layout.root)
+        let subject = coordinator(layout: layout, token: "55555555-5555-5555-5555-555555555555")
+        await #expect(throws: RendererCoordinatorFailure.filesystemOperationFailed) { try await subject.withExclusiveAccess {} }
     }
 
     private func makeLayout(_ name: String) throws -> RendererPackageStoreLayout {
@@ -120,41 +51,9 @@ struct RendererPackageStoreCoordinatorTests {
         return try RendererPackageStoreLayout(appGroupContainerRoot: root)
     }
 
-    private func coordinator(layout: RendererPackageStoreLayout, now: Date = Date(), token: String, live: Bool = false, policy: RendererEventPolicy = .phase3Default) -> RendererPackageStoreCoordinator {
-        RendererPackageStoreCoordinator(layout: layout, clock: FixedClock(now: now), processIdentity: testIdentity, livenessChecker: FixedLiveness(isLive: live), tokenGenerator: FixedToken(value: token), policy: policy)
+    private func coordinator(layout: RendererPackageStoreLayout, token: String) -> RendererPackageStoreCoordinator {
+        RendererPackageStoreCoordinator(layout: layout, processIdentity: RendererProcessIdentity(processID: 42, executableIdentity: "test", hostIdentity: "test-host", bootSessionIdentity: nil), tokenGenerator: FixedToken(value: token))
     }
-
-    private func writeOwnerLock(_ layout: RendererPackageStoreLayout, now: Date, token: String) throws {
-        try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
-        let record = try RendererCoordinatorOwnerRecord(processIdentity: testIdentity, now: now, ownerToken: token)
-        try JSONEncoder().encode(record).write(to: layout.lockURL)
-    }
-
-    private var testIdentity: RendererProcessIdentity { RendererProcessIdentity(processID: 42, executableIdentity: "test", hostIdentity: "test-host", bootSessionIdentity: "test-session") }
 }
 
-private struct FixedClock: RendererCoordinatorClock { let nowValue: Date; init(now: Date) { nowValue = now }; func now() -> Date { nowValue } }
-private struct FixedLiveness: RendererProcessLivenessChecking { let isLive: Bool; func isLive(_: RendererProcessIdentity) -> Bool { isLive } }
 private struct FixedToken: RendererCoordinatorOwnerTokenGenerating { let value: String; func nextOwnerToken() -> String { value } }
-private struct TestFailure: Error {}
-private actor EventLog { private var storage: [String] = []; func append(_ value: String) { storage.append(value) }; func values() -> [String] { storage } }
-
-private struct ReplacingAfterQuarantineFileSystem: RendererPackageFileSystem {
-    private let real = RealRendererPackageFileSystem()
-    let lockURL: URL
-    let replacement: Data
-    func ensureDirectory(at url: URL) throws { try real.ensureDirectory(at: url) }
-    func lstat(at url: URL) throws -> RendererPackageFileIdentity { try real.lstat(at: url) }
-    func openReadOnlyNoFollow(at url: URL) throws -> Int32 { try real.openReadOnlyNoFollow(at: url) }
-    func fileIdentity(fileDescriptor: Int32) throws -> RendererPackageFileIdentity { try real.fileIdentity(fileDescriptor: fileDescriptor) }
-    func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data { try real.readAll(fileDescriptor: fileDescriptor, maximumBytes: maximumBytes) }
-    func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity { try real.createExclusiveFile(at: url, contents: contents) }
-    func createHardLink(from source: URL, to destination: URL) throws {
-        try real.createHardLink(from: source, to: destination)
-        guard source == lockURL else { return }
-        try real.removeFile(at: lockURL)
-        _ = try real.createExclusiveFile(at: lockURL, contents: replacement)
-    }
-    func removeFile(at url: URL) throws { try real.removeFile(at: url) }
-    func close(fileDescriptor: Int32) throws { try real.close(fileDescriptor: fileDescriptor) }
-}

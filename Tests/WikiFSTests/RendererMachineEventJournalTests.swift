@@ -43,6 +43,24 @@ struct RendererMachineEventJournalTests {
 
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct RendererEventLeaseTests {
+    @Test func productionGeneratedFractionalOffsetTimestampsPreserveLeaseBoundaries() async throws {
+        let journal = RendererMachineEventJournal(layout: try layout("production-timestamps"))
+        let registry = RendererMachineLeaseRegistry(journal: journal)
+        let zone = try #require(TimeZone(secondsFromGMT: 19_800))
+        let started = RFC3339Timestamp(date: Date(timeIntervalSince1970: 10_000), timeZone: zone)
+        let lease = try await registry.createLease(scope: scope, subsystemID: subsystem, processID: 1, executableIdentity: "renderer", hostIdentity: nil, startedAt: started, now: started)
+        let beforeExpiry = RFC3339Timestamp(date: Date(timeIntervalSince1970: 10_059.9), timeZone: zone)
+        await #expect(throws: RendererMachineEventJournalError.liveLeaseCannotBeReclaimed) { try await registry.reclaim(lease, at: beforeExpiry, isProcessLive: false) }
+        let expired = RFC3339Timestamp(date: Date(timeIntervalSince1970: 10_061), timeZone: zone)
+        try await registry.reclaim(lease, at: expired, isProcessLive: false)
+    }
+
+    @Test func retiredLeaseCannotBeResurrectedByHeartbeat() async throws {
+        let registry = RendererMachineLeaseRegistry(journal: RendererMachineEventJournal(layout: try layout("retired-heartbeat")))
+        let lease = try await registry.createLease(scope: scope, subsystemID: subsystem, processID: 1, executableIdentity: "renderer", hostIdentity: nil, startedAt: time, now: time)
+        try await registry.retire(lease, at: later("2026-08-05T12:00:01+00:00"))
+        await #expect(throws: RendererMachineEventJournalError.liveLeaseCannotBeReclaimed) { try await registry.heartbeat(lease, at: later("2026-08-05T12:00:02+00:00")) }
+    }
     @Test func twoLiveSameSubsystemLeasesAreIndependent() async throws {
         let journal = RendererMachineEventJournal(layout: try layout("leases"))
         let registry = RendererMachineLeaseRegistry(journal: journal)
@@ -69,6 +87,14 @@ struct RendererEventLeaseTests {
         try await registry.retire(replacement, at: time)
         await #expect(throws: RendererMachineEventJournalError.liveLeaseCannotBeReclaimed) { try await registry.reclaim(replacement, at: later("2026-08-05T12:04:59+00:00"), isProcessLive: false) }
         try await registry.reclaim(replacement, at: later("2026-08-05T12:05:00+00:00"), isProcessLive: false)
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct RendererTimestampPersistenceTests {
+    @Test func malformedPersistedTimestampFailsClosed() throws {
+        let data = Data("\"not-a-timestamp\"".utf8)
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(RFC3339Timestamp.self, from: data) }
     }
 }
 

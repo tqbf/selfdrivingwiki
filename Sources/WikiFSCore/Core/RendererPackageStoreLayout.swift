@@ -162,6 +162,12 @@ public protocol RendererPackageFileSystem: Sendable {
     func fileIdentity(fileDescriptor: Int32) throws -> RendererPackageFileIdentity
     func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data
     func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity
+    /// Opens the stable lock inode without following links. The caller retains
+    /// the descriptor until it has released the kernel-held advisory lock.
+    func openLockFileNoFollow(at url: URL) throws -> Int32
+    func createExclusiveLockFile(at url: URL, contents: Data) throws -> Int32
+    func lockExclusiveNonblocking(fileDescriptor: Int32) throws
+    func unlock(fileDescriptor: Int32) throws
     func createHardLink(from source: URL, to destination: URL) throws
     func removeFile(at url: URL) throws
     func close(fileDescriptor: Int32) throws
@@ -242,6 +248,48 @@ public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable
         }
     }
 
+    public func openLockFileNoFollow(at url: URL) throws -> Int32 {
+        try requireFileURL(url)
+        let descriptor = url.path.withCString { open($0, O_RDWR | O_NOFOLLOW) }
+        guard descriptor >= 0 else { throw posixError(operation: "openLock", path: url.path) }
+        do {
+            let identity = try fileIdentity(fileDescriptor: descriptor)
+            guard (identity.mode & UInt32(S_IFMT)) == UInt32(S_IFREG) else {
+                throw RendererPackageStoreError.posix(operation: "openLock", path: url.path, code: EINVAL)
+            }
+            return descriptor
+        } catch {
+            do { try close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock descriptor close failed.") }
+            throw error
+        }
+    }
+
+    public func createExclusiveLockFile(at url: URL, contents: Data) throws -> Int32 {
+        try requireFileURL(url)
+        let descriptor = url.path.withCString { open($0, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR) }
+        guard descriptor >= 0 else { throw posixError(operation: "openExclusiveLock", path: url.path) }
+        do {
+            try writeAll(contents, fileDescriptor: descriptor)
+            guard fsync(descriptor) == 0 else { throw RendererPackageStoreError.posix(operation: "fsync", path: nil, code: errno) }
+            return descriptor
+        } catch {
+            do { try close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock descriptor close failed.") }
+            throw error
+        }
+    }
+
+    public func lockExclusiveNonblocking(fileDescriptor: Int32) throws {
+        guard rendererPackageStoreFlock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            throw RendererPackageStoreError.posix(operation: "flock", path: nil, code: errno)
+        }
+    }
+
+    public func unlock(fileDescriptor: Int32) throws {
+        guard rendererPackageStoreFlock(fileDescriptor, LOCK_UN) == 0 else {
+            throw RendererPackageStoreError.posix(operation: "flock", path: nil, code: errno)
+        }
+    }
+
     public func createHardLink(from source: URL, to destination: URL) throws {
         try requireFileURL(source)
         try requireFileURL(destination)
@@ -291,6 +339,15 @@ private func rendererPackageStoreClose(_ fileDescriptor: Int32) -> Int32 {
     #elseif canImport(Glibc)
     return Glibc.close(fileDescriptor)
     #endif
+}
+
+private func rendererPackageStoreFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32 {
+    var lock = flock()
+    lock.l_whence = Int16(SEEK_SET)
+    lock.l_start = 0
+    lock.l_len = 0
+    lock.l_type = operation == LOCK_UN ? Int16(F_UNLCK) : Int16(F_WRLCK)
+    return fcntl(fileDescriptor, operation == LOCK_UN ? F_SETLK : F_SETLK, &lock)
 }
 
 private func rendererPackageStoreLstat(_ path: UnsafePointer<CChar>, _ metadata: UnsafeMutablePointer<stat>) -> Int32 {
