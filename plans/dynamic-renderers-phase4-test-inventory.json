@@ -386,12 +386,12 @@
       "symbol": "RendererSourcePresentationMode",
       "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
       "decision": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion",
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
         "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
       ],
       "error": [],
       "boundary": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion"
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
       ],
       "cancellation": [],
       "teardown": [],
@@ -415,45 +415,46 @@
       "symbol": "RendererSettingsChangeEvent.sourcePresentationSet(sourceID:presentation:)",
       "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
       "decision": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion",
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
         "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder"
       ],
       "error": [
-        "RendererPhase3PortableTests.unsupportedPersistedRecordVersionRejectsBeforePayloadDecodes"
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
       ],
       "boundary": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion"
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
       ],
       "cancellation": [],
       "teardown": [],
-      "notes": "This typed payload case is synchronous. Envelope version validation rejects unsupported payload grammars before event decoding."
+      "notes": "This typed payload case is synchronous. The versioned settings payload rejects unsupported grammars before event decoding."
     },
     {
       "symbol": "RendererSettingsChangeEvent.sourcePresentationRemoved(sourceID:)",
       "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
       "decision": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion",
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
         "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
       ],
       "error": [
-        "RendererPhase3PortableTests.unsupportedPersistedRecordVersionRejectsBeforePayloadDecodes"
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
       ],
       "boundary": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion"
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
       ],
       "cancellation": [],
       "teardown": [],
-      "notes": "This typed payload case is synchronous. Envelope version validation rejects unsupported payload grammars before event decoding."
+      "notes": "This typed payload case is synchronous. The versioned settings payload rejects unsupported grammars before event decoding."
     },
     {
       "symbol": "PersistedWikiStoreChangeRecord.currentSchemaVersion / init(schemaVersion:eventID:sequence:scope:payload:committedAt:) / init(from:)",
       "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
       "decision": [
-        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentVersion",
-        "RendererPhase3PortableTests.legacyV1RecordsRemainDecodable"
+        "RendererMachineEventJournalTests.currentSettingsPayloadKeepsTheMachineEnvelopeAtV1",
+        "RendererPhase3PortableTests.legacyV1SettingsPayloadsRemainDecodable"
       ],
       "error": [
-        "RendererPhase3PortableTests.unsupportedPersistedRecordVersionRejectsBeforePayloadDecodes"
+        "RendererMachineEventJournalTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess",
+        "RendererPhase3PortableTests.unsupportedRecordEnvelopeVersionRejectsBeforePayloadDecodes"
       ],
       "boundary": [
         "RendererPhase3PortableTests.envelopePayloadRoundTrip",
@@ -461,7 +462,24 @@
       ],
       "cancellation": [],
       "teardown": [],
-      "notes": "The portable envelope emits v2 by default, reads legacy v1, and validates the version before it decodes the payload. It has no cancellation or teardown path."
+      "notes": "The shared envelope remains exact v1 and validates its version before it decodes the payload. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "PersistedRendererSettingsChangePayload / WikiStoreChangeEvent Codable",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
+        "RendererPhase3PortableTests.legacyV1SettingsPayloadsRemainDecodable"
+      ],
+      "error": [
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
+      ],
+      "boundary": [
+        "RendererMachineEventJournalTests.currentSettingsPayloadKeepsTheMachineEnvelopeAtV1"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Legacy unwrapped v1 settings events remain readable; writes use the versioned v2 settings payload and validate its schema before event decoding."
     },
     {
       "symbol": "RendererResolution.preferred(descriptors:preference: RendererPreferenceReference?:input:hostProtocolRevision:)",

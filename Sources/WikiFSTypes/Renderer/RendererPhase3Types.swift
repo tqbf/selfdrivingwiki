@@ -283,14 +283,125 @@ public enum RendererSettingsChangeEvent: Codable, Hashable, Sendable {
     case sourcePresentationRemoved(sourceID: SourceID)
 }
 
-public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
+/// The versioned body for renderer-settings changes. Version 1 was the
+/// unwrapped `RendererSettingsChangeEvent` persisted by Phase 3b; version 2
+/// wraps the event so Phase 4 can evolve its payload without changing the
+/// shared journal envelope.
+public struct PersistedRendererSettingsChangePayload: Codable, Hashable, Sendable {
+    public static let currentSchemaVersion = 2
+
+    public let schemaVersion: Int
+    public let event: RendererSettingsChangeEvent
+
+    fileprivate enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case event
+    }
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        event: RendererSettingsChangeEvent
+    ) throws {
+        try Self.validateSchemaVersion(schemaVersion)
+        self.schemaVersion = schemaVersion
+        self.event = event
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.event = try container.decode(RendererSettingsChangeEvent.self, forKey: .event)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard schemaVersion == currentSchemaVersion else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
+    }
+}
+
+public enum WikiStoreChangeEvent: Hashable, Sendable {
     case resource(ResourceChangeEvent)
     case rendererSettings(RendererSettingsChangeEvent)
 }
 
+extension WikiStoreChangeEvent: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case resource
+        case rendererSettings
+    }
+
+    private enum AssociatedValueCodingKeys: String, CodingKey {
+        case value = "_0"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.resource) {
+            let resource = try container.decode(
+                AssociatedValue<ResourceChangeEvent>.self,
+                forKey: .resource
+            )
+            self = .resource(resource.value)
+            return
+        }
+
+        guard container.contains(.rendererSettings) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath, debugDescription: "Unknown wiki store change event.")
+            )
+        }
+
+        let settingsContainer = try container.nestedContainer(
+            keyedBy: AssociatedValueCodingKeys.self,
+            forKey: .rendererSettings
+        )
+        let payloadContainer = try settingsContainer.nestedContainer(
+            keyedBy: PersistedRendererSettingsChangePayload.CodingKeys.self,
+            forKey: .value
+        )
+
+        if payloadContainer.contains(.schemaVersion) {
+            let payload = try settingsContainer.decode(
+                PersistedRendererSettingsChangePayload.self,
+                forKey: .value
+            )
+            self = .rendererSettings(payload.event)
+        } else {
+            let legacyEvent = try settingsContainer.decode(
+                RendererSettingsChangeEvent.self,
+                forKey: .value
+            )
+            self = .rendererSettings(legacyEvent)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .resource(let resource):
+            try container.encode(AssociatedValue(value: resource), forKey: .resource)
+        case .rendererSettings(let event):
+            let payload = try PersistedRendererSettingsChangePayload(event: event)
+            try container.encode(AssociatedValue(value: payload), forKey: .rendererSettings)
+        }
+    }
+
+    private struct AssociatedValue<Value: Codable>: Codable {
+        let value: Value
+
+        private enum CodingKeys: String, CodingKey {
+            case value = "_0"
+        }
+    }
+}
+
 public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
-    /// Version of the persisted record envelope and its event payload grammar.
-    public static let currentSchemaVersion = 2
+    /// Version of the shared persisted journal envelope.
+    public static let currentSchemaVersion = 1
 
     public let schemaVersion: Int
     public let eventID: UUID
@@ -339,7 +450,7 @@ public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
     }
 
     private static func validateSchemaVersion(_ schemaVersion: Int) throws {
-        guard (1...currentSchemaVersion).contains(schemaVersion) else {
+        guard schemaVersion == currentSchemaVersion else {
             throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
         }
     }

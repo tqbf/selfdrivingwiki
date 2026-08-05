@@ -323,8 +323,8 @@ struct RendererPhase3PortableTests {
         #expect(decoded == record)
     }
 
-    @Test("Source presentation events round-trip with the current persisted record version")
-    func sourcePresentationEventsRoundTripAtCurrentVersion() throws {
+    @Test("Source presentation events round-trip in the current settings payload version")
+    func sourcePresentationEventsRoundTripAtCurrentPayloadVersion() throws {
         let sourceID = SourceID(rawValue: "01J00000000000000000000000")
         let timestamp = try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
         let events: [RendererSettingsChangeEvent] = [
@@ -341,7 +341,7 @@ struct RendererPhase3PortableTests {
                 committedAt: timestamp
             )
 
-            #expect(record.schemaVersion == 2)
+            #expect(record.schemaVersion == 1)
             #expect(try JSONDecoder().decode(
                 PersistedWikiStoreChangeRecord.self,
                 from: JSONEncoder().encode(record)
@@ -349,26 +349,36 @@ struct RendererPhase3PortableTests {
         }
     }
 
-    @Test("Legacy v1 records decode when their payload uses a legacy event case")
-    func legacyV1RecordsRemainDecodable() throws {
+    @Test("Legacy v1 settings payloads remain decodable inside a v1 record envelope")
+    func legacyV1SettingsPayloadsRemainDecodable() throws {
         let packageID = try RendererPackageID(validating: "org.example.viewer")
-        let record = try PersistedWikiStoreChangeRecord(
-            schemaVersion: 1,
-            eventID: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
-            sequence: 46,
-            scope: .wiki(WikiID(rawValue: "wiki-event-contract")),
-            payload: .rendererSettings(.wikiEnablementSet(packageID: packageID, isEnabled: true)),
-            committedAt: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
-        )
+        let data = Data("""
+        {
+          "schemaVersion": 1,
+          "eventID": "00000000-0000-0000-0000-000000000005",
+          "sequence": 46,
+          "scope": { "wiki": { "_0": "wiki-event-contract" } },
+          "payload": {
+            "rendererSettings": {
+              "_0": {
+                "wikiEnablementSet": {
+                  "packageID": "org.example.viewer",
+                  "isEnabled": true
+                }
+              }
+            }
+          },
+          "committedAt": "2026-08-04T12:34:56+00:00"
+        }
+        """.utf8)
 
-        #expect(try JSONDecoder().decode(
-            PersistedWikiStoreChangeRecord.self,
-            from: JSONEncoder().encode(record)
-        ) == record)
+        let record = try JSONDecoder().decode(PersistedWikiStoreChangeRecord.self, from: data)
+        #expect(record.schemaVersion == 1)
+        #expect(record.payload == .rendererSettings(.wikiEnablementSet(packageID: packageID, isEnabled: true)))
     }
 
-    @Test("Unsupported persisted record versions reject before their payload decodes")
-    func unsupportedPersistedRecordVersionRejectsBeforePayloadDecodes() throws {
+    @Test("Unsupported record envelope versions reject before their payload decodes")
+    func unsupportedRecordEnvelopeVersionRejectsBeforePayloadDecodes() throws {
         let data = Data("""
         {
           "schemaVersion": 99,
@@ -387,6 +397,42 @@ struct RendererPhase3PortableTests {
             #expect(error == .unsupportedManifestRevision(99))
         } catch {
             Issue.record("Expected schema version validation before payload decoding, got: \(error)")
+        }
+    }
+
+    @Test("Unsupported renderer settings payload versions reject before their event decodes")
+    func unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes() throws {
+        let event = RendererSettingsChangeEvent.sourcePresentationSet(
+            sourceID: SourceID(rawValue: "01J00000000000000000000000"),
+            presentation: .split
+        )
+        let record = try PersistedWikiStoreChangeRecord(
+            eventID: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!,
+            sequence: 48,
+            scope: .wiki(WikiID(rawValue: "wiki-event-contract")),
+            payload: .rendererSettings(event),
+            committedAt: try RFC3339Timestamp(validating: "2026-08-04T12:34:56+00:00")
+        )
+        var envelope = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any]
+        )
+        var payload = try #require(envelope["payload"] as? [String: Any])
+        var rendererSettings = try #require(payload["rendererSettings"] as? [String: Any])
+        var settingsPayload = try #require(rendererSettings["_0"] as? [String: Any])
+        settingsPayload["schemaVersion"] = 99
+        settingsPayload["event"] = ["unrecognizedEvent": [:]]
+        rendererSettings["_0"] = settingsPayload
+        payload["rendererSettings"] = rendererSettings
+        envelope["payload"] = payload
+
+        let data = try JSONSerialization.data(withJSONObject: envelope)
+        do {
+            _ = try JSONDecoder().decode(PersistedWikiStoreChangeRecord.self, from: data)
+            Issue.record("Expected an unsupported renderer settings payload version error.")
+        } catch let error as RendererValidationError {
+            #expect(error == .unsupportedManifestRevision(99))
+        } catch {
+            Issue.record("Expected settings payload validation before event decoding, got: \(error)")
         }
     }
 
