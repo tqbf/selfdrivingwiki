@@ -32,6 +32,12 @@ Phase 5 WebView security, Phase 6 Excalidraw/JSON Canvas, and Phase 7 settings
 UI remain untouched. The retained per-PR symbol/path test inventory is
 `tmp/orchestration/dynamic-renderers-phase4/test-inventory-pr4.json`.
 
+The presentation owner now clears its state before source navigation. It resolves
+the default only after it loads source bytes, markdown, and origin. A later
+source change resolves the default again, so a newly extracted PDF or transcript
+returns from its automatic Rendered default to Source. Split uses a pinned
+renderer only when that renderer remains in the current descriptor set.
+
 ## Verification
 
 - Final implementation commit: `7c96e919030772c41ec5551457e15cf9718559a0`.
@@ -43,6 +49,12 @@ UI remain untouched. The retained per-PR symbol/path test inventory is
   store/API regressions passed, 11 Swift Testing tests in 2 suites.
 - Commit hooks: SwiftLint strict passed with 0 violations; bare `try?` guard
   passed; `git diff --check` passed.
+
+## Remediation verification
+
+- Focused renderer suites: passed, 39 Swift Testing tests in 3 suites.
+- `make build`: passed.
+- `make test`: passed.
 - An independent Claude/Opus review found routing and persistence gaps at the
   earlier routing head. This commit addresses the default, fallback, stale-pin,
   layout, and store-backed presentation findings. A fresh exact-head review is

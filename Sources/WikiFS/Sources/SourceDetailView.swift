@@ -450,12 +450,12 @@ struct SourceDetailView: View {
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
             refreshSourceBytesSnapshot()
-            resetRendererPresentation()
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
             lastKnownActiveTabID = store.activeTabID
+            resolveRendererPresentation()
             consumePinnedExtraction()
             updateRightSidebarRegistration()
         }
@@ -477,7 +477,7 @@ struct SourceDetailView: View {
             editHistory = []
             isRefreshable = false
             sourceBytesSnapshot = nil
-            resetRendererPresentation()
+            beginRendererPresentationLoading()
             pdfQuote = nil
             pinnedExtraction = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
@@ -490,9 +490,7 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
-            if rendererPresentation.pinnedRenderer == nil {
-                resetRendererPresentation()
-            }
+            resolveRendererPresentation()
             updateRightSidebarRegistration()
         }
         .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
@@ -545,10 +543,10 @@ struct SourceDetailView: View {
         // viewing the same source would see the stale head without this).
         .onChange(of: store.sources) { _, _ in
             refreshSourceBytesSnapshot()
-            rendererPresentation.keepPinnedRenderer(available: rendererDescriptors.map(\.reference))
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
             }
+            resolveRendererPresentation()
             updateRightSidebarRegistration()
         }
         .background { findShortcutButton }
@@ -1188,7 +1186,16 @@ struct SourceDetailView: View {
 
     /// Resolve the persisted logical or exact renderer once per source. The
     /// resulting exact reference remains pinned while this pane stays open.
-    private func resetRendererPresentation() {
+    private func beginRendererPresentationLoading() {
+        var lifecycle = RendererPresentationLifecycle(sourceID: rendererPresentation.sourceID)
+        lifecycle.beginLoading(sourceID: file.id)
+        rendererPresentation = lifecycle.state
+    }
+
+    /// Resolve only after this view has loaded bytes, markdown, and origin for
+    /// the current source. The persisted selection records an explicit user
+    /// choice. Without it, a new presentable source returns to Source.
+    private func resolveRendererPresentation() {
         do {
             let planner = try SourceRendererPresentationPlanner()
             let preference = store.rendererSourcePreference(for: file.id)
@@ -1207,13 +1214,13 @@ struct SourceDetailView: View {
                     currentMarkdown: currentMarkdownContent,
                     origin: origin).first
             }
-            rendererPresentation = RendererPresentationState.defaultState(
-                sourceID: file.id,
+            var lifecycle = RendererPresentationLifecycle(sourceID: file.id)
+            lifecycle.resolveLoadedSource(
+                source: file,
                 matchingRenderer: descriptor?.reference,
-                hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
-                    for: file,
-                    currentMarkdown: currentMarkdownContent),
+                currentMarkdown: currentMarkdownContent,
                 persistedSelection: store.rendererSourcePresentation(for: file.id))
+            rendererPresentation = lifecycle.state
         } catch {
             DebugLog.tabs("SourceDetailView: renderer preference resolution failed (source=\(file.id.rawValue)): \(error)")
             rendererPresentation = RendererPresentationState(sourceID: file.id)

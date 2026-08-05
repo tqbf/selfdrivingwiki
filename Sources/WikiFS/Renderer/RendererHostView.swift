@@ -82,7 +82,10 @@ struct RendererHostView<Source: View, Rendered: View>: View {
             .keyboardShortcut("2", modifiers: [.command, .option])
             .accessibilityLabel("Show rendered content")
             Button("Split") {
-                if let reference = state.pinnedRenderer ?? descriptors.first?.reference {
+                if let reference = Self.splitRendererReference(
+                    pinnedRenderer: state.pinnedRenderer,
+                    availableRendererReferences: descriptors.map(\.reference)
+                ) {
                     state.selectSplit(reference)
                     onRendererSelected(reference)
                     onPresentationSelected(.split)
@@ -96,6 +99,18 @@ struct RendererHostView<Source: View, Rendered: View>: View {
         .font(.callout)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.vertical, 6)
+    }
+
+    /// A pin only belongs to the descriptor snapshot that supplied it. If the
+    /// snapshot changed, Split must use a descriptor that is available now.
+    static func splitRendererReference(
+        pinnedRenderer: RendererReference?,
+        availableRendererReferences: [RendererReference]
+    ) -> RendererReference? {
+        guard let pinnedRenderer, availableRendererReferences.contains(pinnedRenderer) else {
+            return availableRendererReferences.first
+        }
+        return pinnedRenderer
     }
 
     @ViewBuilder
