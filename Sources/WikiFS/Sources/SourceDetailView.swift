@@ -96,7 +96,7 @@ struct SourceDetailView: View {
     /// ingested — prompts before re-ingesting, since that may create duplicate
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
     @State private var showReingestConfirmation = false
-    @State private var selectedTab = FileContentTab.reader
+    @State private var rendererPresentation = RendererPresentationState(sourceID: SourceID(rawValue: ""))
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
@@ -120,25 +120,6 @@ struct SourceDetailView: View {
     @Environment(FindModel.self) private var findModel
     @State private var findVersion = 0
 
-    private enum FileContentTab: String, CaseIterable {
-        case reader = "Reader"
-        case pdf = "PDF"
-        /// The original HTML rendered in a WKWebView — the "HTML" tab for HTML
-        /// sources (issue #599). Mirrors the PDF tab: the original document
-        /// rendered faithfully alongside the Reader (extracted markdown) tab.
-        case html = "HTML"
-        /// The rendered Mermaid diagram (inline SVG). Only shown for Mermaid
-        /// sources (`.mmd` or markdown containing a ```mermaid block); the raw
-        /// value is the picker label.
-        case rendered = "Rendered"
-        /// The embedded media player pane — covers both video (YouTube/Vimeo/
-        /// direct-remote `<video>`) and audio (Apple Podcasts/Spotify/
-        /// SoundCloud/direct-remote `<audio>`). The picker label is dynamic
-        /// ("Video"/"Audio"/"Media"); the raw value is the generic fallback.
-        case media = "Media"
-        case split = "Split"
-    }
-
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
@@ -146,22 +127,8 @@ struct SourceDetailView: View {
         return false
     }
 
-    private var isPDF: Bool { MimeType.isPDF(file.mimeType) }
-
-    /// `true` for sources whose original bytes are HTML (issue #599). Detects
-    /// the canonical HTML MIME types (text/html, application/xhtml+xml) and the
-    /// `.html`/`.htm`/`.xhtml` extensions. A source whose original HTML was
-    /// discarded by the pre-#599 ingest path (stored as markdown with format
-    /// `.htmlConverted`) does NOT match here — it has a markdown MIME and no
-    /// HTML extension — so it stays in the markdown-only path with no HTML tab,
-    /// matching the "no migration needed" rule in the issue.
-    private var isHTMLSource: Bool {
-        if let mime = file.mimeType {
-            return mime == MimeType.html || mime == MimeType.xhtml
-        }
-        let ext = file.ext.lowercased()
-        return ext == "html" || ext == "htm" || ext == "xhtml"
-    }
+    /// A PDF quote anchor is consumed only before a markdown extraction exists.
+    private var requiresPDFQuoteAnchor: Bool { MimeType.isPDF(file.mimeType) }
 
     /// The source's resolved `ContentKind` — the registry classification for
     /// this source's MIME + provider + extension. PR2 (§5.4): the Extract /
@@ -177,16 +144,34 @@ struct SourceDetailView: View {
             ext: file.ext)
     }
 
-    /// The source's original HTML bytes, decoded as text. Used by the HTML tab
-    /// (the WKWebView renders them verbatim). Returns `nil` when the source
-    /// isn't HTML or the bytes couldn't be decoded.
-    private var htmlSourceString: String? {
-        guard isHTMLSource, let data = store.sourceBytes(id: file.id) else { return nil }
-        return String(data: data, encoding: .utf8)
-            ?? String(decoding: data, as: UTF8.self)  // lossy, never nil
+    private var hasMarkdown: Bool { headVersion != nil }
+
+    private var rendererDescriptors: [RendererDescriptor] {
+        do {
+            let planner = try SourceRendererPresentationPlanner()
+            return try planner.matchingDescriptors(
+                for: file,
+                boundedBytes: store.sourceBytes(id: file.id),
+                currentMarkdown: currentMarkdownContent,
+                origin: origin)
+        } catch {
+            DebugLog.tabs("SourceDetailView: renderer planning failed (source=\(file.id.rawValue)): \(error)")
+            return []
+        }
     }
 
-    private var hasMarkdown: Bool { headVersion != nil }
+    private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
+        let bytes = store.sourceBytes(id: file.id)
+        return BuiltInRendererFactoryInputs(
+            sourceBytes: bytes,
+            pdfQuote: pdfQuote,
+            htmlSource: SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: bytes),
+            mermaidMarkdown: SourceRendererPresentationPlanner.renderableMermaidMarkdown(currentMarkdownContent),
+            mediaTarget: SourceRendererPresentationPlanner.mediaTarget(for: file, origin: origin),
+            selection: store.selection,
+            store: store,
+            readerZoom: $readerZoom)
+    }
 
     private var showsSourceOutlineTab: Bool {
         isOutlineApplicable && currentMarkdownContent != nil
@@ -272,18 +257,6 @@ struct SourceDetailView: View {
     /// existing gate).
     private var needsTranscription: Bool { isTranscribable && !hasMarkdown }
 
-    /// Whether this source should expose the Mermaid diagram tabs
-    /// (Reader / Rendered / Split). Detection is content-aware: a standalone
-    /// `.mmd` file or a `text/mermaid` source is always a Mermaid source, and a
-    /// markdown document carrying a fenced ` ```mermaid ` block becomes one once
-    /// its content loads. See `MermaidSourceDetector` (pure + unit-tested).
-    private var isMermaidSource: Bool {
-        MermaidSourceDetector.isMermaidSource(
-            mimeType: file.mimeType,
-            filename: file.filename,
-            content: currentMarkdownContent)
-    }
-
     /// Mirrors `WikiStoreModel.canIngest` — the single "can this source be
     /// ingested?" rule shared with the sources outline context menu and the
     /// `enqueueIngestion` chokepoint. A source is ingestible iff it has a
@@ -318,36 +291,6 @@ struct SourceDetailView: View {
     /// detail view so byteless video sources surface the player above their
     /// transcript (the transcript markdown has no embed directive, so the
     /// inline reader path never emits the iframe here).
-    private var embedTarget: EmbedTarget? {
-        guard let descriptor = embedDescriptor else { return nil }
-        return ExternalEmbed.target(for: descriptor)
-    }
-
-    /// `true` when this source should render the embed-player + transcript
-    /// layout (a byteless provider video/audio, or direct-remote media) rather
-    /// than the PDF/markdown/binary branches.
-    private var isBytelessEmbedWithPlayer: Bool { embedTarget != nil }
-
-    /// The dynamic label for the media tab — "Video" / "Audio" / "Media" —
-    /// derived from the embed descriptor's classification (audio vs video via
-    /// MIME prefix or `agentName`, with Apple Podcasts → Audio). Falls back to
-    /// "Media" before the origin loads; the picker only renders once the embed
-    /// resolves (`availableTabs` gates on `isBytelessEmbedWithPlayer`), so the
-    /// fallback is never user-visible in practice.
-    private var mediaTabLabel: String {
-        guard let descriptor = embedDescriptor,
-              let label = ExternalEmbed.mediaTabLabel(for: descriptor) else {
-            return FileContentTab.media.rawValue
-        }
-        return label
-    }
-
-    /// Per-tab label for the picker. Most tabs use their `rawValue`; the media
-    /// tab's label is dynamic ("Video"/"Audio"/"Media") per the source kind.
-    private func tabLabel(for tab: FileContentTab) -> String {
-        tab == .media ? mediaTabLabel : tab.rawValue
-    }
-
     /// Phase 6: consume a pending pinned-extraction id (if any) for the current
     /// source and load that extraction into `pinnedExtraction`. Called from
     /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
@@ -360,54 +303,9 @@ struct SourceDetailView: View {
         }
     }
 
-    /// The tabs applicable to this source. PDFs with extracted markdown show
-    /// Reader / PDF / Split (the classic three-way). Byteless media embeds
-    /// (YouTube/Vimeo/Spotify/SoundCloud/Apple Podcasts/direct-remote audio &
-    /// video) show Reader (the transcript) / Media (the player) / Split (both
-    /// side-by-side); a media source without a transcript drops Split (nothing
-    /// to split) but keeps Reader so the "no transcript" placeholder is
-    /// discoverable. Empty for a PDF with no extraction yet — that branch
-    /// renders the bare PDF with no picker.
-    ///
-    /// Issue #599: HTML sources with extracted markdown show Reader (markdown)
-    /// / HTML (rendered WKWebView) / Split (both) — mirrors the PDF three-way
-    /// so HTML is treated like a PDF (original bytes preserved + extracted
-    /// markdown alongside). An HTML source whose extracted markdown didn't
-    /// land (e.g. a conversion failure on a fresh ingest) still shows the
-    /// Reader / HTML pair via the `hasMarkdown || isHTMLSource` gate so the
-    /// user can see something on each tab.
-    private var availableTabs: [FileContentTab] {
-        if isBytelessEmbedWithPlayer {
-            var tabs: [FileContentTab] = [.reader, .media]
-            if hasMarkdown { tabs.append(.split) }
-            return tabs
-        }
-        if isPDF && hasMarkdown {
-            return [.reader, .pdf, .split]
-        }
-        // An HTML source with extracted markdown (or at minimum HTML bytes to
-        // show on the HTML tab): Reader (markdown) ⇄ HTML (rendered) ⇄ Split
-        // (both). Checked after PDF so a PDF whose extracted text happens to
-        // be HTML stays a PDF; checked before Mermaid so a `.mmd` source stays
-        // on the Mermaid three-way.
-        if isHTMLSource && (hasMarkdown || htmlSourceString != nil) {
-            return hasMarkdown ? [.reader, .html, .split] : [.html]
-        }
-        // A Mermaid source (standalone `.mmd` / `text/mermaid`, or markdown
-        // carrying a fenced ```mermaid block): Reader (raw source) ⇄ Rendered
-        // (the SVG diagram) ⇄ Split (both). Checked after PDF so a PDF whose
-        // extracted text happens to mention mermaid stays a PDF.
-        if isMermaidSource {
-            return [.reader, .rendered, .split]
-        }
-        return []
-    }
-
-    private var showTabs: Bool { !availableTabs.isEmpty }
-
     /// `true` when this source's content type has a file-extraction backend
     /// — the gate for the Extract button and the Re-extract menu. PR2 §5.4:
-    /// migrated from `isPDF || isHTMLSource` (which already encoded the same
+    /// migrated from ad-hoc format checks (which already encoded the same
     /// intent ad-hoc) onto the registry's `hasFileExtractionBackend`
     /// (`extractionPath == .pdfBackend || .htmlToMarkdown`). Stays PDF/HTML
     /// only — podcast / YouTube transcript kinds have
@@ -418,8 +316,7 @@ struct SourceDetailView: View {
     /// for the same source — the UI shows one prominent button per source.
     ///
     /// Text/binary/byteless sources skip extraction entirely (their
-    /// `extractionPath == nil`). A PDF with bytes (isPDF true) and a raw
-    /// HTML byte source (isHTMLSource true) both resolve to a kind with a
+    /// `extractionPath == nil`). PDF and HTML byte sources both resolve to a kind with a
     /// file-extraction backend via `ContentKind.resolve` — the registry's
     /// MIME + ext path matches the same MIME/extension checks the old
     /// predicate did.
@@ -496,8 +393,14 @@ struct SourceDetailView: View {
         // sources — the raw bytes are HTML, not markdown, and rendering them
         // as markdown would show raw `<html>` tags. The Reader tab falls back
         // to its "No Processed Markdown" placeholder until headVersion loads.
-        if isHTMLSource { return nil }
+        if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
+            return nil
+        }
         if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
+            return String(data: data, encoding: .utf8)
+        }
+        if SourceRendererPresentationPlanner.standaloneDiagramSource(file),
+           let data = store.sourceBytes(id: file.id) {
             return String(data: data, encoding: .utf8)
         }
         // #620: defense-in-depth — when a Mermaid-detected source arrives
@@ -506,16 +409,11 @@ struct SourceDetailView: View {
         // that bypasses it), still surface the raw diagram bytes so the Reader
         // and Rendered tabs render instead of empty states. Calls the static
         // detector with `content: nil` (mime+filename arms only) — NOT the
-        // `isMermaidSource` computed property, which reads this same property
-        // and would recurse. The content-scan arm is irrelevant here: this
+        // renderer matcher, which reads this same property and would recurse.
+        // The content-scan arm is irrelevant here: this
         // branch is only reached when `isMarkdownNative` is false, and a
         // fenced-block-only source (no `.mmd`, no `text/mermaid` mime) already
         // had nowhere to read its bytes from before #620.
-        if MermaidSourceDetector.isMermaidSource(
-               mimeType: file.mimeType, filename: file.filename, content: nil),
-           let data = store.sourceBytes(id: file.id) {
-            return String(data: data, encoding: .utf8)
-        }
         return nil
     }
 
@@ -538,9 +436,6 @@ struct SourceDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             headerSection
-            if showTabs, !isEditing {
-                tabPicker
-            }
             Divider().opacity(PageEditorMetrics.dividerOpacity)
             contentAndOutline
         }
@@ -551,6 +446,7 @@ struct SourceDetailView: View {
         // ChatDetailView's minimum detail-column contract.
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
+            resetRendererPresentation()
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
@@ -576,7 +472,7 @@ struct SourceDetailView: View {
             origin = nil
             editHistory = []
             isRefreshable = false
-            selectedTab = .reader
+            resetRendererPresentation()
             pdfQuote = nil
             pinnedExtraction = nil
             // Cancel any pending edit-mode restoration so it doesn't apply to
@@ -588,6 +484,9 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
+            if rendererPresentation.pinnedRenderer == nil {
+                resetRendererPresentation()
+            }
             updateRightSidebarRegistration()
         }
         .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
@@ -603,7 +502,7 @@ struct SourceDetailView: View {
             // Only consume for un-extracted PDFs (the markdown side handles
             // extracted PDFs via WikiReaderView). Double-check at consume time
             // since `hasMarkdown` may have changed since render.
-            guard isPDF, !hasMarkdown else { return }
+            guard requiresPDFQuoteAnchor, !hasMarkdown else { return }
             if let frag = store.consumePendingScrollAnchor(for: store.selection) {
                 pdfQuote = frag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             }
@@ -723,7 +622,7 @@ struct SourceDetailView: View {
                     // For non-PDF markdown the origin is plain provenance text here;
                     // for PDFs the interactive extraction chip lives on the action
                     // row beside Ingest (see below), not in this metadata line.
-                    if let head = headVersion, !isPDF,
+                    if let head = headVersion, !requiresPDFQuoteAnchor,
                        let label = Self.markdownOriginLabel(for: head.origin) {
                         metadataSeparator
                         Text("\(label) \(Self.compactDate(head.createdAt))")
@@ -853,9 +752,9 @@ struct SourceDetailView: View {
                         // go through the queue as before.
                         Button(isExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(isHTMLSource)")
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil)")
                             Task {
-                                if isHTMLSource {
+                                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
                                     await runHtmlExtraction()
                                 } else {
                                     await runExtraction()
@@ -955,9 +854,7 @@ struct SourceDetailView: View {
                             // tab, where the markdown editor isn't rendered.
                             // Leave Split alone — the editor is already
                             // visible there.
-                            if selectedTab == .pdf || selectedTab == .html || selectedTab == .media || selectedTab == .rendered {
-                                selectedTab = .reader
-                            }
+                            rendererPresentation.selectSource()
                         }
                         .keyboardShortcut("e", modifiers: .command)
                         .disabled(isRunning)
@@ -1231,182 +1128,60 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        if showTabs || isBytelessEmbedWithPlayer {
-            // Video sources (byteless embeds) route through the same tabbed
-            // viewer as PDFs: the transcript renders in the Reader tab, the
-            // player in the Video tab, and Split shows both. A video with no
-            // transcript has only the Video tab and a Reader placeholder.
-            tabbedContent
-        } else if isPDF {
-            pdfOnlyContent
-        } else if isMarkdownNative {
-            markdownContent
+        RendererHostView(
+            state: $rendererPresentation,
+            descriptors: rendererDescriptors,
+            source: { sourcePresentationContent },
+            rendered: { descriptor in renderedContent(for: descriptor) },
+            onRendererSelected: persistRendererPreference,
+            onFallback: logRendererFallback)
+    }
+
+    @ViewBuilder
+    private var sourcePresentationContent: some View {
+        if isMarkdownNative || hasMarkdown { markdownContent } else { binaryFallback }
+    }
+
+    @ViewBuilder
+    private func renderedContent(for descriptor: RendererDescriptor) -> some View {
+        if let view = BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs) {
+            view
         } else {
-            binaryFallback
+            sourcePresentationContent
         }
     }
 
-    // MARK: Video player (Video tab content)
+    private func persistRendererPreference(_ reference: RendererReference) {
+        do {
+            try store.internalStore.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
+        } catch {
+            DebugLog.tabs("SourceDetailView: could not save renderer preference (source=\(file.id.rawValue)): \(error)")
+        }
+    }
 
-    /// The byteless embed player as a standalone tab content view. Renders in
-    /// the Media tab (and as the player half of Split). Reuses
-    /// `MediaEmbedPlayerView` unchanged. When the embed target can't be
-    /// resolved, a calm placeholder stands in (mirrors the empty-transcript
-    /// copy so the tab is never blank).
-    @ViewBuilder
-    private var videoPlayerContent: some View {
-        if let target = embedTarget {
-            MediaEmbedPlayerView(target: target)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(PageEditorMetrics.contentInset)
-        } else {
-            ContentUnavailableView {
-                Label("Player Unavailable", systemImage: "play.slash")
-            } description: {
-                Text("This media source's embed couldn't be resolved.")
+    /// Resolve the persisted logical or exact renderer once per source. The
+    /// resulting exact reference remains pinned while this pane stays open.
+    private func resetRendererPresentation() {
+        var state = RendererPresentationState(sourceID: file.id)
+        do {
+            let preference = try store.internalStore.rendererSourcePreference(sourceID: file.id)?.preference
+            let planner = try SourceRendererPresentationPlanner()
+            if let descriptor = try planner.preferredDescriptor(
+                preference: preference,
+                for: file,
+                boundedBytes: store.sourceBytes(id: file.id),
+                currentMarkdown: currentMarkdownContent,
+                origin: origin) {
+                state.selectRendered(descriptor.reference)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } catch {
+            DebugLog.tabs("SourceDetailView: renderer preference resolution failed (source=\(file.id.rawValue)): \(error)")
         }
+        rendererPresentation = state
     }
 
-    // MARK: Byteless embed placeholder reader
-
-    /// The Reader tab content for a byteless embed with no extracted
-    /// transcript. Kept so the tab picker shows a Reader row whose body is a
-    /// meaningful empty state rather than a blank reader. Issue #575.
-    private var embedEmptyReaderContent: some View {
-        ContentUnavailableView {
-            Label(embedEmptyLabel, systemImage: "waveform")
-        } description: {
-            Text(embedEmptyDescription)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// The placeholder copy when a byteless embed has no transcript yet.
-    private var embedEmptyLabel: String {
-        switch origin?.provider {
-        case .youtube?: return "No Transcript Available"
-        default: return "No Transcript"
-        }
-    }
-
-    /// The placeholder description; explains why there's no text and that the
-    /// player above is the source's content.
-    private var embedEmptyDescription: String {
-        if origin?.provider == .youtube {
-            return "This video has no captions, so no transcript was extracted. The player above is the source."
-        }
-        return "This media source has no extracted text yet. The player above is the source."
-    }
-
-    // MARK: View mode picker
-
-    private var tabPicker: some View {
-        HStack(spacing: 8) {
-            ForEach(availableTabs, id: \.self) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    Text(tabLabel(for: tab))
-                        .font(.callout)
-                        .fontWeight(selectedTab == tab ? .semibold : .regular)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(selectedTab == tab
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 5))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, PageEditorMetrics.contentInset)
-        .padding(.vertical, 6)
-    }
-
-    // MARK: Split Markdown ⇄ companion
-
-    /// Split view: the markdown reader on the left, and the source's primary
-    /// visual companion — the PDF for a PDF source, the rendered HTML for an
-    /// HTML source (issue #599), or the media player for a byteless embed
-    /// (video or audio) — on the right. Only callable when there is markdown
-    /// to show on the left (gate by `hasMarkdown` before appending `.split`
-    /// to `availableTabs`).
-    @ViewBuilder
-    private var splitContent: some View {
-        HSplitView {
-            if isMermaidSource {
-                diagramCodeContent
-            } else {
-                markdownContent
-            }
-            if isBytelessEmbedWithPlayer {
-                videoPlayerContent
-            } else if isHTMLSource {
-                htmlSourceView
-            } else if isMermaidSource {
-                renderedMermaidContent
-            } else {
-                pdfView
-            }
-        }
-    }
-
-    // MARK: Content by selected tab
-
-    @ViewBuilder
-    private var tabbedContent: some View {
-        switch selectedTab {
-        case .reader:
-            if isBytelessEmbedWithPlayer, !hasMarkdown {
-                embedEmptyReaderContent
-            } else if isPureMermaidSource {
-                // Diagram source files (`.mmd` / `text/mermaid`) render their
-                // raw DSL as a read-only monospace code block — the markdown
-                // pipeline parses `flowchart LR` as prose, producing confusing
-                // output. The Rendered and Split tabs keep their existing
-                // diagram-rendering behavior (issue #662). Embedded-mermaid
-                // markdown (`.md` with a ```mermaid block) is gated out by
-                // `isPureMermaidSource` so its prose+outline stay intact.
-                // Follow-up: extend to `.excalidraw` / `.canvas` once their
-                // raw bytes are loaded into `currentMarkdownContent`.
-                diagramCodeContent
-            } else {
-                markdownContent
-            }
-        case .pdf:
-            pdfView
-        case .html:
-            htmlSourceView
-        case .rendered:
-            renderedMermaidContent
-        case .media:
-            videoPlayerContent
-        case .split:
-            splitContent
-        }
-    }
-
-    // MARK: HTML source view (issue #599)
-
-    /// The HTML tab (and the right pane of the HTML split view): renders the
-    /// source's original HTML bytes in a WKWebView with JavaScript disabled.
-    /// Mirrors how the PDF tab renders the original PDF in a `PDFView` —
-    /// faithful to the source, no script execution. Falls back to a calm
-    /// placeholder when the bytes can't be decoded.
-    @ViewBuilder
-    private var htmlSourceView: some View {
-        if let html = htmlSourceString {
-            HTMLSourceWebView(html: html)
-        } else {
-            ContentUnavailableView {
-                Label("Cannot Load HTML", systemImage: "globe")
-            } description: {
-                Text("The source bytes for this file couldn't be read or decoded as HTML.")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+    private func logRendererFallback(_ reason: String) {
+        DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
     }
 
     // MARK: Markdown reader / editor
@@ -1450,7 +1225,10 @@ struct SourceDetailView: View {
             // `.mmd` Mermaid diagram) renders its raw bytes as readable text —
             // the source code for a diagram, or the body of a `.txt`. Binary
             // sources never reach here (they hit `binaryFallback`).
-            WikiReaderView(markdown: content,
+            let sourceMarkdown = SourceRendererPresentationPlanner.standaloneDiagramSource(file)
+                ? MermaidSourceDetector.codeBlockMarkdown(from: content) ?? content
+                : content
+            WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
@@ -1462,91 +1240,6 @@ struct SourceDetailView: View {
             } description: {
                 Text("This file has no extracted or processed markdown yet.")
             }
-        }
-    }
-
-    // MARK: PDF-only (no extraction yet)
-
-    private var pdfOnlyContent: some View {
-        pdfView
-    }
-
-    private var pdfView: some View {
-        Group {
-            if let data = store.sourceBytes(id: file.id) {
-                PDFViewWrapper(data: data, highlightQuote: pdfQuote)
-            } else {
-                ContentUnavailableView {
-                    Label("Cannot Load PDF", systemImage: "doc.richtext")
-                } description: {
-                    Text("The source bytes for this file could not be read.")
-                }
-            }
-        }
-    }
-
-    // MARK: Rendered Mermaid diagram
-
-    /// The "Rendered" tab (and the right pane of the Mermaid split view): draws
-    /// the source's Mermaid diagram as inline SVG. A standalone `.mmd` source is
-    /// wrapped in a ` ```mermaid ` fence by `MermaidSourceDetector.renderableMarkdown`
-    /// so the reader's existing render pipeline (Mermaid 10.9.6 in WKWebView)
-    /// picks it up unchanged — no separate web view or JS wiring. Embedded
-    /// mermaid markdown passes through as-is so surrounding prose stays intact.
-    /// Falls back to a calm placeholder when there's nothing to draw.
-    @ViewBuilder
-    private var renderedMermaidContent: some View {
-        if let content = currentMarkdownContent,
-           let renderable = MermaidSourceDetector.renderableMarkdown(from: content) {
-            WikiReaderView(markdown: renderable,
-                           currentSelection: store.selection,
-                           store: store)
-                .zoomShortcuts($readerZoom)
-                .zoomScroll($readerZoom)
-        } else {
-            ContentUnavailableView {
-                Label("No Diagram", systemImage: "flowchart.fill")
-            } description: {
-                Text("This source has no Mermaid diagram to render yet.")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    // MARK: Diagram source code view (Reader tab for diagram sources)
-
-    /// The Reader-tab content for a STANDALONE diagram source (`.mmd` /
-    /// `text/mermaid`): the raw source text rendered as a read-only monospace
-    /// code block instead of through the markdown pipeline. Diagram DSLs
-    /// confuse the markdown reader — mermaid `flowchart LR` becomes a flat
-    /// paragraph, JSON sources flatten to text — so the Reader tab now shows
-    /// them as code (matches the existing `<pre><code>` reader styling). The
-    /// Edit button still switches to the editor for changes; the Rendered and
-    /// Split tabs are unchanged. Issue #662.
-    ///
-    /// Sibling of `renderedMermaidContent`: that view hands the source to
-    /// `MermaidSourceDetector.renderableMarkdown` (a ` ```mermaid ` fence) so
-    /// the reader renders the diagram; this one hands it to
-    /// `MermaidSourceDetector.codeBlockMarkdown` (a plain code fence) so the
-    /// reader displays the source verbatim. Both use `WikiReaderView`, so the
-    /// find bar, zoom, and color-scheme theming come for free.
-    @ViewBuilder
-    private var diagramCodeContent: some View {
-        if let content = currentMarkdownContent,
-           let codeBlock = MermaidSourceDetector.codeBlockMarkdown(from: content) {
-            WikiReaderView(markdown: codeBlock,
-                           currentSelection: store.selection,
-                           store: store,
-                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-                .zoomShortcuts($readerZoom)
-                .zoomScroll($readerZoom)
-        } else {
-            ContentUnavailableView {
-                Label("No Source", systemImage: "curlybraces")
-            } description: {
-                Text("This source's raw content couldn't be loaded.")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1758,7 +1451,7 @@ struct SourceDetailView: View {
                 // `transcribe` paths (issues #799 PR2 + PR4 + PR5 — the queue
                 // engine is PDF-coupled; generalizing it is a deferred
                 // sub-project per the parent plan's "Out of scope" section).
-                if isHTMLSource {
+                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
                             Task {

@@ -47,6 +47,22 @@ struct SourceRendererPresentationPlanner: Sendable {
             origin: origin))
     }
 
+    func preferredDescriptor(
+        preference: RendererPreferenceReference?,
+        for source: SourceSummary,
+        boundedBytes: Data?,
+        currentMarkdown: String?,
+        origin: SourceOrigin?
+    ) throws -> RendererDescriptor? {
+        try registry.preferred(
+            preference: preference,
+            input: input(
+                for: source,
+                boundedBytes: boundedBytes,
+                currentMarkdown: currentMarkdown,
+                origin: origin))
+    }
+
     nonisolated static func registryInput(
         for source: SourceSummary,
         boundedBytes: Data?,
@@ -80,6 +96,31 @@ struct SourceRendererPresentationPlanner: Sendable {
         return id
     }
 
+    /// Decodes original HTML only for descriptors that match the HTML contract.
+    nonisolated static func htmlSourceString(for source: SourceSummary, bytes: Data?) -> String? {
+        guard htmlSource(source), let bytes else { return nil }
+        return String(data: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    nonisolated static func renderableMermaidMarkdown(_ markdown: String?) -> String? {
+        guard let markdown else { return nil }
+        return MermaidSourceDetector.renderableMarkdown(from: markdown)
+    }
+
+    nonisolated static func mediaTarget(for source: SourceSummary, origin: SourceOrigin?) -> EmbedTarget? {
+        guard let mime = source.mimeType, let origin else { return nil }
+        return ExternalEmbed.target(for: SourceEmbedDescriptor(
+            id: source.id,
+            mimeType: mime,
+            externalIdentity: origin.externalIdentity,
+            agentName: origin.agentName,
+            planURL: origin.plan))
+    }
+
+    nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
+        MimeType.isMermaid(source.mimeType) || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension || source.ext.lowercased() == "mermaid"
+    }
+
     private enum MediaMIMECandidate: Sendable, Equatable {
         case notMediaOrigin
         case rejected
@@ -99,6 +140,11 @@ struct SourceRendererPresentationPlanner: Sendable {
             return RendererMIMEType(rawValue: mime)
         }
         return nil
+    }
+
+    private static func htmlSource(_ source: SourceSummary) -> Bool {
+        if let mime = source.mimeType { return mime == MimeType.html || mime == MimeType.xhtml }
+        return ["html", "htm", "xhtml"].contains(source.ext.lowercased())
     }
 
     private static func normalizedExtension(_ value: String) throws -> RendererFileExtension? {
