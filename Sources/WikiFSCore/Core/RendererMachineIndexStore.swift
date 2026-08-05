@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #if canImport(CSQLite)
 import CSQLite
 #else
@@ -26,12 +31,16 @@ public struct FileRendererMachineDerivedIndexWriter: RendererMachineDerivedIndex
         let temporary = directory.appendingPathComponent(".index-\(UUID().uuidString).tmp", isDirectory: false)
         do {
             try data.write(to: temporary, options: [.atomic])
-            if fileManager.fileExists(atPath: url.path) {
-                _ = try fileManager.replaceItemAt(url, withItemAt: temporary)
-            } else {
-                try fileManager.moveItem(at: temporary, to: url)
+            let result = temporary.path.withCString { temporaryPath in
+                url.path.withCString { destinationPath in
+                    rendererMachineIndexRename(temporaryPath, destinationPath)
+                }
+            }
+            guard result == 0 else {
+                throw RendererPackageStoreError.posix(operation: "rename", path: url.path, code: errno)
             }
         } catch {
+            DebugLog.store("Renderer machine derived-index replacement failed: \(error)")
             if fileManager.fileExists(atPath: temporary.path) {
                 do { try fileManager.removeItem(at: temporary) }
                 catch { DebugLog.store("Renderer machine derived-index temporary cleanup failed.") }
@@ -39,6 +48,14 @@ public struct FileRendererMachineDerivedIndexWriter: RendererMachineDerivedIndex
             throw error
         }
     }
+}
+
+private func rendererMachineIndexRename(_ source: UnsafePointer<CChar>, _ destination: UnsafePointer<CChar>) -> Int32 {
+    #if canImport(Darwin)
+    return Darwin.rename(source, destination)
+    #elseif canImport(Glibc)
+    return Glibc.rename(source, destination)
+    #endif
 }
 
 /// SQLite-backed authority for machine renderer package reservations. It is

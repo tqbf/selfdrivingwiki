@@ -4,6 +4,23 @@ import Testing
 
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct RendererMachineIndexStoreTests {
+    @Test func fileDerivedIndexWriterCreatesAndReplacesExistingIndex() throws {
+        let directory = try temporaryDirectory(named: "portable-replacement")
+        let indexURL = directory.appendingPathComponent("derived/index.json")
+        let writer = FileRendererMachineDerivedIndexWriter()
+        let initial = Data("{\"generation\":0}".utf8)
+        let replacement = Data("{\"generation\":1}".utf8)
+
+        try writer.replaceAtomically(initial, at: indexURL)
+        #expect(try Data(contentsOf: indexURL) == initial)
+
+        try writer.replaceAtomically(replacement, at: indexURL)
+
+        #expect(try Data(contentsOf: indexURL) == replacement)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: indexURL.deletingLastPathComponent().path)
+            .contains { $0.hasPrefix(".index-") } == false)
+    }
+
     @Test func freshReadInitializesSQLiteAuthorityAndDerivedJSON() async throws {
         let layout = try makeLayout("fresh")
         let index = try await RendererMachineIndexStore(layout: layout).read()
