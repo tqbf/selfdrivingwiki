@@ -78,6 +78,35 @@ import WikiFSTypes
         #expect(id == .media)
     }
 
+    @Test("Media without a transcript retains its dynamic Source empty state")
+    func mediaWithoutTranscriptUsesDynamicSourceEmptyState() {
+        let source = fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0)
+        let origin = fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: "dQw4w9WgXcQ")
+        let presentation = SourceRendererPresentationPlanner.emptyMediaPresentation(
+            for: source,
+            currentMarkdown: nil,
+            origin: origin)
+        #expect(presentation?.label == "No Video Transcript")
+        #expect(presentation?.description.contains("no captions") == true)
+    }
+
+    @Test("An unsupported built-in factory result remains an explicit host fallback")
+    @MainActor
+    func unsupportedFactoryReturnsNilForHostFallback() throws {
+        let descriptor = try testInstalledDescriptor()
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: nil,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidMarkdown: nil,
+            mediaTarget: nil,
+            selection: nil,
+            store: WikiStoreModel(store: try GRDBWikiStore(
+                databaseURL: URL.temporaryDirectory.appending(path: "renderer-factory-\(UUID().uuidString).sqlite"))),
+            readerZoom: .constant(1))
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) == nil)
+    }
+
     @Test("Planner preserves Source fallback for media origins missing renderable identity or plan")
     func plannerRejectsMalformedMediaOrigins() throws {
         let youtube = fixtureSource(filename: "video.url", ext: "", mimeType: "video/youtube", byteSize: 0)

@@ -97,6 +97,9 @@ struct SourceDetailView: View {
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
     @State private var showReingestConfirmation = false
     @State private var rendererPresentation = RendererPresentationState(sourceID: SourceID(rawValue: ""))
+    /// Cached once per source lifecycle so body evaluation and editor changes do
+    /// not repeatedly synchronously fetch the complete SQLite blob.
+    @State private var sourceBytesSnapshot: Data?
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
@@ -151,7 +154,7 @@ struct SourceDetailView: View {
             let planner = try SourceRendererPresentationPlanner()
             return try planner.matchingDescriptors(
                 for: file,
-                boundedBytes: store.sourceBytes(id: file.id),
+                boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin)
         } catch {
@@ -161,7 +164,7 @@ struct SourceDetailView: View {
     }
 
     private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
-        let bytes = store.sourceBytes(id: file.id)
+        let bytes = sourceBytesSnapshot
         return BuiltInRendererFactoryInputs(
             sourceBytes: bytes,
             pdfQuote: pdfQuote,
@@ -393,14 +396,14 @@ struct SourceDetailView: View {
         // sources — the raw bytes are HTML, not markdown, and rendering them
         // as markdown would show raw `<html>` tags. The Reader tab falls back
         // to its "No Processed Markdown" placeholder until headVersion loads.
-        if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
+        if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
             return nil
         }
-        if isMarkdownNative, let data = store.sourceBytes(id: file.id) {
+        if isMarkdownNative, let data = sourceBytesSnapshot {
             return String(data: data, encoding: .utf8)
         }
         if SourceRendererPresentationPlanner.standaloneDiagramSource(file),
-           let data = store.sourceBytes(id: file.id) {
+           let data = sourceBytesSnapshot {
             return String(data: data, encoding: .utf8)
         }
         // #620: defense-in-depth — when a Mermaid-detected source arrives
@@ -446,6 +449,7 @@ struct SourceDetailView: View {
         // ChatDetailView's minimum detail-column contract.
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
         .onAppear {
+            refreshSourceBytesSnapshot()
             resetRendererPresentation()
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
@@ -472,6 +476,7 @@ struct SourceDetailView: View {
             origin = nil
             editHistory = []
             isRefreshable = false
+            sourceBytesSnapshot = nil
             resetRendererPresentation()
             pdfQuote = nil
             pinnedExtraction = nil
@@ -480,6 +485,7 @@ struct SourceDetailView: View {
             shouldRestoreEditing = false
         }
         .task(id: file.id) {
+            refreshSourceBytesSnapshot()
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
@@ -538,6 +544,8 @@ struct SourceDetailView: View {
         // fires for the view that initiated the job; another wiki window
         // viewing the same source would see the stale head without this).
         .onChange(of: store.sources) { _, _ in
+            refreshSourceBytesSnapshot()
+            rendererPresentation.keepPinnedRenderer(available: rendererDescriptors.map(\.reference))
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
             }
@@ -622,7 +630,7 @@ struct SourceDetailView: View {
                     // For non-PDF markdown the origin is plain provenance text here;
                     // for PDFs the interactive extraction chip lives on the action
                     // row beside Ingest (see below), not in this metadata line.
-                    if let head = headVersion, !requiresPDFQuoteAnchor,
+                    if let head = headVersion, SourceRendererPresentationPlanner.showsMarkdownOriginMetadata(for: file),
                        let label = Self.markdownOriginLabel(for: head.origin) {
                         metadataSeparator
                         Text("\(label) \(Self.compactDate(head.createdAt))")
@@ -752,9 +760,9 @@ struct SourceDetailView: View {
                         // go through the queue as before.
                         Button(isExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil)")
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil)")
                             Task {
-                                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
+                                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
                                     await runHtmlExtraction()
                                 } else {
                                     await runExtraction()
@@ -1134,29 +1142,56 @@ struct SourceDetailView: View {
             source: { sourcePresentationContent },
             rendered: { descriptor in renderedContent(for: descriptor) },
             onRendererSelected: persistRendererPreference,
+            onSourceSelected: clearRendererPreference,
+            onPresentationSelected: persistRendererPresentationSelection,
             onFallback: logRendererFallback)
     }
 
     @ViewBuilder
     private var sourcePresentationContent: some View {
-        if isMarkdownNative || hasMarkdown { markdownContent } else { binaryFallback }
+        if let emptyMedia = SourceRendererPresentationPlanner.emptyMediaPresentation(
+            for: file,
+            currentMarkdown: currentMarkdownContent,
+            origin: origin
+        ) {
+            ContentUnavailableView {
+                Label(emptyMedia.label, systemImage: "waveform")
+            } description: {
+                Text(emptyMedia.description)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isMarkdownNative || hasMarkdown {
+            markdownContent
+        } else {
+            binaryFallback
+        }
     }
 
-    @ViewBuilder
-    private func renderedContent(for descriptor: RendererDescriptor) -> some View {
-        if let view = BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs) {
-            view
-        } else {
-            sourcePresentationContent
-        }
+    private func renderedContent(for descriptor: RendererDescriptor) -> AnyView? {
+        BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs)
     }
 
     private func persistRendererPreference(_ reference: RendererReference) {
-        do {
-            try store.internalStore.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
-        } catch {
-            DebugLog.tabs("SourceDetailView: could not save renderer preference (source=\(file.id.rawValue)): \(error)")
-        }
+        store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
+    }
+
+    private func clearRendererPreference() {
+        store.removeRendererSourcePreference(sourceID: file.id)
+    }
+
+    private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
+        UserDefaults.standard.set(selection.rawValue, forKey: rendererPresentationSelectionKey)
+    }
+
+    private var rendererPresentationSelectionKey: String {
+        "renderer.presentation.selection.\(file.id.rawValue)"
+    }
+
+    private var persistedRendererPresentationSelection: RendererPresentationState.Selection {
+        guard let rawValue = UserDefaults.standard.string(forKey: rendererPresentationSelectionKey),
+              let selection = RendererPresentationState.Selection(rawValue: rawValue)
+        else { return .rendered }
+        return selection
     }
 
     /// Resolve the persisted logical or exact renderer once per source. The
@@ -1164,20 +1199,34 @@ struct SourceDetailView: View {
     private func resetRendererPresentation() {
         var state = RendererPresentationState(sourceID: file.id)
         do {
-            let preference = try store.internalStore.rendererSourcePreference(sourceID: file.id)?.preference
+            guard let preference = store.rendererSourcePreference(for: file.id) else {
+                rendererPresentation = state
+                return
+            }
             let planner = try SourceRendererPresentationPlanner()
             if let descriptor = try planner.preferredDescriptor(
                 preference: preference,
                 for: file,
-                boundedBytes: store.sourceBytes(id: file.id),
+                boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin) {
-                state.selectRendered(descriptor.reference)
+                switch persistedRendererPresentationSelection {
+                case .source:
+                    break
+                case .rendered:
+                    state.selectRendered(descriptor.reference)
+                case .split:
+                    state.selectSplit(descriptor.reference)
+                }
             }
         } catch {
             DebugLog.tabs("SourceDetailView: renderer preference resolution failed (source=\(file.id.rawValue)): \(error)")
         }
         rendererPresentation = state
+    }
+
+    private func refreshSourceBytesSnapshot() {
+        sourceBytesSnapshot = store.sourceBytes(id: file.id)
     }
 
     private func logRendererFallback(_ reason: String) {
@@ -1451,7 +1500,7 @@ struct SourceDetailView: View {
                 // `transcribe` paths (issues #799 PR2 + PR4 + PR5 — the queue
                 // engine is PDF-coupled; generalizing it is a deferred
                 // sub-project per the parent plan's "Out of scope" section).
-                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: store.sourceBytes(id: file.id)) != nil {
+                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
                             Task {

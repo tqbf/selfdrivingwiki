@@ -28,5 +28,14 @@ import WikiFSTypes
         #expect(state.pinnedRenderer == pdf)
         #expect(state.selection == .source)
     }
+
+    @Test func refreshKeepsThePinnedSplitPresentationWhenRendererRemainsAvailable() {
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
+        state.selectSplit(pdf)
+        state.keepPinnedRenderer(available: [pdf])
+        #expect(state.selection == .split)
+        #expect(state.pinnedRenderer == pdf)
+    }
 }
 #endif

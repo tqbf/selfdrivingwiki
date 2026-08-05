@@ -10,8 +10,10 @@ struct RendererHostView<Source: View, Rendered: View>: View {
     @Binding var state: RendererPresentationState
     let descriptors: [RendererDescriptor]
     let source: () -> Source
-    let rendered: (RendererDescriptor) -> Rendered
+    let rendered: (RendererDescriptor) -> Rendered?
     let onRendererSelected: (RendererReference) -> Void
+    let onSourceSelected: () -> Void
+    let onPresentationSelected: (RendererPresentationState.Selection) -> Void
     let onFallback: (String) -> Void
 
     private var selectedDescriptor: RendererDescriptor? {
@@ -30,17 +32,25 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                     source()
                 case .rendered:
                     if let selectedDescriptor {
-                        rendered(selectedDescriptor)
+                        if let renderedContent = rendered(selectedDescriptor) {
+                            renderedContent
+                        } else {
+                            fallbackWithSource(reason: "The selected renderer could not be loaded.")
+                        }
                     } else {
-                        fallback(reason: "The selected renderer is unavailable.")
+                        fallbackWithSource(reason: "The selected renderer is unavailable.")
                     }
                 case .split:
                     HSplitView {
-                        source()
+                        source().frame(minWidth: RendererHostMetrics.minimumSourcePaneWidth)
                         if let selectedDescriptor {
-                            rendered(selectedDescriptor)
+                            if let renderedContent = rendered(selectedDescriptor) {
+                                renderedContent.frame(minWidth: RendererHostMetrics.minimumRenderedPaneWidth)
+                            } else {
+                                fallbackPane(reason: "The selected renderer could not be loaded.")
+                            }
                         } else {
-                            fallback(reason: "The selected renderer is unavailable.")
+                            fallbackPane(reason: "The selected renderer is unavailable.")
                         }
                     }
                 }
@@ -50,26 +60,32 @@ struct RendererHostView<Source: View, Rendered: View>: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            Button("Source") { state.selectSource() }
-                .keyboardShortcut("1", modifiers: .command)
+            Button("Source") {
+                state.selectSource()
+                onSourceSelected()
+                onPresentationSelected(.source)
+            }
+                .keyboardShortcut("1", modifiers: [.command, .option])
                 .accessibilityLabel("Show source")
             Menu("Rendered") {
                 ForEach(descriptors, id: \.reference) { descriptor in
                     Button(descriptor.displayName) {
                         state.selectRendered(descriptor.reference)
                         onRendererSelected(descriptor.reference)
+                        onPresentationSelected(.rendered)
                     }
                 }
             }
-            .keyboardShortcut("2", modifiers: .command)
+            .keyboardShortcut("2", modifiers: [.command, .option])
             .accessibilityLabel("Show rendered content")
             Button("Split") {
                 if let reference = state.pinnedRenderer ?? descriptors.first?.reference {
                     state.selectSplit(reference)
                     onRendererSelected(reference)
+                    onPresentationSelected(.split)
                 }
             }
-            .keyboardShortcut("3", modifiers: .command)
+            .keyboardShortcut("3", modifiers: [.command, .option])
             .accessibilityLabel("Show source and rendered content")
             .disabled(descriptors.isEmpty)
             Spacer()
@@ -80,17 +96,38 @@ struct RendererHostView<Source: View, Rendered: View>: View {
     }
 
     @ViewBuilder
-    private func fallback(reason: String) -> some View {
+    private func fallbackWithSource(reason: String) -> some View {
         VStack(spacing: 8) {
             Text(reason).font(.callout).foregroundStyle(.secondary)
             source()
         }
+        .onAppear { selectSourceAfterFallback(reason) }
+    }
+
+    @ViewBuilder
+    private func fallbackPane(reason: String) -> some View {
+        ContentUnavailableView {
+            Label("Renderer Unavailable", systemImage: "rectangle.slash")
+        } description: {
+            Text(reason)
+        }
+        .frame(minWidth: RendererHostMetrics.minimumRenderedPaneWidth, maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            onFallback(reason)
-            Task { @MainActor in
-                state.selectSource()
-            }
+            selectSourceAfterFallback(reason)
         }
     }
+
+    private func selectSourceAfterFallback(_ reason: String) {
+        onFallback(reason)
+        // `onAppear` runs after the update pass, so this is not an AppKit
+        // representable update seam. Defer one turn to avoid a synchronous
+        // state mutation while SwiftUI is constructing the fallback tree.
+        Task { @MainActor in state.selectSource() }
+    }
+}
+
+private enum RendererHostMetrics {
+    static let minimumSourcePaneWidth: CGFloat = 280
+    static let minimumRenderedPaneWidth: CGFloat = 280
 }
 #endif

@@ -2976,6 +2976,30 @@ public final class WikiStoreModel {
         DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) })
     }
 
+    /// Renderer preferences are a wiki-store concern. Keeping this write at the
+    /// main-actor model seam preserves the store's method-atomic mutation path.
+    public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) {
+        do {
+            try store.setRendererSourcePreference(sourceID: sourceID, preference: preference)
+        } catch {
+            DebugLog.store("WikiStoreModel.setRendererSourcePreference failed: \(error)")
+        }
+    }
+
+    public func removeRendererSourcePreference(sourceID: SourceID) {
+        do {
+            try store.removeRendererSourcePreference(sourceID: sourceID)
+        } catch {
+            DebugLog.store("WikiStoreModel.removeRendererSourcePreference failed: \(error)")
+        }
+    }
+
+    public func rendererSourcePreference(for sourceID: SourceID) -> RendererPreferenceReference? {
+        DebugLog.trying("rendererSourcePreference", operation: {
+            try store.rendererSourcePreference(sourceID: sourceID)?.preference
+        })
+    }
+
     public func isSourceIngested(_ file: SourceSummary) -> Bool {
         sourceIngestedStatus[file.id] ?? false
     }

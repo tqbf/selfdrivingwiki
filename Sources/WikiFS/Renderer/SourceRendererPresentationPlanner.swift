@@ -9,6 +9,10 @@ import WikiFSTypes
 /// registry input. It intentionally does not choose the Source fallback; callers
 /// keep Source outside renderer matching.
 struct SourceRendererPresentationPlanner: Sendable {
+    struct EmptyMediaPresentation: Sendable, Equatable {
+        let label: String
+        let description: String
+    }
     let registry: RendererRegistrySnapshot
 
     init(installedDescriptors: [RendererDescriptor] = []) throws {
@@ -117,6 +121,19 @@ struct SourceRendererPresentationPlanner: Sendable {
             planURL: origin.plan))
     }
 
+    nonisolated static func emptyMediaPresentation(for source: SourceSummary, currentMarkdown: String?, origin: SourceOrigin?) -> EmptyMediaPresentation? {
+        guard currentMarkdown == nil, mediaTarget(for: source, origin: origin) != nil else { return nil }
+        let label = mediaLabel(for: source, origin: origin)
+        let description = origin?.provider == .youtube
+            ? "This video has no captions, so no transcript was extracted. The player is the source."
+            : "This media source has no extracted text yet. The player is the source."
+        return EmptyMediaPresentation(label: "No \(label) Transcript", description: description)
+    }
+
+    nonisolated static func showsMarkdownOriginMetadata(for source: SourceSummary) -> Bool {
+        !MimeType.isPDF(source.mimeType)
+    }
+
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
         MimeType.isMermaid(source.mimeType) || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension || source.ext.lowercased() == "mermaid"
     }
@@ -188,6 +205,12 @@ struct SourceRendererPresentationPlanner: Sendable {
             planURL: origin.plan)
         guard ExternalEmbed.target(for: descriptor) != nil else { return .rejected }
         return .renderable(mime)
+    }
+
+    private static func mediaLabel(for source: SourceSummary, origin: SourceOrigin?) -> String {
+        guard let mime = source.mimeType, let origin else { return "Media" }
+        let descriptor = SourceEmbedDescriptor(id: source.id, mimeType: mime, externalIdentity: origin.externalIdentity, agentName: origin.agentName, planURL: origin.plan)
+        return ExternalEmbed.mediaTabLabel(for: descriptor) ?? "Media"
     }
 
     private static func mediaMIME(for source: SourceSummary, provider: SourceProvider?) -> String? {

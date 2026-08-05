@@ -56,7 +56,10 @@ public enum RendererResolution {
         hostProtocolRevision: Int
     ) -> RendererDescriptor? {
         let matches = matching(descriptors: descriptors, input: input, hostProtocolRevision: hostProtocolRevision)
-        guard let preference else { return matches.first }
+        // Source is the host-owned default. The registry only resolves an
+        // explicit stored preference; choosing an arbitrary match here would
+        // make a newly available renderer replace Source on open.
+        guard let preference else { return nil }
         switch preference {
         case let .exact(reference):
             return matches.first(where: { $0.reference == reference })
@@ -73,7 +76,8 @@ public enum RendererResolution {
         hostProtocolRevision: Int
     ) -> RendererDescriptor? {
         let matches = matching(descriptors: descriptors, input: input, hostProtocolRevision: hostProtocolRevision)
-        guard let preference else { return matches.first }
+        // See the overload above: an absent preference means "keep Source".
+        guard let preference else { return nil }
         if let exact = preference.exact, let descriptor = matches.first(where: { $0.reference == exact }) {
             return descriptor
         }
