@@ -218,6 +218,15 @@ public final class SessionManager {
     /// All live sessions (for bridge flush routing).
     public var allSessions: [WikiSession] { Array(sessions.values) }
 
+    /// Fan out one authoritative machine-renderer reload to every live wiki
+    /// projection. Closed/inactive wikis own no session and therefore reload
+    /// the same machine authority when they next open.
+    public func reloadRendererMachineAvailabilityForLiveSessions() {
+        for session in sessions.values {
+            session.store.reloadRendererMachineAvailability()
+        }
+    }
+
     /// The frontmost session, if any. Resolved from ``frontmostWikiID`` —
     /// `VacuumCommands` uses this to target the correct wiki for menu-bar
     /// Vacuum/Lint/Activity Log actions.

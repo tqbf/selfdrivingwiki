@@ -125,6 +125,29 @@ public actor RendererMachineLeaseRegistry {
             }
         }
     }
+
+    /// Resets a lease after an authoritative reload detects that journal
+    /// compaction removed one or more records it had not incorporated. Cursor
+    /// and checkpoint change together, so a later restart cannot diagnose a
+    /// stale checkpoint as deliverable history.
+    public func resetAfterAuthoritativeReload(
+        scope: RendererMachineScopeID,
+        subsystemID: RendererEventSubsystemID,
+        leaseID: RendererEventProcessLeaseID,
+        highWater: UInt64
+    ) async throws {
+        try await journal.withLeaseDatabase { database in
+            try RendererMachineJournalSQLite.transaction(database) {
+                try RendererMachineJournalSQLite.resetCursor(
+                    database,
+                    scope: scope,
+                    subsystem: subsystemID,
+                    leaseID: leaseID,
+                    highWater: highWater
+                )
+            }
+        }
+    }
 }
 
 extension RendererMachineEventJournal {
@@ -224,6 +247,10 @@ enum RendererMachineJournalSQLite {
         guard record.sequence > previous else { return }
         try bind(database, sql: "INSERT INTO renderer_machine_cursors(scope, subsystem, lease, sequence) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(scope, subsystem, lease) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, lease.subsystemID.rawValue, lease.leaseID.rawValue.uuidString], integer: record.sequence)
         try bind(database, sql: "INSERT INTO renderer_machine_checkpoints(scope, subsystem, sequence) VALUES(?1, ?2, ?3) ON CONFLICT(scope, subsystem) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)", strings: [scope.rawValue, lease.subsystemID.rawValue], integer: record.sequence)
+    }
+    static func resetCursor(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID, highWater: UInt64) throws {
+        try bind(database, sql: "INSERT INTO renderer_machine_cursors(scope, subsystem, lease, sequence) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(scope, subsystem, lease) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, subsystem.rawValue, leaseID.rawValue.uuidString], integer: highWater)
+        try bind(database, sql: "INSERT INTO renderer_machine_checkpoints(scope, subsystem, sequence) VALUES(?1, ?2, ?3) ON CONFLICT(scope, subsystem) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, subsystem.rawValue], integer: highWater)
     }
     static func storeLease(_ database: OpaquePointer, lease: RendererEventProcessLease) throws { let data = try JSONEncoder().encode(lease); try bind(database, sql: "INSERT INTO renderer_machine_leases(scope, subsystem, lease, record) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(scope, subsystem, lease) DO UPDATE SET record = excluded.record", strings: [lease.scope.rawValue, lease.subsystemID.rawValue, lease.leaseID.rawValue.uuidString], data: data) }
     static func loadLease(_ database: OpaquePointer, lease: RendererEventProcessLease) throws -> RendererEventProcessLease {
