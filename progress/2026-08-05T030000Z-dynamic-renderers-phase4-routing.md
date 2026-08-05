@@ -3,7 +3,7 @@ timestamp: 2026-08-05T030000Z
 title: Dynamic renderers Phase 4 PR 4 generic presentation routing
 issue: 1026
 branch: feature/dynamic-renderers-04-routing
-status: complete
+status: in_review
 ---
 
 # Dynamic renderers Phase 4 PR 4 generic presentation routing
@@ -40,23 +40,21 @@ renderer only when that renderer remains in the current descriptor set.
 
 ## Verification
 
-- Final implementation/fix commit: `f91d5ecffa8b2400b169f29d1c8e7d6e75d77066`.
+- Final implementation/fix commit: `bd71665fd9a13d9eb4d988e3ab0b6d15765a27b9`.
 - Base: `feature/dynamic-renderers-03-persistence` at
   `41c96e17051e2f131b279fbd34d243136cff2dd5`.
-- `make build`: passed.
-- `make test`: passed, 3,112 tests in 264 suites.
-- Focused renderer/app/resolution/persistence suites: passed, 85 Swift
-  Testing tests in 5 suites.
-- Commit hooks: SwiftLint strict passed with 0 violations; bare `try?` guard
-  passed; `git diff --check` passed.
+- Exact-head `make build`: passed; signed app assembled.
+- Exact-head `make test`: passed, 3,116 tests in 264 suites.
+- Exact-head focused renderer/app/resolution/persistence suites: passed, 116
+  Swift Testing tests in 7 suites, including `RendererPhase3PortableTests`.
+- Exact-head `make lint`: passed with 0 violations; bare `try?` guard passed;
+  `git diff --check` passed.
 
 ## Remediation verification
 
-- Focused renderer/app/resolution/persistence suites: passed, 85 Swift
-  Testing tests in 5 suites at `f91d5ecf`.
-- `make build`: passed.
-- `make test`: passed, 3,112 tests in 264 suites.
 - The exact-head remediation fixes live Source fallback persistence, Source
-  preference retention, and delayed-fallback source identity. Focused renderer,
-  app, resolver, and persistence gates; `make build`; `make test`; and SwiftLint
-  passed. A fresh exact-head review is required before publication.
+  preference retention, delayed-fallback source identity, persisted settings
+  payload versioning with legacy v1 decode compatibility, and lifecycle source
+  identity resolution. The retained inventory is updated for all changed
+  production symbols. A fresh independent Claude/Opus exact-head review is
+  required before publication.
