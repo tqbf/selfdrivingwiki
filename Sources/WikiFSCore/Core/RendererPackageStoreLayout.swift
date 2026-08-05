@@ -144,8 +144,12 @@ public struct RendererPackageFileIdentity: Hashable, Sendable {
 }
 
 public protocol RendererPackageFileSystem: Sendable {
+    func ensureDirectory(at url: URL) throws
     func lstat(at url: URL) throws -> RendererPackageFileIdentity
     func openReadOnlyNoFollow(at url: URL) throws -> Int32
+    func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data
+    func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity
+    func removeFile(at url: URL) throws
     func close(fileDescriptor: Int32) throws
 }
 
@@ -155,6 +159,19 @@ public protocol RendererPackageFileSystem: Sendable {
 /// avoids `FileManager` inspection APIs, which follow symlinks before exposing facts.
 public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable {
     public init() {}
+
+    public func ensureDirectory(at url: URL) throws {
+        try requireFileURL(url)
+        let parent = url.deletingLastPathComponent()
+        for directory in [parent, url] {
+            let result = directory.path.withCString { mkdir($0, S_IRWXU) }
+            if result != 0 && errno != EEXIST { throw posixError(operation: "mkdir", path: directory.path) }
+            let identity = try lstat(at: directory)
+            guard (identity.mode & UInt32(S_IFMT)) == UInt32(S_IFDIR) else {
+                throw RendererPackageStoreError.posix(operation: "mkdir", path: directory.path, code: ENOTDIR)
+            }
+        }
+    }
 
     public func lstat(at url: URL) throws -> RendererPackageFileIdentity {
         try requireFileURL(url)
@@ -171,6 +188,43 @@ public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable
         return descriptor
     }
 
+    public func readAll(fileDescriptor: Int32, maximumBytes: Int) throws -> Data {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: min(maximumBytes, 4096))
+        while data.count < maximumBytes {
+            let remaining = min(buffer.count, maximumBytes - data.count)
+            let count = buffer.withUnsafeMutableBytes { read(fileDescriptor, $0.baseAddress, remaining) }
+            guard count >= 0 else { throw RendererPackageStoreError.posix(operation: "read", path: nil, code: errno) }
+            guard count > 0 else { return data }
+            data.append(contentsOf: buffer.prefix(Int(count)))
+        }
+        var extra: UInt8 = 0
+        if read(fileDescriptor, &extra, 1) > 0 {
+            throw RendererPackageStoreError.posix(operation: "read", path: nil, code: EOVERFLOW)
+        }
+        return data
+    }
+
+    public func createExclusiveFile(at url: URL, contents: Data) throws -> RendererPackageFileIdentity {
+        try requireFileURL(url)
+        let descriptor = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR) }
+        guard descriptor >= 0 else { throw posixError(operation: "openExclusive", path: url.path) }
+        do {
+            try writeAll(contents, fileDescriptor: descriptor)
+            guard fsync(descriptor) == 0 else { throw RendererPackageStoreError.posix(operation: "fsync", path: nil, code: errno) }
+            try close(fileDescriptor: descriptor)
+            return try lstat(at: url)
+        } catch {
+            do { try close(fileDescriptor: descriptor) } catch { DebugLog.store("Renderer coordinator lock descriptor close failed.") }
+            throw error
+        }
+    }
+
+    public func removeFile(at url: URL) throws {
+        try requireFileURL(url)
+        guard url.path.withCString({ unlink($0) }) == 0 else { throw posixError(operation: "unlink", path: url.path) }
+    }
+
     public func close(fileDescriptor: Int32) throws {
         guard rendererPackageStoreClose(fileDescriptor) == 0 else {
             throw RendererPackageStoreError.posix(operation: "close", path: nil, code: errno)
@@ -183,6 +237,18 @@ public struct RealRendererPackageFileSystem: RendererPackageFileSystem, Sendable
 
     private func posixError(operation: String, path: String) -> RendererPackageStoreError {
         RendererPackageStoreError.posix(operation: operation, path: path, code: errno)
+    }
+
+    private func writeAll(_ data: Data, fileDescriptor: Int32) throws {
+        try data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let count = write(fileDescriptor, baseAddress.advanced(by: offset), bytes.count - offset)
+                guard count > 0 else { throw RendererPackageStoreError.posix(operation: "write", path: nil, code: errno) }
+                offset += Int(count)
+            }
+        }
     }
 }
 
