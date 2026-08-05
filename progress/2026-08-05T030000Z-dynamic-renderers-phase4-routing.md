@@ -18,8 +18,11 @@ the planner preserves quote anchors, HTML-without-markdown behavior, Mermaid
 standalone/fenced inputs, media transcript state, and editor/outline inputs.
 
 The rendered pane pins an exact renderer reference for its lifetime, resolves
-logical and exact stored preferences, restores Source/Rendered/Split per source,
-and records short redacted fallback diagnostics. Renderer controls are inside
+logical and exact stored preferences, restores Source/Rendered/Split per source
+through the wiki store, and records short redacted fallback diagnostics. An
+unextracted PDF defaults to its matching rendered pane so PDF quote anchors
+remain reachable; presentable markdown, plain-text, and transcript sources
+default to Source. Renderer controls are inside
 the rendered pane, use non-conflicting keyboard shortcuts, carry VoiceOver
 labels, and keep both split panes usable at the minimum detail width. Format
 checks remain at extraction, transcription, editor, or outline decision seams;
@@ -31,14 +34,16 @@ UI remain untouched. The retained per-PR symbol/path test inventory is
 
 ## Verification
 
-- Final implementation head: `832efb00fb126a4e7382d3287678291765854167`.
+- Final implementation commit: `7c96e919030772c41ec5551457e15cf9718559a0`.
 - Base: `feature/dynamic-renderers-03-persistence` at
   `41c96e17051e2f131b279fbd34d243136cff2dd5`.
 - `make build`: passed.
-- `make test`: passed, 3,110 tests in 264 suites.
-- Focused renderer suites: passed, 33 Swift Testing tests in 4 suites.
+- `make test`: passed, 3,115 tests in 265 suites.
+- Focused renderer suites: passed, 30 Swift Testing tests in 2 suites;
+  store/API regressions passed, 11 Swift Testing tests in 2 suites.
 - Commit hooks: SwiftLint strict passed with 0 violations; bare `try?` guard
   passed; `git diff --check` passed.
-- An independent Claude/Opus review found wiring gaps at the earlier routing
-  head; Terra fixes and owner integration commits addressed those findings.
-  A fresh exact-head review is required before publication.
+- An independent Claude/Opus review found routing and persistence gaps at the
+  earlier routing head. This commit addresses the default, fallback, stale-pin,
+  layout, and store-backed presentation findings. A fresh exact-head review is
+  required before publication.
