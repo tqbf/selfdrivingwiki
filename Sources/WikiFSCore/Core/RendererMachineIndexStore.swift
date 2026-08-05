@@ -79,6 +79,25 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Changes machine install/safe-mode state and appends its durable renderer
+    /// event in the same coordinator-held SQLite transaction. Nothing is
+    /// emitted here; callers may publish a payload only after this returns.
+    public func mutateAndAppendMachineEvent(
+        expectedGeneration: UInt64,
+        scope: RendererMachineScopeID,
+        payload: RendererSettingsChangeEvent,
+        eventIDGenerator: any RendererEventIDGenerating = UUIDRendererEventIDGenerator(),
+        sequenceGenerator: any RendererEventSequenceGenerating = DurableRendererEventSequenceGenerator(),
+        clock: any RendererEventClock = WallRendererEventClock(),
+        _ mutation: @Sendable (inout [RendererPackageInstallRecord], inout Bool) throws -> Void
+    ) async throws -> (index: RendererMachineIndex, record: PersistedWikiStoreChangeRecord) {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            try storage.mutateAndAppendMachineEvent(expectedGeneration: expectedGeneration, scope: scope, payload: payload, eventIDGenerator: eventIDGenerator, sequenceGenerator: sequenceGenerator, clock: clock, mutation: mutation)
+        }
+    }
+
     private func prepareRoot() throws {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
     }
@@ -131,6 +150,45 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
                 throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
             }
         }
+    }
+
+    func mutateAndAppendMachineEvent(
+        expectedGeneration: UInt64,
+        scope: RendererMachineScopeID,
+        payload: RendererSettingsChangeEvent,
+        eventIDGenerator: any RendererEventIDGenerating,
+        sequenceGenerator: any RendererEventSequenceGenerating,
+        clock: any RendererEventClock,
+        mutation: (inout [RendererPackageInstallRecord], inout Bool) throws -> Void
+    ) throws -> (index: RendererMachineIndex, record: PersistedWikiStoreChangeRecord) {
+        try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+        return try withDatabase { database in
+            guard FileManager.default.fileExists(atPath: layout.indexDatabaseURL.path) else { throw RendererMachineIndexStoreError.corruptIndex }
+            let current = try load(database: database)
+            let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
+            try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
+            try attachJournal(database)
+            try RendererMachineJournalSQLite.initializeAttached(database)
+            try execute(database, sql: "SAVEPOINT renderer_machine_index_event_mutation")
+            do {
+                let highWater = try RendererMachineJournalSQLite.attachedHighWater(database, scope: scope)
+                let record = try PersistedWikiStoreChangeRecord(eventID: eventIDGenerator.nextEventID(), sequence: sequenceGenerator.nextSequence(after: highWater), scope: .machine(scope), payload: .rendererSettings(payload), committedAt: clock.now())
+                try update(database: database, index: next)
+                try RendererMachineJournalSQLite.appendAttached(database, record: record)
+                try replaceDerivedIndex(next)
+                try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_event_mutation")
+                return (next, record)
+            } catch {
+                _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_event_mutation", nil, nil, nil)
+                _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_event_mutation", nil, nil, nil)
+                throw error
+            }
+        }
+    }
+
+    private func attachJournal(_ database: OpaquePointer) throws {
+        let escapedPath = layout.journalURL.path.replacingOccurrences(of: "'", with: "''")
+        try execute(database, sql: "ATTACH DATABASE '\(escapedPath)' AS renderer_machine_journal")
     }
 
     private func writeFresh(database: OpaquePointer, index: RendererMachineIndex) throws {

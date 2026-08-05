@@ -290,6 +290,26 @@ public struct UUIDRendererEventIDGenerator: RendererEventIDGenerating {
     public func nextEventID() -> UUID { UUID() }
 }
 
+/// Supplies a candidate sequence for a machine journal append. The journal
+/// validates it against its durable scoped high-water mark before committing.
+public protocol RendererEventSequenceGenerating: Sendable {
+    func nextSequence(after: UInt64) -> UInt64
+}
+
+public struct DurableRendererEventSequenceGenerator: RendererEventSequenceGenerating {
+    public init() {}
+    public func nextSequence(after sequence: UInt64) -> UInt64 { sequence + 1 }
+}
+
+public protocol RendererEventProcessLeaseIDGenerating: Sendable {
+    func nextLeaseID() -> RendererEventProcessLeaseID
+}
+
+public struct UUIDRendererEventProcessLeaseIDGenerator: RendererEventProcessLeaseIDGenerating {
+    public init() {}
+    public func nextLeaseID() -> RendererEventProcessLeaseID { RendererEventProcessLeaseID() }
+}
+
 public protocol RendererEventClock: Sendable {
     func now() -> RFC3339Timestamp
 }
