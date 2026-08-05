@@ -2,8 +2,10 @@
   "schemaVersion": 1,
   "issue": 1026,
   "phase": "3b",
-  "implementationSHA": "5437472a3730823264a07803ecb429fb33d26969",
-  "implementationHeadRole": "exact pre-remediation production implementation head; this remediation removes its unused numeric-PID liveness probe",
+  "implementationSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6",
+  "implementationHeadRole": "exact signal-safety-remediated production implementation and gate-evidence head",
+  "baselineImplementationSHA": "5437472a3730823264a07803ecb429fb33d26969",
+  "baselineImplementationHeadRole": "exact pre-remediation production implementation head; the remediation removes its unused numeric-PID liveness probe",
   "branch": "feature/dynamic-renderers-03b-machine-store",
   "target": {
     "ref": "feature/dynamic-renderers-03-persistence",
@@ -132,24 +134,29 @@
     "No test directly asserts DurableRendererEventSequenceGenerator or UUIDRendererEventProcessLeaseIDGenerator. The journal tests use a deterministic sequence generator and cover the default lease generator indirectly."
   ],
   "commandEvidence": [
-    { "command": "swift test --filter DocumentationContractTests", "status": "passed", "terminalMarkers": ["Test run with 7 tests in 1 suite passed"] },
-    { "command": "swift test --filter ProcessSignalSafetyAuditTests", "status": "passed", "terminalMarkers": ["Test run with 5 tests in 1 suite passed"] },
+    { "command": "swift test --filter DocumentationContractTests", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "evidenceRole": "prior remediation commit", "terminalMarkers": ["Test run with 7 tests in 1 suite passed"] },
+    { "command": "swift test --filter ProcessSignalSafetyAuditTests", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "evidenceRole": "prior remediation commit", "terminalMarkers": ["Test run with 5 tests in 1 suite passed"] },
     { "command": "jq empty plans/dynamic-renderers-phase3b-test-inventory.json", "status": "passed", "terminalMarkers": ["exit status 0"] },
     { "command": "zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh", "status": "passed", "terminalMarkers": ["phase3b-inventory-test-name-resolution-pass"] },
     { "command": "git diff --check", "status": "passed", "terminalMarkers": ["exit status 0"] },
-    { "command": "swiftlint lint --strict", "status": "passed", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] }
+    { "command": "swiftlint lint --strict", "status": "passed", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] },
+    { "command": "make build", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "terminalMarkers": ["Build complete!"] },
+    { "command": "make test", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "terminalMarkers": ["Test run with 3150 tests in 276 suites passed", "tests pass"] },
+    { "command": "make lint", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] },
+    { "command": "swift build", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "terminalMarkers": ["Build complete!"] },
+    { "command": "swift test --parallel --num-workers 1", "status": "passed", "runAtSHA": "6df5deb86cfa38988d4fb706d7c7141d634008f6", "terminalMarkers": ["Test run with 3150 tests in 276 suites passed"] }
   ],
   "gateStatus": {
     "preflight": "passed",
-    "makeBuild": "pending: not run after remediation",
-    "makeTest": "pending: not run after remediation",
-    "makeLint": "pending: not run after remediation; the commit hook's swiftlint and bare try? audit passed",
-    "swiftBuild": "pending: not run after remediation",
-    "swiftTest": "pending: not run after remediation",
-    "focusedSuites": "partially passed: documentation contract (7) and process-safety audit (5); the 42 renderer tests were not rerun after remediation",
+    "makeBuild": "passed at 6df5deb86cfa38988d4fb706d7c7141d634008f6",
+    "makeTest": "passed at 6df5deb86cfa38988d4fb706d7c7141d634008f6: 3150 tests in 276 suites",
+    "makeLint": "passed at 6df5deb86cfa38988d4fb706d7c7141d634008f6: 0 violations",
+    "swiftBuild": "passed at 6df5deb86cfa38988d4fb706d7c7141d634008f6",
+    "swiftTest": "passed at 6df5deb86cfa38988d4fb706d7c7141d634008f6: 3150 tests in 276 suites",
+    "focusedSuites": "passed: 42 renderer mappings remain retained; DocumentationContractTests (7) and ProcessSignalSafetyAuditTests (5) ran in the prior remediation commit at 6df5deb86cfa38988d4fb706d7c7141d634008f6",
     "diffCheck": "passed",
     "jsonValidation": "passed",
     "testNameResolver": "passed",
-    "workingTreeAtImplementationHead": "pending: commit not yet created"
+    "workingTreeAtImplementationHead": "passed before this evidence-only documentation commit at 6df5deb86cfa38988d4fb706d7c7141d634008f6"
   }
 }
