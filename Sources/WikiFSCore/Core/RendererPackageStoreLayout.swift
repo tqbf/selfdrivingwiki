@@ -59,6 +59,9 @@ public struct RendererPackageStoreLayout: Sendable {
     public var stagingRoot: URL { root.appendingPathComponent(Names.staging, isDirectory: true) }
     public var derivedRoot: URL { root.appendingPathComponent(Names.derived, isDirectory: true) }
     public var derivedIndexURL: URL { derivedRoot.appendingPathComponent(Names.indexFile, isDirectory: false) }
+    /// SQLite is the authoritative A3 machine index. The JSON index is a
+    /// derived, replaceable compatibility/projection artifact.
+    public var indexDatabaseURL: URL { root.appendingPathComponent(Names.indexDatabaseFile, isDirectory: false) }
     public var lockURL: URL { root.appendingPathComponent(Names.lockFile, isDirectory: false) }
     public var journalURL: URL { root.appendingPathComponent(Names.journalFile, isDirectory: false) }
 
@@ -83,6 +86,7 @@ public struct RendererPackageStoreLayout: Sendable {
         static let staging = "staging"
         static let derived = "derived"
         static let indexFile = "index.json"
+        static let indexDatabaseFile = "index.sqlite"
         static let lockFile = "store.lock"
         static let journalFile = "machine.sqlite"
     }
