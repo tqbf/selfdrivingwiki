@@ -40,22 +40,23 @@ renderer only when that renderer remains in the current descriptor set.
 
 ## Verification
 
-- Final implementation commit: `7c96e919030772c41ec5551457e15cf9718559a0`.
+- Final implementation/fix commit: `f91d5ecffa8b2400b169f29d1c8e7d6e75d77066`.
 - Base: `feature/dynamic-renderers-03-persistence` at
   `41c96e17051e2f131b279fbd34d243136cff2dd5`.
 - `make build`: passed.
-- `make test`: passed, 3,115 tests in 265 suites.
-- Focused renderer suites: passed, 30 Swift Testing tests in 2 suites;
-  store/API regressions passed, 11 Swift Testing tests in 2 suites.
+- `make test`: passed, 3,112 tests in 264 suites.
+- Focused renderer/app/resolution/persistence suites: passed, 85 Swift
+  Testing tests in 5 suites.
 - Commit hooks: SwiftLint strict passed with 0 violations; bare `try?` guard
   passed; `git diff --check` passed.
 
 ## Remediation verification
 
-- Focused renderer suites: passed, 39 Swift Testing tests in 3 suites.
+- Focused renderer/app/resolution/persistence suites: passed, 85 Swift
+  Testing tests in 5 suites at `f91d5ecf`.
 - `make build`: passed.
-- `make test`: passed.
-- An independent Claude/Opus review found routing and persistence gaps at the
-  earlier routing head. This commit addresses the default, fallback, stale-pin,
-  layout, and store-backed presentation findings. A fresh exact-head review is
-  required before publication.
+- `make test`: passed, 3,112 tests in 264 suites.
+- The exact-head remediation fixes live Source fallback persistence, Source
+  preference retention, and delayed-fallback source identity. Focused renderer,
+  app, resolver, and persistence gates; `make build`; `make test`; and SwiftLint
+  passed. A fresh exact-head review is required before publication.
