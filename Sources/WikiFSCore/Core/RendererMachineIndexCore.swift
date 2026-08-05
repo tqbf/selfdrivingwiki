@@ -83,6 +83,10 @@ func rendererMachineIndexValidatingPackagePaths(
     layout: RendererPackageStoreLayout
 ) throws {
     try index.validate()
+    if FileManager.default.fileExists(atPath: layout.packagesRoot.path),
+       isRendererPackageStorePathContained(layout.packagesRoot, within: layout.root) == false {
+        throw RendererMachineIndexStoreError.invalidPackagePath
+    }
     for record in index.records {
         let packageURL = layout.packageURL(packageID: record.packageID, version: record.version)
         guard isRendererPackageStorePathContained(packageURL, within: layout.packagesRoot) else {
