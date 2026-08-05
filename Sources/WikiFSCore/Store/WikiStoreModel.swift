@@ -3000,6 +3000,28 @@ public final class WikiStoreModel {
         })
     }
 
+    public func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) {
+        do {
+            try store.setRendererSourcePresentation(sourceID: sourceID, presentation: presentation)
+        } catch {
+            DebugLog.store("WikiStoreModel.setRendererSourcePresentation failed: \(error)")
+        }
+    }
+
+    public func removeRendererSourcePresentation(sourceID: SourceID) {
+        do {
+            try store.removeRendererSourcePresentation(sourceID: sourceID)
+        } catch {
+            DebugLog.store("WikiStoreModel.removeRendererSourcePresentation failed: \(error)")
+        }
+    }
+
+    public func rendererSourcePresentation(for sourceID: SourceID) -> RendererSourcePresentationMode? {
+        DebugLog.trying("rendererSourcePresentation", operation: {
+            try store.rendererSourcePresentation(sourceID: sourceID)?.presentation
+        })
+    }
+
     public func isSourceIngested(_ file: SourceSummary) -> Bool {
         sourceIngestedStatus[file.id] ?? false
     }

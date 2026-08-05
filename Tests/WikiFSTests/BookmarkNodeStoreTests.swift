@@ -657,7 +657,7 @@ private struct FixedRendererEventClock: RendererEventClock {
         )
     }
 
-    @Test func freshSchemaCreatesRendererTablesAndReopensAtV49() throws {
+    @Test func freshSchemaCreatesRendererTablesAndReopensAtV50() throws {
         let url = try tempDatabaseURL()
         let first = try store(url: url)
         #expect(first.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
@@ -665,7 +665,7 @@ private struct FixedRendererEventClock: RendererEventClock {
         #expect(first.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_event_journal';") == "1")
 
         let reopened = try store(url: url)
-        #expect(reopened.pragmaValue("user_version") == "49")
+        #expect(reopened.pragmaValue("user_version") == "50")
         #expect(try reopened.listRendererWikiEnablement().isEmpty)
     }
 
@@ -679,12 +679,27 @@ private struct FixedRendererEventClock: RendererEventClock {
 
         try store.setRendererWikiEnablement(packageID: packageID, isEnabled: true)
         try store.setRendererSourcePreference(sourceID: source.id, preference: preference)
+        try store.setRendererSourcePresentation(sourceID: source.id, presentation: .split)
 
         #expect(try store.rendererWikiEnablement(packageID: packageID)?.isEnabled == true)
         #expect(try store.rendererSourcePreference(sourceID: source.id)?.preference == preference)
+        #expect(try store.rendererSourcePresentation(sourceID: source.id)?.presentation == .split)
         let records = try store.rendererSettingsJournalRecords()
-        #expect(records.map(\.sequence) == [1, 2])
+        #expect(records.map(\.sequence) == [1, 2, 3])
         #expect(records.allSatisfy { $0.committedAt.rawValue.hasSuffix("+00:00") })
+    }
+
+    @Test func sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference() throws {
+        let store = try store()
+        let source = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        try store.setRendererSourcePresentation(sourceID: source.id, presentation: .rendered)
+        #expect(try store.rendererSourcePresentation(sourceID: source.id)?.presentation == .rendered)
+        #expect(try store.rendererSourcePreference(sourceID: source.id) == nil)
+
+        try store.removeRendererSourcePresentation(sourceID: source.id)
+        #expect(try store.rendererSourcePresentation(sourceID: source.id) == nil)
+        #expect(try store.rendererSettingsJournalRecords().count == 2)
     }
 
     @Test func sourcePreferenceConstraintRollbackPersistsNoJournalRecord() throws {
@@ -774,12 +789,12 @@ private struct FixedRendererEventClock: RendererEventClock {
         }
     }
 
-    @Test func v49FreshAndUpgradeRendererSchemasMatch() throws {
-        let freshURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "fresh-v49-renderer")
+    @Test func v50FreshAndUpgradeRendererSchemasMatch() throws {
+        let freshURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "fresh-v50-renderer")
         let fresh = try store(url: freshURL)
         fresh.close()
 
-        let upgradedURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "upgrade-v49-renderer")
+        let upgradedURL = try MetadataSQLiteFixtureSupport.fileURL(prefix: "upgrade-v50-renderer")
         try MetadataSQLiteFixtureSupport.prepareV48(at: upgradedURL)
         let upgraded = try store(url: upgradedURL)
         upgraded.close()
@@ -792,29 +807,29 @@ private struct FixedRendererEventClock: RendererEventClock {
         }
     }
 
-    @Test func explicitV48UpgradeCreatesRendererSchemaAndReopensAtV49() throws {
-        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "explicit-v48-to-v49")
+    @Test func explicitV48UpgradeCreatesRendererSchemaAndReopensAtV50() throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "explicit-v48-to-v50")
         try MetadataSQLiteFixtureSupport.prepareV48(at: url)
         #expect(try MetadataSQLiteFixtureSupport.scalar("PRAGMA user_version", at: url) == "48")
 
         let upgraded = try store(url: url)
-        #expect(upgraded.pragmaValue("user_version") == "49")
+        #expect(upgraded.pragmaValue("user_version") == "50")
         #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_wiki_enablement';") == "1")
         #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='renderer_event_journal_scope_sequence';") == "1")
         upgraded.close()
 
         let reopened = try store(url: url)
-        #expect(reopened.pragmaValue("user_version") == "49")
+        #expect(reopened.pragmaValue("user_version") == "50")
         #expect(try reopened.listRendererWikiEnablement().isEmpty)
     }
 
     private var rendererSchemaObjectNamesSQLList: String {
-        "('renderer_wiki_enablement', 'renderer_source_preferences', 'renderer_source_preferences_package', 'renderer_event_sequence', 'renderer_event_journal', 'renderer_event_journal_scope_sequence', 'renderer_event_process_leases', 'renderer_event_process_leases_subsystem', 'renderer_event_cursors', 'renderer_event_checkpoints')"
+        "('renderer_wiki_enablement', 'renderer_source_preferences', 'renderer_source_preferences_package', 'renderer_source_presentations', 'renderer_event_sequence', 'renderer_event_journal', 'renderer_event_journal_scope_sequence', 'renderer_event_process_leases', 'renderer_event_process_leases_subsystem', 'renderer_event_cursors', 'renderer_event_checkpoints')"
     }
 
     private func normalizedMetadataSQL(type: String, names: String, at url: URL) throws -> String {
         try MetadataSQLiteFixtureSupport.scalar(
-            "SELECT group_concat(replace(replace(lower(sql), char(10), ' '), '  ', ' '), '|') FROM sqlite_master WHERE type = '\(type)' AND name IN \(names) ORDER BY name",
+            "SELECT group_concat(normalized_sql, '|') FROM (SELECT replace(replace(lower(sql), char(10), ' '), '  ', ' ') AS normalized_sql FROM sqlite_master WHERE type = '\(type)' AND name IN \(names) ORDER BY name)",
             at: url
         )
     }

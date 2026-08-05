@@ -45,6 +45,60 @@ import WikiFSTypes
         #expect(id == .pdf)
     }
 
+    @Test("Unextracted PDF defaults rendered and carries its quote anchor to the PDF factory")
+    @MainActor
+    func unextractedPDFDefaultKeepsQuoteAnchorReachable() throws {
+        let source = fixtureSource(filename: "paper.pdf", ext: "pdf", mimeType: MimeType.pdf, byteSize: 4)
+        let descriptor = try #require(try SourceRendererPresentationPlanner()
+            .matchingDescriptors(for: source, boundedBytes: Data("%PDF".utf8), currentMarkdown: nil, origin: nil)
+            .first)
+        let state = RendererPresentationState.defaultState(
+            sourceID: source.id,
+            matchingRenderer: descriptor.reference,
+            hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
+                for: source,
+                currentMarkdown: nil),
+            persistedSelection: nil)
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: Data("%PDF".utf8),
+            pdfQuote: "a retained quote",
+            htmlSource: nil,
+            mermaidMarkdown: nil,
+            mediaTarget: nil,
+            selection: nil,
+            store: WikiStoreModel(store: try GRDBWikiStore(
+                databaseURL: URL.temporaryDirectory.appending(path: "renderer-quote-\(UUID().uuidString).sqlite"))),
+            readerZoom: .constant(1))
+
+        #expect(state.selection == .rendered)
+        #expect(state.pinnedRenderer == descriptor.reference)
+        #expect(inputs.pdfQuote == "a retained quote")
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) != nil)
+    }
+
+    @Test(arguments: [
+        ("markdown", fixtureSource(filename: "note.md", ext: "md", mimeType: MimeType.markdown, byteSize: 5), "# Note"),
+        ("plain text", fixtureSource(filename: "note.txt", ext: "txt", mimeType: "text/plain", byteSize: 5), "hello"),
+        ("media transcript", fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0), "Transcript")
+    ])
+    func presentableSourceKindsDefaultToSource(
+        _: String,
+        source: SourceSummary,
+        markdown: String
+    ) {
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        let state = RendererPresentationState.defaultState(
+            sourceID: source.id,
+            matchingRenderer: pdf,
+            hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
+                for: source,
+                currentMarkdown: markdown),
+            persistedSelection: nil)
+
+        #expect(state.selection == .source)
+        #expect(state.pinnedRenderer == nil)
+    }
+
     @Test("Planner maps HTML bytes to the HTML built-in")
     func plannerMatchesHTML() throws {
         let source = fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)

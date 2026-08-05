@@ -111,6 +111,10 @@ struct SourceRendererPresentationPlanner: Sendable {
         return MermaidSourceDetector.renderableMarkdown(from: markdown)
     }
 
+    nonisolated static func hasPresentableSource(for source: SourceSummary, currentMarkdown: String?) -> Bool {
+        currentMarkdown != nil || source.mimeType.map(MimeType.isText) == true
+    }
+
     nonisolated static func mediaTarget(for source: SourceSummary, origin: SourceOrigin?) -> EmbedTarget? {
         guard let mime = source.mimeType, let origin else { return nil }
         return ExternalEmbed.target(for: SourceEmbedDescriptor(

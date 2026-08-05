@@ -1183,49 +1183,41 @@ struct SourceDetailView: View {
     }
 
     private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
-        UserDefaults.standard.set(selection.rawValue, forKey: rendererPresentationSelectionKey)
-    }
-
-    private var rendererPresentationSelectionKey: String {
-        "renderer.presentation.selection.\(file.id.rawValue)"
-    }
-
-    private var persistedRendererPresentationSelection: RendererPresentationState.Selection {
-        guard let rawValue = UserDefaults.standard.string(forKey: rendererPresentationSelectionKey),
-              let selection = RendererPresentationState.Selection(rawValue: rawValue)
-        else { return .rendered }
-        return selection
+        store.setRendererSourcePresentation(sourceID: file.id, presentation: selection)
     }
 
     /// Resolve the persisted logical or exact renderer once per source. The
     /// resulting exact reference remains pinned while this pane stays open.
     private func resetRendererPresentation() {
-        var state = RendererPresentationState(sourceID: file.id)
         do {
-            guard let preference = store.rendererSourcePreference(for: file.id) else {
-                rendererPresentation = state
-                return
-            }
             let planner = try SourceRendererPresentationPlanner()
-            if let descriptor = try planner.preferredDescriptor(
-                preference: preference,
-                for: file,
-                boundedBytes: sourceBytesSnapshot,
-                currentMarkdown: currentMarkdownContent,
-                origin: origin) {
-                switch persistedRendererPresentationSelection {
-                case .source:
-                    break
-                case .rendered:
-                    state.selectRendered(descriptor.reference)
-                case .split:
-                    state.selectSplit(descriptor.reference)
-                }
+            let preference = store.rendererSourcePreference(for: file.id)
+            let descriptor: RendererDescriptor?
+            if let preference {
+                descriptor = try planner.preferredDescriptor(
+                    preference: preference,
+                    for: file,
+                    boundedBytes: sourceBytesSnapshot,
+                    currentMarkdown: currentMarkdownContent,
+                    origin: origin)
+            } else {
+                descriptor = try planner.matchingDescriptors(
+                    for: file,
+                    boundedBytes: sourceBytesSnapshot,
+                    currentMarkdown: currentMarkdownContent,
+                    origin: origin).first
             }
+            rendererPresentation = RendererPresentationState.defaultState(
+                sourceID: file.id,
+                matchingRenderer: descriptor?.reference,
+                hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
+                    for: file,
+                    currentMarkdown: currentMarkdownContent),
+                persistedSelection: store.rendererSourcePresentation(for: file.id))
         } catch {
             DebugLog.tabs("SourceDetailView: renderer preference resolution failed (source=\(file.id.rawValue)): \(error)")
+            rendererPresentation = RendererPresentationState(sourceID: file.id)
         }
-        rendererPresentation = state
     }
 
     private func refreshSourceBytesSnapshot() {

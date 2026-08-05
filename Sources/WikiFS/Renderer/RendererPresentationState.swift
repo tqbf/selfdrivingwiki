@@ -9,42 +9,74 @@ import WikiFSTypes
 /// Source is a host-owned fallback. A rendered choice retains its exact
 /// reference until the pane closes or the user makes another selection.
 struct RendererPresentationState: Sendable, Equatable {
-    enum Selection: String, Sendable, Equatable {
-        case source
-        case rendered
-        case split
-    }
+    typealias Selection = RendererSourcePresentationMode
 
     let sourceID: SourceID
     private(set) var selection: Selection
     private(set) var pinnedRenderer: RendererReference?
+    private(set) var fallbackReason: String?
 
     init(sourceID: SourceID, selection: Selection = .source, pinnedRenderer: RendererReference? = nil) {
         self.sourceID = sourceID
         self.selection = selection
         self.pinnedRenderer = pinnedRenderer
+        fallbackReason = nil
+    }
+
+    static func defaultState(
+        sourceID: SourceID,
+        matchingRenderer: RendererReference?,
+        hasPresentableSource: Bool,
+        persistedSelection: Selection?
+    ) -> Self {
+        guard let matchingRenderer else { return Self(sourceID: sourceID) }
+        let selection = persistedSelection ?? (hasPresentableSource ? .source : .rendered)
+        guard selection != .source else { return Self(sourceID: sourceID) }
+        return Self(sourceID: sourceID, selection: selection, pinnedRenderer: matchingRenderer)
     }
 
     mutating func selectSource() {
         selection = .source
+        fallbackReason = nil
     }
 
     mutating func selectRendered(_ reference: RendererReference) {
         selection = .rendered
         pinnedRenderer = reference
+        fallbackReason = nil
     }
 
     mutating func selectSplit(_ reference: RendererReference) {
         selection = .split
         pinnedRenderer = reference
+        fallbackReason = nil
+    }
+
+    mutating func selectFallback(reason: String) {
+        selection = .source
+        pinnedRenderer = nil
+        fallbackReason = reason
     }
 
     /// A registry refresh cannot substitute a different exact renderer.
     mutating func keepPinnedRenderer(available: [RendererReference]) {
         guard let pinnedRenderer, available.contains(pinnedRenderer) else {
-            selection = .source
+            if self.pinnedRenderer != nil {
+                selectFallback(reason: "The selected renderer is unavailable.")
+            }
             return
         }
+    }
+}
+
+enum RendererPresentationLayout {
+    /// Both panes must fit within `PageEditorMetrics.detailMinWidth` (420pt).
+    static let minimumSourcePaneWidth: CGFloat = 200
+    static let minimumRenderedPaneWidth: CGFloat = 200
+    static let splitDividerAllowance: CGFloat = 20
+
+    static func supportsSplit(detailWidth: CGFloat) -> Bool {
+        detailWidth >= minimumSourcePaneWidth + minimumRenderedPaneWidth + splitDividerAllowance
     }
 }
 #endif

@@ -164,12 +164,35 @@ public struct RendererSourcePreference: Codable, Hashable, Sendable {
     }
 }
 
+/// The source-reader arrangement selected by a person. This is independent of
+/// renderer preference: a source can retain a rendered arrangement while the
+/// registry uses its deterministic default renderer choice.
+public enum RendererSourcePresentationMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case source
+    case rendered
+    case split
+}
+
+public struct RendererSourcePresentation: Codable, Hashable, Sendable {
+    public let sourceID: SourceID
+    public let presentation: RendererSourcePresentationMode
+    public let updatedAt: RFC3339Timestamp
+
+    public init(sourceID: SourceID, presentation: RendererSourcePresentationMode, updatedAt: RFC3339Timestamp) {
+        self.sourceID = sourceID
+        self.presentation = presentation
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum RendererSettingsChangeEvent: Codable, Hashable, Sendable {
     case machineInstallStateChanged(packageID: RendererPackageID, version: RendererPackageVersion)
     case machineSafeModeChanged(isEnabled: Bool)
     case wikiEnablementSet(packageID: RendererPackageID, isEnabled: Bool)
     case sourcePreferenceSet(sourceID: SourceID, preference: RendererPreferenceReference)
     case sourcePreferenceRemoved(sourceID: SourceID)
+    case sourcePresentationSet(sourceID: SourceID, presentation: RendererSourcePresentationMode)
+    case sourcePresentationRemoved(sourceID: SourceID)
 }
 
 public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
