@@ -39,6 +39,11 @@ final class WikiChangeBridge {
     /// The wiki ids we currently observe, so `refreshObservations()` is
     /// idempotent — it only adds newly-registered wikis and drops removed ones.
     private var observedWikiIDs: Set<WikiID> = []
+    /// Renderer machine wakes use a different Darwin namespace and are routed
+    /// to the durable renderer reader. They never enter the generic resource
+    /// coalescer below, which is the only path that signals File Provider.
+    private var observedRendererMachineScopes: Set<RendererMachineScopeID> = []
+    var rendererMachineWakeHandler: @MainActor @Sendable (RendererMachineScopeID) -> Void = { _ in }
 
     init(registry: WikiRegistryClient, fileProvider: FileProviderFacade) {
         self.registry = registry
@@ -63,6 +68,19 @@ final class WikiChangeBridge {
             removeObserver(forWikiID: removed)
         }
         observedWikiIDs = current
+    }
+
+    /// Update the explicitly observed machine scopes. App wiring owns the
+    /// reader subscription; this bridge only maps the payload-free notification
+    /// name back to that scope identity.
+    func refreshRendererMachineObservations(_ scopes: Set<RendererMachineScopeID>) {
+        for added in scopes.subtracting(observedRendererMachineScopes) {
+            addRendererMachineObserver(for: added)
+        }
+        for removed in observedRendererMachineScopes.subtracting(scopes) {
+            removeRendererMachineObserver(for: removed)
+        }
+        observedRendererMachineScopes = scopes
     }
 
     // MARK: - Darwin observation
@@ -99,10 +117,37 @@ final class WikiChangeBridge {
         )
     }
 
+    private func addRendererMachineObserver(for scope: RendererMachineScopeID) {
+        let name = CFNotificationName(RendererChangeNotification.machineName(for: scope) as CFString)
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, name, _, _ in
+                guard let observer, let name else { return }
+                let bridge = Unmanaged<WikiChangeBridge>.fromOpaque(observer).takeUnretainedValue()
+                let posted = name.rawValue as String
+                Task { @MainActor in bridge.didReceiveDarwinNotification(named: posted) }
+            },
+            name.rawValue, nil, .deliverImmediately
+        )
+    }
+
+    private func removeRendererMachineObserver(for scope: RendererMachineScopeID) {
+        let name = CFNotificationName(RendererChangeNotification.machineName(for: scope) as CFString)
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(), name, nil
+        )
+    }
+
     /// Map a posted Darwin name back to its wiki id and feed the coalescer. The
     /// id is the suffix after the base name; we match against the wikis we observe
     /// rather than string-splitting, so a malformed name is simply ignored.
     private func didReceiveDarwinNotification(named posted: String) {
+        if let scope = RendererMachineWakeRouting.scope(forNotificationName: posted, observedScopes: observedRendererMachineScopes) {
+            rendererMachineWakeHandler(scope)
+            return
+        }
         guard let wikiID = observedWikiIDs.first(where: {
             posted == WikiChangeNotification.name(forWikiID: $0.rawValue)
         }) else { return }

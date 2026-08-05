@@ -24,6 +24,83 @@ public struct RendererMachineScopeID: RawRepresentable, Codable, Hashable, Senda
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+}
+
+/// Lifecycle state recorded for an immutable renderer package version.
+/// A3 persists all cases but deliberately exposes none to the renderer registry.
+public enum RendererPackageInstallState: String, Codable, CaseIterable, Hashable, Sendable {
+    case unvalidated
+    case validated
+    case quarantined
+    case removed
+}
+
+/// A closed, redacted install diagnostic. It has no free-form text by design:
+/// machine records must never retain package/source bytes, credentials, paths,
+/// or untrusted validator output.
+public enum RendererPackageInstallDiagnostic: String, Codable, CaseIterable, Hashable, Sendable {
+    case packageValidationFailed
+    case packageQuarantined
+    case packageRemoved
+    case indexConsistencyFailure
+}
+
+/// One immutable package-version reservation in the machine index.
+public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Comparable {
+    public let packageID: RendererPackageID
+    public let version: RendererPackageVersion
+    public let expectedPackageHash: RendererSHA256Digest
+    public let state: RendererPackageInstallState
+    public let reservedAt: RFC3339Timestamp
+    public let updatedAt: RFC3339Timestamp
+    public let diagnostic: RendererPackageInstallDiagnostic?
+    public let rollbackCandidate: RendererPackageVersion?
+
+    public init(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedPackageHash: RendererSHA256Digest,
+        state: RendererPackageInstallState,
+        reservedAt: RFC3339Timestamp,
+        updatedAt: RFC3339Timestamp,
+        diagnostic: RendererPackageInstallDiagnostic? = nil,
+        rollbackCandidate: RendererPackageVersion? = nil
+    ) throws {
+        guard reservedAt <= updatedAt, rollbackCandidate != version else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent record")
+        }
+        self.packageID = packageID
+        self.version = version
+        self.expectedPackageHash = expectedPackageHash
+        self.state = state
+        self.reservedAt = reservedAt
+        self.updatedAt = updatedAt
+        self.diagnostic = diagnostic
+        self.rollbackCandidate = rollbackCandidate
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.packageID, lhs.version) < (rhs.packageID, rhs.version)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            packageID: container.decode(RendererPackageID.self, forKey: .packageID),
+            version: container.decode(RendererPackageVersion.self, forKey: .version),
+            expectedPackageHash: container.decode(RendererSHA256Digest.self, forKey: .expectedPackageHash),
+            state: container.decode(RendererPackageInstallState.self, forKey: .state),
+            reservedAt: container.decode(RFC3339Timestamp.self, forKey: .reservedAt),
+            updatedAt: container.decode(RFC3339Timestamp.self, forKey: .updatedAt),
+            diagnostic: try container.decodeIfPresent(RendererPackageInstallDiagnostic.self, forKey: .diagnostic),
+            rollbackCandidate: try container.decodeIfPresent(RendererPackageVersion.self, forKey: .rollbackCandidate)
+        )
+    }
 }
 
 public struct RendererEventSubsystemID: RawRepresentable, Codable, Hashable, Sendable, Comparable {
@@ -116,6 +193,17 @@ public struct RFC3339Timestamp: RawRepresentable, Codable, Hashable, Sendable, C
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// Parses a persisted timestamp using the same RFC 3339 variants accepted
+    /// at construction. Persistence readers must not substitute a sentinel.
+    public func date() throws -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        throw RendererValidationError.invalidIdentifier(kind: "offset-bearing RFC3339 timestamp", value: rawValue)
+    }
 
     private static func isOffsetBearingRFC3339(_ value: String) -> Bool {
         guard value.contains("T"), value.count >= 25 else { return false }
@@ -264,6 +352,26 @@ public protocol RendererEventIDGenerating: Sendable {
 public struct UUIDRendererEventIDGenerator: RendererEventIDGenerating {
     public init() {}
     public func nextEventID() -> UUID { UUID() }
+}
+
+/// Supplies a candidate sequence for a machine journal append. The journal
+/// validates it against its durable scoped high-water mark before committing.
+public protocol RendererEventSequenceGenerating: Sendable {
+    func nextSequence(after: UInt64) -> UInt64
+}
+
+public struct DurableRendererEventSequenceGenerator: RendererEventSequenceGenerating {
+    public init() {}
+    public func nextSequence(after sequence: UInt64) -> UInt64 { sequence + 1 }
+}
+
+public protocol RendererEventProcessLeaseIDGenerating: Sendable {
+    func nextLeaseID() -> RendererEventProcessLeaseID
+}
+
+public struct UUIDRendererEventProcessLeaseIDGenerator: RendererEventProcessLeaseIDGenerating {
+    public init() {}
+    public func nextLeaseID() -> RendererEventProcessLeaseID { RendererEventProcessLeaseID() }
 }
 
 public protocol RendererEventClock: Sendable {

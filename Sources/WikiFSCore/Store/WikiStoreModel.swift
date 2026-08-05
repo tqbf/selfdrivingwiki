@@ -37,6 +37,12 @@ public struct SearchUpgradeState: Identifiable {
 @Observable
 public final class WikiStoreModel {
     public private(set) var summaries: [WikiPageSummary] = []
+    /// Monotone invalidation for machine-scoped renderer availability. It is
+    /// intentionally separate from resource projections: machine settings do
+    /// not create pages, sources, provenance, File Provider work, or Tantivy
+    /// indexing. Phase 5 will consume this to build an unavailable-only
+    /// renderer availability projection; this slice does not activate records.
+    public private(set) var rendererMachineAvailabilityRevision: UInt64 = 0
     /// Sort order for the sidebar pages list. Changing this triggers a reload.
     public var pageSortOrder: PageSortOrder = .lastUpdated {
         didSet {
@@ -3824,6 +3830,14 @@ public final class WikiStoreModel {
         reloadBookmarkNodes()
         pruneHistoryToCurrentStore()
         reloadCurrentDraftIfClean()
+    }
+
+    /// Incorporate the authoritative machine renderer index after a durable
+    /// machine-event delivery. Active renderer pins and all resource state are
+    /// deliberately untouched; installed records remain unavailable until the
+    /// future activation phase.
+    public func reloadRendererMachineAvailability() {
+        rendererMachineAvailabilityRevision &+= 1
     }
 
     /// Re-read the current page's draft (title + body) from the store when the
