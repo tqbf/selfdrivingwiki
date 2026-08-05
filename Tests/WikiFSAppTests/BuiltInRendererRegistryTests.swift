@@ -110,6 +110,13 @@ import WikiFSTypes
         #expect(id == .html)
     }
 
+    @Test("HTML extraction classification does not depend on a loaded byte snapshot")
+    func htmlExtractionClassificationSurvivesNilBytes() {
+        let source = fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)
+        #expect(SourceRendererPresentationPlanner.isHTMLSource(source))
+        #expect(SourceRendererPresentationPlanner.htmlSourceString(for: source, bytes: nil) == nil)
+    }
+
     @Test("Planner maps Mermaid extension/content to the Mermaid built-in")
     func plannerMatchesMermaid() throws {
         let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)

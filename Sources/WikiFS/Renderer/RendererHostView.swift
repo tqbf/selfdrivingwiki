@@ -9,6 +9,7 @@ import WikiFSTypes
 struct RendererHostView<Source: View, Rendered: View>: View {
     @Binding var state: RendererPresentationState
     let descriptors: [RendererDescriptor]
+    let showsControls: Bool
     let source: () -> Source
     let rendered: (RendererDescriptor) -> Rendered?
     let onRendererSelected: (RendererReference) -> Void
@@ -23,7 +24,7 @@ struct RendererHostView<Source: View, Rendered: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !descriptors.isEmpty {
+            if showsControls && !descriptors.isEmpty {
                 controls
             }
             Group {
@@ -44,17 +45,21 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                         fallbackWithSource(reason: "The selected renderer is unavailable.")
                     }
                 case .split:
-                    HSplitView {
-                        source().frame(minWidth: RendererPresentationLayout.minimumSourcePaneWidth)
-                        if let selectedDescriptor {
-                            if let renderedContent = rendered(selectedDescriptor) {
-                                renderedContent.frame(minWidth: RendererPresentationLayout.minimumRenderedPaneWidth)
+                    if RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth) {
+                        HSplitView {
+                            source().frame(minWidth: RendererPresentationLayout.minimumSourcePaneWidth)
+                            if let selectedDescriptor {
+                                if let renderedContent = rendered(selectedDescriptor) {
+                                    renderedContent.frame(minWidth: RendererPresentationLayout.minimumRenderedPaneWidth)
+                                } else {
+                                    fallbackPane(reason: "The selected renderer could not be loaded.")
+                                }
                             } else {
-                                fallbackPane(reason: "The selected renderer could not be loaded.")
+                                fallbackPane(reason: "The selected renderer is unavailable.")
                             }
-                        } else {
-                            fallbackPane(reason: "The selected renderer is unavailable.")
                         }
+                    } else {
+                        fallbackWithSource(reason: "The detail pane is too narrow for Split view.")
                     }
                 }
             }
@@ -141,11 +146,14 @@ struct RendererHostView<Source: View, Rendered: View>: View {
     }
 
     private func selectSourceAfterFallback(_ reason: String) {
-        onFallback(reason)
         // `onAppear` runs after the update pass, so this is not an AppKit
         // representable update seam. Defer one turn to avoid a synchronous
         // state mutation while SwiftUI is constructing the fallback tree.
-        Task { @MainActor in state.selectFallback(reason: reason) }
+        Task { @MainActor in
+            guard state.fallbackReason == nil else { return }
+            state.selectFallback(reason: reason)
+            onFallback(reason)
+        }
     }
 }
 #endif

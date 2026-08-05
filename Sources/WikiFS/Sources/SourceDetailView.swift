@@ -96,7 +96,7 @@ struct SourceDetailView: View {
     /// ingested — prompts before re-ingesting, since that may create duplicate
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
     @State private var showReingestConfirmation = false
-    @State private var rendererPresentation = RendererPresentationState(sourceID: SourceID(rawValue: ""))
+    @State private var rendererPresentationLifecycle = RendererPresentationLifecycle(sourceID: SourceID(rawValue: ""))
     /// Cached once per source lifecycle so body evaluation and editor changes do
     /// not repeatedly synchronously fetch the complete SQLite blob.
     @State private var sourceBytesSnapshot: Data?
@@ -161,6 +161,12 @@ struct SourceDetailView: View {
             DebugLog.tabs("SourceDetailView: renderer planning failed (source=\(file.id.rawValue)): \(error)")
             return []
         }
+    }
+
+    private var rendererPresentationBinding: Binding<RendererPresentationState> {
+        Binding(
+            get: { rendererPresentationLifecycle.state },
+            set: { rendererPresentationLifecycle.replaceState($0) })
     }
 
     private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
@@ -396,7 +402,7 @@ struct SourceDetailView: View {
         // sources — the raw bytes are HTML, not markdown, and rendering them
         // as markdown would show raw `<html>` tags. The Reader tab falls back
         // to its "No Processed Markdown" placeholder until headVersion loads.
-        if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
+        if SourceRendererPresentationPlanner.isHTMLSource(file) {
             return nil
         }
         if isMarkdownNative, let data = sourceBytesSnapshot {
@@ -542,11 +548,10 @@ struct SourceDetailView: View {
         // fires for the view that initiated the job; another wiki window
         // viewing the same source would see the stale head without this).
         .onChange(of: store.sources) { _, _ in
-            refreshSourceBytesSnapshot()
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
             }
-            resolveRendererPresentation()
+            refreshRendererPresentation()
             updateRightSidebarRegistration()
         }
         .background { findShortcutButton }
@@ -758,9 +763,9 @@ struct SourceDetailView: View {
                         // go through the queue as before.
                         Button(isExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil)")
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file))")
                             Task {
-                                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
+                                if SourceRendererPresentationPlanner.isHTMLSource(file) {
                                     await runHtmlExtraction()
                                 } else {
                                     await runExtraction()
@@ -861,8 +866,10 @@ struct SourceDetailView: View {
                             // Leave Split alone — the editor is already
                             // visible there. Rendered-only mode needs Source
                             // so editing keeps its editor input visible.
-                            if rendererPresentation.selection == .rendered {
-                                rendererPresentation.selectSource()
+                            if rendererPresentationLifecycle.state.selection == .rendered {
+                                var lifecycle = rendererPresentationLifecycle
+                                lifecycle.selectSource()
+                                rendererPresentationLifecycle = lifecycle
                             }
                         }
                         .keyboardShortcut("e", modifiers: .command)
@@ -1138,14 +1145,15 @@ struct SourceDetailView: View {
     @ViewBuilder
     private var contentArea: some View {
         RendererHostView(
-            state: $rendererPresentation,
+            state: rendererPresentationBinding,
             descriptors: rendererDescriptors,
+            showsControls: !isEditing,
             source: { sourcePresentationContent },
             rendered: { descriptor in renderedContent(for: descriptor) },
             onRendererSelected: persistRendererPreference,
             onSourceSelected: clearRendererPreference,
             onPresentationSelected: persistRendererPresentationSelection,
-            onFallback: logRendererFallback)
+            onFallback: handleRendererFallback)
     }
 
     @ViewBuilder
@@ -1187,9 +1195,9 @@ struct SourceDetailView: View {
     /// Resolve the persisted logical or exact renderer once per source. The
     /// resulting exact reference remains pinned while this pane stays open.
     private func beginRendererPresentationLoading() {
-        var lifecycle = RendererPresentationLifecycle(sourceID: rendererPresentation.sourceID)
+        var lifecycle = rendererPresentationLifecycle
         lifecycle.beginLoading(sourceID: file.id)
-        rendererPresentation = lifecycle.state
+        rendererPresentationLifecycle = lifecycle
     }
 
     /// Resolve only after this view has loaded bytes, markdown, and origin for
@@ -1214,16 +1222,57 @@ struct SourceDetailView: View {
                     currentMarkdown: currentMarkdownContent,
                     origin: origin).first
             }
-            var lifecycle = RendererPresentationLifecycle(sourceID: file.id)
+            var lifecycle = rendererPresentationLifecycle
+            if lifecycle.state.sourceID != file.id {
+                lifecycle.beginLoading(sourceID: file.id)
+            }
             lifecycle.resolveLoadedSource(
                 source: file,
                 matchingRenderer: descriptor?.reference,
+                boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
+                origin: origin,
                 persistedSelection: store.rendererSourcePresentation(for: file.id))
-            rendererPresentation = lifecycle.state
+            rendererPresentationLifecycle = lifecycle
         } catch {
             DebugLog.tabs("SourceDetailView: renderer preference resolution failed (source=\(file.id.rawValue)): \(error)")
-            rendererPresentation = RendererPresentationState(sourceID: file.id)
+            var lifecycle = rendererPresentationLifecycle
+            lifecycle.beginLoading(sourceID: file.id)
+            rendererPresentationLifecycle = lifecycle
+        }
+    }
+
+    /// Refreshes using the already-loaded source facts. A source-list change is
+    /// not itself permission to rebuild the pane's exact renderer pin.
+    private func refreshRendererPresentation() {
+        do {
+            let planner = try SourceRendererPresentationPlanner()
+            let descriptors = try planner.matchingDescriptors(
+                for: file,
+                boundedBytes: sourceBytesSnapshot,
+                currentMarkdown: currentMarkdownContent,
+                origin: origin)
+            let preference = store.rendererSourcePreference(for: file.id)
+            let matching = try preference.flatMap { preference in
+                try planner.preferredDescriptor(
+                    preference: preference,
+                    for: file,
+                    boundedBytes: sourceBytesSnapshot,
+                    currentMarkdown: currentMarkdownContent,
+                    origin: origin)
+            } ?? descriptors.first
+            var lifecycle = rendererPresentationLifecycle
+            lifecycle.refreshLoadedSource(
+                source: file,
+                availableRenderers: descriptors.map(\.reference),
+                matchingRenderer: matching?.reference,
+                boundedBytes: sourceBytesSnapshot,
+                currentMarkdown: currentMarkdownContent,
+                origin: origin,
+                persistedSelection: store.rendererSourcePresentation(for: file.id))
+            rendererPresentationLifecycle = lifecycle
+        } catch {
+            DebugLog.tabs("SourceDetailView: renderer refresh failed (source=\(file.id.rawValue)): \(error)")
         }
     }
 
@@ -1231,8 +1280,10 @@ struct SourceDetailView: View {
         sourceBytesSnapshot = store.sourceBytes(id: file.id)
     }
 
-    private func logRendererFallback(_ reason: String) {
+    private func handleRendererFallback(_ reason: String) {
         DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
+        store.removeRendererSourcePreference(sourceID: file.id)
+        store.setRendererSourcePresentation(sourceID: file.id, presentation: .source)
     }
 
     // MARK: Markdown reader / editor
@@ -1502,7 +1553,7 @@ struct SourceDetailView: View {
                 // `transcribe` paths (issues #799 PR2 + PR4 + PR5 — the queue
                 // engine is PDF-coupled; generalizing it is a deferred
                 // sub-project per the parent plan's "Out of scope" section).
-                if SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: sourceBytesSnapshot) != nil {
+                if SourceRendererPresentationPlanner.isHTMLSource(file) {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
                             Task {

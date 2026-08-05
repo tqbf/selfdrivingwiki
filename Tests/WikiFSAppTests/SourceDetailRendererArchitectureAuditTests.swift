@@ -40,6 +40,9 @@ import Testing
         #expect(source.contains("RendererHostView"))
         #expect(source.contains("SourceRendererPresentationPlanner"))
         #expect(source.contains("BuiltInRendererFactoryMap.makeView"))
+        #expect(source.contains("showsControls: !isEditing"))
+        #expect(source.contains("SourceRendererPresentationPlanner.isHTMLSource(file)"))
+        #expect(source.contains("refreshRendererPresentation"))
     }
 
     @Test func rendererShortcutsDoNotOverlapGlobalCommandNumberTabs() throws {
@@ -52,6 +55,13 @@ import Testing
             #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: [.command, .option])"))
             #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: .command)") == false)
         }
+    }
+
+    @Test("Renderer host guards Split with the detail-width contract") func rendererHostGuardsSplitWidth() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let host = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererHostView.swift"), encoding: .utf8)
+        #expect(host.contains("RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth)"))
     }
 }
 #endif

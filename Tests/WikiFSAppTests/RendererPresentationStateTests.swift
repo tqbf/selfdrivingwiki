@@ -7,6 +7,18 @@ import WikiFSTypes
 @testable import WikiFS
 
 @Suite struct RendererPresentationStateTests {
+    private func pdfSource() -> SourceSummary {
+        SourceSummary(
+            id: SourceID(rawValue: "01J00000000000000000000000"),
+            filename: "paper.pdf",
+            ext: "pdf",
+            mimeType: MimeType.pdf,
+            byteSize: 4,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            version: 1)
+    }
+
     @Test func sourceFallbackIsSelectedWhenNoRendererMatches() {
         let state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
         #expect(state.selection == .source)
@@ -55,6 +67,58 @@ import WikiFSTypes
         state.keepPinnedRenderer(available: [html])
         #expect(state.pinnedRenderer == nil)
         #expect(state.selection == .source)
+    }
+
+    @Test("Production lifecycle: an unchanged source refresh preserves its pinned renderer and selected mode")
+    func unchangedRefreshPreservesPinnedRendererAndMode() {
+        let source = pdfSource()
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+        lifecycle.selectSplit(pdf)
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+
+        #expect(lifecycle.state.selection == .split)
+        #expect(lifecycle.state.pinnedRenderer == pdf)
+    }
+
+    @Test("Production lifecycle: a failed renderer fallback survives an unchanged refresh")
+    func fallbackRefreshKeepsSourceAndNotice() {
+        let source = pdfSource()
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+        lifecycle.selectFallback(reason: "The selected renderer could not be loaded.")
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .source)
+
+        #expect(lifecycle.state.selection == .source)
+        #expect(lifecycle.state.pinnedRenderer == nil)
+        #expect(lifecycle.state.fallbackReason == "The selected renderer could not be loaded.")
+    }
+
+    @Test("The detail minimum width admits the production Split layout")
+    func detailMinimumWidthSupportsSplit() {
+        #expect(RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth))
     }
 
     @Test("A removed pin lets Split choose an available renderer")

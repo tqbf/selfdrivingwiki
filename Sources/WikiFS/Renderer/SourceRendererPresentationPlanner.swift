@@ -102,8 +102,14 @@ struct SourceRendererPresentationPlanner: Sendable {
 
     /// Decodes original HTML only for descriptors that match the HTML contract.
     nonisolated static func htmlSourceString(for source: SourceSummary, bytes: Data?) -> String? {
-        guard htmlSource(source), let bytes else { return nil }
+        guard isHTMLSource(source), let bytes else { return nil }
         return String(data: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// HTML classification is source metadata, independent of whether this
+    /// pane's bounded byte snapshot has loaded yet.
+    nonisolated static func isHTMLSource(_ source: SourceSummary) -> Bool {
+        htmlSource(source)
     }
 
     nonisolated static func renderableMermaidMarkdown(_ markdown: String?) -> String? {
