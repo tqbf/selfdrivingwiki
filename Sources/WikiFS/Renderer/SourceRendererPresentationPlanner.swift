@@ -118,7 +118,19 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     nonisolated static func hasPresentableSource(for source: SourceSummary, currentMarkdown: String?) -> Bool {
-        currentMarkdown != nil || source.mimeType.map(MimeType.isText) == true
+        usesMarkdownSourcePresentation(for: source, currentMarkdown: currentMarkdown)
+    }
+
+    /// Whether Source should use the Markdown/reader path instead of the raw
+    /// binary fallback. Standalone Mermaid sources retain this path even for
+    /// legacy rows whose MIME type is NULL (#620).
+    nonisolated static func usesMarkdownSourcePresentation(
+        for source: SourceSummary,
+        currentMarkdown: String?
+    ) -> Bool {
+        currentMarkdown != nil ||
+            source.mimeType.map(MimeType.isText) == true ||
+            standaloneDiagramSource(source)
     }
 
     nonisolated static func mediaTarget(for source: SourceSummary, origin: SourceOrigin?) -> EmbedTarget? {

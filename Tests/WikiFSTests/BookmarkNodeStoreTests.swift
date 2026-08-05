@@ -702,6 +702,34 @@ private struct FixedRendererEventClock: RendererEventClock {
         #expect(try store.rendererSettingsJournalRecords().count == 2)
     }
 
+    @Test("Renderer fallback Source presentation retains logical and exact preferences")
+    func sourcePresentationFallbackRetainsRendererPreferences() throws {
+        let packageID = try RendererPackageID(validating: "org.example.viewer")
+        let registrationID = try RendererRegistrationID(validating: "canvas")
+        let preferences: [RendererPreferenceReference] = [
+            .logical(LogicalRendererReference(packageID: packageID, registrationID: registrationID)),
+            .exact(RendererReference(
+                packageID: packageID,
+                version: try RendererPackageVersion(validating: "1.0.0"),
+                registrationID: registrationID)),
+        ]
+
+        for (index, preference) in preferences.enumerated() {
+            let store = try store()
+            let source = try store.addSource(
+                filename: "diagram-\(index).canvas",
+                data: Data("{\"index\":\(index)}".utf8))
+            try store.setRendererSourcePreference(sourceID: source.id, preference: preference)
+
+            // Renderer fallback changes what this source shows without
+            // deleting the user's stored renderer choice.
+            try store.setRendererSourcePresentation(sourceID: source.id, presentation: .source)
+
+            #expect(try store.rendererSourcePreference(sourceID: source.id)?.preference == preference)
+            #expect(try store.rendererSourcePresentation(sourceID: source.id)?.presentation == .source)
+        }
+    }
+
     @Test func sourcePreferenceConstraintRollbackPersistsNoJournalRecord() throws {
         let store = try store()
         let packageID = try RendererPackageID(validating: "org.example.viewer")

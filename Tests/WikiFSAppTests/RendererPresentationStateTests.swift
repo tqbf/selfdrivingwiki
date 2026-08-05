@@ -147,6 +147,44 @@ import WikiFSTypes
         #expect(state.fallbackReason == nil)
     }
 
+    @Test("Presentation controls describe the active visual and VoiceOver state")
+    func presentationControlsDescribeActiveVisualAndVoiceOverState() {
+        let source = RendererPresentationControlState(
+            presentation: .source,
+            selectedPresentation: .rendered)
+        let rendered = RendererPresentationControlState(
+            presentation: .rendered,
+            selectedPresentation: .rendered)
+        let split = RendererPresentationControlState(
+            presentation: .split,
+            selectedPresentation: .rendered)
+
+        #expect(source.isSelected == false)
+        #expect(source.accessibilityValue == "Not selected")
+        #expect(rendered.isSelected)
+        #expect(rendered.accessibilityValue == "Selected")
+        #expect(split.isSelected == false)
+        #expect(split.accessibilityValue == "Not selected")
+    }
+
+    @Test("Fallback waits for explicit renderer selection before recovering")
+    func fallbackWaitsForExplicitRendererSelectionBeforeRecovering() {
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
+        state.selectRendered(pdf)
+        state.selectFallback(reason: "The selected renderer could not be loaded.")
+
+        state.keepPinnedRenderer(available: [pdf])
+        #expect(state.selection == .source)
+        #expect(state.pinnedRenderer == nil)
+        #expect(state.fallbackReason == "The selected renderer could not be loaded.")
+
+        state.selectRendered(pdf)
+        #expect(state.selection == .rendered)
+        #expect(state.pinnedRenderer == pdf)
+        #expect(state.fallbackReason == nil)
+    }
+
     @Test("Split metrics fit the source detail minimum width")
     func splitMetricsFitDetailMinimumWidth() {
         #expect(RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth))

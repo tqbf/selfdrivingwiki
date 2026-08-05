@@ -45,6 +45,20 @@ import Testing
         #expect(source.contains("refreshRendererPresentation"))
     }
 
+    @Test func rendererFallbackSelectsSourceWithoutDeletingRendererPreference() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/WikiFS/Sources/SourceDetailView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let fallbackStart = try #require(source.range(of: "private func handleRendererFallback"))
+        let fallbackEnd = try #require(source[fallbackStart.lowerBound...].range(of: "\n    // MARK:"))
+        let fallback = source[fallbackStart.lowerBound..<fallbackEnd.lowerBound]
+
+        #expect(fallback.contains("store.setRendererSourcePresentation(sourceID: file.id, presentation: .source)"))
+        #expect(fallback.contains("DebugLog.tabs"))
+        #expect(fallback.contains("removeRendererSourcePreference") == false)
+    }
+
     @Test func rendererShortcutsDoNotOverlapGlobalCommandNumberTabs() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

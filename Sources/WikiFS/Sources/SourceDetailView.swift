@@ -1169,7 +1169,10 @@ struct SourceDetailView: View {
                 Text(emptyMedia.description)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if isMarkdownNative || hasMarkdown {
+        } else if SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: file,
+            currentMarkdown: currentMarkdownContent
+        ) {
             markdownContent
         } else {
             binaryFallback
@@ -1282,7 +1285,10 @@ struct SourceDetailView: View {
 
     private func handleRendererFallback(_ reason: String) {
         DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
-        store.removeRendererSourcePreference(sourceID: file.id)
+        // A failed renderer changes this source's visible presentation, not
+        // the user's stored logical or exact renderer preference. Retaining
+        // that preference allows an explicit retry when a compatible renderer
+        // is available, without data loss.
         store.setRendererSourcePresentation(sourceID: file.id, presentation: .source)
     }
 

@@ -128,6 +128,15 @@ import WikiFSTypes
         #expect(id == .mermaid)
     }
 
+    @Test("Characterization: NULL-MIME standalone Mermaid uses Source markdown presentation")
+    func nullMIMEStandaloneMermaidUsesSourceMarkdownPresentation() {
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
+
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: source,
+            currentMarkdown: nil))
+    }
+
     @Test("Planner maps media origin to the Media built-in")
     func plannerMatchesMediaOrigin() throws {
         let source = fixtureSource(filename: "video.url", ext: "", mimeType: "video/youtube", byteSize: 0)

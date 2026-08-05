@@ -4,6 +4,18 @@ import WikiFSTypes
 
 // pattern: Imperative Shell
 
+/// The visual and accessibility state for one presentation control.
+///
+/// Keeping this projection pure makes Source, Rendered, and Split semantics
+/// consistent for both the native control treatment and VoiceOver.
+struct RendererPresentationControlState: Sendable, Equatable {
+    let presentation: RendererSourcePresentationMode
+    let selectedPresentation: RendererSourcePresentationMode
+
+    var isSelected: Bool { presentation == selectedPresentation }
+    var accessibilityValue: String { isSelected ? "Selected" : "Not selected" }
+}
+
 /// Generic native renderer host. It owns presentation controls and keeps Source
 /// visible whenever matching or rendering cannot provide a rendered pane.
 struct RendererHostView<Source: View, Rendered: View>: View {
@@ -68,42 +80,68 @@ struct RendererHostView<Source: View, Rendered: View>: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            Button("Source") {
-                state.selectSource()
-                onSourceSelected()
-                onPresentationSelected(.source)
-            }
+            presentationControl(.source) {
+                Button("Source") {
+                    state.selectSource()
+                    onSourceSelected()
+                    onPresentationSelected(.source)
+                }
                 .keyboardShortcut("1", modifiers: [.command, .option])
                 .accessibilityLabel("Show source")
-            Menu("Rendered") {
-                ForEach(descriptors, id: \.reference) { descriptor in
-                    Button(descriptor.displayName) {
-                        state.selectRendered(descriptor.reference)
-                        onRendererSelected(descriptor.reference)
-                        onPresentationSelected(.rendered)
+            }
+            presentationControl(.rendered) {
+                Menu("Rendered") {
+                    ForEach(descriptors, id: \.reference) { descriptor in
+                        Button(descriptor.displayName) {
+                            state.selectRendered(descriptor.reference)
+                            onRendererSelected(descriptor.reference)
+                            onPresentationSelected(.rendered)
+                        }
                     }
                 }
+                .keyboardShortcut("2", modifiers: [.command, .option])
+                .accessibilityLabel("Show rendered content")
             }
-            .keyboardShortcut("2", modifiers: [.command, .option])
-            .accessibilityLabel("Show rendered content")
-            Button("Split") {
-                if let reference = Self.splitRendererReference(
-                    pinnedRenderer: state.pinnedRenderer,
-                    availableRendererReferences: descriptors.map(\.reference)
-                ) {
-                    state.selectSplit(reference)
-                    onRendererSelected(reference)
-                    onPresentationSelected(.split)
+            presentationControl(.split) {
+                Button("Split") {
+                    if let reference = Self.splitRendererReference(
+                        pinnedRenderer: state.pinnedRenderer,
+                        availableRendererReferences: descriptors.map(\.reference)
+                    ) {
+                        state.selectSplit(reference)
+                        onRendererSelected(reference)
+                        onPresentationSelected(.split)
+                    }
                 }
+                .keyboardShortcut("3", modifiers: [.command, .option])
+                .accessibilityLabel("Show source and rendered content")
+                .disabled(descriptors.isEmpty)
             }
-            .keyboardShortcut("3", modifiers: [.command, .option])
-            .accessibilityLabel("Show source and rendered content")
-            .disabled(descriptors.isEmpty)
             Spacer()
         }
         .font(.callout)
         .padding(.horizontal, PageEditorMetrics.contentInset)
         .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func presentationControl<Content: View>(
+        _ presentation: RendererSourcePresentationMode,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let controlState = RendererPresentationControlState(
+            presentation: presentation,
+            selectedPresentation: state.selection)
+        if controlState.isSelected {
+            content()
+                .buttonStyle(.borderedProminent)
+                .accessibilityValue(controlState.accessibilityValue)
+                .accessibilityAddTraits(.isSelected)
+        } else {
+            content()
+                .buttonStyle(.bordered)
+                .accessibilityValue(controlState.accessibilityValue)
+        }
     }
 
     /// A pin only belongs to the descriptor snapshot that supplied it. If the
