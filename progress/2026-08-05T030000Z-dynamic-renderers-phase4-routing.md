@@ -40,12 +40,12 @@ renderer only when that renderer remains in the current descriptor set.
 
 ## Verification
 
-- Final implementation/fix commit: `bd71665fd9a13d9eb4d988e3ab0b6d15765a27b9`.
+- Final implementation/fix commit: `20970974fed6fcc461791a01d56f89df11242b46`.
 - Base: `feature/dynamic-renderers-03-persistence` at
   `41c96e17051e2f131b279fbd34d243136cff2dd5`.
 - Exact-head `make build`: passed; signed app assembled.
 - Exact-head `make test`: passed, 3,116 tests in 264 suites.
-- Exact-head focused renderer/app/resolution/persistence suites: passed, 116
+- Exact-head focused renderer/app/resolution/persistence suites: passed, 119
   Swift Testing tests in 7 suites, including `RendererPhase3PortableTests`.
 - Exact-head `make lint`: passed with 0 violations; bare `try?` guard passed;
   `git diff --check` passed.
@@ -54,7 +54,8 @@ renderer only when that renderer remains in the current descriptor set.
 
 - The exact-head remediation fixes live Source fallback persistence, Source
   preference retention, delayed-fallback source identity, persisted settings
-  payload versioning with legacy v1 decode compatibility, and lifecycle source
-  identity resolution. The retained inventory is updated for all changed
+  payload versioning with legacy v1 decode compatibility, lifecycle source
+  identity resolution, HTML-without-markdown rendered defaults, and editor-safe
+  source refreshes. The retained inventory is updated for all changed
   production symbols. A fresh independent Claude/Opus exact-head review is
   required before publication.
