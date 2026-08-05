@@ -550,8 +550,8 @@ struct SourceDetailView: View {
         .onChange(of: store.sources) { _, _ in
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
+                refreshRendererPresentation()
             }
-            refreshRendererPresentation()
             updateRightSidebarRegistration()
         }
         .background { findShortcutButton }
@@ -1267,7 +1267,8 @@ struct SourceDetailView: View {
                 boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin,
-                persistedSelection: store.rendererSourcePresentation(for: file.id))
+                persistedSelection: store.rendererSourcePresentation(for: file.id),
+                isEditing: isEditing)
             rendererPresentationLifecycle = lifecycle
         } catch {
             DebugLog.tabs("SourceDetailView: renderer refresh failed (source=\(file.id.rawValue)): \(error)")

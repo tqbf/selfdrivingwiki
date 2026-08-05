@@ -43,6 +43,15 @@ import Testing
         #expect(source.contains("showsControls: !isEditing"))
         #expect(source.contains("SourceRendererPresentationPlanner.isHTMLSource(file)"))
         #expect(source.contains("refreshRendererPresentation"))
+
+        let sourceRefreshStart = try #require(source.range(of: ".onChange(of: store.sources)"))
+        let sourceRefreshEnd = try #require(source[sourceRefreshStart.lowerBound...].range(of: ".background"))
+        let sourceRefresh = source[sourceRefreshStart.lowerBound..<sourceRefreshEnd.lowerBound]
+        let editingGuard = try #require(sourceRefresh.range(of: "if !isEditing"))
+        let refreshCall = try #require(sourceRefresh.range(of: "refreshRendererPresentation()"))
+        let editingGuardEnd = try #require(source[editingGuard.lowerBound...].range(of: "\n            }"))
+        #expect(editingGuard.lowerBound < refreshCall.lowerBound && refreshCall.lowerBound < editingGuardEnd.lowerBound,
+                "A source-list refresh must not recompute renderer presentation from an active editor buffer.")
     }
 
     @Test func rendererFallbackStaysLiveWithoutOverwritingStoredPresentationOrPreference() throws {

@@ -78,8 +78,13 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
         boundedBytes: Data? = nil,
         currentMarkdown: String?,
         origin: SourceOrigin? = nil,
-        persistedSelection: RendererSourcePresentationMode?
+        persistedSelection: RendererSourcePresentationMode?,
+        isEditing: Bool = false
     ) {
+        // An edit buffer is transient input. Do not let a source-list refresh
+        // resolve the persisted presentation over the live Source editor.
+        // A different source must still resolve after navigation.
+        guard !isEditing || state.sourceID != source.id else { return }
         let refreshedFacts = LoadedFacts(
             source: source,
             boundedBytes: boundedBytes,

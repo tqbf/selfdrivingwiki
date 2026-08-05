@@ -129,7 +129,7 @@ struct SourceRendererPresentationPlanner: Sendable {
         currentMarkdown: String?
     ) -> Bool {
         currentMarkdown != nil ||
-            source.mimeType.map(MimeType.isText) == true ||
+            (!isHTMLSource(source) && source.mimeType.map(MimeType.isText) == true) ||
             standaloneDiagramSource(source)
     }
 

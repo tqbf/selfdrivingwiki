@@ -264,6 +264,18 @@ import WikiFSTypes
         #expect(result.tabs == [.reader, .html, .split])
     }
 
+    @Test("Characterization: HTML without markdown renders HTML only")
+    func characterizesHTMLWithoutMarkdown() {
+        let result = SourceDetailPresentationCharacterization.characterize(
+            source: fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14),
+            boundedBytes: Data("<h1>Hello</h1>".utf8),
+            currentMarkdown: nil,
+            hasProcessedMarkdown: false,
+            origin: nil)
+        #expect(result.contentArea == .tabbed)
+        #expect(result.tabs == [.html])
+    }
+
     @Test("Characterization: Mermaid keeps Reader/Rendered/Split tabs")
     func characterizesMermaid() {
         let result = SourceDetailPresentationCharacterization.characterize(

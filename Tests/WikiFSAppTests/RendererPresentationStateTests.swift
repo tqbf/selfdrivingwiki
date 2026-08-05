@@ -282,6 +282,46 @@ import WikiFSTypes
         #expect(lifecycle.state.pinnedRenderer == nil)
     }
 
+    @Test("Lifecycle: HTML without processed markdown uses its rendered descriptor")
+    func lifecycleHTMLWithoutMarkdownUsesRenderedDescriptor() {
+        let source = lifecycleSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)
+        let html = BuiltInRendererReference.reference(for: .html)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: html,
+            currentMarkdown: nil,
+            persistedSelection: nil)
+
+        #expect(lifecycle.state.selection == .rendered)
+        #expect(lifecycle.state.pinnedRenderer == html)
+    }
+
+    @Test("Lifecycle: an editing refresh retains Source despite a persisted Rendered selection")
+    func lifecycleEditingRefreshDoesNotReplaceSourceWithRendered() {
+        let source = lifecycleSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)
+        let html = BuiltInRendererReference.reference(for: .html)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: html,
+            currentMarkdown: "# Extracted page",
+            persistedSelection: .rendered)
+        lifecycle.selectSource()
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [html],
+            matchingRenderer: html,
+            currentMarkdown: "# Extracted page\n\nUnsaved edit",
+            persistedSelection: .rendered,
+            isEditing: true)
+
+        #expect(lifecycle.state.selection == .source)
+        #expect(lifecycle.state.pinnedRenderer == nil)
+    }
+
     @Test("Lifecycle: a loaded extraction replaces an automatic PDF Rendered default with Source")
     func lifecycleReResolvesWhenPDFPresentabilityChanges() {
         let source = lifecycleSource(filename: "paper.pdf", ext: "pdf", mimeType: MimeType.pdf, byteSize: 4)
