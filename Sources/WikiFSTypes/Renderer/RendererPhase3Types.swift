@@ -201,6 +201,9 @@ public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
 }
 
 public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
+    /// Version of the persisted record envelope and its event payload grammar.
+    public static let currentSchemaVersion = 2
+
     public let schemaVersion: Int
     public let eventID: UUID
     public let sequence: UInt64
@@ -208,23 +211,49 @@ public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
     public let payload: WikiStoreChangeEvent
     public let committedAt: RFC3339Timestamp
 
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case eventID
+        case sequence
+        case scope
+        case payload
+        case committedAt
+    }
+
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = PersistedWikiStoreChangeRecord.currentSchemaVersion,
         eventID: UUID,
         sequence: UInt64,
         scope: WikiStoreChangeScope,
         payload: WikiStoreChangeEvent,
         committedAt: RFC3339Timestamp
     ) throws {
-        guard schemaVersion == 1 else {
-            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
-        }
+        try Self.validateSchemaVersion(schemaVersion)
         self.schemaVersion = schemaVersion
         self.eventID = eventID
         self.sequence = sequence
         self.scope = scope
         self.payload = payload
         self.committedAt = committedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.eventID = try container.decode(UUID.self, forKey: .eventID)
+        self.sequence = try container.decode(UInt64.self, forKey: .sequence)
+        self.scope = try container.decode(WikiStoreChangeScope.self, forKey: .scope)
+        self.payload = try container.decode(WikiStoreChangeEvent.self, forKey: .payload)
+        self.committedAt = try container.decode(RFC3339Timestamp.self, forKey: .committedAt)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard (1...currentSchemaVersion).contains(schemaVersion) else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
     }
 }
 

@@ -139,6 +139,31 @@ import WikiFSTypes
         #expect(reopened.state.pinnedRenderer == pdf)
     }
 
+    @Test("Production lifecycle: a refresh for a different source adopts that source identity")
+    func refreshForDifferentSourceUsesResolvedSourceIdentity() {
+        let firstSourceID = SourceID(rawValue: "01J00000000000000000000000")
+        let secondSourceID = SourceID(rawValue: "01J00000000000000000000001")
+        let secondSource = lifecycleSource(
+            id: secondSourceID,
+            filename: "paper.pdf",
+            ext: "pdf",
+            mimeType: MimeType.pdf,
+            byteSize: 4)
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var lifecycle = RendererPresentationLifecycle(sourceID: firstSourceID)
+
+        lifecycle.refreshLoadedSource(
+            source: secondSource,
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+
+        #expect(lifecycle.state.sourceID == secondSourceID)
+        #expect(lifecycle.state.selection == .rendered)
+        #expect(lifecycle.state.pinnedRenderer == pdf)
+    }
+
     @Test("The detail minimum width admits the production Split layout")
     func detailMinimumWidthSupportsSplit() {
         #expect(RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth))
@@ -364,13 +389,14 @@ import WikiFSTypes
 }
 
 private func lifecycleSource(
+    id: SourceID = SourceID(rawValue: "01J00000000000000000000000"),
     filename: String,
     ext: String,
     mimeType: String?,
     byteSize: Int
 ) -> SourceSummary {
     SourceSummary(
-        id: SourceID(rawValue: "01J00000000000000000000000"),
+        id: id,
         filename: filename,
         ext: ext,
         mimeType: mimeType,

@@ -55,7 +55,7 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
         persistedSelection: RendererSourcePresentationMode?
     ) {
         state = RendererPresentationState.defaultState(
-            sourceID: state.sourceID,
+            sourceID: source.id,
             matchingRenderer: matchingRenderer,
             hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
                 for: source,
