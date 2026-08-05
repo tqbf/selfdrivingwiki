@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 2,
+  "issue": 1026,
+  "phase": "3b",
+  "branch": "feature/dynamic-renderers-03b-machine-store",
+  "implementationSHA": "48312faa3ed896e250544db721abb6b0295fb878",
+  "auditedHEAD": "48312faa3ed896e250544db721abb6b0295fb878",
+  "implementationHeadRole": "exact production implementation audited by this docs-only gate refresh",
+  "documentationCommitRole": "this artifact is committed after the audited implementation; its commit SHA must not replace implementationSHA",
+  "target": { "ref": "feature/dynamic-renderers-03-persistence", "sha": "41c96e17051e2f131b279fbd34d243136cff2dd5" },
+  "mergeBase": "41c96e17051e2f131b279fbd34d243136cff2dd5",
+  "focusedSuites": [
+    { "suite": "RendererPackageStoreLayoutTests", "count": 5 },
+    { "suite": "RendererPackageStoreCoordinatorTests", "count": 6 },
+    { "suite": "RendererMachineIndexStoreTests", "count": 12 },
+    { "suite": "RendererMachineEventJournalTests", "count": 4 },
+    { "suite": "RendererEventLeaseTests", "count": 5 },
+    { "suite": "RendererTimestampPersistenceTests", "count": 1 },
+    { "suite": "RendererEventCursorTests", "count": 3 },
+    { "suite": "RendererEventAtLeastOnceTests", "count": 3 },
+    { "suite": "RendererEventRetentionTests", "count": 3 },
+    { "suite": "RendererEventTwoInstanceDeliveryTests", "count": 1 },
+    { "suite": "RendererEventWakeTests", "count": 3 },
+    { "suite": "RendererMachineEventFanOutTests", "count": 2 },
+    { "suite": "RendererSettingsProjectionIsolationTests", "count": 1 },
+    { "suite": "RendererSettingsSubscriptionTests", "count": 1 }
+  ],
+  "focusedTestCount": 50,
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreLayout.swift",
+      "symbols": ["RendererPackageStagingID", "RendererPackageStoreLayout", "isRendererPackageStorePathContained", "RendererPackageFileIdentity", "RendererPackageFileSystem", "RealRendererPackageFileSystem", "rendererPackageStoreFlock", "RendererPackageStoreError"],
+      "tests": ["RendererPackageStoreLayoutTests.injectedRootBuildsVersionedMachinePaths", "RendererPackageStoreLayoutTests.containmentAcceptsNestedAndRejectsEscapes", "RendererPackageStoreLayoutTests.containmentRejectsResolvedSymlinkEscape", "RendererPackageStoreLayoutTests.fileSystemReportsLstatIdentityAndNoFollowOpen", "RendererPackageStoreLayoutTests.noFollowOpenRejectsSymlink", "RendererPackageStoreCoordinatorTests.separateOpenFileDescriptionsCannotAcquireKernelLockUntilRelease", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinatorCore.swift",
+      "symbols": ["RendererCoordinatorClock", "SystemRendererCoordinatorClock", "RendererProcessIdentity", "RendererCoordinatorOwnerTokenGenerating", "UUIDRendererCoordinatorOwnerTokenGenerator", "RendererCoordinatorOwnerRecord", "RendererCoordinatorFailure"],
+      "tests": ["RendererPackageStoreCoordinatorTests.stableLockInodeSurvivesReleaseAndSerializesOwners", "RendererPackageStoreCoordinatorTests.cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode", "RendererPackageStoreCoordinatorTests.malformedDiagnosticMetadataDoesNotBlockKernelRecovery", "RendererPackageStoreCoordinatorTests.symlinkLockFailsClosed"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinator.swift",
+      "symbols": ["RendererPackageStoreCoordinator", "withExclusiveAccess", "acquireLock", "createLock", "releaseLock", "RendererPackageStoreInProcessGate", "tryAcquire", "release"],
+      "tests": ["RendererPackageStoreCoordinatorTests.stableLockInodeSurvivesReleaseAndSerializesOwners", "RendererPackageStoreCoordinatorTests.cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode", "RendererPackageStoreCoordinatorTests.separateOpenFileDescriptionsCannotAcquireKernelLockUntilRelease", "RendererPackageStoreCoordinatorTests.distinctCoordinatorsForOneLayoutCannotEnterConcurrently", "RendererPackageStoreCoordinatorTests.malformedDiagnosticMetadataDoesNotBlockKernelRecovery", "RendererPackageStoreCoordinatorTests.symlinkLockFailsClosed"]
+    },
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "symbols": ["RendererPackageInstallState", "RendererPackageInstallDiagnostic", "RendererPackageInstallRecord", "RFC3339Timestamp", "RendererEventSequenceGenerating", "DurableRendererEventSequenceGenerator", "RendererEventProcessLeaseIDGenerating", "UUIDRendererEventProcessLeaseIDGenerator"],
+      "tests": ["RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererEventLeaseTests.twoLiveSameSubsystemLeasesBootstrapAtCurrentHighWater", "RendererTimestampPersistenceTests.malformedPersistedTimestampFailsClosed"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": ["RendererMachineIndex", "RendererPackageReservation", "RendererMachineIndexStoreError", "rendererMachineIndexValidatingPackagePaths", "rendererMachineIndexApplying"],
+      "tests": ["RendererMachineIndexStoreTests.freshReadInitializesSQLiteAuthorityAndDerivedJSON", "RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations", "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected", "RendererMachineIndexStoreTests.duplicateRecordsAreRejected", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["RendererMachineDerivedIndexWriting", "FileRendererMachineDerivedIndexWriter", "RendererMachineIndexStore", "read", "mutate", "mutateAndAppendMachineEvent", "RendererMachineIndexSQLiteStorage", "ensureExpectedHashReservationTable", "reserveExpectedHashes", "expectedHashReservation", "insertExpectedHashReservation"],
+      "tests": ["RendererMachineIndexStoreTests.freshReadInitializesSQLiteAuthorityAndDerivedJSON", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations", "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid", "RendererMachineIndexStoreTests.failedDerivedReplacementRollsBackSQLiteAndPreservesLastValidJSON", "RendererMachineIndexStoreTests.machineStoreDoesNotTouchWikiOrFileProviderProjection", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventJournal.swift",
+      "symbols": ["RendererMachineEventJournal", "ReadBatch", "highWater", "records", "append", "discardRecords", "RendererMachineEventJournalError", "RendererEventProcessLease", "RendererMachineLeaseRegistry", "createLease", "heartbeat", "retire", "reclaim", "cursor", "checkpoint", "markHandled", "resetAfterAuthoritativeReload", "RendererMachineJournalSQLite", "resetCursor", "advanceCursor", "validateLiveLease"],
+      "tests": ["RendererMachineEventJournalTests.freshJournalHasZeroHighWater", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord", "RendererMachineEventJournalTests.scopedOrderedDrainIsBoundedAndReportsHighWater", "RendererEventLeaseTests.productionGeneratedFractionalOffsetTimestampsPreserveLeaseBoundaries", "RendererEventLeaseTests.retiredLeaseCannotBeResurrectedByHeartbeat", "RendererEventLeaseTests.twoLiveSameSubsystemLeasesBootstrapAtCurrentHighWater", "RendererEventLeaseTests.liveLeaseAndHeartbeatCannotBeReclaimed", "RendererEventLeaseTests.staleAndCleanRetiredLeasesObserveSafetyWindows", "RendererEventCursorTests.restartedLeaseBootstrapsCursorToJournalHighWater", "RendererEventCursorTests.cursorAdvancesOnlyAfterExplicitSuccessAndCheckpointIsConservative", "RendererEventCursorTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess", "RendererEventRetentionTests.retentionGapReloadsAuthorityAndResetsCursorAndCheckpoint", "RendererEventRetentionTests.cursorBeyondHighWaterReloadsAuthorityInsteadOfSilentlyNoOping", "RendererEventRetentionTests.cancellationDuringHandlerDoesNotAdvanceRetiredLeaseCursor", "RendererEventTwoInstanceDeliveryTests.twoIndependentInstancesDeliverAfterBothLeasesAreReady"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventReader.swift",
+      "symbols": ["RendererMachineEventReader", "receiveWake", "cancel", "drainUntilCaughtUp"],
+      "tests": ["RendererEventAtLeastOnceTests.crashAfterHandlerBeforeCursorCausesReplay", "RendererEventAtLeastOnceTests.replayProducesIdempotentFinalModelState", "RendererEventAtLeastOnceTests.handlerFailureLeavesCursorUnchanged", "RendererEventRetentionTests.retentionGapReloadsAuthorityAndResetsCursorAndCheckpoint", "RendererEventRetentionTests.cursorBeyondHighWaterReloadsAuthorityInsteadOfSilentlyNoOping", "RendererEventRetentionTests.cancellationDuringHandlerDoesNotAdvanceRetiredLeaseCursor", "RendererEventWakeTests.wakeWithoutCommittedRecordIsNoOp", "RendererEventWakeTests.duplicateWakeRunsOneOrderedDrainPerLease"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventSubscription.swift",
+      "symbols": ["RendererMachineEventSubscription", "RendererMachineModelFanOut", "register", "unregister", "receiveWake", "teardown", "reloadLiveModels"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineWakeRouting.swift",
+      "symbols": ["RendererMachineWakeRouting", "scope"],
+      "tests": ["RendererEventWakeTests.machineRoutingRejectsResourceNames"]
+    },
+    {
+      "path": "Sources/WikiFS/Window/WikiChangeBridge.swift",
+      "symbols": ["observedRendererMachineScopes", "rendererMachineWakeHandler", "refreshRendererMachineObservations", "addRendererMachineObserver", "removeRendererMachineObserver", "didReceiveDarwinNotification"],
+      "tests": ["RendererEventWakeTests.machineRoutingRejectsResourceNames"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "symbols": ["rendererMachineAvailabilityRevision", "reloadRendererMachineAvailability"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection"]
+    },
+    {
+      "path": "Sources/WikiFSEngine/SessionManager.swift",
+      "symbols": ["reloadRendererMachineAvailabilityForLiveSessions"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen"]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererPackageStoreLayoutTests.swift",
+    "Tests/WikiFSTests/RendererPackageStoreCoordinatorTests.swift",
+    "Tests/WikiFSTests/RendererMachineIndexStoreTests.swift",
+    "Tests/WikiFSTests/RendererMachineEventJournalTests.swift",
+    "Tests/WikiFSTests/RendererMachineEventDeliveryTests.swift"
+  ],
+  "coverageByRisk": {
+    "flock and same-process gate": ["RendererPackageStoreCoordinatorTests.separateOpenFileDescriptionsCannotAcquireKernelLockUntilRelease", "RendererPackageStoreCoordinatorTests.distinctCoordinatorsForOneLayoutCannotEnterConcurrently"],
+    "durable expected-hash reservation": ["RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations", "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid"],
+    "lease bootstrap and cursor/checkpoint durability": ["RendererEventLeaseTests.twoLiveSameSubsystemLeasesBootstrapAtCurrentHighWater", "RendererEventCursorTests.restartedLeaseBootstrapsCursorToJournalHighWater"],
+    "retention gap and cursor-ahead recovery": ["RendererEventRetentionTests.retentionGapReloadsAuthorityAndResetsCursorAndCheckpoint", "RendererEventRetentionTests.cursorBeyondHighWaterReloadsAuthorityInsteadOfSilentlyNoOping"],
+    "cancellation and retired-lease cursor protection": ["RendererEventRetentionTests.cancellationDuringHandlerDoesNotAdvanceRetiredLeaseCursor", "RendererEventLeaseTests.retiredLeaseCannotBeResurrectedByHeartbeat"],
+    "two-instance delivery": ["RendererEventTwoInstanceDeliveryTests.twoIndependentInstancesDeliverAfterBothLeasesAreReady"]
+  },
+  "removedSymbols": ["RendererProcessLivenessChecking", "SystemRendererProcessLivenessChecker", "RendererEventLeaseTests.twoLiveSameSubsystemLeasesAreIndependent"],
+  "honestCoverageLimits": [
+    "No test directly hosts WikiChangeBridge or validates CFNotification observer registration and removal; the pure routing function is covered.",
+    "No focused test executes production app-group discovery or a real Darwin notification across OS processes.",
+    "The two-instance delivery test uses independent journal and registry instances sharing one layout in one test process; it validates durable coordination but is not a separate-process launch test."
+  ],
+  "commandEvidence": [
+    { "command": "focused Phase 3b tests", "status": "passed", "runAtSHA": "48312faa3ed896e250544db721abb6b0295fb878", "evidenceRole": "operator-confirmed current production-head result" },
+    { "command": "jq empty plans/dynamic-renderers-phase3b-test-inventory.json", "status": "passed" },
+    { "command": "zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh", "status": "passed", "terminalMarkers": ["phase3b-inventory-bidirectional-resolution-pass"] },
+    { "command": "swift test --filter DocumentationContractTests", "status": "passed", "terminalMarkers": ["Test run with 7 tests in 1 suite passed"] },
+    { "command": "git diff --check", "status": "passed" }
+  ],
+  "gateStatus": {
+    "preflight": "passed at auditedHEAD before docs-only changes",
+    "focusedTests": "passed at implementationSHA (operator-confirmed)",
+    "inventoryResolver": "passed: 13 production paths, mapped symbols, all 50 declared focused tests, suite counts, and total count",
+    "documentationContract": "passed: 7 tests in 1 suite",
+    "diffCheck": "passed"
+  }
+}
