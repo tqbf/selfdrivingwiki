@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": "3b",
+  "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae",
+  "branch": "feature/dynamic-renderers-03b-machine-store",
+  "target": {
+    "ref": "feature/dynamic-renderers-03-persistence",
+    "sha": "41c96e17051e2f131b279fbd34d243136cff2dd5"
+  },
+  "mergeBase": "41c96e17051e2f131b279fbd34d243136cff2dd5",
+  "integrationEvidence": {
+    "requiredSourceSHA": "41c96e17",
+    "mergedPullRequest": 1066,
+    "mergeCommit": "a1a1163393ae0dc7c7904faa74bd4c711bcd4b5a",
+    "recordedMainSHA": "9b28a2d5b09d1a479f8fcfbb5399e5b4f5c5dfd7",
+    "currentLocalMainSHA": "ab5f44b7c6673c7288eedbfb1d9aad482cb2ee93"
+  },
+  "focusedSuites": [
+    { "suite": "RendererPackageStoreLayoutTests", "count": 5 },
+    { "suite": "RendererPackageStoreCoordinatorTests", "count": 8 },
+    { "suite": "RendererMachineIndexStoreTests", "count": 10 },
+    { "suite": "RendererMachineEventJournalTests", "count": 4 },
+    { "suite": "RendererEventLeaseTests", "count": 3 },
+    { "suite": "RendererEventCursorTests", "count": 2 },
+    { "suite": "RendererEventAtLeastOnceTests", "count": 3 },
+    { "suite": "RendererEventWakeTests", "count": 3 },
+    { "suite": "RendererMachineEventFanOutTests", "count": 2 },
+    { "suite": "RendererSettingsProjectionIsolationTests", "count": 1 },
+    { "suite": "RendererSettingsSubscriptionTests", "count": 1 }
+  ],
+  "focusedTestCount": 42,
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreLayout.swift",
+      "slice": "A1",
+      "symbols": ["RendererPackageStagingID", "RendererPackageStoreLayout", "isRendererPackageStorePathContained", "RendererPackageFileIdentity", "RendererPackageFileSystem", "RealRendererPackageFileSystem", "RendererPackageStoreError"],
+      "tests": ["RendererPackageStoreLayoutTests.injectedRootBuildsVersionedMachinePaths", "RendererPackageStoreLayoutTests.containmentAcceptsNestedAndRejectsEscapes", "RendererPackageStoreLayoutTests.containmentRejectsResolvedSymlinkEscape", "RendererPackageStoreLayoutTests.fileSystemReportsLstatIdentityAndNoFollowOpen", "RendererPackageStoreLayoutTests.noFollowOpenRejectsSymlink", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinatorCore.swift",
+      "slice": "A2",
+      "symbols": ["RendererCoordinatorClock", "SystemRendererCoordinatorClock", "RendererProcessIdentity", "RendererProcessLivenessChecking", "SystemRendererProcessLivenessChecker", "RendererCoordinatorOwnerTokenGenerating", "UUIDRendererCoordinatorOwnerTokenGenerator", "RendererCoordinatorOwnerRecord", "RendererCoordinatorFailure", "rendererCoordinatorShouldRecover"],
+      "tests": ["RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.malformedOwnerRecordFailsClosed", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinator.swift",
+      "slice": "A2",
+      "symbols": ["RendererPackageStoreCoordinator", "withExclusiveAccess", "acquireLock", "createLock", "recoverExpiredLockIfSafe", "readOwnerRecord", "releaseLock"],
+      "tests": ["RendererPackageStoreCoordinatorTests.twoCoordinatorInstancesSerializeAccess", "RendererPackageStoreCoordinatorTests.boundedTimeoutLeavesExistingLiveLockUntouched", "RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.cancellationDuringAcquisitionDoesNotCreateOwnership", "RendererPackageStoreCoordinatorTests.throwingBodyReleasesLock", "RendererPackageStoreCoordinatorTests.malformedOwnerRecordFailsClosed", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"]
+    },
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "slice": "A3/A4a",
+      "symbols": ["RendererPackageInstallState", "RendererPackageInstallDiagnostic", "RendererPackageInstallRecord", "RendererEventSequenceGenerating", "DurableRendererEventSequenceGenerator", "RendererEventProcessLeaseIDGenerating", "UUIDRendererEventProcessLeaseIDGenerator"],
+      "tests": ["RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererEventLeaseTests.twoLiveSameSubsystemLeasesAreIndependent"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "slice": "A3",
+      "symbols": ["RendererMachineIndex", "RendererPackageReservation", "RendererMachineIndexStoreError", "rendererMachineIndexValidatingPackagePaths", "rendererMachineIndexApplying"],
+      "tests": ["RendererMachineIndexStoreTests.freshReadInitializesSQLiteAuthorityAndDerivedJSON", "RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected", "RendererMachineIndexStoreTests.duplicateRecordsAreRejected", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "slice": "A3/A4a",
+      "symbols": ["RendererMachineDerivedIndexWriting", "FileRendererMachineDerivedIndexWriter", "RendererMachineIndexStore", "read", "mutate", "mutateAndAppendMachineEvent", "RendererMachineIndexSQLiteStorage"],
+      "tests": ["RendererMachineIndexStoreTests.freshReadInitializesSQLiteAuthorityAndDerivedJSON", "RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected", "RendererMachineIndexStoreTests.duplicateRecordsAreRejected", "RendererMachineIndexStoreTests.failedDerivedReplacementRollsBackSQLiteAndPreservesLastValidJSON", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen", "RendererMachineIndexStoreTests.machineStoreDoesNotTouchWikiOrFileProviderProjection", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventJournal.swift",
+      "slice": "A4a",
+      "symbols": ["RendererMachineEventJournal", "RendererMachineEventJournalError", "RendererEventProcessLeaseStatus", "RendererEventProcessLease", "RendererMachineLeaseRegistry", "RendererMachineJournalSQLite"],
+      "tests": ["RendererMachineEventJournalTests.freshJournalHasZeroHighWater", "RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord", "RendererMachineEventJournalTests.scopedOrderedDrainIsBoundedAndReportsHighWater", "RendererEventLeaseTests.twoLiveSameSubsystemLeasesAreIndependent", "RendererEventLeaseTests.liveLeaseAndHeartbeatCannotBeReclaimed", "RendererEventLeaseTests.staleAndCleanRetiredLeasesObserveSafetyWindows", "RendererEventCursorTests.cursorAdvancesOnlyAfterExplicitSuccessAndCheckpointIsConservative", "RendererEventCursorTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventReader.swift",
+      "slice": "A4b",
+      "symbols": ["RendererMachineEventReader", "receiveWake", "cancel", "drainUntilCaughtUp"],
+      "tests": ["RendererEventAtLeastOnceTests.crashAfterHandlerBeforeCursorCausesReplay", "RendererEventAtLeastOnceTests.replayProducesIdempotentFinalModelState", "RendererEventAtLeastOnceTests.handlerFailureLeavesCursorUnchanged", "RendererEventWakeTests.wakeWithoutCommittedRecordIsNoOp", "RendererEventWakeTests.duplicateWakeRunsOneOrderedDrainPerLease", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineEventSubscription.swift",
+      "slice": "A4b",
+      "symbols": ["RendererMachineEventSubscription", "RendererMachineModelFanOut"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineWakeRouting.swift",
+      "slice": "A4b",
+      "symbols": ["RendererMachineWakeRouting.scope(forNotificationName:observedScopes:)"],
+      "tests": ["RendererEventWakeTests.machineRoutingRejectsResourceNames"]
+    },
+    {
+      "path": "Sources/WikiFS/Window/WikiChangeBridge.swift",
+      "slice": "A4b existing file",
+      "symbols": ["observedRendererMachineScopes", "rendererMachineWakeHandler", "refreshRendererMachineObservations", "addRendererMachineObserver", "removeRendererMachineObserver", "didReceiveDarwinNotification"],
+      "tests": ["RendererEventWakeTests.machineRoutingRejectsResourceNames"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "slice": "A4b existing file",
+      "symbols": ["rendererMachineAvailabilityRevision", "reloadRendererMachineAvailability"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection"]
+    },
+    {
+      "path": "Sources/WikiFSEngine/SessionManager.swift",
+      "slice": "A4b existing file",
+      "symbols": ["reloadRendererMachineAvailabilityForLiveSessions"],
+      "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen"]
+    }
+  ],
+  "decisionAndBoundaryCoverage": {
+    "layout, traversal, resolved-symlink, lstat, and no-follow boundaries": ["RendererPackageStoreLayoutTests.containmentAcceptsNestedAndRejectsEscapes", "RendererPackageStoreLayoutTests.containmentRejectsResolvedSymlinkEscape", "RendererPackageStoreLayoutTests.fileSystemReportsLstatIdentityAndNoFollowOpen", "RendererPackageStoreLayoutTests.noFollowOpenRejectsSymlink"],
+    "coordination, timeout, stale-owner, replacement-race, cancellation, and throwing-body teardown": ["RendererPackageStoreCoordinatorTests.twoCoordinatorInstancesSerializeAccess", "RendererPackageStoreCoordinatorTests.boundedTimeoutLeavesExistingLiveLockUntouched", "RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.cancellationDuringAcquisitionDoesNotCreateOwnership", "RendererPackageStoreCoordinatorTests.throwingBodyReleasesLock", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"],
+    "generation, hash reservation, derived-index rollback, corruption, safe mode, and projection isolation": ["RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.failedDerivedReplacementRollsBackSQLiteAndPreservesLastValidJSON", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen", "RendererMachineIndexStoreTests.machineStoreDoesNotTouchWikiOrFileProviderProjection"],
+    "journal transaction, ordering, lease lifecycle, cursor boundary, and schema rejection": ["RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord", "RendererMachineEventJournalTests.scopedOrderedDrainIsBoundedAndReportsHighWater", "RendererEventLeaseTests.liveLeaseAndHeartbeatCannotBeReclaimed", "RendererEventLeaseTests.staleAndCleanRetiredLeasesObserveSafetyWindows", "RendererEventCursorTests.cursorAdvancesOnlyAfterExplicitSuccessAndCheckpointIsConservative", "RendererEventCursorTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess"],
+    "at-least-once replay, failed-handler cursor retention, duplicate wakes, routing, fan-out, isolation, and teardown": ["RendererEventAtLeastOnceTests.crashAfterHandlerBeforeCursorCausesReplay", "RendererEventAtLeastOnceTests.replayProducesIdempotentFinalModelState", "RendererEventAtLeastOnceTests.handlerFailureLeavesCursorUnchanged", "RendererEventWakeTests.duplicateWakeRunsOneOrderedDrainPerLease", "RendererEventWakeTests.machineRoutingRejectsResourceNames", "RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"]
+  },
+  "honestCoverageLimits": [
+    "No test directly hosts WikiChangeBridge or checks CFNotification observer registration and removal. The pure routing function is tested.",
+    "No test directly checks RendererProcessIdentity.current or SystemRendererProcessLivenessChecker platform behavior. Coordinator tests inject these seams.",
+    "No test directly asserts DurableRendererEventSequenceGenerator or UUIDRendererEventProcessLeaseIDGenerator. The journal tests use a deterministic sequence generator and cover the default lease generator indirectly."
+  ],
+  "commandEvidence": [
+    { "command": "make build", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["phase3b-make-build-pass", "Build complete!", "built + signed build/Self Driving Wiki.app"] },
+    { "command": "make test", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["SwiftPM test command completed with exit status 0", "Build complete!"] },
+    { "command": "make lint", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] },
+    { "command": "swift build", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["Build complete! (0.20s)"] },
+    { "command": "swift test", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["SwiftPM test command completed with exit status 0", "Build complete! (2.22s)"] },
+    { "command": "swift test --filter RendererPackageStoreLayoutTests", "terminalMarkers": ["Test run with 5 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererPackageStoreCoordinatorTests", "terminalMarkers": ["Test run with 8 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererMachineIndexStoreTests", "terminalMarkers": ["Test run with 10 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererMachineEventJournalTests", "terminalMarkers": ["Test run with 9 tests in 3 suites passed"] },
+    { "command": "swift test --filter RendererEventAtLeastOnceTests", "terminalMarkers": ["Test run with 3 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererEventWakeTests", "terminalMarkers": ["Test run with 3 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererMachineEventFanOutTests", "terminalMarkers": ["Test run with 2 tests in 1 suite passed"] },
+    { "command": "swift test --filter RendererSettingsProjectionIsolationTests", "terminalMarkers": ["Test run with 1 test in 1 suite passed"] },
+    { "command": "swift test --filter RendererSettingsSubscriptionTests", "terminalMarkers": ["Test run with 1 test in 1 suite passed"] },
+    { "command": "git diff --check", "terminalMarkers": ["exit status 0"] },
+    { "command": "jq empty plans/dynamic-renderers-phase3b-test-inventory.json", "terminalMarkers": ["exit status 0"] },
+    { "command": "zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh", "terminalMarkers": ["phase3b-inventory-test-name-resolution-pass"] }
+  ],
+  "gateStatus": {
+    "preflight": "passed",
+    "makeBuild": "passed",
+    "makeTest": "passed",
+    "makeLint": "passed",
+    "swiftBuild": "passed",
+    "swiftTest": "passed",
+    "focusedSuites": "passed: 42 tests across 11 exact suite filters",
+    "diffCheck": "passed",
+    "jsonValidation": "passed",
+    "testNameResolver": "passed",
+    "workingTreeAtImplementationHead": "clean"
+  }
+}
