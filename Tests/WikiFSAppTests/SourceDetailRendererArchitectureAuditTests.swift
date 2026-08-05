@@ -21,7 +21,6 @@ import Testing
             "private var isBytelessEmbedWithPlayer",
             "Excalidraw",
             "JSON Canvas",
-            "MimeType.isMermaid",
             "MimeType.isHTML",
             "ExternalEmbed.target",
             "ExternalEmbed.mediaTabLabel",
