@@ -19,7 +19,6 @@ public actor RendererPackageStoreCoordinator {
         fileSystem: any RendererPackageFileSystem = RealRendererPackageFileSystem(),
         clock: any RendererCoordinatorClock = SystemRendererCoordinatorClock(),
         processIdentity: RendererProcessIdentity = .current(),
-        livenessChecker: any RendererProcessLivenessChecking = SystemRendererProcessLivenessChecker(),
         tokenGenerator: any RendererCoordinatorOwnerTokenGenerating = UUIDRendererCoordinatorOwnerTokenGenerator(),
         policy: RendererEventPolicy = .phase3Default
     ) {
@@ -27,7 +26,6 @@ public actor RendererPackageStoreCoordinator {
         self.fileSystem = fileSystem
         self.clock = clock
         self.processIdentity = processIdentity
-        _ = livenessChecker // Metadata is diagnostic only and never authorizes recovery.
         self.tokenGenerator = tokenGenerator
         self.policy = policy
     }

@@ -1,11 +1,13 @@
 ---
+timestamp: 2026-08-05T042900Z
 title: Dynamic renderers Phase 3b A3 machine index
-issue: 1026
+branch: feature/dynamic-renderers-03b-machine-store
+status: complete
 ---
 
 # Dynamic renderers Phase 3b A3 machine index
 
-## Delivered
+## Progress
 
 - Added a machine-only SQLite authority at `renderers/v1/index.sqlite` and an
   atomically regenerated derived `derived/index.json`.
@@ -16,7 +18,7 @@ issue: 1026
   coordinator. The implementation does not change wiki SQLite, File Provider,
   registry, validator, activation, journal, delivery, or UI code.
 
-## Evidence
+## Verification
 
 - `swift test --filter RendererMachineIndexStoreTests` passed: 10 tests.
 - `make build` passed on Swift 6.3.3.

@@ -1,4 +1,13 @@
+---
+timestamp: 2026-08-05T044200Z
+title: Dynamic renderers Phase 3b A4a machine events
+branch: feature/dynamic-renderers-03b-machine-store
+status: complete
+---
+
 # Dynamic renderers Phase 3b A4a machine events
+
+## Progress
 
 This bounded Phase 3b increment adds durable machine-only renderer event
 structures beneath the App Group package store. The new machine journal records
@@ -16,7 +25,8 @@ subsystem identities, heartbeats, retirement, lease-safe reclamation, per-lease
 cursors, and subsystem checkpoints. Consumers explicitly mark a record handled
 only after a successful authoritative handler; event UUIDs are not dedup keys.
 
-Focused Swift Testing coverage validates fresh and ordered bounded journal
-reads, rollback, high-water reads, independent same-subsystem leases, live and
-heartbeat protection, stale and clean-retirement safety windows, cursor-after-
-success behavior, and unsupported envelope rejection.
+## Verification
+
+- `swift test --filter RendererMachineEventJournalTests` passed: 9 tests across
+  3 suites. The suite includes the lease and cursor coverage recorded for this
+  increment.

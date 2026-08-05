@@ -7,7 +7,7 @@ status: complete
 
 # Dynamic renderers Phase 3b retained inventory and gate evidence
 
-## Scope
+## Progress
 
 This entry records the retained inventory for the Phase 3b machine package-store implementation. The implementation head is `a0ab7470f1b2916bb85826a1779de0e911c873ae`. The branch is `feature/dynamic-renderers-03b-machine-store`.
 
@@ -22,3 +22,9 @@ The required source SHA is `41c96e17`. PR #1066 merged the equivalent Phase 3 se
 ## Remaining risks
 
 The inventory identifies three direct-coverage limits. It does not host a `WikiChangeBridge` CFNotification observer. It does not directly test platform process identity or liveness behavior. It also does not directly assert the default sequence and lease-ID generators. The focused tests cover the seams that use these values.
+
+## Verification
+
+- `jq empty plans/dynamic-renderers-phase3b-test-inventory.json` passed.
+- `zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh`
+  passed with `phase3b-inventory-test-name-resolution-pass`.

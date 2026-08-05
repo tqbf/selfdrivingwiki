@@ -37,18 +37,6 @@ public struct RendererProcessIdentity: Codable, Equatable, Sendable {
     }
 }
 
-public protocol RendererProcessLivenessChecking: Sendable {
-    func isLive(_ identity: RendererProcessIdentity) -> Bool
-}
-
-public struct SystemRendererProcessLivenessChecker: RendererProcessLivenessChecking {
-    public init() {}
-    public func isLive(_ identity: RendererProcessIdentity) -> Bool {
-        guard identity.hostIdentity == ProcessInfo.processInfo.hostName else { return false }
-        return kill(identity.processID, 0) == 0 || errno == EPERM
-    }
-}
-
 public protocol RendererCoordinatorOwnerTokenGenerating: Sendable {
     func nextOwnerToken() -> String
 }
@@ -105,17 +93,4 @@ public enum RendererCoordinatorFailure: Error, Equatable, Sendable {
     case lockOwnershipChanged
     case lockCleanupFailed
     case filesystemOperationFailed
-}
-
-func rendererCoordinatorShouldRecover(
-    owner: RendererCoordinatorOwnerRecord,
-    now: Date,
-    policy: RendererEventPolicy,
-    livenessChecker: some RendererProcessLivenessChecking
-) throws -> Bool {
-    guard owner.isExpired(at: now, policy: policy) else { return false }
-    guard livenessChecker.isLive(owner.processIdentity) == false else {
-        throw RendererCoordinatorFailure.staleOwnerStillLive
-    }
-    return true
 }

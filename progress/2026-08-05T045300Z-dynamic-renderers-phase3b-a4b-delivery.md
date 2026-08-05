@@ -1,11 +1,13 @@
 ---
+timestamp: 2026-08-05T045300Z
 title: Dynamic renderers Phase 3b A4b machine delivery and isolation
-issue: 1026
+branch: feature/dynamic-renderers-03b-machine-store
+status: complete
 ---
 
 # Dynamic renderers Phase 3b A4b machine delivery and isolation
 
-## Delivered
+## Progress
 
 - Added one actor-owned, ordered, at-least-once drain per machine process lease.
   It reads durable records after the cursor, calls the idempotent authoritative

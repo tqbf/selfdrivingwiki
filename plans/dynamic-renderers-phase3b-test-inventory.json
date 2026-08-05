@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "issue": 1026,
   "phase": "3b",
-  "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae",
+  "implementationSHA": "5437472a3730823264a07803ecb429fb33d26969",
+  "implementationHeadRole": "exact pre-remediation production implementation head; this remediation removes its unused numeric-PID liveness probe",
   "branch": "feature/dynamic-renderers-03b-machine-store",
   "target": {
     "ref": "feature/dynamic-renderers-03-persistence",
@@ -18,7 +19,7 @@
   },
   "focusedSuites": [
     { "suite": "RendererPackageStoreLayoutTests", "count": 5 },
-    { "suite": "RendererPackageStoreCoordinatorTests", "count": 8 },
+    { "suite": "RendererPackageStoreCoordinatorTests", "count": 4 },
     { "suite": "RendererMachineIndexStoreTests", "count": 10 },
     { "suite": "RendererMachineEventJournalTests", "count": 4 },
     { "suite": "RendererEventLeaseTests", "count": 3 },
@@ -27,9 +28,10 @@
     { "suite": "RendererEventWakeTests", "count": 3 },
     { "suite": "RendererMachineEventFanOutTests", "count": 2 },
     { "suite": "RendererSettingsProjectionIsolationTests", "count": 1 },
-    { "suite": "RendererSettingsSubscriptionTests", "count": 1 }
+    { "suite": "RendererSettingsSubscriptionTests", "count": 1 },
+    { "suite": "ProcessSignalSafetyAuditTests", "count": 1 }
   ],
-  "focusedTestCount": 42,
+  "focusedTestCount": 43,
   "productionPaths": [
     {
       "path": "Sources/WikiFSCore/Core/RendererPackageStoreLayout.swift",
@@ -40,14 +42,14 @@
     {
       "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinatorCore.swift",
       "slice": "A2",
-      "symbols": ["RendererCoordinatorClock", "SystemRendererCoordinatorClock", "RendererProcessIdentity", "RendererProcessLivenessChecking", "SystemRendererProcessLivenessChecker", "RendererCoordinatorOwnerTokenGenerating", "UUIDRendererCoordinatorOwnerTokenGenerator", "RendererCoordinatorOwnerRecord", "RendererCoordinatorFailure", "rendererCoordinatorShouldRecover"],
-      "tests": ["RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.malformedOwnerRecordFailsClosed", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"]
+      "symbols": ["RendererCoordinatorClock", "SystemRendererCoordinatorClock", "RendererProcessIdentity", "RendererCoordinatorOwnerTokenGenerating", "UUIDRendererCoordinatorOwnerTokenGenerator", "RendererCoordinatorOwnerRecord", "RendererCoordinatorFailure"],
+      "tests": ["RendererPackageStoreCoordinatorTests.stableLockInodeSurvivesReleaseAndSerializesOwners", "RendererPackageStoreCoordinatorTests.cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode", "RendererPackageStoreCoordinatorTests.malformedDiagnosticMetadataDoesNotBlockKernelRecovery", "RendererPackageStoreCoordinatorTests.symlinkLockFailsClosed"]
     },
     {
       "path": "Sources/WikiFSCore/Core/RendererPackageStoreCoordinator.swift",
       "slice": "A2",
       "symbols": ["RendererPackageStoreCoordinator", "withExclusiveAccess", "acquireLock", "createLock", "recoverExpiredLockIfSafe", "readOwnerRecord", "releaseLock"],
-      "tests": ["RendererPackageStoreCoordinatorTests.twoCoordinatorInstancesSerializeAccess", "RendererPackageStoreCoordinatorTests.boundedTimeoutLeavesExistingLiveLockUntouched", "RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.cancellationDuringAcquisitionDoesNotCreateOwnership", "RendererPackageStoreCoordinatorTests.throwingBodyReleasesLock", "RendererPackageStoreCoordinatorTests.malformedOwnerRecordFailsClosed", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"]
+      "tests": ["RendererPackageStoreCoordinatorTests.stableLockInodeSurvivesReleaseAndSerializesOwners", "RendererPackageStoreCoordinatorTests.cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode", "RendererPackageStoreCoordinatorTests.malformedDiagnosticMetadataDoesNotBlockKernelRecovery", "RendererPackageStoreCoordinatorTests.symlinkLockFailsClosed"]
     },
     {
       "path": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
@@ -110,48 +112,44 @@
       "tests": ["RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererMachineEventFanOutTests.inactiveWikiRefreshesOnNextOpen"]
     }
   ],
+  "safetyRemediation": {
+    "removedSymbols": ["RendererProcessLivenessChecking", "SystemRendererProcessLivenessChecker"],
+    "removedOperation": "kill(identity.processID, 0)",
+    "rationale": "A PID read from a lock record has no kernel creation-time identity. The coordinator did not use the liveness dependency to authorize recovery, so removing the unused numeric signal probe prevents a PID-only process-control call without changing coordinator lock authority.",
+    "tests": ["ProcessSignalSafetyAuditTests.everyProcessControlCallSiteIsReviewed"]
+  },
   "decisionAndBoundaryCoverage": {
     "layout, traversal, resolved-symlink, lstat, and no-follow boundaries": ["RendererPackageStoreLayoutTests.containmentAcceptsNestedAndRejectsEscapes", "RendererPackageStoreLayoutTests.containmentRejectsResolvedSymlinkEscape", "RendererPackageStoreLayoutTests.fileSystemReportsLstatIdentityAndNoFollowOpen", "RendererPackageStoreLayoutTests.noFollowOpenRejectsSymlink"],
-    "coordination, timeout, stale-owner, replacement-race, cancellation, and throwing-body teardown": ["RendererPackageStoreCoordinatorTests.twoCoordinatorInstancesSerializeAccess", "RendererPackageStoreCoordinatorTests.boundedTimeoutLeavesExistingLiveLockUntouched", "RendererPackageStoreCoordinatorTests.expiredNonLiveOwnerIsRecoveredAfterExpiryAndSkew", "RendererPackageStoreCoordinatorTests.expiredLiveOwnerIsNeverReclaimed", "RendererPackageStoreCoordinatorTests.cancellationDuringAcquisitionDoesNotCreateOwnership", "RendererPackageStoreCoordinatorTests.throwingBodyReleasesLock", "RendererPackageStoreCoordinatorTests.replacementDuringStaleQuarantineSurvivesAndCannotBeReleasedByOldOwner"],
+    "coordination, stable-inode release, cooperative acquisition, malformed metadata, and symlink refusal": ["RendererPackageStoreCoordinatorTests.stableLockInodeSurvivesReleaseAndSerializesOwners", "RendererPackageStoreCoordinatorTests.cooperativeReleaseLetsAnotherCoordinatorAcquireStableInode", "RendererPackageStoreCoordinatorTests.malformedDiagnosticMetadataDoesNotBlockKernelRecovery", "RendererPackageStoreCoordinatorTests.symlinkLockFailsClosed"],
     "generation, hash reservation, derived-index rollback, corruption, safe mode, and projection isolation": ["RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.failedDerivedReplacementRollsBackSQLiteAndPreservesLastValidJSON", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen", "RendererMachineIndexStoreTests.machineStoreDoesNotTouchWikiOrFileProviderProjection"],
     "journal transaction, ordering, lease lifecycle, cursor boundary, and schema rejection": ["RendererMachineEventJournalTests.coordinatedMutationAllocatesScopedMonotoneRecords", "RendererMachineEventJournalTests.failedCoordinatedMutationLeavesNoRecord", "RendererMachineEventJournalTests.scopedOrderedDrainIsBoundedAndReportsHighWater", "RendererEventLeaseTests.liveLeaseAndHeartbeatCannotBeReclaimed", "RendererEventLeaseTests.staleAndCleanRetiredLeasesObserveSafetyWindows", "RendererEventCursorTests.cursorAdvancesOnlyAfterExplicitSuccessAndCheckpointIsConservative", "RendererEventCursorTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess"],
-    "at-least-once replay, failed-handler cursor retention, duplicate wakes, routing, fan-out, isolation, and teardown": ["RendererEventAtLeastOnceTests.crashAfterHandlerBeforeCursorCausesReplay", "RendererEventAtLeastOnceTests.replayProducesIdempotentFinalModelState", "RendererEventAtLeastOnceTests.handlerFailureLeavesCursorUnchanged", "RendererEventWakeTests.duplicateWakeRunsOneOrderedDrainPerLease", "RendererEventWakeTests.machineRoutingRejectsResourceNames", "RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"]
+    "at-least-once replay, failed-handler cursor retention, duplicate wakes, routing, fan-out, isolation, and teardown": ["RendererEventAtLeastOnceTests.crashAfterHandlerBeforeCursorCausesReplay", "RendererEventAtLeastOnceTests.replayProducesIdempotentFinalModelState", "RendererEventAtLeastOnceTests.handlerFailureLeavesCursorUnchanged", "RendererEventWakeTests.duplicateWakeRunsOneOrderedDrainPerLease", "RendererMachineEventFanOutTests.machineEventRefreshesTwoLiveWikiSessions", "RendererSettingsProjectionIsolationTests.rendererSettingsDoNotReloadResourceProjection", "RendererSettingsSubscriptionTests.teardownRetiresLeaseAndStopsWakeReads"],
+    "source-level process-control inventory and numeric-PID probe removal": ["ProcessSignalSafetyAuditTests.everyProcessControlCallSiteIsReviewed"]
   },
   "honestCoverageLimits": [
     "No test directly hosts WikiChangeBridge or checks CFNotification observer registration and removal. The pure routing function is tested.",
-    "No test directly checks RendererProcessIdentity.current or SystemRendererProcessLivenessChecker platform behavior. Coordinator tests inject these seams.",
+    "No test directly checks RendererProcessIdentity.current platform behavior. The coordinator has no system liveness probe because PID-only process identity is insufficient for a recovery decision.",
     "No test directly asserts DurableRendererEventSequenceGenerator or UUIDRendererEventProcessLeaseIDGenerator. The journal tests use a deterministic sequence generator and cover the default lease generator indirectly."
   ],
   "commandEvidence": [
-    { "command": "make build", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["phase3b-make-build-pass", "Build complete!", "built + signed build/Self Driving Wiki.app"] },
-    { "command": "make test", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["SwiftPM test command completed with exit status 0", "Build complete!"] },
-    { "command": "make lint", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] },
-    { "command": "swift build", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["Build complete! (0.20s)"] },
-    { "command": "swift test", "implementationSHA": "a0ab7470f1b2916bb85826a1779de0e911c873ae", "terminalMarkers": ["SwiftPM test command completed with exit status 0", "Build complete! (2.22s)"] },
-    { "command": "swift test --filter RendererPackageStoreLayoutTests", "terminalMarkers": ["Test run with 5 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererPackageStoreCoordinatorTests", "terminalMarkers": ["Test run with 8 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererMachineIndexStoreTests", "terminalMarkers": ["Test run with 10 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererMachineEventJournalTests", "terminalMarkers": ["Test run with 9 tests in 3 suites passed"] },
-    { "command": "swift test --filter RendererEventAtLeastOnceTests", "terminalMarkers": ["Test run with 3 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererEventWakeTests", "terminalMarkers": ["Test run with 3 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererMachineEventFanOutTests", "terminalMarkers": ["Test run with 2 tests in 1 suite passed"] },
-    { "command": "swift test --filter RendererSettingsProjectionIsolationTests", "terminalMarkers": ["Test run with 1 test in 1 suite passed"] },
-    { "command": "swift test --filter RendererSettingsSubscriptionTests", "terminalMarkers": ["Test run with 1 test in 1 suite passed"] },
-    { "command": "git diff --check", "terminalMarkers": ["exit status 0"] },
-    { "command": "jq empty plans/dynamic-renderers-phase3b-test-inventory.json", "terminalMarkers": ["exit status 0"] },
-    { "command": "zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh", "terminalMarkers": ["phase3b-inventory-test-name-resolution-pass"] }
+    { "command": "swift test --filter DocumentationContractTests", "status": "passed", "terminalMarkers": ["Test run with 7 tests in 1 suite passed"] },
+    { "command": "swift test --filter ProcessSignalSafetyAuditTests", "status": "passed", "terminalMarkers": ["Test run with 5 tests in 1 suite passed"] },
+    { "command": "jq empty plans/dynamic-renderers-phase3b-test-inventory.json", "status": "passed", "terminalMarkers": ["exit status 0"] },
+    { "command": "zsh tmp/orchestration/dynamic-renderers-phase3b/verify-inventory-test-names.sh", "status": "passed", "terminalMarkers": ["phase3b-inventory-test-name-resolution-pass"] },
+    { "command": "git diff --check", "status": "passed", "terminalMarkers": ["exit status 0"] },
+    { "command": "swiftlint lint --strict", "status": "passed", "terminalMarkers": ["Done linting! Found 0 violations, 0 serious in 461 files.", "no new bare try? in Sources/ or tools/"] }
   ],
   "gateStatus": {
     "preflight": "passed",
-    "makeBuild": "passed",
-    "makeTest": "passed",
-    "makeLint": "passed",
-    "swiftBuild": "passed",
-    "swiftTest": "passed",
-    "focusedSuites": "passed: 42 tests across 11 exact suite filters",
+    "makeBuild": "pending: not run after remediation",
+    "makeTest": "pending: not run after remediation",
+    "makeLint": "pending: not run after remediation; the commit hook's swiftlint and bare try? audit passed",
+    "swiftBuild": "pending: not run after remediation",
+    "swiftTest": "pending: not run after remediation",
+    "focusedSuites": "partially passed: documentation contract (7) and process-safety audit (5); the 42 renderer tests were not rerun after remediation",
     "diffCheck": "passed",
     "jsonValidation": "passed",
     "testNameResolver": "passed",
-    "workingTreeAtImplementationHead": "clean"
+    "workingTreeAtImplementationHead": "pending: commit not yet created"
   }
 }
