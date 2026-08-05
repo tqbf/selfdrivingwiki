@@ -113,11 +113,14 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
             if try hasIndexTable(database) {
+                try ensureExpectedHashReservationTable(database)
                 let index = try load(database: database)
                 try rendererMachineIndexValidatingPackagePaths(index, layout: layout)
+                try reserveExpectedHashes(database, records: index.records)
                 return index
             }
             try execute(database, sql: Self.createTableSQL)
+            try ensureExpectedHashReservationTable(database)
             let fresh = try RendererMachineIndex()
             try writeFresh(database: database, index: fresh)
             return fresh
@@ -131,12 +134,15 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
             guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
+            try ensureExpectedHashReservationTable(database)
             let current = try load(database: database)
             try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
             try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
             try execute(database, sql: "SAVEPOINT renderer_machine_index_mutation")
             do {
+                try reserveExpectedHashes(database, records: current.records)
+                try reserveExpectedHashes(database, records: next.records)
                 try update(database: database, index: next)
                 try replaceDerivedIndex(next)
                 try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_mutation")
@@ -162,6 +168,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try withDatabase { database in
             guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
+            try ensureExpectedHashReservationTable(database)
             let current = try load(database: database)
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
             try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
@@ -169,6 +176,8 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
             try RendererMachineJournalSQLite.initializeAttached(database)
             try execute(database, sql: "SAVEPOINT renderer_machine_index_event_mutation")
             do {
+                try reserveExpectedHashes(database, records: current.records)
+                try reserveExpectedHashes(database, records: next.records)
                 let highWater = try RendererMachineJournalSQLite.attachedHighWater(database, scope: scope)
                 let record = try PersistedWikiStoreChangeRecord(eventID: eventIDGenerator.nextEventID(), sequence: sequenceGenerator.nextSequence(after: highWater), scope: .machine(scope), payload: .rendererSettings(payload), committedAt: clock.now())
                 try update(database: database, index: next)
@@ -285,6 +294,56 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         return result == SQLITE_ROW
     }
 
+    private func ensureExpectedHashReservationTable(_ database: OpaquePointer) throws {
+        try execute(database, sql: Self.createExpectedHashReservationTableSQL)
+    }
+
+    /// Hash reservations are append-only authority: removing an index row must
+    /// not permit a different payload to claim the same package/version later.
+    private func reserveExpectedHashes(_ database: OpaquePointer, records: [RendererPackageInstallRecord]) throws {
+        for record in records {
+            let existingHash = try expectedHashReservation(database, for: record)
+            if let existingHash {
+                guard existingHash == record.expectedPackageHash.hex else {
+                    throw RendererMachineIndexStoreError.conflictingExpectedHash
+                }
+                continue
+            }
+            try insertExpectedHashReservation(database, record: record)
+        }
+    }
+
+    private func expectedHashReservation(_ database: OpaquePointer, for record: RendererPackageInstallRecord) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT expected_hash FROM renderer_machine_expected_hash_reservations WHERE package_id = ?1 AND version = ?2", -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw RendererMachineIndexStoreError.sqliteFailure
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_bind_text(statement, 1, record.packageID.rawValue, -1, rendererMachineIndexSQLiteTransient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 2, record.version.rawValue, -1, rendererMachineIndexSQLiteTransient) == SQLITE_OK
+        else { throw RendererMachineIndexStoreError.sqliteFailure }
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_ROW || result == SQLITE_DONE else { throw RendererMachineIndexStoreError.sqliteFailure }
+        guard result == SQLITE_ROW else { return nil }
+        guard sqlite3_column_type(statement, 0) == SQLITE_TEXT,
+              let bytes = sqlite3_column_text(statement, 0)
+        else { throw RendererMachineIndexStoreError.corruptIndex }
+        return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, 0))), as: UTF8.self)
+    }
+
+    private func insertExpectedHashReservation(_ database: OpaquePointer, record: RendererPackageInstallRecord) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "INSERT INTO renderer_machine_expected_hash_reservations(package_id, version, expected_hash) VALUES(?1, ?2, ?3)", -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw RendererMachineIndexStoreError.sqliteFailure
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_bind_text(statement, 1, record.packageID.rawValue, -1, rendererMachineIndexSQLiteTransient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 2, record.version.rawValue, -1, rendererMachineIndexSQLiteTransient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 3, record.expectedPackageHash.hex, -1, rendererMachineIndexSQLiteTransient) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE
+        else { throw RendererMachineIndexStoreError.sqliteFailure }
+    }
+
     private func execute(_ database: OpaquePointer, sql: String) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw RendererMachineIndexStoreError.sqliteFailure
@@ -297,6 +356,15 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         schema_version INTEGER NOT NULL,
         generation INTEGER NOT NULL CHECK (generation >= 0),
         index_json BLOB NOT NULL
+    )
+    """
+
+    private static let createExpectedHashReservationTableSQL = """
+    CREATE TABLE IF NOT EXISTS renderer_machine_expected_hash_reservations (
+        package_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        expected_hash TEXT NOT NULL,
+        PRIMARY KEY(package_id, version)
     )
     """
 }

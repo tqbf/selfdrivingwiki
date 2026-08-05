@@ -341,13 +341,14 @@ private func rendererPackageStoreClose(_ fileDescriptor: Int32) -> Int32 {
     #endif
 }
 
+/// `flock` is a type name in Swift's Darwin/Glibc overlays, so bind the POSIX
+/// function symbol explicitly rather than accidentally calling `fcntl` record
+/// locking with incompatible ownership semantics.
+@_silgen_name("flock")
+private func rendererPackageStoreNativeFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
+
 private func rendererPackageStoreFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32 {
-    var lock = flock()
-    lock.l_whence = Int16(SEEK_SET)
-    lock.l_start = 0
-    lock.l_len = 0
-    lock.l_type = operation == LOCK_UN ? Int16(F_UNLCK) : Int16(F_WRLCK)
-    return fcntl(fileDescriptor, operation == LOCK_UN ? F_SETLK : F_SETLK, &lock)
+    rendererPackageStoreNativeFlock(fileDescriptor, operation)
 }
 
 private func rendererPackageStoreLstat(_ path: UnsafePointer<CChar>, _ metadata: UnsafeMutablePointer<stat>) -> Int32 {

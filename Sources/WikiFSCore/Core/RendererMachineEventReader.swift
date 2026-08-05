@@ -66,12 +66,21 @@ public actor RendererMachineEventReader {
             try Task.checkCancellation()
             let cursor = try await leases.cursor(scope: lease.scope, subsystemID: lease.subsystemID, leaseID: lease.leaseID)
             let batch = try await journal.records(after: cursor, scope: lease.scope, limit: batchLimit)
+            guard isCancelled == false else { return }
+
+            if cursor > batch.highWater {
+                try await retentionGapHandler()
+                guard isCancelled == false else { return }
+                try await leases.resetAfterAuthoritativeReload(scope: lease.scope, subsystemID: lease.subsystemID, leaseID: lease.leaseID, highWater: batch.highWater)
+                return
+            }
 
             // A nonempty journal whose first retained record skips the cursor
             // is authoritative evidence of a retention gap. Reload, then make
             // the new high-water durable before accepting later records.
             if let first = batch.records.first, first.sequence > cursor + 1 {
                 try await retentionGapHandler()
+                guard isCancelled == false else { return }
                 try await leases.resetAfterAuthoritativeReload(scope: lease.scope, subsystemID: lease.subsystemID, leaseID: lease.leaseID, highWater: batch.highWater)
                 return
             }
@@ -84,6 +93,7 @@ public actor RendererMachineEventReader {
                 // journal cannot call the handler with an unsupported envelope.
                 guard record.schemaVersion == 1 else { throw RendererMachineEventJournalError.unsupportedSchemaVersion }
                 try await handler(record)
+                guard isCancelled == false else { return }
                 try await leases.markHandled(record, lease: lease)
             }
         }

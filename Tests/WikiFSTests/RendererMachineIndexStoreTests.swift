@@ -59,6 +59,37 @@ struct RendererMachineIndexStoreTests {
         #expect(try await store.read().records == [first])
     }
 
+    @Test func replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations() async throws {
+        let layout = try makeLayout("hash-history")
+        let store = RendererMachineIndexStore(layout: layout)
+        _ = try await store.read()
+        let first = try makeRecord()
+        let conflicting = try makeRecord(hashByte: 2)
+
+        _ = try await store.mutate(expectedGeneration: 0) { records, _ in records = [first] }
+        _ = try await store.mutate(expectedGeneration: 1) { records, _ in records.removeAll() }
+
+        await #expect(throws: RendererMachineIndexStoreError.conflictingExpectedHash) {
+            try await store.mutate(expectedGeneration: 2) { records, _ in records = [conflicting] }
+        }
+        #expect(try await store.read().generation == 2)
+        #expect(try await store.read().records.isEmpty)
+    }
+
+    @Test func replacingAbsentReservationWithSameExpectedHashRemainsValid() async throws {
+        let layout = try makeLayout("same-hash-history")
+        let store = RendererMachineIndexStore(layout: layout)
+        _ = try await store.read()
+        let record = try makeRecord()
+
+        _ = try await store.mutate(expectedGeneration: 0) { records, _ in records = [record] }
+        _ = try await store.mutate(expectedGeneration: 1) { records, _ in records.removeAll() }
+        let restored = try await store.mutate(expectedGeneration: 2) { records, _ in records = [record] }
+
+        #expect(restored.generation == 3)
+        #expect(restored.records == [record])
+    }
+
     @Test func packageRootSymlinkEscapeIsRejected() async throws {
         let layout = try makeLayout("outside")
         let outside = try temporaryDirectory(named: "outside-target")

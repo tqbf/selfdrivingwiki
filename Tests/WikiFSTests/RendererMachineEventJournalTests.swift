@@ -61,14 +61,15 @@ struct RendererEventLeaseTests {
         try await registry.retire(lease, at: later("2026-08-05T12:00:01+00:00"))
         await #expect(throws: RendererMachineEventJournalError.liveLeaseCannotBeReclaimed) { try await registry.heartbeat(lease, at: later("2026-08-05T12:00:02+00:00")) }
     }
-    @Test func twoLiveSameSubsystemLeasesAreIndependent() async throws {
+    @Test func twoLiveSameSubsystemLeasesBootstrapAtCurrentHighWater() async throws {
         let journal = RendererMachineEventJournal(layout: try layout("leases"))
         let registry = RendererMachineLeaseRegistry(journal: journal)
         let first = try await registry.createLease(scope: scope, subsystemID: subsystem, processID: 1, executableIdentity: "renderer", hostIdentity: "host", startedAt: time, now: time)
+        try await journal.append(record(sequence: 1))
         let second = try await registry.createLease(scope: scope, subsystemID: subsystem, processID: 2, executableIdentity: "renderer", hostIdentity: "host", startedAt: time, now: time)
         #expect(first.leaseID != second.leaseID)
         #expect(try await registry.cursor(scope: scope, subsystemID: subsystem, leaseID: first.leaseID) == 0)
-        #expect(try await registry.cursor(scope: scope, subsystemID: subsystem, leaseID: second.leaseID) == 0)
+        #expect(try await registry.cursor(scope: scope, subsystemID: subsystem, leaseID: second.leaseID) == 1)
     }
 
     @Test func liveLeaseAndHeartbeatCannotBeReclaimed() async throws {
@@ -100,6 +101,18 @@ struct RendererTimestampPersistenceTests {
 
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct RendererEventCursorTests {
+    @Test func restartedLeaseBootstrapsCursorToJournalHighWater() async throws {
+        let journal = RendererMachineEventJournal(layout: try layout("restart-bootstrap"))
+        let registry = RendererMachineLeaseRegistry(journal: journal)
+        try await journal.append(record(sequence: 1))
+        try await journal.append(record(sequence: 2))
+
+        let lease = try await registry.createLease(scope: scope, subsystemID: subsystem, processID: 2, executableIdentity: "renderer", hostIdentity: nil, startedAt: time, now: time)
+
+        #expect(try await registry.cursor(scope: scope, subsystemID: subsystem, leaseID: lease.leaseID) == 2)
+        #expect(try await registry.checkpoint(scope: scope, subsystemID: subsystem) == 2)
+    }
+
     @Test func cursorAdvancesOnlyAfterExplicitSuccessAndCheckpointIsConservative() async throws {
         let journal = RendererMachineEventJournal(layout: try layout("cursor"))
         let registry = RendererMachineLeaseRegistry(journal: journal)

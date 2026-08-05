@@ -45,6 +45,16 @@ public actor RendererMachineEventJournal {
         }
     }
 
+    /// Retains only records newer than `sequence` for one scope. Consumers that
+    /// lag behind this boundary must reload authoritative machine state.
+    public func discardRecords(through sequence: UInt64, scope: RendererMachineScopeID) async throws {
+        try await withDatabase { database in
+            try RendererMachineJournalSQLite.transaction(database) {
+                try RendererMachineJournalSQLite.discardRecords(database, through: sequence, scope: scope)
+            }
+        }
+    }
+
     private func withDatabase<T: Sendable>(_ body: @escaping @Sendable (OpaquePointer) throws -> T) async throws -> T {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
         return try await coordinator.withExclusiveAccess {
@@ -63,6 +73,7 @@ public enum RendererMachineEventJournalError: Error, Equatable, Sendable {
     case invalidSequence
     case sqliteFailure
     case leaseNotFound
+    case leaseNotLive
     case liveLeaseCannotBeReclaimed
 }
 
@@ -98,7 +109,13 @@ public actor RendererMachineLeaseRegistry {
 
     public func createLease(scope: RendererMachineScopeID, subsystemID: RendererEventSubsystemID, processID: Int32, executableIdentity: String, hostIdentity: String?, startedAt: RFC3339Timestamp, now: RFC3339Timestamp) async throws -> RendererEventProcessLease {
         let lease = RendererEventProcessLease(scope: scope, subsystemID: subsystemID, leaseID: leaseIDGenerator.nextLeaseID(), processID: processID, executableIdentity: executableIdentity, hostIdentity: hostIdentity, startedAt: startedAt, createdAt: now, lastHeartbeatAt: now, retiredAt: nil, status: .live)
-        try await journal.withLeaseDatabase { database in try RendererMachineJournalSQLite.insertLease(database, lease: lease) }
+        try await journal.withLeaseDatabase { database in
+            try RendererMachineJournalSQLite.transaction(database) {
+                let highWater = try RendererMachineJournalSQLite.highWater(database, scope: scope)
+                try RendererMachineJournalSQLite.insertLease(database, lease: lease)
+                try RendererMachineJournalSQLite.resetCursor(database, scope: scope, subsystem: subsystemID, leaseID: lease.leaseID, highWater: highWater)
+            }
+        }
         return lease
     }
 
@@ -117,6 +134,12 @@ public actor RendererMachineLeaseRegistry {
 
     public func cursor(scope: RendererMachineScopeID, subsystemID: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID) async throws -> UInt64 {
         try await journal.withLeaseDatabase { database in try RendererMachineJournalSQLite.cursor(database, scope: scope, subsystem: subsystemID, leaseID: leaseID) }
+    }
+
+    public func checkpoint(scope: RendererMachineScopeID, subsystemID: RendererEventSubsystemID) async throws -> UInt64 {
+        try await journal.withLeaseDatabase { database in
+            try RendererMachineJournalSQLite.checkpoint(database, scope: scope, subsystem: subsystemID)
+        }
     }
 
     public func markHandled(_ record: PersistedWikiStoreChangeRecord, lease: RendererEventProcessLease) async throws {
@@ -192,6 +215,10 @@ enum RendererMachineJournalSQLite {
         try bind(database, sql: "INSERT INTO renderer_machine_events(scope, sequence, record) VALUES(?1, ?2, ?3)", strings: [scope.rawValue], integer: record.sequence, data: data)
     }
 
+    static func discardRecords(_ database: OpaquePointer, through sequence: UInt64, scope: RendererMachineScopeID) throws {
+        try bind(database, sql: "DELETE FROM renderer_machine_events WHERE scope = ?1 AND sequence <= ?2", strings: [scope.rawValue], integer: sequence)
+    }
+
     static func attachedHighWater(_ database: OpaquePointer, scope: RendererMachineScopeID) throws -> UInt64 {
         try scalar(database, sql: "SELECT COALESCE(MAX(sequence), 0) FROM renderer_machine_journal.renderer_machine_events WHERE scope = ?1", strings: [scope.rawValue])
     }
@@ -251,14 +278,18 @@ enum RendererMachineJournalSQLite {
         let next = RendererEventProcessLease(scope: current.scope, subsystemID: current.subsystemID, leaseID: current.leaseID, processID: current.processID, executableIdentity: current.executableIdentity, hostIdentity: current.hostIdentity, startedAt: current.startedAt, createdAt: current.createdAt, lastHeartbeatAt: current.lastHeartbeatAt, retiredAt: current.retiredAt, status: .reclaimed); try storeLease(database, lease: next)
     }
     static func cursor(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID) throws -> UInt64 { try scalar(database, sql: "SELECT COALESCE(sequence, 0) FROM renderer_machine_cursors WHERE scope = ?1 AND subsystem = ?2 AND lease = ?3", strings: [scope.rawValue, subsystem.rawValue, leaseID.rawValue.uuidString]) }
+    static func checkpoint(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID) throws -> UInt64 { try scalar(database, sql: "SELECT COALESCE(sequence, 0) FROM renderer_machine_checkpoints WHERE scope = ?1 AND subsystem = ?2", strings: [scope.rawValue, subsystem.rawValue]) }
     static func advanceCursor(_ database: OpaquePointer, record: PersistedWikiStoreChangeRecord, lease: RendererEventProcessLease) throws {
         guard case let .machine(scope) = record.scope, scope == lease.scope else { throw RendererMachineEventJournalError.invalidScope }
+        let currentLease = try loadLease(database, lease: lease)
+        guard currentLease == lease, currentLease.status == .live else { throw RendererMachineEventJournalError.leaseNotLive }
         let previous = try cursor(database, scope: scope, subsystem: lease.subsystemID, leaseID: lease.leaseID)
         guard record.sequence > previous else { return }
         try bind(database, sql: "INSERT INTO renderer_machine_cursors(scope, subsystem, lease, sequence) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(scope, subsystem, lease) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, lease.subsystemID.rawValue, lease.leaseID.rawValue.uuidString], integer: record.sequence)
         try bind(database, sql: "INSERT INTO renderer_machine_checkpoints(scope, subsystem, sequence) VALUES(?1, ?2, ?3) ON CONFLICT(scope, subsystem) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)", strings: [scope.rawValue, lease.subsystemID.rawValue], integer: record.sequence)
     }
     static func resetCursor(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID, highWater: UInt64) throws {
+        try validateLiveLease(database, scope: scope, subsystem: subsystem, leaseID: leaseID)
         try bind(database, sql: "INSERT INTO renderer_machine_cursors(scope, subsystem, lease, sequence) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(scope, subsystem, lease) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, subsystem.rawValue, leaseID.rawValue.uuidString], integer: highWater)
         try bind(database, sql: "INSERT INTO renderer_machine_checkpoints(scope, subsystem, sequence) VALUES(?1, ?2, ?3) ON CONFLICT(scope, subsystem) DO UPDATE SET sequence = excluded.sequence", strings: [scope.rawValue, subsystem.rawValue], integer: highWater)
     }
@@ -270,6 +301,21 @@ enum RendererMachineJournalSQLite {
         guard sqlite3_bind_text(statement, 1, lease.scope.rawValue, -1, transient) == SQLITE_OK, sqlite3_bind_text(statement, 2, lease.subsystemID.rawValue, -1, transient) == SQLITE_OK, sqlite3_bind_text(statement, 3, lease.leaseID.rawValue.uuidString, -1, transient) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { throw RendererMachineEventJournalError.leaseNotFound }
         do { return try JSONDecoder().decode(RendererEventProcessLease.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))) }
         catch { throw RendererMachineEventJournalError.corruptRecord }
+    }
+    static func validateLiveLease(_ database: OpaquePointer, scope: RendererMachineScopeID, subsystem: RendererEventSubsystemID, leaseID: RendererEventProcessLeaseID) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT record FROM renderer_machine_leases WHERE scope = ?1 AND subsystem = ?2 AND lease = ?3", -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_bind_text(statement, 1, scope.rawValue, -1, transient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 2, subsystem.rawValue, -1, transient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 3, leaseID.rawValue.uuidString, -1, transient) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW,
+              let bytes = sqlite3_column_blob(statement, 0)
+        else { throw RendererMachineEventJournalError.leaseNotFound }
+        let lease: RendererEventProcessLease
+        do { lease = try JSONDecoder().decode(RendererEventProcessLease.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))) }
+        catch { throw RendererMachineEventJournalError.corruptRecord }
+        guard lease.status == .live else { throw RendererMachineEventJournalError.leaseNotLive }
     }
     static func scalar(_ database: OpaquePointer, sql: String, strings: [String]) throws -> UInt64 { var statement: OpaquePointer?; guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw RendererMachineEventJournalError.sqliteFailure }; defer { sqlite3_finalize(statement) }; for (offset, string) in strings.enumerated() { guard sqlite3_bind_text(statement, Int32(offset + 1), string, -1, transient) == SQLITE_OK else { throw RendererMachineEventJournalError.sqliteFailure } }; guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }; return try nonnegativeSequence(database, statement: statement, column: 0) }
     static func nonnegativeSequence(_ database: OpaquePointer, statement: OpaquePointer, column: Int32) throws -> UInt64 {

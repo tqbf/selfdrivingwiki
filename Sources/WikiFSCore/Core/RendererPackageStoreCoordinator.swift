@@ -6,6 +6,7 @@ import Foundation
 /// processes sharing the same App Group container.
 public actor RendererPackageStoreCoordinator {
     private static let retryBackoff: Duration = .milliseconds(25)
+    private static let inProcessGate = RendererPackageStoreInProcessGate()
 
     private let layout: RendererPackageStoreLayout
     private let fileSystem: any RendererPackageFileSystem
@@ -32,23 +33,37 @@ public actor RendererPackageStoreCoordinator {
 
     public func withExclusiveAccess<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
         let ownership = try await acquireLock()
-        defer { releaseLock(ownership) }
-        try Task.checkCancellation()
-        return try await body()
+        do {
+            try Task.checkCancellation()
+            let value = try await body()
+            await releaseLock(ownership)
+            return value
+        } catch {
+            await releaseLock(ownership)
+            throw error
+        }
     }
 
     private func acquireLock() async throws -> LockOwnership {
         let deadline = clock.now().addingTimeInterval(policy.lockAcquisitionTimeout)
         while true {
             try Task.checkCancellation()
+            guard await Self.inProcessGate.tryAcquire(layout.lockURL.path) else {
+                try await Task.sleep(for: Self.retryBackoff)
+                guard clock.now() < deadline else { throw RendererCoordinatorFailure.lockAcquisitionTimedOut }
+                continue
+            }
             do {
                 return try createLock()
             } catch RendererPackageStoreError.posix(_, _, let code) where code == EWOULDBLOCK || code == EAGAIN {
+                await Self.inProcessGate.release(layout.lockURL.path)
                 // Ordinary contention: the current owner may cooperatively release.
                 try await Task.sleep(for: Self.retryBackoff)
             } catch let failure as RendererCoordinatorFailure {
+                await Self.inProcessGate.release(layout.lockURL.path)
                 throw failure
             } catch {
+                await Self.inProcessGate.release(layout.lockURL.path)
                 throw RendererCoordinatorFailure.filesystemOperationFailed
             }
             guard clock.now() < deadline else { throw RendererCoordinatorFailure.lockAcquisitionTimedOut }
@@ -80,13 +95,29 @@ public actor RendererPackageStoreCoordinator {
         }
     }
 
-    private func releaseLock(_ ownership: LockOwnership) {
+    private func releaseLock(_ ownership: LockOwnership) async {
         do {
             try fileSystem.unlock(fileDescriptor: ownership.fileDescriptor)
             try fileSystem.close(fileDescriptor: ownership.fileDescriptor)
         } catch {
             DebugLog.store("Renderer coordinator lock release failed: redacted ownership verification error.")
         }
+        await Self.inProcessGate.release(layout.lockURL.path)
+    }
+}
+
+/// A layout-keyed gate prevents a reentrant actor suspension from allowing a
+/// second coordinator in this process to race a separately opened lock file.
+/// The kernel `flock` remains the cross-process authority.
+private actor RendererPackageStoreInProcessGate {
+    private var heldLayouts: Set<String> = []
+
+    func tryAcquire(_ layoutKey: String) -> Bool {
+        return heldLayouts.insert(layoutKey).inserted
+    }
+
+    func release(_ layoutKey: String) {
+        heldLayouts.remove(layoutKey)
     }
 }
 
