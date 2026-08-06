@@ -192,6 +192,10 @@ public actor RendererMachineIndexStore {
             }
         } catch {
             if let error = error as? RendererMachineIndexStoreError { throw error }
+            // A coordinator failure occurs before this invocation owns the
+            // staged tree. Preserve both the caller-owned validation artifact
+            // and the precise contention classification for a safe retry.
+            if let error = error as? RendererCoordinatorFailure { throw error }
             if isRendererPackageStorePathContained(package.stagedRoot, within: layout.stagingRoot) {
                 try rendererMachineActivationCleanup(.staging(package.stagedRoot), layout: layout, cleaner: activationCleaner)
             }

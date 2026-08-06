@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 5,
+  "slice": 0,
+  "baseSHA": "933a0637",
+  "scope": "WebView security gate preparation; no WebView implementation",
+  "futureInputContract": "A renderer session will receive version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
+  "productionPaths": [
+    { "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift", "symbols": ["RendererMachineIndexStore.activate"], "tests": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"] },
+    { "path": "Sources/DynamicRendererPRSeriesAudit/Audit.swift", "symbols": ["GitRepositoryQuerying", "GitHubPullRequestQuerying", "GateRecordReading", "GateRecordWriting", "AuditClock", "GateRecordSchemaValidator", "DynamicRendererPRSeriesAuditor.verify", "DynamicRendererPRSeriesAuditor.buildSuite"], "tests": ["DynamicRendererPRSeriesAuditTests.schemaRejectsCheckAndApprovalFromAnotherHead", "DynamicRendererPRSeriesAuditTests.buildSuiteRejectsDirtyCheckoutBeforeCommandsRun", "DynamicRendererPRSeriesAuditTests.verifyRejectsStaleEvidenceWithWrongBase"] },
+    { "path": "Sources/DynamicRendererPRSeriesAudit/main.swift", "symbols": ["LocalGit", "GitHubCLI", "Main"], "tests": ["DynamicRendererPRSeriesAuditTests.buildSuiteRejectsDirtyCheckoutBeforeCommandsRun"] }
+  ],
+  "excluded": ["WikiAppWebViewSession", "WKURLSchemeHandler", "CSP", "bridge", "navigation", "WebKit networking", "Excalidraw", "JSON Canvas", "settings UI"]
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic renderer SHA-keyed gate record",
+  "type": "object",
+  "required": ["schemaVersion", "auditedHead", "headRefOid", "baseRefName", "baseRefOid", "cleanCheckout", "requiredCheckNames", "checkRunHeadOIDs", "approvalCommitOIDs", "commandResults", "inventoryPath", "findingDispositions", "recordedAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 }, "auditedHead": { "type": "string", "minLength": 7 }, "headRefOid": { "type": "string", "minLength": 7 }, "baseRefName": { "type": "string", "minLength": 1 }, "baseRefOid": { "type": "string", "minLength": 7 }, "cleanCheckout": { "const": true }, "requiredCheckNames": { "type": "array", "items": { "type": "string" } }, "checkRunHeadOIDs": { "type": "array", "items": { "type": "string" } }, "approvalCommitOIDs": { "type": "array", "items": { "type": "string" } }, "commandResults": { "type": "array" }, "inventoryPath": { "type": "string" }, "findingDispositions": { "type": "array", "items": { "type": "string" } }, "recordedAt": { "type": "string" }
+  }
+}
