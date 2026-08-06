@@ -140,11 +140,14 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private let configurationFactory: WikiAppWebViewConfigurationFactory
     private let timeoutScheduler: any RendererWebViewLoadTimeoutScheduling
     private let permits: RendererWebViewSessionPermitPool
+    private let bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)?
 
     private var machine: WikiAppWebViewSessionStateMachine
     private var configuration: WikiAppWebViewConfigurationFactory.Configuration?
     private var timeoutHandle: (any RendererWebViewCancellable)?
     private var permit: RendererWebViewSessionPermit?
+    private var bridge: RendererContentWorldBroker?
+    private var scriptMessageHandler: RendererScriptMessageHandler?
     private var requestGeneration = 0
     private(set) var webView: WKWebView?
 
@@ -154,13 +157,15 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         resourceProvider: any RendererPackageResourceProviding,
         configurationFactory: WikiAppWebViewConfigurationFactory = .init(),
         timeoutScheduler: any RendererWebViewLoadTimeoutScheduling = SystemRendererWebViewLoadTimeoutScheduler(),
-        permits: RendererWebViewSessionPermitPool? = nil
+        permits: RendererWebViewSessionPermitPool? = nil,
+        bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)? = nil
     ) {
         self.entryURL = entryURL
         self.resourceProvider = resourceProvider
         self.configurationFactory = configurationFactory
         self.timeoutScheduler = timeoutScheduler
         self.permits = permits ?? .shared
+        self.bridgeFactory = bridgeFactory
         machine = .init(sessionID: sessionID)
     }
 
@@ -188,6 +193,22 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
             resourceProvider: resourceProvider
         )
         self.configuration = configuration
+        if let bridgeFactory {
+            let bridge = bridgeFactory(machine.sessionID)
+            let handler = RendererScriptMessageHandler(broker: bridge) { [weak self] in
+                self?.isReadyForBridge ?? false
+            }
+            configuration.userContentController.add(
+                handler,
+                contentWorld: configuration.contentWorld,
+                name: WikiAppWebViewPolicy.isolatedMessageHandlerName
+            )
+            configuration.userContentController.addUserScript(
+                RendererContentWorldBroker.pageRelayScript(contentWorld: configuration.contentWorld)
+            )
+            self.bridge = bridge
+            scriptMessageHandler = handler
+        }
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -209,6 +230,9 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         timeoutHandle?.cancel()
         timeoutHandle = nil
         webView?.stopLoading()
+        bridge?.close()
+        bridge = nil
+        scriptMessageHandler = nil
         configuration?.schemeHandler.close()
         if let configuration {
             configuration.userContentController.removeScriptMessageHandler(
@@ -252,6 +276,11 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private var isLoading: Bool {
         guard case .loading = machine.state else { return false }
         return true
+    }
+
+    private var isReadyForBridge: Bool {
+        if case .ready = machine.state { return true }
+        return false
     }
 
     private func timeoutFired(sessionID: RendererSessionID, requestGeneration: Int) {

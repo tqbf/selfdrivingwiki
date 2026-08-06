@@ -128,7 +128,7 @@ struct DocumentationContractTests {
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
     }
 
-    @Test func dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation() throws {
+    @Test func dynamicRendererBridgeContractIsVersionPinnedAndStillExcludesNavigation() throws {
         let root = try #require(Self.locateRepositoryRoot())
         let inventory = try String(
             contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath),
@@ -136,9 +136,9 @@ struct DocumentationContractTests {
         )
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
-        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2]"))
+        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3]"))
         #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
-        #expect(inventory.contains("It adds no bridge authorization"))
+        #expect(inventory.contains("per-session capability-bound input.read bridge"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
         #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
