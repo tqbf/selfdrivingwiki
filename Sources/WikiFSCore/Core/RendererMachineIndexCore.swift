@@ -5,38 +5,46 @@ import Foundation
 /// Versioned, machine-only package index. SQLite stores this value authoritatively;
 /// `derived/index.json` is a regenerated projection of the same validated value.
 public struct RendererMachineIndex: Codable, Equatable, Sendable {
-    /// Version 2 adds validator-produced descriptors to validated records.
-    public static let currentSchemaVersion = 2
+    /// Version 3 adds persisted installed-renderer failure accounting.
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let generation: UInt64
     public let records: [RendererPackageInstallRecord]
     public let safeModeIsEnabled: Bool
+    public let installedRendererFailures: [RendererInstalledRendererFailure]
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         generation: UInt64 = 0,
         records: [RendererPackageInstallRecord] = [],
-        safeModeIsEnabled: Bool = false
+        safeModeIsEnabled: Bool = false,
+        installedRendererFailures: [RendererInstalledRendererFailure] = []
     ) throws {
         self.schemaVersion = schemaVersion
         self.generation = generation
         self.records = records.sorted()
         self.safeModeIsEnabled = safeModeIsEnabled
+        self.installedRendererFailures = installedRendererFailures
         try validate()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, generation, records, safeModeIsEnabled
+        case schemaVersion, generation, records, safeModeIsEnabled, installedRendererFailures
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == 2 || schemaVersion == Self.currentSchemaVersion else {
+            throw RendererMachineIndexStoreError.unsupportedSchemaVersion
+        }
         try self.init(
-            schemaVersion: container.decode(Int.self, forKey: .schemaVersion),
+            schemaVersion: Self.currentSchemaVersion,
             generation: container.decode(UInt64.self, forKey: .generation),
             records: container.decode([RendererPackageInstallRecord].self, forKey: .records),
-            safeModeIsEnabled: container.decode(Bool.self, forKey: .safeModeIsEnabled)
+            safeModeIsEnabled: container.decode(Bool.self, forKey: .safeModeIsEnabled),
+            installedRendererFailures: try container.decodeIfPresent([RendererInstalledRendererFailure].self, forKey: .installedRendererFailures) ?? []
         )
     }
 
@@ -68,8 +76,12 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
             .sorted { $0.reference < $1.reference }
     }
 
-    func replacing(records: [RendererPackageInstallRecord], safeModeIsEnabled: Bool) throws -> Self {
-        try Self(generation: generation + 1, records: records, safeModeIsEnabled: safeModeIsEnabled)
+    func replacing(
+        records: [RendererPackageInstallRecord],
+        safeModeIsEnabled: Bool,
+        installedRendererFailures: [RendererInstalledRendererFailure]? = nil
+    ) throws -> Self {
+        try Self(generation: generation + 1, records: records, safeModeIsEnabled: safeModeIsEnabled, installedRendererFailures: installedRendererFailures ?? self.installedRendererFailures)
     }
 }
 
@@ -98,6 +110,7 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case activationCleanupFailed
     case activationCancelled
     case packageRootAlreadyExists
+    case installedRendererNotAvailable
 }
 
 func rendererMachineIndexValidatingPackagePaths(
@@ -129,4 +142,38 @@ func rendererMachineIndexApplying(
     var safeModeIsEnabled = index.safeModeIsEnabled
     try mutation(&records, &safeModeIsEnabled)
     return try index.replacing(records: records, safeModeIsEnabled: safeModeIsEnabled)
+}
+
+func rendererMachineIndexRecordingInstalledRendererFailure(
+    _ index: RendererMachineIndex,
+    packageID: RendererPackageID,
+    version: RendererPackageVersion,
+    cause: RendererInstalledRendererFailureCause,
+    expectedGeneration: UInt64,
+    now: RFC3339Timestamp
+) throws -> (index: RendererMachineIndex, window: RendererInstalledRendererFailureWindow) {
+    guard index.generation == expectedGeneration else {
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+    let reservation = RendererPackageReservation(packageID: packageID, version: version)
+    guard index.records.contains(where: {
+        $0.state == .validated && RendererPackageReservation(packageID: $0.packageID, version: $0.version) == reservation
+    }) else {
+        throw RendererMachineIndexStoreError.installedRendererNotAvailable
+    }
+    let failures = try rendererInstalledRendererFailuresPruned(index.installedRendererFailures, now: now.date())
+        + [.init(packageID: packageID, version: version, cause: cause, occurredAt: now)]
+    let window = rendererInstalledRendererFailureWindow(failures, reservation: reservation)
+    let next = try index.replacing(records: index.records, safeModeIsEnabled: index.safeModeIsEnabled || window.hasReachedThreshold, installedRendererFailures: failures)
+    return (next, window)
+}
+
+func rendererMachineIndexResettingInstalledRendererSafeMode(
+    _ index: RendererMachineIndex,
+    expectedGeneration: UInt64
+) throws -> RendererMachineIndex {
+    guard index.generation == expectedGeneration else {
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+    return try index.replacing(records: index.records, safeModeIsEnabled: false, installedRendererFailures: [])
 }

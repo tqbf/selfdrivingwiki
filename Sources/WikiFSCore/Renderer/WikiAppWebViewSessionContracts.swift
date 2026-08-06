@@ -37,7 +37,26 @@ public enum RendererSessionFailureKind: Equatable, Sendable {
     case concurrencyLimitReached
     case loadTimedOut
     case navigationFailed
+    case bridgeBootstrapFailed
     case webContentProcessTerminated
+
+    /// Only failures caused by executable installed renderer code may affect
+    /// the machine safe-mode window. Rejection and lifecycle paths deliberately
+    /// have no mapping and therefore cannot be persisted as failures.
+    public var installedRendererFailureCause: RendererInstalledRendererFailureCause? {
+        switch self {
+        case .loadTimedOut:
+            .loadTimedOut
+        case .navigationFailed:
+            .entryNavigationFailed
+        case .bridgeBootstrapFailed:
+            .bridgeBootstrapFailed
+        case .webContentProcessTerminated:
+            .webContentProcessTerminated
+        case .invalidEntryURL, .concurrencyLimitReached:
+            nil
+        }
+    }
 }
 
 public struct RendererSessionFailure: Equatable, Sendable {

@@ -267,7 +267,7 @@ struct RendererPackageActivationTests {
         {"schemaVersion":1,"generation":0,"records":[],"safeModeIsEnabled":false}
         """.utf8)
 
-        #expect(RendererMachineIndex.currentSchemaVersion == 2)
+        #expect(RendererMachineIndex.currentSchemaVersion == 3)
         #expect(throws: RendererMachineIndexStoreError.unsupportedSchemaVersion) {
             _ = try JSONDecoder().decode(RendererMachineIndex.self, from: legacy)
         }

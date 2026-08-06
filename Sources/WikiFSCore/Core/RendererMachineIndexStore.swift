@@ -114,6 +114,50 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Records one qualifying installed-renderer failure under the same
+    /// coordinator and generation-CAS discipline as package mutations.
+    public func recordInstalledRendererFailure(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        failure: RendererInstalledRendererFailureCause,
+        expectedGeneration: UInt64,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> (index: RendererMachineIndex, window: RendererInstalledRendererFailureWindow) {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            try storage.recordInstalledRendererFailure(
+                packageID: packageID,
+                version: version,
+                failure: failure,
+                expectedGeneration: expectedGeneration,
+                now: clock.now()
+            )
+        }
+    }
+
+    /// Re-enables installed renderer projection and discards the current
+    /// rolling failure history so an old window cannot immediately re-trigger.
+    public func resetInstalledRendererSafeMode(expectedGeneration: UInt64) async throws -> RendererMachineIndex {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            try storage.resetInstalledRendererSafeMode(expectedGeneration: expectedGeneration)
+        }
+    }
+
+    /// Returns the current window after applying normal time aging. This read
+    /// does not alter generation; the next qualifying write persists pruning.
+    public func failureWindow(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> RendererInstalledRendererFailureWindow {
+        let index = try await read()
+        let failures = try rendererInstalledRendererFailuresPruned(index.installedRendererFailures, now: clock.now().date())
+        return rendererInstalledRendererFailureWindow(failures, reservation: .init(packageID: packageID, version: version))
+    }
+
     /// Atomically promotes a validator-produced staged package into its reserved
     /// immutable package/version root, then makes its registrations available in
     /// the machine index. The coordinator covers both the revalidation and the
@@ -316,9 +360,13 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         return try withDatabase { database in
             if try hasIndexTable(database) {
                 try ensureExpectedHashReservationTable(database)
-                let index = try load(database: database)
+                let loaded = try load(database: database)
+                let index = loaded.index
                 try rendererMachineIndexValidatingPackagePaths(index, layout: layout)
                 try reserveExpectedHashes(database, records: index.records)
+                if loaded.requiresMigration {
+                    try migrate(database: database, index: index)
+                }
                 return index
             }
             try execute(database, sql: Self.createTableSQL)
@@ -337,7 +385,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         return try withDatabase { database in
             guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
             try ensureExpectedHashReservationTable(database)
-            let current = try load(database: database)
+            let current = try load(database: database).index
             try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
             try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
@@ -358,6 +406,59 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         }
     }
 
+    func recordInstalledRendererFailure(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        failure: RendererInstalledRendererFailureCause,
+        expectedGeneration: UInt64,
+        now: RFC3339Timestamp
+    ) throws -> (index: RendererMachineIndex, window: RendererInstalledRendererFailureWindow) {
+        try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+        return try withDatabase { database in
+            guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
+            try ensureExpectedHashReservationTable(database)
+            let current = try load(database: database).index
+            try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
+            let result = try rendererMachineIndexRecordingInstalledRendererFailure(current, packageID: packageID, version: version, cause: failure, expectedGeneration: expectedGeneration, now: now)
+            try execute(database, sql: "SAVEPOINT renderer_machine_index_failure_mutation")
+            do {
+                try update(database: database, index: result.index)
+                try replaceDerivedIndex(result.index)
+                try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_failure_mutation")
+                return result
+            } catch {
+                _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_failure_mutation", nil, nil, nil)
+                _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_failure_mutation", nil, nil, nil)
+                if error is RendererMachineIndexStoreError { throw error }
+                throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
+            }
+        }
+    }
+
+    func resetInstalledRendererSafeMode(expectedGeneration: UInt64) throws -> RendererMachineIndex {
+        try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+        return try withDatabase { database in
+            guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
+            try ensureExpectedHashReservationTable(database)
+            let current = try load(database: database).index
+            try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
+            let next = try rendererMachineIndexResettingInstalledRendererSafeMode(current, expectedGeneration: expectedGeneration)
+            try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
+            try execute(database, sql: "SAVEPOINT renderer_machine_index_safe_mode_reset")
+            do {
+                try update(database: database, index: next)
+                try replaceDerivedIndex(next)
+                try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_safe_mode_reset")
+                return next
+            } catch {
+                _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_safe_mode_reset", nil, nil, nil)
+                _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_safe_mode_reset", nil, nil, nil)
+                if error is RendererMachineIndexStoreError { throw error }
+                throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
+            }
+        }
+    }
+
     func mutateAndAppendMachineEvent(
         expectedGeneration: UInt64,
         scope: RendererMachineScopeID,
@@ -371,7 +472,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         return try withDatabase { database in
             guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
             try ensureExpectedHashReservationTable(database)
-            let current = try load(database: database)
+            let current = try load(database: database).index
             let next = try rendererMachineIndexApplying(current, expectedGeneration: expectedGeneration, mutation: mutation)
             try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
             try attachJournal(database)
@@ -414,7 +515,12 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         }
     }
 
-    private func load(database: OpaquePointer) throws -> RendererMachineIndex {
+    private struct LoadedIndex {
+        let index: RendererMachineIndex
+        let requiresMigration: Bool
+    }
+
+    private func load(database: OpaquePointer) throws -> LoadedIndex {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, "SELECT schema_version, generation, index_json FROM renderer_machine_index WHERE singleton = 1", -1, &statement, nil) == SQLITE_OK,
               let statement else { throw RendererMachineIndexStoreError.corruptIndex }
@@ -425,7 +531,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
               sqlite3_column_type(statement, 2) == SQLITE_BLOB
         else { throw RendererMachineIndexStoreError.corruptIndex }
         let schemaVersion = Int(sqlite3_column_int64(statement, 0))
-        guard schemaVersion == RendererMachineIndex.currentSchemaVersion else {
+        guard schemaVersion == 2 || schemaVersion == RendererMachineIndex.currentSchemaVersion else {
             throw RendererMachineIndexStoreError.unsupportedSchemaVersion
         }
         let rawGeneration = sqlite3_column_int64(statement, 1)
@@ -438,10 +544,27 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         let index: RendererMachineIndex
         do { index = try JSONDecoder().decode(RendererMachineIndex.self, from: Data(bytes: bytes, count: length)) }
         catch { throw RendererMachineIndexStoreError.corruptIndex }
-        guard index.schemaVersion == schemaVersion, index.generation == generation else {
+        guard index.generation == generation else {
             throw RendererMachineIndexStoreError.corruptIndex
         }
-        return index
+        return .init(index: index, requiresMigration: schemaVersion != RendererMachineIndex.currentSchemaVersion)
+    }
+
+    /// Rewrites a proven v2 JSON shape as v3 without changing generation,
+    /// descriptors, or safe mode. The savepoint leaves the v2 authority intact
+    /// if the derived projection cannot be replaced.
+    private func migrate(database: OpaquePointer, index: RendererMachineIndex) throws {
+        try execute(database, sql: "SAVEPOINT renderer_machine_index_schema_migration")
+        do {
+            try update(database: database, index: index)
+            try replaceDerivedIndex(index)
+            try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_schema_migration")
+        } catch {
+            _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_schema_migration", nil, nil, nil)
+            _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_schema_migration", nil, nil, nil)
+            if error is RendererMachineIndexStoreError { throw error }
+            throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
+        }
     }
 
     private func insert(database: OpaquePointer, index: RendererMachineIndex) throws {

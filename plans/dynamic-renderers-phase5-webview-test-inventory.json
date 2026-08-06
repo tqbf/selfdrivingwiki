@@ -6,7 +6,7 @@
   "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "ad0cf2e73fd070d2e6b3b791c3ac655df952ff06",
   "headSHA": "407f0fcca510004975b8ee7cef888fed0ae351bf",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, and isolated trusted external-link activation contracts. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. It adds no session-host wiring, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, and machine-wide installed-renderer safe mode. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. It adds no session-host wiring, general subresource interception, network harness, storage, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -53,6 +53,7 @@
       "symbols": [
         "RendererSessionID",
         "WikiAppWebViewPolicy",
+        "RendererSessionFailureKind.installedRendererFailureCause",
         "RendererSessionFailure",
         "WikiAppWebViewSessionStateMachine"
       ],
@@ -60,6 +61,46 @@
         "WikiAppWebViewSessionContractsTests.policyUsesNamedLimits",
         "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
         "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererFailureWindow.swift",
+      "symbols": [
+        "RendererInstalledRendererFailureCause",
+        "RendererInstalledRendererFailurePolicy",
+        "rendererInstalledRendererFailuresPruned"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.windowIncludesItsExactStartAndExcludesOlderFailures",
+        "RendererFailureWindowTests.eachExplicitlyCountedFailureParticipatesInTheWindow",
+        "RendererFailureWindowTests.retainedFailureHistoryHasANamedBound"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": [
+        "RendererMachineIndex.availableDescriptorProjection",
+        "rendererMachineIndexRecordingInstalledRendererFailure",
+        "rendererMachineIndexResettingInstalledRendererSafeMode"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.countedFailuresAtThresholdEnableSafeModeAndPersist",
+        "RendererSafeModeTests.thresholdDisablesInstalledOnlyAndResetRestores",
+        "RendererSafeModeTests.staleResetCannotDiscardAConcurrentFailureHistory"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": [
+        "RendererMachineIndexStore.recordInstalledRendererFailure",
+        "RendererMachineIndexStore.resetInstalledRendererSafeMode",
+        "RendererMachineIndexSQLiteStorage.migrate"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.concurrentStoresRejectStaleFailureUpdateWithoutLosingFirstWrite",
+        "RendererFailureWindowTests.simultaneousTwoStoreUpdatesCommitOnlyOneGeneration",
+        "RendererFailureWindowTests.retriedSecondStoreUpdatePreservesBothFailures",
+        "RendererFailureWindowTests.v2MigrationPreservesDescriptorsSafeModeAndGeneration"
       ]
     },
     {
@@ -176,6 +217,9 @@
     "Tests/WikiFSAppTests/RendererContentWorldBridgeTests.swift",
     "Tests/WikiFSAppTests/WikiAppWebViewSessionTests.swift",
     "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererFailureWindowTests.swift",
+    "Tests/WikiFSTests/RendererSafeModeTests.swift",
+    "Tests/WikiFSTests/RendererMachineStoreFailureFixture.swift",
     "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
     "Tests/WikiFSTests/DocumentationContractTests.swift",
     "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
@@ -277,7 +321,6 @@
   "excluded": [
     "general subresource interception",
     "network harness",
-    "safe mode",
     "SwiftUI host",
     "Excalidraw",
     "JSON Canvas",

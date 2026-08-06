@@ -145,6 +145,8 @@ struct DocumentationContractTests {
         #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
         #expect(inventory.contains("WikiAppWebViewSession"))
         #expect(inventory.contains("navigation policy, actual WebKit provenance checks"))
+        #expect(inventory.contains("machine-wide installed-renderer safe mode"))
+        #expect(inventory.contains("Failure accounting stores only a package identity"))
     }
 
     @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
