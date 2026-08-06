@@ -14,7 +14,7 @@ public enum WikiAppWebViewPolicy {
     public static let maximumDecodedByteCount = RendererPackageValidationLimits.maximumDecodedInputByteCount
     public static let maximumBridgeMessageByteCount = 64 * 1_024
     public static let loadTimeout: Duration = .seconds(30)
-    public static let isolatedContentWorldName = "com.selfdrivingwiki.renderer-host"
+    public static let isolatedContentWorldNamePrefix = "com.selfdrivingwiki.renderer-host"
     public static let isolatedMessageHandlerName = "renderer-host"
 }
 

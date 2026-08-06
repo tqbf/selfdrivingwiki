@@ -58,6 +58,8 @@ private final class RendererWebViewTaskHandle: RendererWebViewCancellable {
 
 @MainActor
 final class RendererWebViewSessionPermitPool {
+    static let shared = RendererWebViewSessionPermitPool()
+
     private let maximumPermits: Int
     private var activePermits = 0
 
@@ -105,10 +107,15 @@ struct WikiAppWebViewConfigurationFactory {
         self.dataStores = dataStores
     }
 
-    func makeConfiguration(resourceProvider: any RendererPackageResourceProviding) -> Configuration {
+    func makeConfiguration(
+        sessionID: RendererSessionID,
+        resourceProvider: any RendererPackageResourceProviding
+    ) -> Configuration {
         let dataStore = dataStores.makeNonPersistentDataStore()
         let userContentController = WKUserContentController()
-        let contentWorld = WKContentWorld.world(name: WikiAppWebViewPolicy.isolatedContentWorldName)
+        let contentWorld = WKContentWorld.world(
+            name: "\(WikiAppWebViewPolicy.isolatedContentWorldNamePrefix).\(sessionID.rawValue.uuidString)"
+        )
         let schemeHandler = RendererPackageSchemeHandler(resourceProvider: resourceProvider)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
@@ -137,7 +144,6 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private var machine: WikiAppWebViewSessionStateMachine
     private var configuration: WikiAppWebViewConfigurationFactory.Configuration?
     private var timeoutHandle: (any RendererWebViewCancellable)?
-    private var operationHandles: [any RendererWebViewCancellable] = []
     private var permit: RendererWebViewSessionPermit?
     private var requestGeneration = 0
     private(set) var webView: WKWebView?
@@ -148,14 +154,18 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         resourceProvider: any RendererPackageResourceProviding,
         configurationFactory: WikiAppWebViewConfigurationFactory = .init(),
         timeoutScheduler: any RendererWebViewLoadTimeoutScheduling = SystemRendererWebViewLoadTimeoutScheduler(),
-        permits: RendererWebViewSessionPermitPool = .init()
+        permits: RendererWebViewSessionPermitPool? = nil
     ) {
         self.entryURL = entryURL
         self.resourceProvider = resourceProvider
         self.configurationFactory = configurationFactory
         self.timeoutScheduler = timeoutScheduler
-        self.permits = permits
+        self.permits = permits ?? .shared
         machine = .init(sessionID: sessionID)
+    }
+
+    isolated deinit {
+        releaseOwnedResources()
     }
 
     var state: WikiAppWebViewSessionState { machine.state }
@@ -171,7 +181,12 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
             return
         }
         self.permit = permit
-        let configuration = configurationFactory.makeConfiguration(resourceProvider: resourceProvider)
+        requestGeneration &+= 1
+        let requestGeneration = requestGeneration
+        let configuration = configurationFactory.makeConfiguration(
+            sessionID: machine.sessionID,
+            resourceProvider: resourceProvider
+        )
         self.configuration = configuration
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
         webView.navigationDelegate = self
@@ -179,18 +194,20 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.webView = webView
         let sessionID = machine.sessionID
         timeoutHandle = timeoutScheduler.schedule(after: WikiAppWebViewPolicy.loadTimeout) { [weak self] in
-            self?.timeoutFired(sessionID: sessionID)
+            self?.timeoutFired(sessionID: sessionID, requestGeneration: requestGeneration)
         }
         webView.load(URLRequest(url: entryURL))
     }
 
     func close() {
         guard machine.close() else { return }
+        releaseOwnedResources()
+    }
+
+    private func releaseOwnedResources() {
         requestGeneration &+= 1
         timeoutHandle?.cancel()
         timeoutHandle = nil
-        for handle in operationHandles { handle.cancel() }
-        operationHandles.removeAll()
         webView?.stopLoading()
         configuration?.schemeHandler.close()
         if let configuration {
@@ -209,8 +226,10 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+        guard self.webView === webView, isLoading else { return }
         timeoutHandle?.cancel()
         timeoutHandle = nil
+        requestGeneration &+= 1
         machine.markReady(sessionID: machine.sessionID)
     }
 
@@ -219,26 +238,32 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         didFailProvisionalNavigation navigation: WKNavigation?,
         withError error: any Error
     ) {
-        failLoading(.navigationFailed)
+        failLoading(.navigationFailed, webView: webView)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation?, withError error: any Error) {
-        failLoading(.navigationFailed)
+        failLoading(.navigationFailed, webView: webView)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        failLoading(.webContentProcessTerminated)
+        failLoading(.webContentProcessTerminated, webView: webView)
     }
 
-    private func timeoutFired(sessionID: RendererSessionID) {
-        machine.fail(sessionID: sessionID, kind: .loadTimedOut)
-        close()
+    private var isLoading: Bool {
+        guard case .loading = machine.state else { return false }
+        return true
     }
 
-    private func failLoading(_ kind: RendererSessionFailureKind) {
-        timeoutHandle?.cancel()
-        timeoutHandle = nil
+    private func timeoutFired(sessionID: RendererSessionID, requestGeneration: Int) {
+        guard self.requestGeneration == requestGeneration, machine.sessionID == sessionID, isLoading else { return }
+        failLoading(.loadTimedOut)
+    }
+
+    private func failLoading(_ kind: RendererSessionFailureKind, webView: WKWebView? = nil) {
+        guard isLoading else { return }
+        if let webView, self.webView !== webView { return }
         machine.fail(sessionID: machine.sessionID, kind: kind)
+        releaseOwnedResources()
     }
 }
 #endif

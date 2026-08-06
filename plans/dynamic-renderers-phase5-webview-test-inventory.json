@@ -3,8 +3,8 @@
   "issue": 1026,
   "phase": 5,
   "slice": 2,
-  "baseSHA": "5e58228f77dd1477354fc9e03079e86fa913657a",
-  "scope": "WebView package-resource security boundary and ephemeral WebKit session lifecycle. This slice adds a main-actor session, a fresh nonpersistent data store, a fresh configuration, a package scheme handler, an isolated content world, timeout cancellation, and terminal teardown. It adds no bridge authorization or input.read implementation, trusted activation, navigation policy, general subresource interception, network harness, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "baseSHA": "4a1b9ad5a9e1d24fd3ffd01b0e8658e04e4b13bb",
+  "scope": "WebView package-resource security boundary and ephemeral WebKit session lifecycle. This slice adds a main-actor session, a fresh nonpersistent data store, a fresh configuration, a package scheme handler, a fresh per-session named isolated WKContentWorld, timeout cancellation, and terminal teardown. It adds no bridge authorization or input.read implementation, trusted activation, navigation policy, general subresource interception, network harness, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "A future renderer session must receive version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -69,7 +69,12 @@
         "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
         "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
         "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
-        "WikiAppWebViewSessionTests.timeoutClosesSessionAndReleasesPermit"
+        "WikiAppWebViewSessionTests.timeoutFailureIsObservableAndReleasesResources",
+        "WikiAppWebViewSessionTests.defaultSessionsShareTheGlobalCapacityLimit",
+        "WikiAppWebViewSessionTests.failedSessionReleasesReferencesAndCapacity",
+        "WikiAppWebViewSessionTests.staleTimeoutDoesNotChangeReadySession",
+        "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
+        "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity"
       ]
     },
     {
@@ -157,11 +162,18 @@
       "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
       "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
     ],
-    "each session uses fresh ephemeral WebKit objects and terminal close cancels its timer and releases its permit": [
+    "each session uses fresh ephemeral WebKit objects, a per-session content world, and terminal close cancels its timer and releases its permit": [
       "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
       "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
       "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
-      "WikiAppWebViewSessionTests.timeoutClosesSessionAndReleasesPermit"
+      "WikiAppWebViewSessionTests.timeoutFailureIsObservableAndReleasesResources"
+    ],
+    "the default session limit is global, failures release WebKit resources, and stale timeout callbacks cannot change a ready session": [
+      "WikiAppWebViewSessionTests.defaultSessionsShareTheGlobalCapacityLimit",
+      "WikiAppWebViewSessionTests.failedSessionReleasesReferencesAndCapacity",
+      "WikiAppWebViewSessionTests.staleTimeoutDoesNotChangeReadySession",
+      "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
+      "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity"
     ],
     "future WebView sessions use only version-pinned input": [
         "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation"
@@ -170,7 +182,7 @@
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|policyUsesNamedLimits|closeIsTerminalAndIdempotent|failureRequiresCurrentLoadingSession|configurationFactoryCreatesFreshComponents|invalidEntryURLFailsClosed|closeIsTerminalAndReleasesPermit|timeoutClosesSessionAndReleasesPermit|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation' Tests"
+    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|policyUsesNamedLimits|closeIsTerminalAndIdempotent|failureRequiresCurrentLoadingSession|configurationFactoryCreatesFreshComponents|invalidEntryURLFailsClosed|closeIsTerminalAndReleasesPermit|timeoutFailureIsObservableAndReleasesResources|defaultSessionsShareTheGlobalCapacityLimit|failedSessionReleasesReferencesAndCapacity|staleTimeoutDoesNotChangeReadySession|discardedLoadingSessionReleasesPermit|discardedFailedSessionReleasesCapacity|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation' Tests"
   },
   "excluded": [
     "bridge",
