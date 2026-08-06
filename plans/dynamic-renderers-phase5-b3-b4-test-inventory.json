@@ -6,10 +6,22 @@
   "scope": "Integrated Phase 5 B1-B4 package validation, activation, and installed descriptor projection",
   "baseSHA": "a1b1f28b592641dbb26333c58ac4c675dd231ec8",
   "implementationSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
-  "auditedHeadSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
-  "workingTreeHeadSHA": "7f5b3418cc4f5a5362442c998fa73fdce66819ca",
+  "auditedHeadSHA": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
+  "workingTreeHeadSHA": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
   "implementationHeadRole": "Exact integrated Phase 5 production implementation audited by this inventory refresh.",
-  "documentationCommitRole": "The current working head carries the standalone typecheck harness fix and inventory refresh. It does not replace the audited production implementationSHA.",
+  "documentationCommitRole": "The audited and pre-commit working head records the standalone typecheck-harness fix and the progress-record documentation-contract repair. It does not replace the audited production implementationSHA.",
+  "postImplementationChanges": [
+    {
+      "sha": "d38dad43b2803467137a8ccaca1c409fbb259aa4",
+      "kind": "test-harness",
+      "summary": "Adds the generated CRendererPackageMove.build directory to standalone IdentifierBoundaryTypecheckTests compiler search arguments so its module map is discovered after the Phase 5 C target move."
+    },
+    {
+      "sha": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
+      "kind": "documentation-contract",
+      "summary": "Repairs the existing Phase 5 inventory progress record with timestamp, branch, status, and timestamp_source front matter plus required Progress and Verification sections."
+    }
+  ],
   "focusedSuites": [
     { "suite": "RendererPackageActivationTests", "mappedTestCount": 13, "suiteTestCount": 13 },
     { "suite": "RendererDirectoryValidationTests", "mappedTestCount": 5, "suiteTestCount": 5 },
@@ -79,6 +91,7 @@
   ],
   "environmentEvidence": {
     "containerImage": "official Docker image swift:6.3-noble",
+    "containerImageDigest": "sha256:69bf1f0281e13d82c9e49d67c2dd1dcc8c00bad738c860f4323d7078787ec8ea",
     "swiftVersion": "Swift 6.3.3",
     "architecture": "aarch64 Linux",
     "setup": "The ephemeral container installed libsqlite3-dev before Swift commands."
@@ -92,16 +105,28 @@
     { "command": "swift test --filter RendererPackageStoreLayoutTests", "status": "passed: 6 tests in 1 suite" },
     { "command": "swift test --filter 'RendererPackageActivationTests|RendererDirectoryValidationTests|RendererMachineIndexStoreTests|RendererPackageStoreLayoutTests'", "status": "passed: 37 tests in 4 suites on Swift 6.3.3 aarch64 Linux" },
     { "command": "swift test --filter IdentifierBoundaryTypecheckTests", "status": "passed: 26 tests in 1 suite on macOS after adding CRendererPackageMove generated module-map discovery" },
+    { "command": "swift test --filter DocumentationContractTests", "status": "passed: 7 tests in 1 suite on macOS" },
+    { "command": "make build", "status": "passed on macOS" },
+    { "command": "make lint", "status": "passed on macOS: 0 violations" },
+    { "command": "swift test --filter 'RendererPackageActivationTests|RendererDirectoryValidationTests|RendererMachineIndexStoreTests|RendererPackageStoreLayoutTests|IdentifierBoundaryTypecheckTests'", "status": "passed: 63 tests in 5 suites on macOS; the four Phase 5 suites remain 37 tests in 4 suites and IdentifierBoundaryTypecheckTests is recorded separately" },
+    { "command": "make test", "status": "passed on macOS: 3,188 tests in 280 suites" },
     { "command": "swift build --target WikiFSCoreTests", "status": "passed on Swift 6.3.3 aarch64 Linux" },
     { "command": "swift test --filter WikiFSCoreTests", "status": "vacuous: 0 tests in this container; not claimed as a pass" },
+    { "command": "swift package clean && make build && make test", "status": "passed on macOS after the container run: make build and make test both passed" },
     { "command": "git diff --check", "status": "passed" }
   ],
   "gateStatus": {
     "preflight": "passed at implementationSHA before this docs-and-test refresh",
     "inventoryResolver": "passed: eight changed production paths, 37 mapped tests, source-suite counts, and retained test names",
     "focusedTests": "passed: 37 executed tests in four suites on Swift 6.3.3 aarch64 Linux",
+    "macOSFocusedTests": "passed: 63 executed tests in five suites; the inventory remains 37 Phase 5 tests in four suites, with 26 IdentifierBoundaryTypecheckTests recorded separately",
+    "documentationContract": "passed: 7 tests in 1 suite on macOS",
+    "nativeBuild": "passed: make build on macOS",
+    "lint": "passed: make lint reported 0 violations on macOS",
+    "nativeFullSuite": "passed: make test ran 3,188 tests in 280 suites on macOS",
     "portableTargetBuild": "passed on Swift 6.3.3 aarch64 Linux",
     "workflowFilter": "not passed: the literal WikiFSCoreTests filter discovered 0 tests in this container",
+    "postContainerNativeRerun": "passed after swift package clean: make build and make test both passed",
     "diffCheck": "passed"
   }
 }
