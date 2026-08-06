@@ -4,8 +4,8 @@
   "phase": 5,
   "slice": 4,
   "coveredSlices": [0, 1, 2, 3, 4],
-  "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
-  "headSHA": "f13da5ebbb0e90cf9a6714e1b8854cb63a7a1c54",
+  "baseSHA": "a416935c",
+  "headSHA": "fdd303f199d736ea5f7737cb40037288f75a1eb4",
   "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, and bounded replay state. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. It adds no trusted activation, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
@@ -43,7 +43,9 @@
         "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody",
         "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed",
         "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks",
-        "RendererPackageSchemeHandlerTests.closeCancelsOutstandingServe"
+        "RendererPackageSchemeHandlerTests.closeCancelsOutstandingServe",
+        "RendererPackageSchemeHandlerTests.stoppingTaskSuppressesLaterCancellation",
+        "RendererPackageSchemeHandlerTests.stopDuringResponsePreventsLaterCallbacks"
       ]
     },
     {
@@ -68,12 +70,17 @@
     {
       "path": "Sources/WikiFSCore/Renderer/RendererAuthorizedInputReader.swift",
       "symbols": ["RendererAuthorizedInputReader"],
-      "tests": ["RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads", "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef"]
+      "tests": ["RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads", "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes", "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "symbols": ["GRDBWikiStore.rendererInputByteCount"],
+      "tests": ["RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"]
     },
     {
       "path": "Sources/WikiFS/Renderer/RendererContentWorldBridge.swift",
       "symbols": ["RendererContentWorldBroker", "RendererScriptMessageHandler"],
-      "tests": ["RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks", "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance"]
+      "tests": ["RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks", "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"]
     },
     {
       "path": "Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift",
@@ -201,6 +208,17 @@
     "an oversized pinned source or Markdown input fails before its body is materialized": [
       "RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads"
     ],
+    "a store-backed Markdown bridge read uses the immutable authorized blob instead of a current Markdown head": [
+      "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"
+    ],
+    "nil WebView bindings and observed WebView identities deny bridge requests": [
+      "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding",
+      "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"
+    ],
+    "a stopped scheme task receives no failure, body, or finish callback after WebKit revokes it": [
+      "RendererPackageSchemeHandlerTests.stoppingTaskSuppressesLaterCancellation",
+      "RendererPackageSchemeHandlerTests.stopDuringResponsePreventsLaterCallbacks"
+    ],
     "each session uses fresh ephemeral WebKit objects, a per-session content world, and terminal close cancels its timer and releases its permit": [
       "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
       "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
@@ -227,7 +245,7 @@
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && while IFS= read -r testName; do functionName=${testName##*.}; matches=$(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' plans/dynamic-renderers-phase5-webview-test-inventory.json) | wc -l | tr -d ' '); test \"$matches\" -eq 1 || { echo \"inventory test did not resolve exactly once: $testName\" >&2; exit 1; }; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' plans/dynamic-renderers-phase5-webview-test-inventory.json)"
+    "command": "inventory=plans/dynamic-renderers-phase5-webview-test-inventory.json && jq -e '(.productionPaths | length > 0) and (.testPaths | length > 0) and all(.productionPaths[]; ((.path | type == \"string\" and length > 0) and (.symbols | type == \"array\" and length > 0) and (.tests | type == \"array\" and length > 0))) and all(.testPaths[]; type == \"string\" and length > 0)' \"$inventory\" >/dev/null && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory production path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.productionPaths[].path' \"$inventory\") && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory test path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.testPaths[]' \"$inventory\") && while IFS= read -r testName; do functionName=${testName##*.}; matches=$(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' \"$inventory\") | wc -l | tr -d ' '); test \"$matches\" -eq 1 || { echo \"inventory test did not resolve exactly once: $testName\" >&2; exit 1; }; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' \"$inventory\")"
   },
   "excluded": [
     "general subresource interception",

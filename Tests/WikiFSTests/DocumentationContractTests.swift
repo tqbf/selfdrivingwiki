@@ -137,14 +137,50 @@ struct DocumentationContractTests {
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
         #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4]"))
-        #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
-        #expect(inventory.contains("\"headSHA\": \"f13da5ebbb0e90cf9a6714e1b8854cb63a7a1c54\""))
+        #expect(inventory.contains("\"baseSHA\": \"a416935c\""))
+        #expect(inventory.contains("\"headSHA\": \"fdd303f199d736ea5f7737cb40037288f75a1eb4\""))
         #expect(inventory.contains("per-session capability-bound input.read"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
         #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
         #expect(inventory.contains("WikiAppWebViewSession"))
         #expect(inventory.contains("navigation policy, actual WebKit provenance checks"))
+    }
+
+    @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let data = try Data(contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath))
+        let inventory = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "inventory must be a JSON object"
+        )
+        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
+        let testPaths = try #require(inventory["testPaths"] as? [String])
+        try #require(productionPaths.isEmpty == false)
+        try #require(testPaths.isEmpty == false)
+
+        let testURLs = try testPaths.map { path in
+            let url = root.appendingPathComponent(path)
+            try #require(FileManager.default.fileExists(atPath: url.path), "missing listed test path: \(path)")
+            return url
+        }
+
+        for productionPath in productionPaths {
+            let path = try #require(productionPath["path"] as? String)
+            #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path), "missing listed production path: \(path)")
+            let symbols = try #require(productionPath["symbols"] as? [String])
+            let tests = try #require(productionPath["tests"] as? [String])
+            try #require(symbols.isEmpty == false, "production path has no symbols: \(path)")
+            try #require(tests.isEmpty == false, "production path has no tests: \(path)")
+
+            for testName in tests {
+                let functionName = try #require(testName.split(separator: ".").last)
+                let matches = testURLs.filter { url in
+                    (try? String(contentsOf: url, encoding: .utf8))?.contains("func \(functionName)(") == true
+                }
+                #expect(matches.count == 1, "inventory test must resolve exactly once: \(testName)")
+            }
+        }
     }
 
     @Test func rendererBridgeWebKitBoundaryIsExplicitlyScoped() throws {
