@@ -136,9 +136,9 @@ struct DocumentationContractTests {
         )
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
-        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4]"))
-        #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
-        #expect(inventory.contains("\"headSHA\": \"fdd303f199d736ea5f7737cb40037288f75a1eb4\""))
+        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4, 5]"))
+        #expect(inventory.contains("\"baseSHA\": \"ad0cf2e73fd070d2e6b3b791c3ac655df952ff06\""))
+        #expect(inventory.contains("\"headSHA\": \"407f0fcca510004975b8ee7cef888fed0ae351bf\""))
         #expect(inventory.contains("per-session capability-bound input.read"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
