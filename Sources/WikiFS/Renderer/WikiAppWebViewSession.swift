@@ -140,7 +140,9 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private let configurationFactory: WikiAppWebViewConfigurationFactory
     private let timeoutScheduler: any RendererWebViewLoadTimeoutScheduling
     private let permits: RendererWebViewSessionPermitPool
-    private let bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)?
+    private let installedPackage: RendererPackageReservation?
+    private let failureRecorder: RendererSessionFailureRecording?
+    private let bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)?
 
     private var machine: WikiAppWebViewSessionStateMachine
     private var configuration: WikiAppWebViewConfigurationFactory.Configuration?
@@ -164,7 +166,9 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         configurationFactory: WikiAppWebViewConfigurationFactory = .init(),
         timeoutScheduler: any RendererWebViewLoadTimeoutScheduling = SystemRendererWebViewLoadTimeoutScheduler(),
         permits: RendererWebViewSessionPermitPool? = nil,
-        bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)? = nil,
+        installedPackage: RendererPackageReservation? = nil,
+        failureRecorder: RendererSessionFailureRecording? = nil,
+        bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)? = nil,
         externalURLOpener: any RendererExternalURLOpening = SystemRendererExternalURLOpener(),
         activationClock: any RendererActivationClock = SystemRendererActivationClock(),
         activationNonceGenerator: any RendererActivationNonceGenerating = SystemRendererActivationNonceGenerator()
@@ -174,6 +178,8 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.configurationFactory = configurationFactory
         self.timeoutScheduler = timeoutScheduler
         self.permits = permits ?? .shared
+        self.installedPackage = installedPackage
+        self.failureRecorder = failureRecorder
         self.bridgeFactory = bridgeFactory
         externalLinkRedemptionGate = .init(
             opener: externalURLOpener,
@@ -208,23 +214,29 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         )
         self.configuration = configuration
         if let bridgeFactory {
-            let bridge = bridgeFactory(machine.sessionID)
-            let handler = RendererScriptMessageHandler(
-                broker: bridge,
-                expectedContentWorld: configuration.contentWorld
-            ) { [weak self] in
-                self?.isReadyForBridge ?? false
+            do {
+                let bridge = try bridgeFactory(machine.sessionID)
+                let handler = RendererScriptMessageHandler(
+                    broker: bridge,
+                    expectedContentWorld: configuration.contentWorld
+                ) { [weak self] in
+                    self?.isReadyForBridge ?? false
+                }
+                configuration.userContentController.addScriptMessageHandler(
+                    handler,
+                    contentWorld: configuration.contentWorld,
+                    name: WikiAppWebViewPolicy.isolatedMessageHandlerName
+                )
+                configuration.userContentController.addUserScript(
+                    RendererContentWorldBroker.pageRelayScript(contentWorld: configuration.contentWorld)
+                )
+                self.bridge = bridge
+                scriptMessageHandler = handler
+            } catch {
+                DebugLog.reader("Renderer bridge bootstrap failed.")
+                failLoading(.bridgeBootstrapFailed)
+                return
             }
-            configuration.userContentController.addScriptMessageHandler(
-                handler,
-                contentWorld: configuration.contentWorld,
-                name: WikiAppWebViewPolicy.isolatedMessageHandlerName
-            )
-            configuration.userContentController.addUserScript(
-                RendererContentWorldBroker.pageRelayScript(contentWorld: configuration.contentWorld)
-            )
-            self.bridge = bridge
-            scriptMessageHandler = handler
         }
         let trustedActivationHandler = RendererTrustedActivationScriptMessageHandler(
             expectedContentWorld: configuration.contentWorld
@@ -369,7 +381,14 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
               entryURL.host == "package"
         else { return false }
         do {
-            _ = try RendererPackageScheme.request(from: entryURL)
+            let request = try RendererPackageScheme.request(from: entryURL)
+            guard let installedPackage else { return true }
+            guard request.packageID == installedPackage.packageID,
+                  request.version == installedPackage.version
+            else {
+                DebugLog.reader("Renderer package entry URL did not match its installed package reservation.")
+                return false
+            }
             return true
         } catch {
             DebugLog.reader("renderer package entry URL rejected by package scheme validation.")
@@ -395,8 +414,8 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private func failLoading(_ kind: RendererSessionFailureKind, webView: WKWebView? = nil) {
         if let webView, self.webView !== webView { return }
         externalLinkRedemptionGate.invalidateAll(reason: .sessionFailed)
-        guard isLoading else { return }
-        machine.fail(sessionID: machine.sessionID, kind: kind)
+        guard machine.fail(sessionID: machine.sessionID, kind: kind) else { return }
+        recordInstalledRendererFailure(kind)
         releaseOwnedResources(invalidation: .sessionFailed)
     }
 
@@ -444,6 +463,19 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
 
     private func hasExpectedPackageOrigin(_ origin: WKSecurityOrigin?) -> Bool {
         origin?.protocol == RendererPackageScheme.name && origin?.host == "package"
+    }
+
+    private func recordInstalledRendererFailure(_ kind: RendererSessionFailureKind) {
+        guard let failureRecorder,
+              let installedPackage,
+              kind.installedRendererFailureCause != nil
+        else { return }
+        let failure = RendererSessionFailure(sessionID: machine.sessionID, kind: kind)
+        // This must outlive the WebView teardown so a terminal callback cannot
+        // lose its accounting event when the host immediately closes the view.
+        Task {
+            await failureRecorder(failure, installedPackage)
+        }
     }
 }
 #endif

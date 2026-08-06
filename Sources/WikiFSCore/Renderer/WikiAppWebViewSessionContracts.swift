@@ -69,6 +69,13 @@ public struct RendererSessionFailure: Equatable, Sendable {
     }
 }
 
+/// Async host seam for recording one terminal failure of an installed package.
+/// A session invokes this only after it makes a counted terminal transition.
+public typealias RendererSessionFailureRecording = @Sendable (
+    RendererSessionFailure,
+    RendererPackageReservation
+) async -> Void
+
 public enum WikiAppWebViewSessionState: Equatable, Sendable {
     case idle(RendererSessionID)
     case loading(RendererSessionID)
@@ -94,9 +101,18 @@ public struct WikiAppWebViewSessionStateMachine: Equatable, Sendable {
         state = .ready(sessionID)
     }
 
-    public mutating func fail(sessionID: RendererSessionID, kind: RendererSessionFailureKind) {
-        guard case let .loading(loadingID) = state, loadingID == sessionID else { return }
-        state = .failed(.init(sessionID: sessionID, kind: kind))
+    @discardableResult
+    public mutating func fail(sessionID: RendererSessionID, kind: RendererSessionFailureKind) -> Bool {
+        switch state {
+        case let .loading(loadingID) where loadingID == sessionID:
+            state = .failed(.init(sessionID: sessionID, kind: kind))
+            return true
+        case let .ready(readyID) where readyID == sessionID && kind == .webContentProcessTerminated:
+            state = .failed(.init(sessionID: sessionID, kind: kind))
+            return true
+        default:
+            return false
+        }
     }
 
     @discardableResult

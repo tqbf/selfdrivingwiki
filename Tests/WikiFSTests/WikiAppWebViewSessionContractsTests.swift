@@ -41,4 +41,30 @@ struct WikiAppWebViewSessionContractsTests {
         machine.fail(sessionID: sessionID, kind: .loadTimedOut)
         #expect(machine.state == .failed(.init(sessionID: sessionID, kind: .loadTimedOut)))
     }
+
+    @Test("only process termination can fail a ready session")
+    func processTerminationIsTheOnlyReadySessionFailure() {
+        let sessionID = RendererSessionID(rawValue: UUID())
+        var navigationMachine = WikiAppWebViewSessionStateMachine(sessionID: sessionID)
+        var terminationMachine = WikiAppWebViewSessionStateMachine(sessionID: sessionID)
+        let navigationStarted = navigationMachine.start()
+        let terminationStarted = terminationMachine.start()
+        #expect(navigationStarted)
+        #expect(terminationStarted)
+        navigationMachine.markReady(sessionID: sessionID)
+        terminationMachine.markReady(sessionID: sessionID)
+
+        let navigationFailed = navigationMachine.fail(sessionID: sessionID, kind: .navigationFailed)
+        #expect(navigationFailed == false)
+        #expect(navigationMachine.state == .ready(sessionID))
+        let terminationFailed = terminationMachine.fail(
+            sessionID: sessionID,
+            kind: .webContentProcessTerminated
+        )
+        #expect(terminationFailed)
+        #expect(terminationMachine.state == .failed(.init(
+            sessionID: sessionID,
+            kind: .webContentProcessTerminated
+        )))
+    }
 }

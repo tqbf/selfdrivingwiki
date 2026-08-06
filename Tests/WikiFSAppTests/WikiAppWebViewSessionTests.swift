@@ -52,6 +52,152 @@ struct WikiAppWebViewSessionTests {
         #expect(session.state == .closed(sessionID))
     }
 
+    @Test("installed session timeout records its exact package reservation once")
+    func installedTimeoutRecordsOnce() async throws {
+        let scheduler = ManualTimeoutScheduler()
+        let recorder = RecordedSessionFailures()
+        let sessionID = RendererSessionID(rawValue: UUID())
+        let session = try makeInstalledSession(
+            sessionID: sessionID,
+            timeoutScheduler: scheduler,
+            recorder: recorder
+        )
+
+        session.start()
+        scheduler.fire()
+        scheduler.fire()
+        session.close()
+
+        let failures = try await recorder.waitingForCount(1)
+        #expect(failures == [
+            .init(
+                failure: .init(sessionID: sessionID, kind: .loadTimedOut),
+                reservation: try rendererPackageReservation()
+            ),
+        ])
+    }
+
+    @Test("installed entry navigation failure records its exact package reservation")
+    func entryNavigationFailureRecordsOnce() async throws {
+        let recorder = RecordedSessionFailures()
+        let sessionID = RendererSessionID(rawValue: UUID())
+        let session = try makeInstalledSession(sessionID: sessionID, recorder: recorder)
+        session.start()
+        let webView = try #require(session.webView)
+
+        session.webView(webView, didFailProvisionalNavigation: nil, withError: NSError(domain: "test", code: 1))
+        session.webView(webView, didFail: nil, withError: NSError(domain: "test", code: 2))
+
+        let failures = try await recorder.waitingForCount(1)
+        #expect(failures == [
+            .init(
+                failure: .init(sessionID: sessionID, kind: .navigationFailed),
+                reservation: try rendererPackageReservation()
+            ),
+        ])
+    }
+
+    @Test("bridge bootstrap failure records its exact package reservation")
+    func bridgeBootstrapFailureRecordsOnce() async throws {
+        let recorder = RecordedSessionFailures()
+        let sessionID = RendererSessionID(rawValue: UUID())
+        let session = try makeInstalledSession(
+            sessionID: sessionID,
+            recorder: recorder,
+            bridgeFactory: { _ in throw BridgeBootstrapError.failed }
+        )
+
+        session.start()
+
+        let failures = try await recorder.waitingForCount(1)
+        #expect(failures == [
+            .init(
+                failure: .init(sessionID: sessionID, kind: .bridgeBootstrapFailed),
+                reservation: try rendererPackageReservation()
+            ),
+        ])
+        #expect(session.webView == nil)
+    }
+
+    @Test("installed renderer process termination after ready records its exact package reservation")
+    func processTerminationAfterReadyRecordsOnce() async throws {
+        let recorder = RecordedSessionFailures()
+        let sessionID = RendererSessionID(rawValue: UUID())
+        let session = try makeInstalledSession(sessionID: sessionID, recorder: recorder)
+        session.start()
+        let webView = try #require(session.webView)
+        session.webView(webView, didFinish: nil)
+
+        session.webViewWebContentProcessDidTerminate(webView)
+        session.webViewWebContentProcessDidTerminate(webView)
+        session.close()
+
+        let failures = try await recorder.waitingForCount(1)
+        #expect(failures == [
+            .init(
+                failure: .init(sessionID: sessionID, kind: .webContentProcessTerminated),
+                reservation: try rendererPackageReservation()
+            ),
+        ])
+    }
+
+    @Test("entry validation and sessions without an installed reservation do not record failures")
+    func nonInstalledOrInvalidSessionsDoNotRecordFailures() async throws {
+        let recorder = RecordedSessionFailures()
+        let invalidSession = WikiAppWebViewSession(
+            entryURL: try #require(URL(string: "https://example.invalid/index.html")),
+            resourceProvider: StubResourceProvider(),
+            installedPackage: try rendererPackageReservation(),
+            failureRecorder: recorder.makeRecorder()
+        )
+        let unboundSession = WikiAppWebViewSession(
+            entryURL: try #require(rendererEntryURL()),
+            resourceProvider: StubResourceProvider(),
+            failureRecorder: recorder.makeRecorder()
+        )
+
+        invalidSession.start()
+        unboundSession.start()
+        let webView = try #require(unboundSession.webView)
+        unboundSession.webView(webView, didFail: nil, withError: NSError(domain: "test", code: 1))
+
+        await Task.yield()
+        let failures = await recorder.failures()
+        #expect(failures.isEmpty)
+    }
+
+    @Test("reservation mismatch and host close do not record failures")
+    func reservationMismatchAndHostCloseDoNotRecordFailures() async throws {
+        let recorder = RecordedSessionFailures()
+        let mismatch = RendererPackageReservation(
+            packageID: try #require(RendererPackageID(rawValue: "org.example.session")),
+            version: try #require(RendererPackageVersion(rawValue: "2.0.0"))
+        )
+        let mismatchedSession = WikiAppWebViewSession(
+            entryURL: try #require(rendererEntryURL()),
+            resourceProvider: StubResourceProvider(),
+            installedPackage: mismatch,
+            failureRecorder: recorder.makeRecorder()
+        )
+        let scheduler = ManualTimeoutScheduler()
+        let closedSession = try makeInstalledSession(
+            sessionID: .init(rawValue: UUID()),
+            timeoutScheduler: scheduler,
+            recorder: recorder
+        )
+
+        mismatchedSession.start()
+        closedSession.start()
+        closedSession.close()
+        scheduler.fire()
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(mismatchedSession.webView == nil)
+        #expect(closedSession.state == .closed(closedSession.state.sessionID))
+        let failures = await recorder.failures()
+        #expect(failures.isEmpty)
+    }
+
     @Test("invalid entry URL fails without creating a WebView")
     func invalidEntryURLFailsClosed() {
         let sessionID = RendererSessionID(rawValue: UUID())
@@ -228,6 +374,48 @@ private final class StubResourceProvider: RendererPackageResourceProviding {
     }
 }
 
+private enum BridgeBootstrapError: Error {
+    case failed
+}
+
+private struct RecordedSessionFailure: Equatable, Sendable {
+    let failure: RendererSessionFailure
+    let reservation: RendererPackageReservation
+}
+
+private actor RecordedSessionFailures {
+    private enum Timing {
+        static let maximumPolls = 50
+        static let pollDelay: Duration = .milliseconds(10)
+    }
+
+    private var values: [RecordedSessionFailure] = []
+
+    nonisolated func makeRecorder() -> RendererSessionFailureRecording {
+        { [self] failure, reservation in
+            await record(failure: failure, reservation: reservation)
+        }
+    }
+
+    func record(failure: RendererSessionFailure, reservation: RendererPackageReservation) {
+        values.append(.init(failure: failure, reservation: reservation))
+    }
+
+    func failures() -> [RecordedSessionFailure] { values }
+
+    func waitingForCount(_ expectedCount: Int) async throws -> [RecordedSessionFailure] {
+        for _ in 0 ..< Timing.maximumPolls {
+            if values.count == expectedCount { return values }
+            try await Task.sleep(for: Timing.pollDelay)
+        }
+        throw RecordedSessionFailuresError.timedOut(expectedCount: expectedCount)
+    }
+}
+
+private enum RecordedSessionFailuresError: Error {
+    case timedOut(expectedCount: Int)
+}
+
 @MainActor
 private final class ManualTimeoutScheduler: RendererWebViewLoadTimeoutScheduling {
     let handle = Handle()
@@ -252,5 +440,30 @@ private final class ManualTimeoutScheduler: RendererWebViewLoadTimeoutScheduling
 
 private func rendererEntryURL() -> URL? {
     URL(string: "renderer-package://package/org.example.session/1.0.0/index.html")
+}
+
+private func rendererPackageReservation() throws -> RendererPackageReservation {
+    .init(
+        packageID: try #require(RendererPackageID(rawValue: "org.example.session")),
+        version: try #require(RendererPackageVersion(rawValue: "1.0.0"))
+    )
+}
+
+@MainActor
+private func makeInstalledSession(
+    sessionID: RendererSessionID,
+    timeoutScheduler: any RendererWebViewLoadTimeoutScheduling = SystemRendererWebViewLoadTimeoutScheduler(),
+    recorder: RecordedSessionFailures,
+    bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)? = nil
+) throws -> WikiAppWebViewSession {
+    WikiAppWebViewSession(
+        sessionID: sessionID,
+        entryURL: try #require(rendererEntryURL()),
+        resourceProvider: StubResourceProvider(),
+        timeoutScheduler: timeoutScheduler,
+        installedPackage: try rendererPackageReservation(),
+        failureRecorder: recorder.makeRecorder(),
+        bridgeFactory: bridgeFactory
+    )
 }
 #endif

@@ -136,6 +136,53 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Records a terminal session failure for one immutable installed package.
+    /// Non-counted session failures return `nil` without reading or mutating
+    /// persistent state. Generation conflicts retry the same event, so one
+    /// terminal callback can persist exactly one failure through a competing
+    /// package-store update.
+    public func recordRendererSessionFailure(
+        reservation: RendererPackageReservation,
+        failure: RendererSessionFailure,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> (index: RendererMachineIndex, window: RendererInstalledRendererFailureWindow)? {
+        guard let cause = failure.kind.installedRendererFailureCause else { return nil }
+        for _ in 0 ..< RendererInstalledRendererFailurePolicy.maximumRecordingAttempts {
+            let index = try await read()
+            do {
+                return try await recordInstalledRendererFailure(
+                    packageID: reservation.packageID,
+                    version: reservation.version,
+                    failure: cause,
+                    expectedGeneration: index.generation,
+                    clock: clock
+                )
+            } catch RendererMachineIndexStoreError.staleGeneration {
+                continue
+            }
+        }
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+
+    /// Creates the production host callback for a WebView session. The callback
+    /// retains no page content and logs a redacted persistence failure because a
+    /// WebKit delegate cannot surface an async store error synchronously.
+    public nonisolated func sessionFailureRecorder(
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) -> RendererSessionFailureRecording {
+        { [self, clock] failure, reservation in
+            do {
+                _ = try await recordRendererSessionFailure(
+                    reservation: reservation,
+                    failure: failure,
+                    clock: clock
+                )
+            } catch {
+                DebugLog.store("Installed renderer session failure could not be recorded.")
+            }
+        }
+    }
+
     /// Re-enables installed renderer projection and discards the current
     /// rolling failure history so an old window cannot immediately re-trigger.
     public func resetInstalledRendererSafeMode(expectedGeneration: UInt64) async throws -> RendererMachineIndex {

@@ -98,6 +98,85 @@ struct RendererFailureWindowTests {
         #expect(RendererSessionFailureKind.bridgeBootstrapFailed.installedRendererFailureCause == .bridgeBootstrapFailed)
     }
 
+    @Test(arguments: [
+        (RendererSessionFailureKind.loadTimedOut, RendererInstalledRendererFailureCause.loadTimedOut),
+        (RendererSessionFailureKind.navigationFailed, .entryNavigationFailed),
+        (RendererSessionFailureKind.bridgeBootstrapFailed, .bridgeBootstrapFailed),
+        (RendererSessionFailureKind.webContentProcessTerminated, .webContentProcessTerminated),
+    ])
+    func sessionFailureRecorderPersistsEachCountedCause(
+        kind: RendererSessionFailureKind,
+        expectedCause: RendererInstalledRendererFailureCause
+    ) async throws {
+        let fixture = try RendererMachineStoreFailureFixture()
+        defer { fixture.remove() }
+        let store = try await fixture.installedStore()
+        let failure = RendererSessionFailure(sessionID: .init(rawValue: UUID()), kind: kind)
+        let clock = RendererMachineStoreFailureFixture.Clock(
+            timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: 0)
+        )
+
+        let result = try await store.recordRendererSessionFailure(
+            reservation: .init(packageID: fixture.packageID, version: fixture.version),
+            failure: failure,
+            clock: clock
+        )
+
+        let recorded = try #require(result)
+        #expect(recorded.window.count == 1)
+        #expect(recorded.index.installedRendererFailures == [
+            .init(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                cause: expectedCause,
+                occurredAt: try RendererMachineStoreFailureFixture.timestamp(minutes: 0)
+            ),
+        ])
+    }
+
+    @Test func sessionFailureRecorderRejectsNonCountedKindsBeforePersistence() async throws {
+        let fixture = try RendererMachineStoreFailureFixture()
+        defer { fixture.remove() }
+        let store = try await fixture.installedStore()
+        let initial = try await store.read()
+
+        let result = try await store.recordRendererSessionFailure(
+            reservation: .init(packageID: fixture.packageID, version: fixture.version),
+            failure: .init(sessionID: .init(rawValue: UUID()), kind: .invalidEntryURL),
+            clock: RendererMachineStoreFailureFixture.Clock(
+                timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: 0)
+            )
+        )
+
+        #expect(result == nil)
+        #expect(try await store.read() == initial)
+    }
+
+    @Test func sessionFailureRecorderCallbackPersistsTheBoundInstalledVersion() async throws {
+        let fixture = try RendererMachineStoreFailureFixture()
+        defer { fixture.remove() }
+        let store = try await fixture.installedStore()
+        let clock = RendererMachineStoreFailureFixture.Clock(
+            timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: 0)
+        )
+        let recorder = store.sessionFailureRecorder(clock: clock)
+        let reservation = RendererPackageReservation(
+            packageID: fixture.packageID,
+            version: fixture.version
+        )
+
+        await recorder(
+            .init(sessionID: .init(rawValue: UUID()), kind: .webContentProcessTerminated),
+            reservation
+        )
+
+        #expect(try await store.failureWindow(
+            packageID: fixture.packageID,
+            version: fixture.version,
+            clock: clock
+        ).count == 1)
+    }
+
     @Test func retainedFailureHistoryHasANamedBound() throws {
         let fixture = try RendererMachineStoreFailureFixture()
         defer { fixture.remove() }
