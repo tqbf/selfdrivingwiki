@@ -96,6 +96,9 @@ public struct RendererPackageStoreLayout: Sendable {
 /// existing symlinks. Equality is accepted so callers may validate the root itself.
 public func isRendererPackageStorePathContained(_ candidate: URL, within root: URL) -> Bool {
     guard candidate.isFileURL, root.isFileURL else { return false }
+    // Preserve the security meaning of an explicit parent traversal. Standardizing
+    // before this check would erase `..` and could turn it into an in-root path.
+    guard candidate.pathComponents.contains("..") == false else { return false }
     let resolvedRoot = rendererPackageStoreCanonicalPath(root)
     let resolvedCandidate = rendererPackageStoreCanonicalPath(candidate)
     if resolvedCandidate == resolvedRoot { return true }
