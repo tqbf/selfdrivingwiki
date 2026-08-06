@@ -177,7 +177,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
 
     func start() {
         guard machine.start() else { return }
-        guard entryURL.scheme == RendererPackageScheme.name else {
+        guard isValidEntryURL else {
             machine.fail(sessionID: machine.sessionID, kind: .invalidEntryURL)
             return
         }
@@ -195,10 +195,13 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.configuration = configuration
         if let bridgeFactory {
             let bridge = bridgeFactory(machine.sessionID)
-            let handler = RendererScriptMessageHandler(broker: bridge) { [weak self] in
+            let handler = RendererScriptMessageHandler(
+                broker: bridge,
+                expectedContentWorld: configuration.contentWorld
+            ) { [weak self] in
                 self?.isReadyForBridge ?? false
             }
-            configuration.userContentController.add(
+            configuration.userContentController.addScriptMessageHandler(
                 handler,
                 contentWorld: configuration.contentWorld,
                 name: WikiAppWebViewPolicy.isolatedMessageHandlerName
@@ -212,6 +215,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        bridge?.bind(to: webView)
         self.webView = webView
         let sessionID = machine.sessionID
         timeoutHandle = timeoutScheduler.schedule(after: WikiAppWebViewPolicy.loadTimeout) { [weak self] in
@@ -271,6 +275,58 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         failLoading(.webContentProcessTerminated, webView: webView)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+    ) {
+        guard self.webView === webView else {
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(isAllowedPackageURL(navigationAction.request.url) ? .allow : .cancel)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
+    ) {
+        guard self.webView === webView,
+              isAllowedPackageURL(navigationResponse.response.url)
+        else {
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        nil
+    }
+
+    private func isAllowedPackageURL(_ url: URL?) -> Bool {
+        RendererNavigationPolicy.decision(for: url, entryURL: entryURL) == .allowPackageResource
+    }
+
+    private var isValidEntryURL: Bool {
+        guard entryURL.scheme == RendererPackageScheme.name,
+              entryURL.host == "package"
+        else { return false }
+        do {
+            _ = try RendererPackageScheme.request(from: entryURL)
+            return true
+        } catch {
+            DebugLog.reader("renderer package entry URL rejected by package scheme validation.")
+            return false
+        }
     }
 
     private var isLoading: Bool {

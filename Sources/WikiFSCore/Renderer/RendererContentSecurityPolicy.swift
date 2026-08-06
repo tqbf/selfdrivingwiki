@@ -20,7 +20,6 @@ public enum RendererContentSecurityPolicy {
         "object-src 'none'",
         "form-action 'none'",
         "base-uri 'none'",
-        "navigate-to 'none'",
     ].joined(separator: "; ")
 
     public static let noSniffHeaderName = "X-Content-Type-Options"

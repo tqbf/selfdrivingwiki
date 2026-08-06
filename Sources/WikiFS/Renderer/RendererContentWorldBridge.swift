@@ -17,12 +17,20 @@ final class RendererContentWorldBroker {
     private let capability: RendererSessionCapability
     private let mainFrameID = UUID()
     private var isClosed = false
+    private weak var expectedWebView: WKWebView?
+    private let expectedOrigin: (scheme: String, host: String)
 
-    init(sessionID: RendererSessionID, capability: RendererSessionCapability, inputReader: RendererAuthorizedInputReader) {
+    init(
+        sessionID: RendererSessionID,
+        capability: RendererSessionCapability,
+        inputReader: RendererAuthorizedInputReader,
+        expectedOrigin: URL = URL(string: "renderer-package://package")!
+    ) {
         self.sessionID = sessionID
         windowID = UUID()
         self.capability = capability
         self.inputReader = inputReader
+        self.expectedOrigin = (expectedOrigin.scheme ?? "", expectedOrigin.host ?? "")
         authorizer = RendererBridgeAuthorizer(
             capability: capability,
             sessionID: sessionID,
@@ -31,7 +39,23 @@ final class RendererContentWorldBroker {
         )
     }
 
-    func handlePageEnvelope(_ envelope: Data, isMainFrame: Bool, sessionIsReady: Bool) throws -> Data {
+    func bind(to webView: WKWebView) { expectedWebView = webView }
+
+    func handlePageEnvelope(
+        _ envelope: Data,
+        webView: WKWebView?,
+        securityOrigin: WKSecurityOrigin?,
+        isMainFrame: Bool,
+        sessionIsReady: Bool
+    ) throws -> Data {
+        guard let expectedWebView, webView === expectedWebView else {
+            throw RendererBridgeAuthorizationError.wrongWindow
+        }
+        guard let securityOrigin,
+              securityOrigin.protocol == expectedOrigin.scheme,
+              securityOrigin.host == expectedOrigin.host
+        else { throw RendererBridgeAuthorizationError.wrongWindow }
+        guard isMainFrame else { throw RendererBridgeAuthorizationError.nonMainFrame }
         guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
             throw RendererBridgeAuthorizationError.oversizedEnvelope
         }
@@ -47,11 +71,10 @@ final class RendererContentWorldBroker {
             capability: capability,
             input: pageRequest.input
         )
-        let frameID = isMainFrame ? mainFrameID : UUID()
         let context = RendererBridgeAuthorizationContext(
             sessionID: sessionID,
             windowID: windowID,
-            frameID: frameID,
+            frameID: mainFrameID,
             mainFrameID: mainFrameID
         )
         _ = try authorizer.authorize(
@@ -74,21 +97,51 @@ final class RendererContentWorldBroker {
 /// Receives only messages registered in the session's isolated content world.
 /// A separate user script relays page `postMessage` values into this handler.
 @MainActor
-final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandler {
+final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
     private let broker: RendererContentWorldBroker
     private let sessionIsReady: () -> Bool
+    private let expectedContentWorld: WKContentWorld
 
-    init(broker: RendererContentWorldBroker, sessionIsReady: @escaping () -> Bool) {
+    init(
+        broker: RendererContentWorldBroker,
+        expectedContentWorld: WKContentWorld,
+        sessionIsReady: @escaping () -> Bool
+    ) {
         self.broker = broker
+        self.expectedContentWorld = expectedContentWorld
         self.sessionIsReady = sessionIsReady
     }
 
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let text = message.body as? String else { return }
+    @available(macOS 11.0, *)
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) async -> (Any?, String?) {
+        response(for: message)
+    }
+
+    private func response(for message: WKScriptMessage) -> (Any?, String?) {
+        guard message.world === expectedContentWorld else {
+            return (nil, "wrong content world")
+        }
+        guard let text = message.body as? String else {
+            return (nil, "malformed envelope")
+        }
         do {
-            _ = try broker.handlePageEnvelope(Data(text.utf8), isMainFrame: message.frameInfo.isMainFrame, sessionIsReady: sessionIsReady())
+            let response = try broker.handlePageEnvelope(
+                Data(text.utf8),
+                webView: message.webView,
+                securityOrigin: message.frameInfo.securityOrigin,
+                isMainFrame: message.frameInfo.isMainFrame,
+                sessionIsReady: sessionIsReady()
+            )
+            guard let responseText = String(data: response, encoding: .utf8) else {
+                return (nil, "invalid response")
+            }
+            return (responseText, nil)
         } catch {
             DebugLog.reader("renderer bridge request denied: \(String(describing: error))")
+            return (nil, "request denied")
         }
     }
 }
@@ -98,10 +151,15 @@ extension RendererContentWorldBroker {
         let source = """
         window.addEventListener("message", function(event) {
             if (event.source !== window || !event.data || typeof event.data.rendererBridge !== "string") { return; }
-            window.webkit.messageHandlers["\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
+            const reply = window.webkit.messageHandlers["\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
+            if (reply && typeof reply.then === "function") {
+                reply.then(function(value) {
+                    window.postMessage({rendererBridgeResponse: value}, "*");
+                });
+            }
         });
         """
-        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: contentWorld)
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: contentWorld)
     }
 }
 #endif

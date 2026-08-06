@@ -85,7 +85,8 @@ public struct RendererBridgeAuthorizationContext: Equatable, Sendable {
 
 public enum RendererBridgeAuthorizationError: Error, Equatable, Sendable {
     case malformedEnvelope, oversizedEnvelope, capabilityMismatch, wrongSession, wrongWindow, nonMainFrame
-    case sessionNotReady, sessionClosed, duplicateRequestID, unauthorizedInput, oversizedPayload, unavailablePinnedInput
+    case sessionNotReady, sessionClosed, invalidRequestID, duplicateRequestID, replayCapacityExceeded
+    case unauthorizedInput, oversizedPayload, unavailablePinnedInput
 }
 
 /// Session-local authorization gate. Every session has an independent replay
@@ -119,6 +120,12 @@ public struct RendererBridgeAuthorizer: Sendable {
             guard context.frameID == context.mainFrameID else { throw RendererBridgeAuthorizationError.nonMainFrame }
         }
         guard authorizedInput == nil || request.input == authorizedInput else { throw RendererBridgeAuthorizationError.unauthorizedInput }
+        let requestIDByteCount = request.id.rawValue.utf8.count
+        guard requestIDByteCount > 0,
+              requestIDByteCount <= WikiAppWebViewPolicy.maximumBridgeRequestIDByteCount
+        else { throw RendererBridgeAuthorizationError.invalidRequestID }
+        guard seenRequestIDs.count < WikiAppWebViewPolicy.maximumRetainedBridgeRequestIDs
+        else { throw RendererBridgeAuthorizationError.replayCapacityExceeded }
         guard seenRequestIDs.insert(request.id).inserted else { throw RendererBridgeAuthorizationError.duplicateRequestID }
         return request
     }

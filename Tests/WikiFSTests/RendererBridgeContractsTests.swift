@@ -85,4 +85,59 @@ struct RendererBridgeContractsTests {
         let childFrame = RendererBridgeAuthorizationContext(sessionID: sessionID, windowID: windowID, frameID: UUID(), mainFrameID: mainFrameID)
         #expect(throws: RendererBridgeAuthorizationError.nonMainFrame) { try nonMainFrame.authorize(envelope: envelope, context: childFrame, sessionIsReady: true, sessionIsClosed: false) }
     }
+
+    @Test("request identifiers are bounded before replay retention")
+    func requestIdentifiersAreBoundedBeforeReplayRetention() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let input = RendererBridgeInput.source(versionID: .init(rawValue: "version-1"))
+
+        let emptyID = RendererBridgeRequest(
+            id: .init(rawValue: ""), method: .inputRead, capability: capability, input: input
+        )
+        var emptyAuthorizer = RendererBridgeAuthorizer(capability: capability)
+        #expect(throws: RendererBridgeAuthorizationError.invalidRequestID) {
+            try emptyAuthorizer.authorize(envelope: RendererBridgeEnvelope.encode(emptyID), sessionIsReady: true)
+        }
+
+        let oversizedID = RendererBridgeRequest(
+            id: .init(rawValue: String(repeating: "x", count: WikiAppWebViewPolicy.maximumBridgeRequestIDByteCount + 1)),
+            method: .inputRead,
+            capability: capability,
+            input: input
+        )
+        var oversizedAuthorizer = RendererBridgeAuthorizer(capability: capability)
+        #expect(throws: RendererBridgeAuthorizationError.invalidRequestID) {
+            try oversizedAuthorizer.authorize(envelope: RendererBridgeEnvelope.encode(oversizedID), sessionIsReady: true)
+        }
+    }
+
+    @Test("replay retention has a deterministic bound")
+    func replayRetentionHasDeterministicBound() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let input = RendererBridgeInput.source(versionID: .init(rawValue: "version-1"))
+        var authorizer = RendererBridgeAuthorizer(capability: capability)
+
+        for index in 0..<WikiAppWebViewPolicy.maximumRetainedBridgeRequestIDs {
+            let request = RendererBridgeRequest(
+                id: .init(rawValue: "request-\(index)"),
+                method: .inputRead,
+                capability: capability,
+                input: input
+            )
+            _ = try authorizer.authorize(
+                envelope: RendererBridgeEnvelope.encode(request),
+                sessionIsReady: true
+            )
+        }
+
+        let overflow = RendererBridgeRequest(
+            id: .init(rawValue: "overflow"),
+            method: .inputRead,
+            capability: capability,
+            input: input
+        )
+        #expect(throws: RendererBridgeAuthorizationError.replayCapacityExceeded) {
+            try authorizer.authorize(envelope: RendererBridgeEnvelope.encode(overflow), sessionIsReady: true)
+        }
+    }
 }
