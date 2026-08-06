@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "issue": 1026,
   "phase": 5,
-  "slice": 4,
-  "coveredSlices": [0, 1, 2, 3, 4],
+  "slice": 5,
+  "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
   "headSHA": "fdd303f199d736ea5f7737cb40037288f75a1eb4",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, and bounded replay state. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. It adds no trusted activation, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, and isolated trusted external-link activation contracts. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. It adds no session-host wiring, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -153,6 +153,16 @@
       "tests": [
         "DynamicRendererPRSeriesAuditTests.commandEntryPointReturnsAfterASuccessfulVerify"
       ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererTrustedActivationContracts.swift",
+      "symbols": ["RendererExternalDestination", "RendererExternalActivationNonce", "RendererActivationClock", "RendererActivationNonceGenerating", "RendererExternalActivationContext", "RendererExternalActivationAuthorizer"],
+      "tests": ["RendererTrustedActivationContractsTests.normalizesExternalDestinations", "RendererTrustedActivationContractsTests.redeemsOnce", "RendererTrustedActivationContractsTests.rejectsAbsentExpiredAndSubstitutedDestinations", "RendererTrustedActivationContractsTests.expiresAtDeadline", "RendererTrustedActivationContractsTests.systemNoncesAreOpaqueAndURLSafe", "RendererTrustedActivationContractsTests.invalidatesAllHostLifecycleBoundaries"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/RendererTrustedActivationWebKitAdapter.swift",
+      "symbols": ["RendererExternalURLOpening", "RendererExternalLinkRedemptionGate", "RendererTrustedActivationScriptMessageHandler", "RendererExternalLinkScriptMessageHandler"],
+      "tests": ["RendererExternalLinkRedemptionGateTests.opensOnlySuccessfullyRedeemedDestination"]
     }
   ],
   "testPaths": [
@@ -167,7 +177,9 @@
     "Tests/WikiFSAppTests/WikiAppWebViewSessionTests.swift",
     "Tests/WikiFSTests/RendererPackageActivationTests.swift",
     "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
-    "Tests/WikiFSTests/DocumentationContractTests.swift"
+    "Tests/WikiFSTests/DocumentationContractTests.swift",
+    "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
+    "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift"
   ],
   "coverageByRisk": {
     "a scheme request can only name the expected package ID, version, and a declared relative asset": [
@@ -235,6 +247,17 @@
     "future WebView sessions use only version-pinned input": [
         "DocumentationContractTests.dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped"
     ],
+    "a trusted external activation is a URL-safe cryptographic capability bound to the session, window, main frame, navigation, and normalized destination; it expires strictly at its deadline and cannot be replayed": [
+      "RendererTrustedActivationContractsTests.normalizesExternalDestinations",
+      "RendererTrustedActivationContractsTests.redeemsOnce",
+      "RendererTrustedActivationContractsTests.rejectsAbsentExpiredAndSubstitutedDestinations",
+      "RendererTrustedActivationContractsTests.expiresAtDeadline",
+      "RendererTrustedActivationContractsTests.systemNoncesAreOpaqueAndURLSafe",
+      "RendererTrustedActivationContractsTests.invalidatesAllHostLifecycleBoundaries"
+    ],
+    "only a successful trusted-activation redemption can invoke the external URL opener": [
+      "RendererExternalLinkRedemptionGateTests.opensOnlySuccessfullyRedeemedDestination"
+    ],
     "WebKit bridge provenance, reply delivery, frame scope, navigation policy, and CSP boundary are explicit": [
       "RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks",
       "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance",
@@ -250,7 +273,6 @@
   "excluded": [
     "general subresource interception",
     "network harness",
-    "trusted activation",
     "safe mode",
     "SwiftUI host",
     "Excalidraw",
@@ -262,6 +284,7 @@
     "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
     "The portable isolated-world bridge tests exercise handler routing, reply encoding, and injected provenance. They do not run a live renderer document or prove WebKit supplies that provenance. A hosted suite still owns that claim.",
     "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
+    "The trusted-activation contract and redemption-gate tests do not execute a live WKWebView. A hosted WebKit suite must prove that synthetic page events cannot obtain a nonce and that WebKit supplies the observed provenance.",
     "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request."
   ]
 }
