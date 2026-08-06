@@ -46,15 +46,18 @@ public struct ValidatedRendererPackage: Sendable {
 /// payloads live below a machine/App Group root, never a wiki.
 public final class RendererPackageValidator {
     private let packageRoot: URL
+    private let stagingRoot: URL
     private let fileManager: FileManager
     private let diagnose: @Sendable (String) -> Void
 
     public init(
         packageRoot: URL,
+        stagingRoot: URL? = nil,
         fileManager: FileManager = .default,
         diagnose: @escaping @Sendable (String) -> Void = { DebugLog.store($0) }
     ) {
         self.packageRoot = packageRoot.standardizedFileURL
+        self.stagingRoot = (stagingRoot ?? packageRoot.appendingPathComponent(RendererPackageValidationLimits.stagingDirectoryName, isDirectory: true)).standardizedFileURL
         self.fileManager = fileManager
         self.diagnose = diagnose
     }
@@ -68,7 +71,6 @@ public final class RendererPackageValidator {
     /// Removes abandoned staging directories. A cleanup error is reported so it
     /// cannot be mistaken for a successful recovery.
     public func recoverStaging() throws {
-        let stagingRoot = packageRoot.appendingPathComponent(RendererPackageValidationLimits.stagingDirectoryName, isDirectory: true)
         guard fileManager.fileExists(atPath: stagingRoot.path) else { return }
         for child in try fileManager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
             try removeOrDiagnose(child)
@@ -79,7 +81,6 @@ public final class RendererPackageValidator {
     /// copied tree. No archive or remote source is accepted by this API.
     public func validate(directory source: URL, expectedHash: RendererSHA256Digest? = nil) throws -> ValidatedRendererPackage {
         try ensureDirectory(source, label: source.path)
-        let stagingRoot = packageRoot.appendingPathComponent(RendererPackageValidationLimits.stagingDirectoryName, isDirectory: true)
         try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
         let staging = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
@@ -93,6 +94,29 @@ public final class RendererPackageValidator {
             do { try removeOrDiagnose(staging) } catch { throw error }
             throw error
         }
+    }
+
+    /// Rechecks a validator-produced staged tree immediately before activation.
+    /// The staging containment check prevents a package produced for another
+    /// machine store from crossing this machine's activation boundary.
+    public func revalidate(_ package: ValidatedRendererPackage) throws -> ValidatedRendererPackage {
+        guard isRendererPackageStorePathContained(package.stagedRoot, within: stagingRoot) else {
+            throw RendererPackageValidationError.invalidPath("staged package outside validator staging root")
+        }
+        let revalidated = try validateStagedDirectory(package.stagedRoot, expectedHash: package.packageHash)
+        guard revalidated.manifest == package.manifest else {
+            throw RendererPackageValidationError.packageHashMismatch
+        }
+        return revalidated
+    }
+
+    /// Revalidates a package tree already known to be under a caller-owned
+    /// immutable root. The caller must enforce that root's store containment.
+    public func revalidateDirectory(
+        _ directory: URL,
+        expectedHash: RendererSHA256Digest
+    ) throws -> ValidatedRendererPackage {
+        try validateStagedDirectory(directory, expectedHash: expectedHash)
     }
 
     private func validateStagedDirectory(_ root: URL, expectedHash: RendererSHA256Digest?) throws -> ValidatedRendererPackage {

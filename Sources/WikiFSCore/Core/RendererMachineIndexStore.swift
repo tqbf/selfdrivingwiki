@@ -50,6 +50,20 @@ public struct FileRendererMachineDerivedIndexWriter: RendererMachineDerivedIndex
     }
 }
 
+/// Cleanup is injected so activation tests can prove that an abandoned staged
+/// tree never becomes an installed record when removal fails.
+public protocol RendererPackageActivationCleaning: Sendable {
+    func removeRecursively(_ url: URL) throws
+}
+
+public struct FileRendererPackageActivationCleaner: RendererPackageActivationCleaning {
+    public init() {}
+
+    public func removeRecursively(_ url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+}
+
 private func rendererMachineIndexRename(_ source: UnsafePointer<CChar>, _ destination: UnsafePointer<CChar>) -> Int32 {
     #if canImport(Darwin)
     return Darwin.rename(source, destination)
@@ -64,15 +78,18 @@ public actor RendererMachineIndexStore {
     private let layout: RendererPackageStoreLayout
     private let coordinator: RendererPackageStoreCoordinator
     private let derivedIndexWriter: any RendererMachineDerivedIndexWriting
+    private let activationCleaner: any RendererPackageActivationCleaning
 
     public init(
         layout: RendererPackageStoreLayout,
         coordinator: RendererPackageStoreCoordinator? = nil,
-        derivedIndexWriter: any RendererMachineDerivedIndexWriting = FileRendererMachineDerivedIndexWriter()
+        derivedIndexWriter: any RendererMachineDerivedIndexWriting = FileRendererMachineDerivedIndexWriter(),
+        activationCleaner: any RendererPackageActivationCleaning = FileRendererPackageActivationCleaner()
     ) {
         self.layout = layout
         self.coordinator = coordinator ?? RendererPackageStoreCoordinator(layout: layout)
         self.derivedIndexWriter = derivedIndexWriter
+        self.activationCleaner = activationCleaner
     }
 
     public func read() async throws -> RendererMachineIndex {
@@ -93,6 +110,100 @@ public actor RendererMachineIndexStore {
         let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
         return try await coordinator.withExclusiveAccess {
             try storage.mutate(expectedGeneration: expectedGeneration, mutation: mutation)
+        }
+    }
+
+    /// Atomically promotes a validator-produced staged package into its reserved
+    /// immutable package/version root, then makes its registrations available in
+    /// the machine index. The coordinator covers both the revalidation and the
+    /// rename so no staged mutation can race activation.
+    public func activate(
+        _ package: ValidatedRendererPackage,
+        expectedGeneration: UInt64,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> RendererMachineIndex {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        let layout = self.layout
+        let activationCleaner = self.activationCleaner
+        return try await coordinator.withExclusiveAccess {
+            try Task.checkCancellation()
+            let validator = RendererPackageValidator(packageRoot: layout.root, stagingRoot: layout.stagingRoot)
+            let revalidated: ValidatedRendererPackage
+            do {
+                revalidated = try validator.revalidate(package)
+            } catch {
+                try rendererMachineActivationCleanup(package.stagedRoot, layout: layout, cleaner: activationCleaner)
+                throw RendererMachineIndexStoreError.activationFailed
+            }
+            guard revalidated.manifest.packageID == package.manifest.packageID,
+                  revalidated.manifest.version == package.manifest.version,
+                  revalidated.packageHash == package.packageHash,
+                  isRendererPackageStorePathContained(revalidated.stagedRoot, within: layout.stagingRoot)
+            else {
+                try rendererMachineActivationCleanup(package.stagedRoot, layout: layout, cleaner: activationCleaner)
+                throw RendererMachineIndexStoreError.activationFailed
+            }
+
+            let destination = layout.packageURL(packageID: revalidated.manifest.packageID, version: revalidated.manifest.version)
+            guard isRendererPackageStorePathContained(destination, within: layout.packagesRoot) else {
+                try rendererMachineActivationCleanup(package.stagedRoot, layout: layout, cleaner: activationCleaner)
+                throw RendererMachineIndexStoreError.invalidPackagePath
+            }
+            try rendererMachineActivationEnsureDirectory(layout.packagesRoot)
+            try rendererMachineActivationEnsureDirectory(destination.deletingLastPathComponent())
+
+            var moved = false
+            do {
+                if rendererMachineActivationPathExists(destination) {
+                    let installed = try validator.revalidateDirectory(destination, expectedHash: revalidated.packageHash)
+                    guard installed.manifest == revalidated.manifest else {
+                        throw RendererMachineIndexStoreError.conflictingExpectedHash
+                    }
+                } else {
+                    try rendererMachineActivationRename(revalidated.stagedRoot, destination)
+                    moved = true
+                }
+                try Task.checkCancellation()
+                let current = try storage.readOrInitialize()
+                let timestamp = clock.now()
+                let activated = try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
+                    let existing = records.first {
+                        $0.packageID == revalidated.manifest.packageID && $0.version == revalidated.manifest.version
+                    }
+                    if let existing, existing.expectedPackageHash != revalidated.packageHash {
+                        throw RendererMachineIndexStoreError.conflictingExpectedHash
+                    }
+                    let record = try RendererPackageInstallRecord(
+                        packageID: revalidated.manifest.packageID,
+                        version: revalidated.manifest.version,
+                        expectedPackageHash: revalidated.packageHash,
+                        state: .validated,
+                        reservedAt: existing?.reservedAt ?? timestamp,
+                        updatedAt: timestamp,
+                        validatedDescriptors: revalidated.manifest.descriptors
+                    )
+                    records.removeAll {
+                        $0.packageID == record.packageID && $0.version == record.version
+                    }
+                    records.append(record)
+                }
+                _ = current // Documents that initialization precedes CAS mutation.
+                if moved == false {
+                    try rendererMachineActivationCleanup(revalidated.stagedRoot, layout: layout, cleaner: activationCleaner)
+                }
+                return activated
+            } catch {
+                if moved {
+                    do { try rendererMachineActivationCleanup(destination, layout: layout, cleaner: activationCleaner) }
+                    catch { throw RendererMachineIndexStoreError.activationCleanupFailed }
+                } else {
+                    do { try rendererMachineActivationCleanup(revalidated.stagedRoot, layout: layout, cleaner: activationCleaner) }
+                    catch { throw RendererMachineIndexStoreError.activationCleanupFailed }
+                }
+                if error is RendererMachineIndexStoreError { throw error }
+                throw RendererMachineIndexStoreError.activationFailed
+            }
         }
     }
 
@@ -117,6 +228,51 @@ public actor RendererMachineIndexStore {
 
     private func prepareRoot() throws {
         try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+    }
+}
+
+private func rendererMachineActivationEnsureDirectory(_ url: URL) throws {
+    guard url.isFileURL else {
+        throw RendererMachineIndexStoreError.invalidPackagePath
+    }
+    do { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+    catch { throw RendererMachineIndexStoreError.activationFailed }
+    var metadata = stat()
+    guard url.path.withCString({ lstat($0, &metadata) }) == 0,
+          (metadata.st_mode & S_IFMT) == S_IFDIR
+    else { throw RendererMachineIndexStoreError.invalidPackagePath }
+}
+
+private func rendererMachineActivationPathExists(_ url: URL) -> Bool {
+    var metadata = stat()
+    return url.path.withCString { lstat($0, &metadata) == 0 }
+}
+
+private func rendererMachineActivationRename(_ source: URL, _ destination: URL) throws {
+    var sourceMetadata = stat()
+    guard source.path.withCString({ lstat($0, &sourceMetadata) }) == 0,
+          (sourceMetadata.st_mode & S_IFMT) == S_IFDIR
+    else { throw RendererMachineIndexStoreError.activationFailed }
+    let result = source.path.withCString { sourcePath in
+        destination.path.withCString { destinationPath in
+            rendererMachineIndexRename(sourcePath, destinationPath)
+        }
+    }
+    guard result == 0 else { throw RendererMachineIndexStoreError.activationFailed }
+}
+
+private func rendererMachineActivationCleanup(
+    _ url: URL,
+    layout: RendererPackageStoreLayout,
+    cleaner: any RendererPackageActivationCleaning
+) throws {
+    guard isRendererPackageStorePathContained(url, within: layout.stagingRoot)
+            || isRendererPackageStorePathContained(url, within: layout.packagesRoot)
+    else { throw RendererMachineIndexStoreError.invalidPackagePath }
+    do { try cleaner.removeRecursively(url) }
+    catch {
+        DebugLog.store("Renderer package activation cleanup failed: redacted path.")
+        throw RendererMachineIndexStoreError.activationCleanupFailed
     }
 }
 

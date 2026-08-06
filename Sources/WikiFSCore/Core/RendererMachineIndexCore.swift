@@ -31,7 +31,7 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
         }
         var reservations: [RendererPackageReservation: RendererSHA256Digest] = [:]
         for record in records {
-            guard record.state == .unvalidated else {
+            guard record.state == .validated || record.validatedDescriptors.isEmpty else {
                 throw RendererMachineIndexStoreError.installStateUnavailable
             }
             let key = RendererPackageReservation(packageID: record.packageID, version: record.version)
@@ -45,9 +45,16 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
         }
     }
 
-    /// A3 has no validator or activation path, so index records never become
-    /// renderer descriptors. Keeping this pure seam makes that policy testable.
-    public var availableDescriptorProjection: [RendererDescriptor] { [] }
+    /// Only activated, validator-produced records can enter an installed
+    /// registry. Safe mode is a machine-wide kill switch for installed code;
+    /// built-ins and the Source fallback are deliberately outside this value.
+    public var availableDescriptorProjection: [RendererDescriptor] {
+        guard safeModeIsEnabled == false else { return [] }
+        return records
+            .filter { $0.state == .validated }
+            .flatMap(\.validatedDescriptors)
+            .sorted { $0.reference < $1.reference }
+    }
 
     func replacing(records: [RendererPackageInstallRecord], safeModeIsEnabled: Bool) throws -> Self {
         try Self(generation: generation + 1, records: records, safeModeIsEnabled: safeModeIsEnabled)
@@ -76,6 +83,9 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case corruptIndex
     case sqliteFailure
     case derivedIndexReplacementFailed
+    case activationFailed
+    case activationCleanupFailed
+    case packageRootAlreadyExists
 }
 
 func rendererMachineIndexValidatingPackagePaths(

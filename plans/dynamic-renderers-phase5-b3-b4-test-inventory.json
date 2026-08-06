@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 5,
+  "scope": "B3 package activation and B4 installed descriptor projection",
+  "baseSHA": "da6edf416810b83ec0164602a099346b51308e26",
+  "productionSymbols": [
+    {
+      "symbol": "RendererPackageValidator.revalidate / revalidateDirectory",
+      "file": "Sources/WikiFSCore/Renderer/RendererPackageValidator.swift",
+      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
+      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"],
+      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"],
+      "cancellation": [],
+      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"]
+    },
+    {
+      "symbol": "RendererMachineIndexStore.activate",
+      "file": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
+      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"],
+      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"],
+      "cancellation": [],
+      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"]
+    },
+    {
+      "symbol": "RendererMachineIndex.availableDescriptorProjection",
+      "file": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
+      "error": [],
+      "boundary": ["RendererPackageActivationTests.safeModeAndUnavailableRecordsAreExcludedFromDeterministicProjection"],
+      "cancellation": [],
+      "teardown": []
+    },
+    {
+      "symbol": "RendererPackageInstallRecord.validatedDescriptors",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
+      "error": [],
+      "boundary": ["RendererPackageActivationTests.safeModeAndUnavailableRecordsAreExcludedFromDeterministicProjection"],
+      "cancellation": [],
+      "teardown": []
+    }
+  ],
+  "retainedExistingCoverage": [
+    "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations",
+    "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid",
+    "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex",
+    "RendererDirectoryValidationTests.rejectsLinksAndSpecialFiles"
+  ],
+  "honestCoverageLimits": [
+    "The activation slice has no WebKit session, settings UI, or installed-renderer host wiring.",
+    "Cancellation uses the coordinator check before the metadata commit. A separate cancellation seam remains part of the WebView session slice."
+  ]
+}
