@@ -19,6 +19,8 @@ status: complete
 ## Verification
 
 - Exact production head: `f13da5ebbb0e90cf9a6714e1b8854cb63a7a1c54`.
-- Focused bridge, navigation-policy, package-resource, scheme-handler, and opt-in session tests passed before evidence refresh.
-- `make build` and `make lint` passed at the production head; the refreshed evidence commit will record the complete exact-head gate set.
+- Evidence head: `b8395f244f2b7876de9b28f5acb7582f5de18414` (docs/test contract only after the production head).
+- Focused bridge, navigation-policy, package-resource, scheme-handler, and opt-in session tests passed.
+- `make build` passed, `make lint` passed with 0 violations, `swift build` passed, and `make test` passed with 3,218 tests in 285 suites.
+- JSON validation, bidirectional inventory resolution, documentation contract tests (9 tests), and `git diff --check` passed.
 - The portable and opt-in tests do not prove a live page's WebKit provenance or network isolation; hosted WebKit positive controls and hostile matrices remain required later slices.
