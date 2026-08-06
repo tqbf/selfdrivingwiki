@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 2,
+  "issue": 1026,
+  "phase": 5,
+  "branch": "feature/dynamic-renderers-05-webview",
+  "scope": "Integrated Phase 5 B1-B4 package validation, activation, and installed descriptor projection",
+  "baseSHA": "a1b1f28b592641dbb26333c58ac4c675dd231ec8",
+  "implementationSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
+  "auditedHeadSHA": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
+  "workingTreeHeadSHA": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
+  "implementationHeadRole": "Exact integrated Phase 5 production implementation audited by this inventory refresh.",
+  "documentationCommitRole": "The audited and pre-commit working head records the standalone typecheck-harness fix and the progress-record documentation-contract repair. It does not replace the audited production implementationSHA.",
+  "postImplementationChanges": [
+    {
+      "sha": "d38dad43b2803467137a8ccaca1c409fbb259aa4",
+      "kind": "test-harness",
+      "summary": "Adds the generated CRendererPackageMove.build directory to standalone IdentifierBoundaryTypecheckTests compiler search arguments so its module map is discovered after the Phase 5 C target move."
+    },
+    {
+      "sha": "6fa4cdec9cfa3bbc6d8dbbd691ea2d9ff31a7bf0",
+      "kind": "documentation-contract",
+      "summary": "Repairs the existing Phase 5 inventory progress record with timestamp, branch, status, and timestamp_source front matter plus required Progress and Verification sections."
+    }
+  ],
+  "focusedSuites": [
+    { "suite": "RendererPackageActivationTests", "mappedTestCount": 13, "suiteTestCount": 13 },
+    { "suite": "RendererDirectoryValidationTests", "mappedTestCount": 5, "suiteTestCount": 5 },
+    { "suite": "RendererMachineIndexStoreTests", "mappedTestCount": 13, "suiteTestCount": 13 },
+    { "suite": "RendererPackageStoreLayoutTests", "mappedTestCount": 6, "suiteTestCount": 6 }
+  ],
+  "focusedTestCount": 37,
+  "productionPaths": [
+    {
+      "path": "Package.swift",
+      "symbols": ["CRendererPackageMove target", "WikiFSCore dependency on CRendererPackageMove"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
+    },
+    {
+      "path": "Sources/CRendererPackageMove/RendererPackageMove.c",
+      "symbols": ["renderer_package_move_no_replace", "Darwin renamex_np RENAME_EXCL path", "Linux SYS_renameat2 RENAME_NOREPLACE path", "ENOTSUP fallback"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
+    },
+    {
+      "path": "Sources/CRendererPackageMove/include/RendererPackageMove.h",
+      "symbols": ["renderer_package_move_no_replace declaration"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": ["RendererMachineIndex.currentSchemaVersion", "RendererMachineIndex.validate", "RendererMachineIndex.availableDescriptorProjection", "RendererMachineIndexStoreError.activationCancelled", "RendererMachineIndexStoreError.packageRootAlreadyExists"],
+      "tests": ["RendererPackageActivationTests.priorIndexSchemaIsRejectedBeforeDescriptorProjection", "RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["RendererMachineIndexStore.activate", "RendererPackageActivationCleaning", "FileRendererPackageActivationCleaner", "RendererMachineActivationCleanupTarget", "RendererMachineActivationDirectoryIdentity", "rendererMachineActivationDirectoryIdentity", "rendererMachineActivationMoveNoReplace", "rendererMachineActivationEnsureDirectory", "rendererMachineActivationCleanup"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation", "RendererMachineIndexStoreTests.fileDerivedIndexWriterCreatesAndReplacesExistingIndex", "RendererMachineIndexStoreTests.freshReadInitializesSQLiteAuthorityAndDerivedJSON", "RendererMachineIndexStoreTests.mutationIncrementsGenerationAndKeepsRecordUnvalidated", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex", "RendererMachineIndexStoreTests.conflictingExpectedHashCannotReplaceImmutableReservation", "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations", "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid", "RendererMachineIndexStoreTests.packageRootSymlinkEscapeIsRejected", "RendererMachineIndexStoreTests.duplicateRecordsAreRejected", "RendererMachineIndexStoreTests.failedDerivedReplacementRollsBackSQLiteAndPreservesLastValidJSON", "RendererMachineIndexStoreTests.corruptIndexIsRejectedInsteadOfReinitialized", "RendererMachineIndexStoreTests.safeModePersistsAcrossStoreReopen", "RendererMachineIndexStoreTests.machineStoreDoesNotTouchWikiOrFileProviderProjection"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageStoreLayout.swift",
+      "symbols": ["RendererPackageStoreLayout", "isRendererPackageStorePathContained", "rendererPackageStoreCanonicalPath", "RendererPackageFileSystem.openReadOnlyNoFollow"],
+      "tests": ["RendererPackageStoreLayoutTests.injectedRootBuildsVersionedMachinePaths", "RendererPackageStoreLayoutTests.containmentAcceptsNestedAndRejectsEscapes", "RendererPackageStoreLayoutTests.containmentRejectsLexicalTraversalWithinRoot", "RendererPackageStoreLayoutTests.containmentRejectsResolvedSymlinkEscape", "RendererPackageStoreLayoutTests.fileSystemReportsLstatIdentityAndNoFollowOpen", "RendererPackageStoreLayoutTests.noFollowOpenRejectsSymlink"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererPackageValidator.swift",
+      "symbols": ["RendererPackageValidator.validate(directory:expectedHash:)", "RendererPackageValidator.revalidate", "RendererPackageValidator.revalidateDirectory", "RendererPackageValidator.recoverStaging", "RendererPackageValidator.validateStagedDirectory", "RendererPackageValidator.enumerateStaged", "RendererPackageValidator.init(diagnose:)"],
+      "tests": ["RendererDirectoryValidationTests.validatesDirectory", "RendererDirectoryValidationTests.rejectsLinksAndSpecialFiles", "RendererDirectoryValidationTests.rejectsAssetContractViolations", "RendererDirectoryValidationTests.rejectsCollisionAndRecoversStaging", "RendererDirectoryValidationTests.rejectsLimitsAndUnexpectedHash", "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"]
+    },
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "symbols": ["RendererPackageInstallRecord.validatedDescriptors", "RendererPackageInstallRecord.init descriptor identity-and-duplicate guard", "RendererPackageInstallRecord.init validated-state descriptor guard", "RendererPackageInstallRecord.init unavailable-state descriptor guard", "RendererPackageInstallRecord.init(from:)"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference", "RendererPackageActivationTests.installRecordRejectsDuplicateValidatedDescriptorReferences", "RendererPackageActivationTests.installRecordRejectsValidatedDescriptorForAnotherPackage", "RendererPackageActivationTests.installRecordRejectsDescriptorsThatDoNotMatchItsState"]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererDirectoryValidationTests.swift",
+    "Tests/WikiFSTests/RendererMachineIndexStoreTests.swift",
+    "Tests/WikiFSTests/RendererPackageStoreLayoutTests.swift",
+    "Tests/WikiFSTests/IdentifierBoundaryTypecheckTests.swift"
+  ],
+  "retainedExistingCoverage": [
+    "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations",
+    "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid",
+    "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex",
+    "RendererDirectoryValidationTests.rejectsLinksAndSpecialFiles"
+  ],
+  "honestCoverageLimits": [
+    "A process crash after the no-replace move and before the machine-index commit leaves an unindexed installed directory. Recovery is deferred to the installer lifecycle, which must reconcile installed roots under its exclusive startup or ownership-and-age barrier. recoverStaging only sweeps staging and cannot safely repair that state.",
+    "Production stale-staging recovery remains deferred to the package-install lifecycle. recoverStaging cannot run from read or activate because a concurrent install can own a fresh UUID staging directory.",
+    "Machine-index schema v2 rejects v1 explicitly because a v1 validated record cannot prove descriptor compatibility. A coordinated v1 migration remains outside this slice."
+  ],
+  "deferredFollowUps": [
+    {
+      "id": "dynamic-renderers-phase5-activation-contention-error-normalization",
+      "severity": "medium",
+      "trigger": "RendererMachineIndexStore.activate catches only RendererMachineIndexStoreError for cleanup classification. A RendererPackageStoreCoordinator lock-acquisition timeout throws RendererCoordinatorFailure during a contended activation.",
+      "requiredFix": "Classify RendererCoordinatorFailure lock-acquisition timeouts without deleting the caller's validated staging tree, and preserve the specific activation error instead of returning generic activationFailed.",
+      "gate": "before first production activation caller"
+    }
+  ],
+  "environmentEvidence": {
+    "containerImage": "official Docker image swift:6.3-noble",
+    "containerImageDigest": "sha256:69bf1f0281e13d82c9e49d67c2dd1dcc8c00bad738c860f4323d7078787ec8ea",
+    "swiftVersion": "Swift 6.3.3",
+    "architecture": "aarch64 Linux",
+    "setup": "The ephemeral container installed libsqlite3-dev before Swift commands."
+  },
+  "commandEvidence": [
+    { "command": "jq empty plans/dynamic-renderers-phase5-b3-b4-test-inventory.json", "status": "passed" },
+    { "command": "zsh tmp/orchestration/dynamic-renderers-phase5/verify-inventory-test-names.sh", "status": "passed", "terminalMarkers": ["phase5-inventory-bidirectional-resolution-pass"] },
+    { "command": "swift test --filter RendererPackageActivationTests", "status": "passed: 13 tests in 1 suite" },
+    { "command": "swift test --filter RendererDirectoryValidationTests", "status": "passed: 5 tests in 1 suite" },
+    { "command": "swift test --filter RendererMachineIndexStoreTests", "status": "passed: 13 tests in 1 suite" },
+    { "command": "swift test --filter RendererPackageStoreLayoutTests", "status": "passed: 6 tests in 1 suite" },
+    { "command": "swift test --filter 'RendererPackageActivationTests|RendererDirectoryValidationTests|RendererMachineIndexStoreTests|RendererPackageStoreLayoutTests'", "status": "passed: 37 tests in 4 suites on Swift 6.3.3 aarch64 Linux" },
+    { "command": "swift test --filter IdentifierBoundaryTypecheckTests", "status": "passed: 26 tests in 1 suite on macOS after adding CRendererPackageMove generated module-map discovery" },
+    { "command": "swift test --filter DocumentationContractTests", "status": "passed: 7 tests in 1 suite on macOS" },
+    { "command": "make build", "status": "passed on macOS" },
+    { "command": "make lint", "status": "passed on macOS: 0 violations" },
+    { "command": "swift test --filter 'RendererPackageActivationTests|RendererDirectoryValidationTests|RendererMachineIndexStoreTests|RendererPackageStoreLayoutTests|IdentifierBoundaryTypecheckTests'", "status": "passed: 63 tests in 5 suites on macOS; the four Phase 5 suites remain 37 tests in 4 suites and IdentifierBoundaryTypecheckTests is recorded separately" },
+    { "command": "make test", "status": "passed on macOS: 3,188 tests in 280 suites" },
+    { "command": "swift build --target WikiFSCoreTests", "status": "passed on Swift 6.3.3 aarch64 Linux" },
+    { "command": "swift test --filter WikiFSCoreTests", "status": "vacuous: 0 tests in this container; not claimed as a pass" },
+    { "command": "swift package clean && make build && make test", "status": "passed on macOS after the container run: make build and make test both passed" },
+    { "command": "git diff --check", "status": "passed" }
+  ],
+  "gateStatus": {
+    "preflight": "passed at implementationSHA before this docs-and-test refresh",
+    "inventoryResolver": "passed: eight changed production paths, 37 mapped tests, source-suite counts, and retained test names",
+    "focusedTests": "passed: 37 executed tests in four suites on Swift 6.3.3 aarch64 Linux",
+    "macOSFocusedTests": "passed: 63 executed tests in five suites; the inventory remains 37 Phase 5 tests in four suites, with 26 IdentifierBoundaryTypecheckTests recorded separately",
+    "documentationContract": "passed: 7 tests in 1 suite on macOS",
+    "nativeBuild": "passed: make build on macOS",
+    "lint": "passed: make lint reported 0 violations on macOS",
+    "nativeFullSuite": "passed: make test ran 3,188 tests in 280 suites on macOS",
+    "portableTargetBuild": "passed on Swift 6.3.3 aarch64 Linux",
+    "workflowFilter": "not passed: the literal WikiFSCoreTests filter discovered 0 tests in this container",
+    "postContainerNativeRerun": "passed after swift package clean: make build and make test both passed",
+    "diffCheck": "passed"
+  }
+}

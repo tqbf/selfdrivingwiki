@@ -254,6 +254,7 @@ struct IdentifierBoundaryTypecheckTests {
         let fileManager = FileManager.default
 
         let candidateDirectories = [
+            buildProducts.debugDirectory.appendingPathComponent("CRendererPackageMove.build"),
             buildProducts.debugDirectory.appendingPathComponent("GRDB.build/include"),
             buildProducts.debugDirectory.appendingPathComponent("TantivyFFI.build/include"),
             buildProducts.debugDirectory.appendingPathComponent("TantivySwift.build/include"),

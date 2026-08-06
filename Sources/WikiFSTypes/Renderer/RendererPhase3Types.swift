@@ -56,6 +56,10 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
     public let updatedAt: RFC3339Timestamp
     public let diagnostic: RendererPackageInstallDiagnostic?
     public let rollbackCandidate: RendererPackageVersion?
+    /// Normalized registrations copied from a validator-produced manifest after
+    /// the immutable package root has been activated. This remains machine-only
+    /// metadata and never enters wiki or File Provider persistence.
+    public let validatedDescriptors: [RendererDescriptor]
 
     public init(
         packageID: RendererPackageID,
@@ -65,10 +69,23 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
         reservedAt: RFC3339Timestamp,
         updatedAt: RFC3339Timestamp,
         diagnostic: RendererPackageInstallDiagnostic? = nil,
-        rollbackCandidate: RendererPackageVersion? = nil
+        rollbackCandidate: RendererPackageVersion? = nil,
+        validatedDescriptors: [RendererDescriptor] = []
     ) throws {
         guard reservedAt <= updatedAt, rollbackCandidate != version else {
             throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent record")
+        }
+        let descriptors = validatedDescriptors.sorted { $0.reference < $1.reference }
+        guard Set(descriptors.map(\.reference)).count == descriptors.count,
+              descriptors.allSatisfy({ $0.reference.packageID == packageID && $0.reference.version == version })
+        else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent validated descriptors")
+        }
+        guard state != .validated || descriptors.isEmpty == false else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "validated record missing descriptors")
+        }
+        guard state == .validated || descriptors.isEmpty else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "unavailable record has descriptors")
         }
         self.packageID = packageID
         self.version = version
@@ -78,6 +95,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
         self.updatedAt = updatedAt
         self.diagnostic = diagnostic
         self.rollbackCandidate = rollbackCandidate
+        self.validatedDescriptors = descriptors
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool {
@@ -85,7 +103,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
     }
 
     private enum CodingKeys: String, CodingKey {
-        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate
+        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate, validatedDescriptors
     }
 
     public init(from decoder: any Decoder) throws {
@@ -98,7 +116,8 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
             reservedAt: container.decode(RFC3339Timestamp.self, forKey: .reservedAt),
             updatedAt: container.decode(RFC3339Timestamp.self, forKey: .updatedAt),
             diagnostic: try container.decodeIfPresent(RendererPackageInstallDiagnostic.self, forKey: .diagnostic),
-            rollbackCandidate: try container.decodeIfPresent(RendererPackageVersion.self, forKey: .rollbackCandidate)
+            rollbackCandidate: try container.decodeIfPresent(RendererPackageVersion.self, forKey: .rollbackCandidate),
+            validatedDescriptors: try container.decodeIfPresent([RendererDescriptor].self, forKey: .validatedDescriptors) ?? []
         )
     }
 }

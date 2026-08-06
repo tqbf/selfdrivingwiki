@@ -73,6 +73,11 @@ let package = Package(
             path: "Sources/CSQLite",
             pkgConfig: "sqlite3"
         ),
+        .target(
+            name: "CRendererPackageMove",
+            path: "Sources/CRendererPackageMove",
+            publicHeadersPath: "include"
+        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -160,6 +165,7 @@ let package = Package(
                 "WikiFSLinks",
                 "WikiFSMarkdown",
                 "WikiFSSearch",
+                "CRendererPackageMove",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // On Linux, `import SQLite3` needs this system module wrapper.
                 // On macOS, the SDK provides SQLite3 directly.

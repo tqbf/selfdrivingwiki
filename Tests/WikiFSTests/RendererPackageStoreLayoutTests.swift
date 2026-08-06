@@ -35,6 +35,14 @@ struct RendererPackageStoreLayoutTests {
         #expect(isRendererPackageStorePathContained(nonFileURL, within: root) == false)
     }
 
+    @Test func containmentRejectsLexicalTraversalWithinRoot() throws {
+        let root = try temporaryDirectory(named: "lexical-traversal")
+        let nested = root.appendingPathComponent("packages/org.example.canvas/1.0.0")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        #expect(isRendererPackageStorePathContained(nested.appendingPathComponent("../escape"), within: root) == false)
+    }
+
     @Test func containmentRejectsResolvedSymlinkEscape() throws {
         let root = try temporaryDirectory(named: "symlink-root")
         let outside = try temporaryDirectory(named: "symlink-outside")
