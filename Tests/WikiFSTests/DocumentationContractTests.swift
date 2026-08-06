@@ -128,7 +128,7 @@ struct DocumentationContractTests {
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
     }
 
-    @Test func dynamicRendererBridgeContractIsVersionPinnedAndStillExcludesNavigation() throws {
+    @Test func dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped() throws {
         let root = try #require(Self.locateRepositoryRoot())
         let inventory = try String(
             contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath),
@@ -136,14 +136,47 @@ struct DocumentationContractTests {
         )
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
-        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3]"))
+        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4]"))
         #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
-        #expect(inventory.contains("per-session capability-bound input.read bridge"))
+        #expect(inventory.contains("\"headSHA\": \"f13da5ebbb0e90cf9a6714e1b8854cb63a7a1c54\""))
+        #expect(inventory.contains("per-session capability-bound input.read"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
         #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
         #expect(inventory.contains("WikiAppWebViewSession"))
-        #expect(inventory.contains("navigation policy"))
+        #expect(inventory.contains("navigation policy, actual WebKit provenance checks"))
+    }
+
+    @Test func rendererBridgeWebKitBoundaryIsExplicitlyScoped() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let bridge = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererContentWorldBridge.swift"),
+            encoding: .utf8
+        )
+        let session = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/WikiAppWebViewSession.swift"),
+            encoding: .utf8
+        )
+        let policy = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift"),
+            encoding: .utf8
+        )
+        let csp = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Renderer/RendererContentSecurityPolicy.swift"),
+            encoding: .utf8
+        )
+
+        #expect(bridge.contains("WKScriptMessageHandlerWithReply"))
+        #expect(bridge.contains("message.webView"))
+        #expect(bridge.contains("securityOrigin"))
+        #expect(bridge.contains("forMainFrameOnly: true"))
+        #expect(bridge.contains("rendererBridgeResponse"))
+        #expect(session.contains("RendererNavigationPolicy.decision"))
+        #expect(session.contains("decidePolicyFor navigationAction"))
+        #expect(session.contains("decisionHandler(.cancel)"))
+        #expect(session.contains("createWebViewWith"))
+        #expect(policy.contains("RendererPackageScheme.request"))
+        #expect(csp.contains("navigate-to") == false)
     }
 
     @Test func progressEntriesFollowTemplate() throws {

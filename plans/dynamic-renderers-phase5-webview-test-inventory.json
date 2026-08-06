@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "issue": 1026,
   "phase": 5,
-  "slice": 3,
-  "coveredSlices": [0, 1, 2, 3],
+  "slice": 4,
+  "coveredSlices": [0, 1, 2, 3, 4],
   "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
-  "headSHA": "e4e6beee26930211300ca00da73ec7e2983dc953",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, and a per-session capability-bound input.read bridge. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and window/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. It adds no trusted activation, navigation policy, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "headSHA": "f13da5ebbb0e90cf9a6714e1b8854cb63a7a1c54",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, and bounded replay state. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. It adds no trusted activation, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -62,7 +62,7 @@
     {
       "path": "Sources/WikiFSCore/Renderer/RendererBridgeContracts.swift",
       "symbols": ["RendererBridgeRequest", "RendererBridgeAuthorizer", "RendererBridgeAuthorizationContext"],
-      "tests": ["RendererBridgeContractsTests.acceptsFreshBoundedRequest", "RendererBridgeContractsTests.rejectsInvalidRequests", "RendererBridgeContractsTests.bindsSessionWindowFrameAndInput"]
+      "tests": ["RendererBridgeContractsTests.acceptsFreshBoundedRequest", "RendererBridgeContractsTests.rejectsInvalidRequests", "RendererBridgeContractsTests.bindsSessionWindowFrameAndInput", "RendererBridgeContractsTests.requestIdentifiersAreBoundedBeforeReplayRetention", "RendererBridgeContractsTests.replayRetentionHasDeterministicBound"]
     },
     {
       "path": "Sources/WikiFSCore/Renderer/RendererAuthorizedInputReader.swift",
@@ -72,7 +72,12 @@
     {
       "path": "Sources/WikiFS/Renderer/RendererContentWorldBridge.swift",
       "symbols": ["RendererContentWorldBroker", "RendererScriptMessageHandler"],
-      "tests": ["WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents"]
+      "tests": ["WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents", "DocumentationContractTests.rendererBridgeWebKitBoundaryIsExplicitlyScoped"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift",
+      "symbols": ["RendererNavigationDecision", "RendererNavigationPolicy"],
+      "tests": ["RendererNavigationPolicyTests.allowsPackageResources", "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"]
     },
     {
       "path": "Sources/WikiFS/Renderer/WikiAppWebViewSession.swift",
@@ -147,6 +152,7 @@
     "Tests/WikiFSAppTests/RendererPackageSchemeHandlerTests.swift",
     "Tests/WikiFSTests/WikiAppWebViewSessionContractsTests.swift",
     "Tests/WikiFSTests/RendererBridgeContractsTests.swift",
+    "Tests/WikiFSTests/RendererNavigationPolicyTests.swift",
     "Tests/WikiFSAppTests/WikiAppWebViewSessionTests.swift",
     "Tests/WikiFSTests/RendererPackageActivationTests.swift",
     "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
@@ -202,15 +208,19 @@
     ],
     "future WebView sessions use only version-pinned input": [
         "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation"
+    ],
+    "WebKit bridge provenance, reply delivery, frame scope, navigation policy, and CSP boundary are explicit": [
+      "DocumentationContractTests.rendererBridgeWebKitBoundaryIsExplicitlyScoped",
+      "RendererNavigationPolicyTests.allowsPackageResources",
+      "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"
     ]
   },
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|policyUsesNamedLimits|closeIsTerminalAndIdempotent|failureRequiresCurrentLoadingSession|configurationFactoryCreatesFreshComponents|invalidEntryURLFailsClosed|closeIsTerminalAndReleasesPermit|timeoutFailureIsObservableAndReleasesResources|defaultSessionsShareTheGlobalCapacityLimit|failedSessionReleasesReferencesAndCapacity|staleTimeoutDoesNotChangeReadySession|discardedLoadingSessionReleasesPermit|discardedFailedSessionReleasesCapacity|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation' Tests"
+    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|policyUsesNamedLimits|closeIsTerminalAndIdempotent|failureRequiresCurrentLoadingSession|configurationFactoryCreatesFreshComponents|invalidEntryURLFailsClosed|closeIsTerminalAndReleasesPermit|timeoutFailureIsObservableAndReleasesResources|defaultSessionsShareTheGlobalCapacityLimit|failedSessionReleasesReferencesAndCapacity|staleTimeoutDoesNotChangeReadySession|discardedLoadingSessionReleasesPermit|discardedFailedSessionReleasesCapacity|acceptsFreshBoundedRequest|rejectsInvalidRequests|bindsSessionWindowFrameAndInput|requestIdentifiersAreBoundedBeforeReplayRetention|replayRetentionHasDeterministicBound|exactSourceVersionReadDoesNotFollowTheLiveContentRef|rendererBridgeWebKitBoundaryIsExplicitlyScoped|allowsPackageResources|cancelsOutsidePackageBoundary|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation' Tests"
   },
   "excluded": [
-    "navigation policy",
     "general subresource interception",
     "network harness",
     "trusted activation",
@@ -224,6 +234,7 @@
     "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
     "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
     "The opt-in isolated-world adapter does not run a live renderer document or prove a page receives a response; hosted end-to-end response delivery remains a later slice.",
+    "The bridge provenance and navigation tests are portable/lexical and policy-level checks; a hosted WebKit suite must still prove real frame identity, reply delivery, navigation cancellation, and network isolation.",
     "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request."
   ]
 }
