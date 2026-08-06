@@ -128,19 +128,20 @@ struct DocumentationContractTests {
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
     }
 
-    @Test func dynamicRendererFutureSessionInputContractIsVersionPinnedAndSliceOneExcludesSessions() throws {
+    @Test func dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation() throws {
         let root = try #require(Self.locateRepositoryRoot())
         let inventory = try String(
             contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath),
             encoding: .utf8
         )
 
-        #expect(inventory.contains("WebView package-resource security boundary"))
-        #expect(inventory.contains("This slice adds no WebView session"))
+        #expect(inventory.contains("ephemeral WebKit session lifecycle"))
+        #expect(inventory.contains("It adds no bridge authorization"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
         #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
         #expect(inventory.contains("WikiAppWebViewSession"))
+        #expect(inventory.contains("navigation policy"))
     }
 
     @Test func progressEntriesFollowTemplate() throws {

@@ -2,9 +2,9 @@
   "schemaVersion": 2,
   "issue": 1026,
   "phase": 5,
-  "slice": 1,
+  "slice": 2,
   "baseSHA": "5e58228f77dd1477354fc9e03079e86fa913657a",
-  "scope": "WebView package-resource security boundary. This slice adds no WebView session, bridge, navigation delegate, storage policy, network harness, trusted activation, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "scope": "WebView package-resource security boundary and ephemeral WebKit session lifecycle. This slice adds a main-actor session, a fresh nonpersistent data store, a fresh configuration, a package scheme handler, an isolated content world, timeout cancellation, and terminal teardown. It adds no bridge authorization or input.read implementation, trusted activation, navigation policy, general subresource interception, network harness, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "A future renderer session must receive version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -41,6 +41,35 @@
         "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody",
         "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed",
         "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/WikiAppWebViewSessionContracts.swift",
+      "symbols": [
+        "RendererSessionID",
+        "WikiAppWebViewPolicy",
+        "RendererSessionFailure",
+        "WikiAppWebViewSessionStateMachine"
+      ],
+      "tests": [
+        "WikiAppWebViewSessionContractsTests.policyUsesNamedLimits",
+        "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
+        "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
+      ]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/WikiAppWebViewSession.swift",
+      "symbols": [
+        "RendererWebViewDataStoreProviding",
+        "RendererWebViewLoadTimeoutScheduling",
+        "WikiAppWebViewConfigurationFactory",
+        "WikiAppWebViewSession"
+      ],
+      "tests": [
+        "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
+        "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
+        "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
+        "WikiAppWebViewSessionTests.timeoutClosesSessionAndReleasesPermit"
       ]
     },
     {
@@ -94,6 +123,8 @@
   "testPaths": [
     "Tests/WikiFSTests/RendererPackageResourceProviderTests.swift",
     "Tests/WikiFSAppTests/RendererPackageSchemeHandlerTests.swift",
+    "Tests/WikiFSTests/WikiAppWebViewSessionContractsTests.swift",
+    "Tests/WikiFSAppTests/WikiAppWebViewSessionTests.swift",
     "Tests/WikiFSTests/RendererPackageActivationTests.swift",
     "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
     "Tests/WikiFSTests/DocumentationContractTests.swift"
@@ -121,20 +152,31 @@
     "caller-owned validated staging survives pre-ownership coordinator failure": [
       "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
     ],
+    "the session policy has explicit bounds and a closed state ignores late callbacks": [
+      "WikiAppWebViewSessionContractsTests.policyUsesNamedLimits",
+      "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
+      "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
+    ],
+    "each session uses fresh ephemeral WebKit objects and terminal close cancels its timer and releases its permit": [
+      "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
+      "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
+      "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
+      "WikiAppWebViewSessionTests.timeoutClosesSessionAndReleasesPermit"
+    ],
     "future WebView sessions use only version-pinned input": [
-        "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndSliceOneExcludesSessions"
+        "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation"
     ]
   },
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndSliceOneExcludesSessions' Tests"
+    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|policyUsesNamedLimits|closeIsTerminalAndIdempotent|failureRequiresCurrentLoadingSession|configurationFactoryCreatesFreshComponents|invalidEntryURLFailsClosed|closeIsTerminalAndReleasesPermit|timeoutClosesSessionAndReleasesPermit|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndLifecycleSliceExcludesBridgeAndNavigation' Tests"
   },
   "excluded": [
-    "WikiAppWebViewSession",
-    "ephemeral WebKit storage",
     "bridge",
-    "navigation delegate",
+    "bridge authorizer",
+    "input.read implementation",
+    "navigation policy",
     "general subresource interception",
     "network harness",
     "trusted activation",
@@ -146,7 +188,8 @@
   ],
   "honestCoverageLimits": [
     "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
-    "The scheme handler is not registered on a WebView configuration in this slice. A later session slice owns configuration, navigation, bridge, and close integration.",
+    "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
+    "The session installs no bridge handler and defines no navigation policy. Later slices own those authorization boundaries.",
     "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request."
   ]
 }
