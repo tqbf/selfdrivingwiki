@@ -9,26 +9,26 @@
       "symbol": "RendererPackageValidator.revalidate / revalidateDirectory",
       "file": "Sources/WikiFSCore/Renderer/RendererPackageValidator.swift",
       "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"],
-      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"],
-      "cancellation": [],
-      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"]
+      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted"],
+      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation", "RendererDirectoryValidationTests.rejectsAssetContractViolations"],
+      "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"]
     },
     {
       "symbol": "RendererMachineIndexStore.activate",
       "file": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
       "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"],
-      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"],
-      "cancellation": [],
-      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"]
+      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage"],
+      "boundary": ["RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"],
+      "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"]
     },
     {
       "symbol": "RendererMachineIndex.availableDescriptorProjection",
       "file": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
       "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
       "error": [],
-      "boundary": ["RendererPackageActivationTests.safeModeAndUnavailableRecordsAreExcludedFromDeterministicProjection"],
+      "boundary": ["RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference"],
       "cancellation": [],
       "teardown": []
     },
@@ -37,7 +37,7 @@
       "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
       "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
       "error": [],
-      "boundary": ["RendererPackageActivationTests.safeModeAndUnavailableRecordsAreExcludedFromDeterministicProjection"],
+      "boundary": ["RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference"],
       "cancellation": [],
       "teardown": []
     }
@@ -50,6 +50,8 @@
   ],
   "honestCoverageLimits": [
     "The activation slice has no WebKit session, settings UI, or installed-renderer host wiring.",
-    "Cancellation uses the coordinator check before the metadata commit. A separate cancellation seam remains part of the WebView session slice."
+    "Activation cancellation is typed as activationCancelled and cleans only the owned staging tree before any installed record exists.",
+    "Production stale-staging recovery remains deferred to the package-install lifecycle: recoverStaging cannot run from read or activate because a concurrent install can own a fresh UUID staging directory. Wiring requires the plan's startup/recovery exclusive barrier or an ownership-and-age lease; ordinary activation failures and cancellation clean their own staging trees now.",
+    "Machine-index schema v2 rejects v1 explicitly because a v1 validated record cannot prove descriptor compatibility. A coordinated v1 migration is out of this B3/B4 slice; it must derive descriptors by revalidating each immutable root under the recovery barrier."
   ]
 }

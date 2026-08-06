@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Named, conservative bounds for local renderer package v1 ingestion.
 public enum RendererPackageValidationLimits {
@@ -63,9 +67,8 @@ public final class RendererPackageValidator {
     }
 
     public convenience init(diagnose: @escaping @Sendable (String) -> Void = { DebugLog.store($0) }) throws {
-        let root = try DatabaseLocation.appGroupContainerDirectory()
-            .appendingPathComponent(RendererPackageValidationLimits.packagesDirectoryName, isDirectory: true)
-        self.init(packageRoot: root, diagnose: diagnose)
+        let layout = try RendererPackageStoreLayout.production()
+        self.init(packageRoot: layout.root, stagingRoot: layout.stagingRoot, diagnose: diagnose)
     }
 
     /// Removes abandoned staging directories. A cleanup error is reported so it
@@ -91,8 +94,13 @@ public final class RendererPackageValidator {
             let validated = try validateStagedDirectory(staging, expectedHash: expectedHash)
             return validated
         } catch {
-            do { try removeOrDiagnose(staging) } catch { throw error }
-            throw error
+            let validationError = error
+            do {
+                try removeOrDiagnose(staging)
+            } catch {
+                throw error
+            }
+            throw validationError
         }
     }
 
@@ -155,11 +163,11 @@ public final class RendererPackageValidator {
 
     private func enumerateStaged(root: URL, current: URL, device: dev_t, files: inout [RendererRelativePath: URL], seenCaseFolded: inout Set<String>, accounting: inout Accounting) throws {
         try ensureDirectory(current, label: current.path)
-        for child in try fileManager.contentsOfDirectory(at: current, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+        for child in try fileManager.contentsOfDirectory(at: current, includingPropertiesForKeys: nil) {
             let rootComponents = root.standardizedFileURL.pathComponents
             let childComponents = child.standardizedFileURL.pathComponents
             guard childComponents.starts(with: rootComponents) else {
-                throw RendererPackageValidationError.invalidPath(child.path)
+                throw RendererPackageValidationError.invalidPath(child.lastPathComponent)
             }
             let relative = childComponents.dropFirst(rootComponents.count).joined(separator: "/")
             let path = try RendererRelativePath(validating: relative)
@@ -182,31 +190,31 @@ public final class RendererPackageValidator {
 
     private func copyDirectory(_ source: URL, to destination: URL, device: dev_t, accounting: inout Accounting) throws {
         try ensureDirectory(source, label: source.path)
-        for child in try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+        for child in try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) {
             let before = try fileStatus(child.path)
-            guard before.st_dev == device else { throw RendererPackageValidationError.invalidPath(child.path) }
+            guard before.st_dev == device else { throw RendererPackageValidationError.invalidPath(child.lastPathComponent) }
             let target = destination.appendingPathComponent(child.lastPathComponent, isDirectory: isDirectory(before))
             if isDirectory(before) {
                 try fileManager.createDirectory(at: target, withIntermediateDirectories: false)
                 try copyDirectory(child, to: target, device: device, accounting: &accounting)
             } else if isRegular(before) {
-                guard before.st_nlink == 1 else { throw RendererPackageValidationError.forbiddenFileType(child.path) }
+                guard before.st_nlink == 1 else { throw RendererPackageValidationError.forbiddenFileType(child.lastPathComponent) }
                 accounting.fileCount += 1
                 accounting.byteCount += Int(before.st_size)
                 guard accounting.fileCount <= RendererPackageValidationLimits.maximumFileCount else { throw RendererPackageValidationError.fileCountLimitExceeded }
                 guard accounting.byteCount <= RendererPackageValidationLimits.maximumCopiedByteCount else { throw RendererPackageValidationError.copiedByteLimitExceeded }
-                try copyRegularFile(source: child.path, destination: target.path, expected: before)
-            } else { throw RendererPackageValidationError.forbiddenFileType(child.path) }
+                try copyRegularFile(source: child.path, sourceName: child.lastPathComponent, destination: target.path, expected: before)
+            } else { throw RendererPackageValidationError.forbiddenFileType(child.lastPathComponent) }
         }
     }
 
-    private func copyRegularFile(source: String, destination: String, expected: stat) throws {
+    private func copyRegularFile(source: String, sourceName: String, destination: String, expected: stat) throws {
         let descriptor = open(source, O_RDONLY | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw RendererPackageValidationError.sourceChanged(source) }
+        guard descriptor >= 0 else { throw RendererPackageValidationError.sourceChanged(sourceName) }
         defer { close(descriptor) }
         var opened = stat()
         guard fstat(descriptor, &opened) == 0, sameIdentity(expected, opened), isRegular(opened), opened.st_nlink == 1 else {
-            throw RendererPackageValidationError.sourceChanged(source)
+            throw RendererPackageValidationError.sourceChanged(sourceName)
         }
         let output = open(destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
         guard output >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
@@ -228,7 +236,7 @@ public final class RendererPackageValidator {
         }
         var after = stat()
         guard fstat(descriptor, &after) == 0, sameIdentity(opened, after), sameMetadata(expected, after) else {
-            throw RendererPackageValidationError.sourceChanged(source)
+            throw RendererPackageValidationError.sourceChanged(sourceName)
         }
     }
 
@@ -239,7 +247,10 @@ public final class RendererPackageValidator {
 
     private func removeOrDiagnose(_ url: URL) throws {
         do { try fileManager.removeItem(at: url) }
-        catch { diagnose("Renderer package cleanup failed for \(url.lastPathComponent): \(error)"); throw RendererPackageValidationError.cleanupFailed(url.lastPathComponent) }
+        catch {
+            diagnose("Renderer package cleanup failed for \(url.lastPathComponent).")
+            throw RendererPackageValidationError.cleanupFailed(url.lastPathComponent)
+        }
     }
 }
 
@@ -255,10 +266,19 @@ private func isDirectory(_ value: stat) -> Bool { (value.st_mode & S_IFMT) == S_
 private func isRegular(_ value: stat) -> Bool { (value.st_mode & S_IFMT) == S_IFREG }
 private func sameIdentity(_ lhs: stat, _ rhs: stat) -> Bool { lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino }
 private func sameMetadata(_ lhs: stat, _ rhs: stat) -> Bool {
+    #if canImport(Darwin)
     sameIdentity(lhs, rhs)
         && lhs.st_size == rhs.st_size
         && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
         && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
         && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
         && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+    #elseif canImport(Glibc)
+    sameIdentity(lhs, rhs)
+        && lhs.st_size == rhs.st_size
+        && lhs.st_mtim.tv_sec == rhs.st_mtim.tv_sec
+        && lhs.st_mtim.tv_nsec == rhs.st_mtim.tv_nsec
+        && lhs.st_ctim.tv_sec == rhs.st_ctim.tv_sec
+        && lhs.st_ctim.tv_nsec == rhs.st_ctim.tv_nsec
+    #endif
 }

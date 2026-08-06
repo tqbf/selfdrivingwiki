@@ -51,6 +51,13 @@ struct RendererDirectoryValidationTests {
         defer { tampered.remove() }
         try Data("tampered".utf8).write(to: tampered.source.appendingPathComponent("index.html"))
         try expectFailure { _ = try tampered.validator.validate(directory: tampered.source) }
+
+        let hidden = try Fixture()
+        defer { hidden.remove() }
+        try Data("hidden".utf8).write(to: hidden.source.appendingPathComponent(".hidden.js"))
+        try expectValidationFailure(.undeclaredFile(".hidden.js")) {
+            _ = try hidden.validator.validate(directory: hidden.source)
+        }
     }
 
     @Test("case-fold collisions and stale staging are rejected or removed")
@@ -132,5 +139,17 @@ private func expectFailure(_ operation: () throws -> Void) throws {
         Issue.record("Expected renderer package validation to fail")
     } catch is RendererPackageValidationError {
         // Expected validation boundary failure.
+    }
+}
+
+private func expectValidationFailure(
+    _ expected: RendererPackageValidationError,
+    _ operation: () throws -> Void
+) throws {
+    do {
+        try operation()
+        Issue.record("Expected renderer package validation to fail")
+    } catch let error as RendererPackageValidationError {
+        #expect(error == expected)
     }
 }

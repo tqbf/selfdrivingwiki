@@ -38,6 +38,85 @@ struct RendererPackageActivationTests {
         #expect(FileManager.default.fileExists(atPath: package.stagedRoot.path) == false)
     }
 
+    @Test func installedRootPassedToPublicActivationIsNeverDeleted() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        _ = try await store.read()
+        let activated = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+        let installed = try RendererPackageValidator(packageRoot: fixture.layout.root, stagingRoot: fixture.layout.stagingRoot)
+            .revalidateDirectory(root, expectedHash: package.packageHash)
+
+        await #expect(throws: RendererMachineIndexStoreError.activationFailed) {
+            try await store.activate(installed, expectedGeneration: activated.generation, clock: fixture.clock)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
+        #expect(try await store.read().availableDescriptorProjection == fixture.manifest.descriptors)
+    }
+
+    @Test func existingDestinationIsAnExplicitConflictAndCleansOnlyStaging() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        _ = try await store.read()
+        _ = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+        let retry = try fixture.validate()
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+
+        await #expect(throws: RendererMachineIndexStoreError.packageRootAlreadyExists) {
+            try await store.activate(retry, expectedGeneration: 1, clock: fixture.clock)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
+        #expect(FileManager.default.fileExists(atPath: retry.stagedRoot.path) == false)
+    }
+
+    @Test func activationHashConflictRollsBackNewlyMovedPackage() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let first = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        _ = try await store.read()
+        _ = try await store.activate(first, expectedGeneration: 0, clock: fixture.clock)
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+        _ = try await store.mutate(expectedGeneration: 1) { records, _ in records.removeAll() }
+        try FileManager.default.removeItem(at: root)
+        try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fixture.rewrite(contents: Data("replacement renderer".utf8))
+        let replacement = try fixture.validate()
+
+        await #expect(throws: RendererMachineIndexStoreError.conflictingExpectedHash) {
+            try await store.activate(replacement, expectedGeneration: 2, clock: fixture.clock)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
+        #expect((try await store.read()).records.isEmpty)
+    }
+
+    @Test func cancelledActivationCleansStagingWithoutCreatingARecord() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        let clock = fixture.clock
+        _ = try await store.read()
+        let task = Task { try await store.activate(package, expectedGeneration: 0, clock: clock) }
+        task.cancel()
+
+        await #expect(throws: RendererMachineIndexStoreError.activationCancelled) {
+            _ = try await task.value
+        }
+
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+        #expect(FileManager.default.fileExists(atPath: package.stagedRoot.path) == false)
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
+        #expect(try await store.read().records.isEmpty)
+    }
+
     @Test func cleanupFailureNeverActivatesARevalidationFailure() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -71,18 +150,30 @@ struct RendererPackageActivationTests {
         }
     }
 
-    @Test func safeModeAndUnavailableRecordsAreExcludedFromDeterministicProjection() async throws {
-        let fixture = try Fixture()
-        defer { fixture.remove() }
-        let package = try fixture.validate()
-        let store = RendererMachineIndexStore(layout: fixture.layout)
-        _ = try await store.read()
-        let activated = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
-        #expect(activated.availableDescriptorProjection == fixture.manifest.descriptors)
+    @Test func unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference() throws {
+        let first = try Fixture(packageIDRaw: "org.example.projection-z")
+        defer { first.remove() }
+        let second = try Fixture(packageIDRaw: "org.example.projection-a")
+        defer { second.remove() }
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+        let availableFirst = try RendererPackageInstallRecord(packageID: first.packageID, version: first.version, expectedPackageHash: try first.manifest.packageHash(), state: .validated, reservedAt: timestamp, updatedAt: timestamp, validatedDescriptors: first.manifest.descriptors)
+        let unavailable = try RendererPackageInstallRecord(packageID: first.packageID, version: try RendererPackageVersion(validating: "2.0.0"), expectedPackageHash: try first.manifest.packageHash(), state: .quarantined, reservedAt: timestamp, updatedAt: timestamp)
+        let availableSecond = try RendererPackageInstallRecord(packageID: second.packageID, version: second.version, expectedPackageHash: try second.manifest.packageHash(), state: .validated, reservedAt: timestamp, updatedAt: timestamp, validatedDescriptors: second.manifest.descriptors)
+        let index = try RendererMachineIndex(records: [availableFirst, unavailable, availableSecond])
 
-        let safe = try await store.mutate(expectedGeneration: activated.generation) { _, safeMode in safeMode = true }
+        #expect(index.availableDescriptorProjection == [second.manifest.descriptors[0], first.manifest.descriptors[0]])
+        #expect(try RendererMachineIndex(records: [availableFirst, availableSecond], safeModeIsEnabled: true).availableDescriptorProjection.isEmpty)
+    }
 
-        #expect(safe.availableDescriptorProjection.isEmpty)
+    @Test func priorIndexSchemaIsRejectedBeforeDescriptorProjection() throws {
+        let legacy = Data("""
+        {"schemaVersion":1,"generation":0,"records":[],"safeModeIsEnabled":false}
+        """.utf8)
+
+        #expect(RendererMachineIndex.currentSchemaVersion == 2)
+        #expect(throws: RendererMachineIndexStoreError.unsupportedSchemaVersion) {
+            _ = try JSONDecoder().decode(RendererMachineIndex.self, from: legacy)
+        }
     }
 
     private final class Fixture {
@@ -91,21 +182,31 @@ struct RendererPackageActivationTests {
         let source: URL
         let packageID: RendererPackageID
         let version: RendererPackageVersion
-        let manifest: RendererManifest
+        private(set) var manifest: RendererManifest
         let clock: FixedClock
 
-        init() throws {
+        init(packageIDRaw: String = "org.example.activation") throws {
             clock = try FixedClock()
             root = FileManager.default.temporaryDirectory.appendingPathComponent("renderer-package-activation-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
             source = root.appendingPathComponent("candidate", isDirectory: true)
             try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
-            let bytes = Data("<html>activated renderer</html>".utf8)
-            try bytes.write(to: source.appendingPathComponent("index.html"))
-            packageID = try RendererPackageID(validating: "org.example.activation")
+            packageID = try RendererPackageID(validating: packageIDRaw)
             version = try RendererPackageVersion(validating: "1.0.0")
-            let asset = RendererAsset(path: try RendererRelativePath(validating: "index.html"), digest: RendererSHA256.digest(bytes))
+            manifest = try Self.makeManifest(packageID: packageID, version: version, contents: Data("<html>activated renderer</html>".utf8))
+            try Data("<html>activated renderer</html>".utf8).write(to: source.appendingPathComponent("index.html"))
+            try manifest.canonicalJSON().write(to: source.appendingPathComponent("manifest.json"))
+        }
+
+        func rewrite(contents: Data) throws {
+            try contents.write(to: source.appendingPathComponent("index.html"))
+            manifest = try Self.makeManifest(packageID: packageID, version: version, contents: contents)
+            try manifest.canonicalJSON().write(to: source.appendingPathComponent("manifest.json"))
+        }
+
+        private static func makeManifest(packageID: RendererPackageID, version: RendererPackageVersion, contents: Data) throws -> RendererManifest {
+            let asset = RendererAsset(path: try RendererRelativePath(validating: "index.html"), digest: RendererSHA256.digest(contents))
             let descriptor = try RendererDescriptor(
                 reference: .init(packageID: packageID, version: version, registrationID: try RendererRegistrationID(validating: "viewer")),
                 displayName: "Activation fixture",
@@ -114,8 +215,7 @@ struct RendererPackageActivationTests {
                 sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1), linkPolicy: .none,
                 accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
                 compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1), priority: 0)
-            manifest = try RendererManifest(revision: 1, packageID: packageID, version: version, descriptors: [descriptor], assets: [asset])
-            try manifest.canonicalJSON().write(to: source.appendingPathComponent("manifest.json"))
+            return try RendererManifest(revision: 1, packageID: packageID, version: version, descriptors: [descriptor], assets: [asset])
         }
 
         func validate() throws -> ValidatedRendererPackage {
