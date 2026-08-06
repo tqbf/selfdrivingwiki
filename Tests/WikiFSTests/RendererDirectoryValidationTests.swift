@@ -1,6 +1,10 @@
 import Foundation
 import Testing
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 @testable import WikiFSCore
 
 @Suite("Renderer directory validation", .serialized, .timeLimit(.minutes(1)))

@@ -1,46 +1,62 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 1026,
   "phase": 5,
-  "scope": "B3 package activation and B4 installed descriptor projection",
-  "baseSHA": "da6edf416810b83ec0164602a099346b51308e26",
-  "productionSymbols": [
+  "branch": "feature/dynamic-renderers-05-webview",
+  "scope": "Integrated Phase 5 B1-B4 package validation, activation, and installed descriptor projection",
+  "baseSHA": "a1b1f28b592641dbb26333c58ac4c675dd231ec8",
+  "implementationSHA": "3a07d94f412452e5dab42059b0beb7736c98711c",
+  "auditedHeadSHA": "3a07d94f412452e5dab42059b0beb7736c98711c",
+  "workingTreeHeadSHA": "3a07d94f412452e5dab42059b0beb7736c98711c",
+  "implementationHeadRole": "Exact integrated Phase 5 production implementation audited by this inventory refresh.",
+  "documentationCommitRole": "This inventory is committed after the audited implementation. Its commit SHA does not replace implementationSHA.",
+  "focusedSuites": [
+    { "suite": "RendererPackageActivationTests", "mappedTestCount": 13, "suiteTestCount": 13 },
+    { "suite": "RendererDirectoryValidationTests", "mappedTestCount": 5, "suiteTestCount": 5 },
+    { "suite": "RendererMachineIndexStoreTests", "mappedTestCount": 3, "suiteTestCount": 13 }
+  ],
+  "focusedTestCount": 21,
+  "productionPaths": [
     {
-      "symbol": "RendererPackageValidator.revalidate / revalidateDirectory",
-      "file": "Sources/WikiFSCore/Renderer/RendererPackageValidator.swift",
-      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted"],
-      "boundary": ["RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation", "RendererDirectoryValidationTests.rejectsAssetContractViolations"],
-      "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
-      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"]
+      "path": "Package.swift",
+      "symbols": ["CRendererPackageMove target", "WikiFSCore dependency on CRendererPackageMove"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
     },
     {
-      "symbol": "RendererMachineIndexStore.activate",
-      "file": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
-      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage"],
-      "boundary": ["RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"],
-      "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
-      "teardown": ["RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"]
+      "path": "Sources/CRendererPackageMove/RendererPackageMove.c",
+      "symbols": ["renderer_package_move_no_replace", "Darwin renamex_np RENAME_EXCL path", "Linux SYS_renameat2 RENAME_NOREPLACE path", "ENOTSUP fallback"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
     },
     {
-      "symbol": "RendererMachineIndex.availableDescriptorProjection",
-      "file": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
-      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": [],
-      "boundary": ["RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference"],
-      "cancellation": [],
-      "teardown": []
+      "path": "Sources/CRendererPackageMove/include/RendererPackageMove.h",
+      "symbols": ["renderer_package_move_no_replace declaration"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging"]
     },
     {
-      "symbol": "RendererPackageInstallRecord.validatedDescriptors",
-      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
-      "decision": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors"],
-      "error": [],
-      "boundary": ["RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference"],
-      "cancellation": [],
-      "teardown": []
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": ["RendererMachineIndex.currentSchemaVersion", "RendererMachineIndex.validate", "RendererMachineIndex.availableDescriptorProjection", "RendererMachineIndexStoreError.activationCancelled", "RendererMachineIndexStoreError.packageRootAlreadyExists"],
+      "tests": ["RendererPackageActivationTests.priorIndexSchemaIsRejectedBeforeDescriptorProjection", "RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererMachineIndexStoreTests.staleGenerationIsRejectedWithoutChangingAuthoritativeOrDerivedIndex"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["RendererMachineIndexStore.activate", "RendererPackageActivationCleaning", "FileRendererPackageActivationCleaner", "RendererMachineActivationCleanupTarget", "RendererMachineActivationDirectoryIdentity", "rendererMachineActivationDirectoryIdentity", "rendererMachineActivationMoveNoReplace", "rendererMachineActivationEnsureDirectory", "rendererMachineActivationCleanup"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.existingDestinationIsAnExplicitConflictAndCleansOnlyStaging", "RendererPackageActivationTests.activationHashConflictRollsBackNewlyMovedPackage", "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure", "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation", "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations", "RendererMachineIndexStoreTests.replacingAbsentReservationWithSameExpectedHashRemainsValid"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererPackageValidator.swift",
+      "symbols": ["RendererPackageValidator.validate(directory:expectedHash:)", "RendererPackageValidator.revalidate", "RendererPackageValidator.revalidateDirectory", "RendererPackageValidator.recoverStaging", "RendererPackageValidator.validateStagedDirectory", "RendererPackageValidator.enumerateStaged", "RendererPackageValidator.init(diagnose:)"],
+      "tests": ["RendererDirectoryValidationTests.validatesDirectory", "RendererDirectoryValidationTests.rejectsLinksAndSpecialFiles", "RendererDirectoryValidationTests.rejectsAssetContractViolations", "RendererDirectoryValidationTests.rejectsCollisionAndRecoversStaging", "RendererDirectoryValidationTests.rejectsLimitsAndUnexpectedHash", "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate", "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted", "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"]
+    },
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "symbols": ["RendererPackageInstallRecord.validatedDescriptors", "RendererPackageInstallRecord.init descriptor identity-and-duplicate guard", "RendererPackageInstallRecord.init validated-state descriptor guard", "RendererPackageInstallRecord.init unavailable-state descriptor guard", "RendererPackageInstallRecord.init(from:)"],
+      "tests": ["RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors", "RendererPackageActivationTests.unavailableRecordsAreExcludedAndAvailableDescriptorsSortByReference", "RendererPackageActivationTests.installRecordRejectsDuplicateValidatedDescriptorReferences", "RendererPackageActivationTests.installRecordRejectsValidatedDescriptorForAnotherPackage", "RendererPackageActivationTests.installRecordRejectsDescriptorsThatDoNotMatchItsState"]
     }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererDirectoryValidationTests.swift",
+    "Tests/WikiFSTests/RendererMachineIndexStoreTests.swift"
   ],
   "retainedExistingCoverage": [
     "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations",
@@ -49,9 +65,25 @@
     "RendererDirectoryValidationTests.rejectsLinksAndSpecialFiles"
   ],
   "honestCoverageLimits": [
-    "The activation slice has no WebKit session, settings UI, or installed-renderer host wiring.",
-    "Activation cancellation is typed as activationCancelled and cleans only the owned staging tree before any installed record exists.",
-    "Production stale-staging recovery remains deferred to the package-install lifecycle: recoverStaging cannot run from read or activate because a concurrent install can own a fresh UUID staging directory. Wiring requires the plan's startup/recovery exclusive barrier or an ownership-and-age lease; ordinary activation failures and cancellation clean their own staging trees now.",
-    "Machine-index schema v2 rejects v1 explicitly because a v1 validated record cannot prove descriptor compatibility. A coordinated v1 migration is out of this B3/B4 slice; it must derive descriptors by revalidating each immutable root under the recovery barrier."
-  ]
+    "Linux runtime is not locally available for this audit. The portable conditional imports keep WikiFSCoreTests eligible for the Linux CI job, which exercises the C shim's Linux renameat2 path.",
+    "A process crash after the no-replace move and before the machine-index commit leaves an unindexed installed directory. Recovery is deferred to the installer lifecycle, which must reconcile installed roots under its exclusive startup or ownership-and-age barrier. recoverStaging only sweeps staging and cannot safely repair that state.",
+    "Production stale-staging recovery remains deferred to the package-install lifecycle. recoverStaging cannot run from read or activate because a concurrent install can own a fresh UUID staging directory.",
+    "Machine-index schema v2 rejects v1 explicitly because a v1 validated record cannot prove descriptor compatibility. A coordinated v1 migration remains outside this slice."
+  ],
+  "commandEvidence": [
+    { "command": "jq empty plans/dynamic-renderers-phase5-b3-b4-test-inventory.json", "status": "passed" },
+    { "command": "zsh tmp/orchestration/dynamic-renderers-phase5/verify-inventory-test-names.sh", "status": "passed", "terminalMarkers": ["phase5-inventory-bidirectional-resolution-pass"] },
+    { "command": "swift test --filter RendererPackageActivationTests", "status": "passed: 13 tests in 1 suite" },
+    { "command": "swift test --filter RendererDirectoryValidationTests", "status": "passed: 5 tests in 1 suite" },
+    { "command": "swift test --filter RendererMachineIndexStoreTests", "status": "passed: 13 tests in 1 suite; three inventory-mapped tests" },
+    { "command": "swift build --target WikiFSCoreTests", "status": "passed" },
+    { "command": "git diff --check", "status": "passed" }
+  ],
+  "gateStatus": {
+    "preflight": "passed at implementationSHA before this docs-and-test refresh",
+    "inventoryResolver": "passed: seven changed production paths, 21 mapped tests, source-suite counts, and retained test names",
+    "focusedTests": "passed: 31 executed tests in three suites, including 21 mapped tests",
+    "portableTargetBuild": "passed on macOS; Linux runtime remains an honest environment limit",
+    "diffCheck": "passed"
+  }
 }

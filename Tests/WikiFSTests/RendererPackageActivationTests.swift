@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 @testable import WikiFSCore
@@ -163,6 +167,73 @@ struct RendererPackageActivationTests {
 
         #expect(index.availableDescriptorProjection == [second.manifest.descriptors[0], first.manifest.descriptors[0]])
         #expect(try RendererMachineIndex(records: [availableFirst, availableSecond], safeModeIsEnabled: true).availableDescriptorProjection.isEmpty)
+    }
+
+    @Test func installRecordRejectsDuplicateValidatedDescriptorReferences() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+        let descriptor = fixture.manifest.descriptors[0]
+
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererPackageInstallRecord(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                expectedPackageHash: try fixture.manifest.packageHash(),
+                state: .validated,
+                reservedAt: timestamp,
+                updatedAt: timestamp,
+                validatedDescriptors: [descriptor, descriptor]
+            )
+        }
+    }
+
+    @Test func installRecordRejectsValidatedDescriptorForAnotherPackage() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let other = try Fixture(packageIDRaw: "org.example.other-package")
+        defer { other.remove() }
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererPackageInstallRecord(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                expectedPackageHash: try fixture.manifest.packageHash(),
+                state: .validated,
+                reservedAt: timestamp,
+                updatedAt: timestamp,
+                validatedDescriptors: other.manifest.descriptors
+            )
+        }
+    }
+
+    @Test func installRecordRejectsDescriptorsThatDoNotMatchItsState() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererPackageInstallRecord(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                expectedPackageHash: try fixture.manifest.packageHash(),
+                state: .validated,
+                reservedAt: timestamp,
+                updatedAt: timestamp
+            )
+        }
+        #expect(throws: RendererValidationError.self) {
+            _ = try RendererPackageInstallRecord(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                expectedPackageHash: try fixture.manifest.packageHash(),
+                state: .quarantined,
+                reservedAt: timestamp,
+                updatedAt: timestamp,
+                validatedDescriptors: fixture.manifest.descriptors
+            )
+        }
     }
 
     @Test func priorIndexSchemaIsRejectedBeforeDescriptorProjection() throws {
